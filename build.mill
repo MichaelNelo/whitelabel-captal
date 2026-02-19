@@ -1,0 +1,12 @@
+//// SNIPPET:BUILD
+package build
+import mill.*, scalalib.*
+
+trait BaseModule extends ScalaModule:
+  def scalaVersion = "3.8.0"
+  object test extends ScalaTests:
+    def mvnDeps       = Seq(mvn"com.lihaoyi::utest:0.8.9")
+    def testFramework = "utest.runner.Framework"
+end BaseModule
+
+object core extends BaseModule
