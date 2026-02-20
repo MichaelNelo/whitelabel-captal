@@ -1,12 +1,16 @@
-//// SNIPPET:BUILD
+//| mvnDeps:
+//|   - com.goyeau::mill-scalafix::0.6.0
 package build
-import mill.*, scalalib.*
+import com.goyeau.mill.scalafix.ScalafixModule
+import mill.*, scalalib.*, scalafmt.*
 
-trait BaseModule extends ScalaModule:
-  def scalaVersion = "3.8.0"
-  object test extends ScalaTests:
-    def mvnDeps       = Seq(mvn"com.lihaoyi::utest:0.8.9")
+trait BaseModule extends ScalaModule with ScalafmtModule with ScalafixModule:
+  def scalaVersion  = "3.8.0"
+  def scalacOptions = Seq("-Wunused:imports,locals,explicits,implicits")
+  object test extends ScalaTests with ScalafmtModule with ScalafixModule:
+    def mvnDeps       = Seq(mvn"com.lihaoyi::utest:0.8.9", mvn"org.scalacheck::scalacheck:1.18.0")
     def testFramework = "utest.runner.Framework"
 end BaseModule
 
-object core extends BaseModule
+object core extends BaseModule:
+  def mvnDeps = Seq(mvn"org.typelevel::cats-core:2.12.0")
