@@ -3,9 +3,11 @@ package whitelabel.captal.api
 import sttp.tapir.json.circe.*
 import sttp.tapir.ztapir.*
 import whitelabel.captal.core.application.commands.Handler
+import whitelabel.captal.core.application.{Event, EventHandler, Flow}
 import whitelabel.captal.core.infrastructure.{Session, SessionData, SessionRepository}
 import whitelabel.captal.core.{survey, user}
 import zio.*
+import zio.interop.catz.*
 
 object SessionEndpoint:
   val sessionCookie = cookie[Option[String]]("session_id")
@@ -36,18 +38,22 @@ object SessionEndpoint:
       def setCurrentSurvey(surveyId: survey.Id, questionId: survey.question.Id): Task[Unit] = repo
         .setCurrentSurvey(data.sessionId, surveyId, questionId)
 
-  def securedHandler[R, C, Res](
+  def securedFlow[R, C, Res](
       handlerEffect: Session[Task] => ZIO[R, Nothing, Handler.Aux[Task, C, Res]])
-      : ZPartialServerEndpoint[SessionRepository[Task] & R, Option[String], Handler.Aux[
-        Task,
-        C,
-        Res], Unit, ApiError, Unit, Any] = endpoint
+      : ZPartialServerEndpoint[
+        SessionRepository[Task] & EventHandler[Task, Event] & R,
+        Option[String],
+        Flow.Aux[Task, C, Res],
+        Unit,
+        ApiError,
+        Unit,
+        Any] = endpoint
     .securityIn(sessionCookie)
     .errorOut(jsonBody[ApiError])
-    .zServerSecurityLogic { cookie =>
+    .zServerSecurityLogic: cookie =>
       for
-        session <- ZIO.serviceWithZIO[SessionRepository[Task]](validateSession(cookie, _))
-        handler <- handlerEffect(session)
-      yield handler
-    }
+        session      <- ZIO.serviceWithZIO[SessionRepository[Task]](validateSession(cookie, _))
+        handler      <- handlerEffect(session)
+        eventHandler <- ZIO.service[EventHandler[Task, Event]]
+      yield Flow(handler, eventHandler)
 end SessionEndpoint
