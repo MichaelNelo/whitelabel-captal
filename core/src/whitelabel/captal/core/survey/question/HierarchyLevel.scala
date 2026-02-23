@@ -2,20 +2,20 @@ package whitelabel.captal.core.survey.question
 
 /** Hierarchy level for location questions.
   *
-  * Order is strict: Estado -> Ciudad -> Municipio -> Urbanizacion
+  * Order is strict: State -> City -> Municipality -> Urbanization
   */
 enum HierarchyLevel(val order: Int):
-  case Estado       extends HierarchyLevel(1)
-  case Ciudad       extends HierarchyLevel(2)
-  case Municipio    extends HierarchyLevel(3)
-  case Urbanizacion extends HierarchyLevel(4)
+  case State        extends HierarchyLevel(1)
+  case City         extends HierarchyLevel(2)
+  case Municipality extends HierarchyLevel(3)
+  case Urbanization extends HierarchyLevel(4)
 
 object HierarchyLevel:
   val ordered: List[HierarchyLevel] = List(
-    HierarchyLevel.Estado,
-    HierarchyLevel.Ciudad,
-    HierarchyLevel.Municipio,
-    HierarchyLevel.Urbanizacion)
+    HierarchyLevel.State,
+    HierarchyLevel.City,
+    HierarchyLevel.Municipality,
+    HierarchyLevel.Urbanization)
 
   def nextLevel(current: HierarchyLevel): Option[HierarchyLevel] = ordered.find(
     _.order == current.order + 1)
@@ -26,6 +26,6 @@ object HierarchyLevel:
   def canAnswer(toAnswer: HierarchyLevel, lastCompleted: Option[HierarchyLevel]): Boolean =
     lastCompleted match
       case None =>
-        toAnswer == HierarchyLevel.Estado
+        toAnswer == HierarchyLevel.State
       case Some(completed) =>
         toAnswer.order == completed.order + 1

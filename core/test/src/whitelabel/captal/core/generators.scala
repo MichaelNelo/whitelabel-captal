@@ -11,7 +11,7 @@ object generators:
   // Basic generators
   val genUUID: Gen[UUID] = Gen.uuid
 
-  val genQuestionId: Gen[QuestionId] = genUUID.map(QuestionId.apply)
+  val genQuestionId: Gen[survey.question.Id] = genUUID.map(survey.question.Id.apply)
 
   val genOptionId: Gen[OptionId] = genUUID.map(OptionId.apply)
 
@@ -145,3 +145,4 @@ object generators:
       tld      <- Gen.oneOf("com", "org", "net")
       path     <- Gen.option(Gen.alphaNumStr.map("/" + _))
     yield s"$protocol://$domain.$tld${path.getOrElse("")}"
+end generators

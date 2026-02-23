@@ -2,7 +2,6 @@ package whitelabel.captal.core.survey.question
 
 import java.time.LocalDate
 
-/** Supported question types with their configuration */
 enum QuestionType:
   case Radio(options: List[QuestionOption])
   case Checkbox(options: List[QuestionOption], rules: List[SelectionRule])

@@ -2,24 +2,24 @@ package whitelabel.captal.core.user
 
 import java.util.UUID
 
-opaque type UserId = UUID
-object UserId:
-  def apply(value: UUID): UserId            = value
-  def generate: UserId                      = UUID.randomUUID()
-  def fromString(s: String): Option[UserId] = scala.util.Try(UUID.fromString(s)).toOption
+opaque type Id = UUID
+object Id:
+  def apply(value: UUID): Id = value
+  def generate: Id = UUID.randomUUID()
+  def fromString(s: String): Option[Id] = scala.util.Try(UUID.fromString(s)).toOption
 
-  extension (id: UserId)
-    def value: UUID      = id
+  extension (id: Id)
+    def value: UUID = id
     def asString: String = id.toString
 
 opaque type SessionId = UUID
 object SessionId:
-  def apply(value: UUID): SessionId            = value
-  def generate: SessionId                      = UUID.randomUUID()
+  def apply(value: UUID): SessionId = value
+  def generate: SessionId = UUID.randomUUID()
   def fromString(s: String): Option[SessionId] = scala.util.Try(UUID.fromString(s)).toOption
 
   extension (id: SessionId)
-    def value: UUID      = id
+    def value: UUID = id
     def asString: String = id.toString
 
 opaque type DeviceId = String
