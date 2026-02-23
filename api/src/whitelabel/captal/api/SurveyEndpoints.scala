@@ -6,6 +6,7 @@ import sttp.tapir.Schema
 import sttp.tapir.json.circe.*
 import sttp.tapir.ztapir.*
 import whitelabel.captal.core.application.commands.*
+import whitelabel.captal.core.application.{Event, EventHandler}
 import whitelabel.captal.core.infrastructure.{SessionRepository, SurveyRepository}
 import whitelabel.captal.core.survey.question.QuestionAnswer
 import zio.*
@@ -24,14 +25,14 @@ object AnswerEmailResponse:
   given Encoder[AnswerEmailResponse] = deriveEncoder
   given Schema[AnswerEmailResponse] = Schema.derived
 
-// Endpoints organized by handler
+// Endpoints organized by flow
 object SurveyEndpoints:
 
   object AnswerEmail:
-    type Env = SessionRepository[Task] & SurveyRepository[Task]
+    type Env = SessionRepository[Task] & SurveyRepository[Task] & EventHandler[Task, Event]
 
     val endpoint = SessionEndpoint
-      .securedHandler[SurveyRepository[Task], AnswerEmailCommand, QuestionAnswer](session =>
+      .securedFlow[SurveyRepository[Task], AnswerEmailCommand, QuestionAnswer](session =>
         ZIO.serviceWith[SurveyRepository[Task]](AnswerEmailHandler(session, _)))
       .post
       .in("api" / "survey" / "email")

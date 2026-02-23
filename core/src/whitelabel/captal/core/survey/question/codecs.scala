@@ -135,4 +135,51 @@ object codecs:
         "municipality"
       case HierarchyLevel.Urbanization =>
         "urbanization"
+  given Encoder[AnswerValue] = Encoder.instance:
+    case AnswerValue.SingleChoice(optionId) =>
+      Json.obj("type" -> Json.fromString("single"), "value" -> Json.fromString(optionId.asString))
+    case AnswerValue.MultipleChoice(optionIds) =>
+      Json.obj(
+        "type" -> Json.fromString("multiple"),
+        "value" -> Json.arr(optionIds.map(id => Json.fromString(id.asString)).toSeq*))
+    case AnswerValue.Text(value) =>
+      Json.obj("type" -> Json.fromString("text"), "value" -> Json.fromString(value))
+    case AnswerValue.Rating(value) =>
+      Json.obj("type" -> Json.fromString("rating"), "value" -> Json.fromFloatOrString(value))
+    case AnswerValue.Numeric(value) =>
+      Json.obj("type" -> Json.fromString("numeric"), "value" -> Json.fromBigDecimal(value))
+    case AnswerValue.DateValue(value) =>
+      Json.obj("type" -> Json.fromString("date"), "value" -> Json.fromString(value.toString))
+
+  given Decoder[AnswerValue] = Decoder.instance: cursor =>
+    cursor
+      .get[String]("type")
+      .flatMap:
+        case "single" =>
+          cursor
+            .get[String]("value")
+            .flatMap(s =>
+              OptionId
+                .fromString(s)
+                .toRight(io.circe.DecodingFailure(s"Invalid option id: $s", cursor.history)))
+            .map(AnswerValue.SingleChoice(_))
+        case "multiple" =>
+          cursor
+            .get[List[String]]("value")
+            .flatMap: ids =>
+              val parsed = ids.flatMap(OptionId.fromString)
+              if parsed.size == ids.size then
+                Right(AnswerValue.MultipleChoice(parsed.toSet))
+              else
+                Left(io.circe.DecodingFailure("Invalid option ids", cursor.history))
+        case "text" =>
+          cursor.get[String]("value").map(AnswerValue.Text(_))
+        case "rating" =>
+          cursor.get[Float]("value").map(AnswerValue.Rating(_))
+        case "numeric" =>
+          cursor.get[BigDecimal]("value").map(AnswerValue.Numeric(_))
+        case "date" =>
+          cursor.get[String]("value").map(s => AnswerValue.DateValue(LocalDate.parse(s)))
+        case other =>
+          Left(io.circe.DecodingFailure(s"Unknown answer type: $other", cursor.history))
 end codecs
