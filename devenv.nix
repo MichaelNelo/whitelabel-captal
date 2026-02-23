@@ -5,7 +5,7 @@
   # env.GREET = "devenv";
 
   # https://devenv.sh/packages/
-  packages = [ pkgs.coursier ];
+  packages = [ pkgs.coursier pkgs.sqlite ];
 
   # https://devenv.sh/languages/
   languages.java.enable = true;
