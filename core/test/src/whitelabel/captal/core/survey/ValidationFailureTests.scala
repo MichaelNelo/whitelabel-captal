@@ -3,44 +3,47 @@ package whitelabel.captal.core.survey
 import java.time.{Instant, LocalDate}
 
 import cats.data.NonEmptyChain
+import cats.syntax.functor.*
 import org.scalacheck.Prop.{forAll, propBoolean}
 import org.scalacheck.util.Buildable
 import org.scalacheck.{Gen, Prop}
 import utest.*
-import whitelabel.captal.core.Op
 import whitelabel.captal.core.generators.*
 import whitelabel.captal.core.survey.question.*
-import whitelabel.captal.core.user.{SessionId, State as UserState, User, UserId}
+import whitelabel.captal.core.user.ops.answerEmail
+import whitelabel.captal.core.user.{Email, SessionId, State as UserState, User}
+import whitelabel.captal.core.{Op, survey, user}
 
 object ValidationFailureTests extends TestSuite:
 
   // Test fixtures
-  private def makeUser(questionId: QuestionId): User[UserState.AnsweringQuestion] = User(
-    UserId.generate,
-    UserState.AnsweringQuestion(SessionId.generate, "en", questionId))
+  private def makeUser(): User[UserState.WithEmail] = User(
+    user.Id.generate,
+    UserState.WithEmail(Email.unsafeFrom("test@example.com"), SessionId.generate, "en"))
 
   private def makeEmailSurvey(question: QuestionToAnswer): Survey[State.WithEmailQuestion] = Survey(
-    SurveyId.generate,
+    survey.Id.generate,
     State.WithEmailQuestion(question))
 
   private def makeQuestion(
       questionType: QuestionType,
       commonRules: List[CommonRule] = Nil): QuestionToAnswer = QuestionToAnswer(
-    id = QuestionId.generate,
+    id = survey.question.Id.generate,
     text = LocalizedText("Test question", "en"),
     description = None,
     questionType = questionType,
     commonRules = commonRules,
-    pointsAwarded = 10)
+    pointsAwarded = 10
+  )
 
   private def validate(
       questionType: QuestionType,
       value: AnswerValue,
       commonRules: List[CommonRule] = Nil): Either[NonEmptyChain[Error], Unit] =
     val question = makeQuestion(questionType, commonRules)
-    val user     = makeUser(question.id)
-    val survey   = makeEmailSurvey(question)
-    Op.run(ops.answerEmail(user, survey, value, Instant.now)).map(_ => ())
+    val user = makeUser()
+    val survey = makeEmailSurvey(question)
+    Op.run(user.answerEmail(survey, value, Instant.now)).void
 
   private def failsWith[E <: Error](
       questionType: QuestionType,
@@ -96,6 +99,7 @@ object ValidationFailureTests extends TestSuite:
           Set.empty
     val incompatible = allAnswers.filterNot((k, _) => compatible.contains(k)).values.toSeq
     Gen.oneOf(incompatible).flatMap(identity)
+  end genIncompatibleAnswer
 
   private def genStringWithLength(len: Int): Gen[String] = Gen
     .listOfN(len, Gen.alphaChar)
@@ -111,8 +115,8 @@ object ValidationFailureTests extends TestSuite:
         checkProp:
           forAll(Gen.chooseNum(2, 5), genQuestionOptions(5)): (minRequired, options) =>
             val tooFew = minRequired - 1
-            val rules  = List(SelectionRule.MinSelections(minRequired))
-            val qtype  = QuestionType.Checkbox(options, rules)
+            val rules = List(SelectionRule.MinSelections(minRequired))
+            val qtype = QuestionType.Checkbox(options, rules)
             val answer = AnswerValue.MultipleChoice(options.take(tooFew).map(_.id).toSet)
             (minRequired >= 2 && options.size >= minRequired) ==>
               failsWith(qtype, answer):
@@ -123,9 +127,9 @@ object ValidationFailureTests extends TestSuite:
         checkProp:
           forAll(Gen.chooseNum(1, 3), genQuestionOptions(5)): (maxAllowed, options) =>
             val tooMany = maxAllowed + 1
-            val rules   = List(SelectionRule.MaxSelections(maxAllowed))
-            val qtype   = QuestionType.Checkbox(options, rules)
-            val answer  = AnswerValue.MultipleChoice(options.take(tooMany).map(_.id).toSet)
+            val rules = List(SelectionRule.MaxSelections(maxAllowed))
+            val qtype = QuestionType.Checkbox(options, rules)
+            val answer = AnswerValue.MultipleChoice(options.take(tooMany).map(_.id).toSet)
             (tooMany <= options.size) ==>
               failsWith(qtype, answer):
                 case Error.TooManySelections(_, max, actual) =>
@@ -135,8 +139,8 @@ object ValidationFailureTests extends TestSuite:
         checkProp:
           forAll(genQuestionOptions(3), genOptionId): (options, invalidId) =>
             val isInvalid = !options.exists(_.id == invalidId)
-            val qtype     = QuestionType.Radio(options)
-            val answer    = AnswerValue.SingleChoice(invalidId)
+            val qtype = QuestionType.Radio(options)
+            val answer = AnswerValue.SingleChoice(invalidId)
             isInvalid ==>
               failsWith(qtype, answer):
                 case Error.InvalidOptionSelected(_, optId) =>
@@ -146,8 +150,8 @@ object ValidationFailureTests extends TestSuite:
         checkProp:
           forAll(genQuestionOptions(3), genOptionId): (options, invalidId) =>
             val isInvalid = !options.exists(_.id == invalidId)
-            val qtype     = QuestionType.Checkbox(options, Nil)
-            val answer    = AnswerValue.MultipleChoice(Set(invalidId))
+            val qtype = QuestionType.Checkbox(options, Nil)
+            val answer = AnswerValue.MultipleChoice(Set(invalidId))
             isInvalid ==>
               failsWith(qtype, answer):
                 case Error.InvalidOptionsSelected(_, ids) =>
@@ -159,8 +163,8 @@ object ValidationFailureTests extends TestSuite:
           forAll(
             Gen.chooseNum(2, 20).flatMap(min => genStringWithLength(min - 1).map(s => (min, s)))):
             (minLen, shortText) =>
-              val rules  = List(TextRule.MinLength(minLen))
-              val qtype  = QuestionType.Input(rules)
+              val rules = List(TextRule.MinLength(minLen))
+              val qtype = QuestionType.Input(rules)
               val answer = AnswerValue.Text(shortText)
               failsWith(qtype, answer):
                 case Error.TextTooShort(_, min, actual) =>
@@ -171,8 +175,8 @@ object ValidationFailureTests extends TestSuite:
           forAll(
             Gen.chooseNum(1, 10).flatMap(max => genStringWithLength(max + 1).map(s => (max, s)))):
             (maxLen, longText) =>
-              val rules  = List(TextRule.MaxLength(maxLen))
-              val qtype  = QuestionType.Input(rules)
+              val rules = List(TextRule.MaxLength(maxLen))
+              val qtype = QuestionType.Input(rules)
               val answer = AnswerValue.Text(longText)
               failsWith(qtype, answer):
                 case Error.TextTooLong(_, max, actual) =>
@@ -181,8 +185,8 @@ object ValidationFailureTests extends TestSuite:
       test("Email fails with invalid email format"):
         checkProp:
           forAll(genInvalidEmail): invalidEmail =>
-            val rules  = List(TextRule.Email)
-            val qtype  = QuestionType.Input(rules)
+            val rules = List(TextRule.Email)
+            val qtype = QuestionType.Input(rules)
             val answer = AnswerValue.Text(invalidEmail)
             failsWith(qtype, answer):
               case Error.InvalidEmail(_) =>
@@ -191,8 +195,8 @@ object ValidationFailureTests extends TestSuite:
       test("Url fails with invalid URL format"):
         checkProp:
           forAll(genInvalidUrl): invalidUrl =>
-            val rules  = List(TextRule.Url)
-            val qtype  = QuestionType.Input(rules)
+            val rules = List(TextRule.Url)
+            val qtype = QuestionType.Input(rules)
             val answer = AnswerValue.Text(invalidUrl)
             failsWith(qtype, answer):
               case Error.InvalidUrl(_) =>
@@ -202,9 +206,9 @@ object ValidationFailureTests extends TestSuite:
         checkProp:
           forAll(genNonDigitString): nonDigitText =>
             val pattern = "^[0-9]+$"
-            val rules   = List(TextRule.Pattern(pattern))
-            val qtype   = QuestionType.Input(rules)
-            val answer  = AnswerValue.Text(nonDigitText)
+            val rules = List(TextRule.Pattern(pattern))
+            val qtype = QuestionType.Input(rules)
+            val answer = AnswerValue.Text(nonDigitText)
             failsWith(qtype, answer):
               case Error.InvalidPattern(_, p) =>
                 p == pattern
@@ -214,9 +218,9 @@ object ValidationFailureTests extends TestSuite:
         checkProp:
           forAll(Gen.chooseNum(5, 10)): minVal =>
             val belowMin = minVal - 1
-            val rules    = List(RangeRule.Min(minVal))
-            val qtype    = QuestionType.Rating(rules)
-            val answer   = AnswerValue.Rating(belowMin)
+            val rules = List(RangeRule.Min(minVal))
+            val qtype = QuestionType.Rating(rules)
+            val answer = AnswerValue.Rating(belowMin)
             failsWith(qtype, answer):
               case Error.RatingOutOfRange(_, min, _, actual) =>
                 min == minVal && actual == belowMin
@@ -225,9 +229,9 @@ object ValidationFailureTests extends TestSuite:
         checkProp:
           forAll(Gen.chooseNum(1, 5)): maxVal =>
             val aboveMax = maxVal + 1
-            val rules    = List(RangeRule.Max(maxVal))
-            val qtype    = QuestionType.Rating(rules)
-            val answer   = AnswerValue.Rating(aboveMax)
+            val rules = List(RangeRule.Max(maxVal))
+            val qtype = QuestionType.Rating(rules)
+            val answer = AnswerValue.Rating(aboveMax)
             failsWith(qtype, answer):
               case Error.RatingOutOfRange(_, _, max, actual) =>
                 max == maxVal && actual == aboveMax
@@ -236,10 +240,10 @@ object ValidationFailureTests extends TestSuite:
         checkProp:
           forAll(Gen.chooseNum(10.0, 100.0)): minVal =>
             val belowMin = BigDecimal(minVal - 1)
-            val minBD    = BigDecimal(minVal)
-            val rules    = List(RangeRule.Min(minBD))
-            val qtype    = QuestionType.Numeric(rules)
-            val answer   = AnswerValue.Numeric(belowMin)
+            val minBD = BigDecimal(minVal)
+            val rules = List(RangeRule.Min(minBD))
+            val qtype = QuestionType.Numeric(rules)
+            val answer = AnswerValue.Numeric(belowMin)
             failsWith(qtype, answer):
               case Error.NumericOutOfRange(_, min, _, actual) =>
                 min == minBD && actual == belowMin
@@ -248,10 +252,10 @@ object ValidationFailureTests extends TestSuite:
         checkProp:
           forAll(Gen.chooseNum(1.0, 50.0)): maxVal =>
             val aboveMax = BigDecimal(maxVal + 1)
-            val maxBD    = BigDecimal(maxVal)
-            val rules    = List(RangeRule.Max(maxBD))
-            val qtype    = QuestionType.Numeric(rules)
-            val answer   = AnswerValue.Numeric(aboveMax)
+            val maxBD = BigDecimal(maxVal)
+            val rules = List(RangeRule.Max(maxBD))
+            val qtype = QuestionType.Numeric(rules)
+            val answer = AnswerValue.Numeric(aboveMax)
             failsWith(qtype, answer):
               case Error.NumericOutOfRange(_, _, max, actual) =>
                 max == maxBD && actual == aboveMax
@@ -261,8 +265,8 @@ object ValidationFailureTests extends TestSuite:
         checkProp:
           forAll(Gen.chooseNum(1, 365)): daysBefore =>
             val before = minDate.minusDays(daysBefore.toLong)
-            val rules  = List(RangeRule.Min(minDate))
-            val qtype  = QuestionType.Date(rules)
+            val rules = List(RangeRule.Min(minDate))
+            val qtype = QuestionType.Date(rules)
             val answer = AnswerValue.DateValue(before)
             failsWith(qtype, answer):
               case Error.DateOutOfRange(_, min, _, actual) =>
@@ -272,9 +276,9 @@ object ValidationFailureTests extends TestSuite:
         val maxDate = LocalDate.of(2024, 6, 30)
         checkProp:
           forAll(Gen.chooseNum(1, 365)): daysAfter =>
-            val after  = maxDate.plusDays(daysAfter.toLong)
-            val rules  = List(RangeRule.Max(maxDate))
-            val qtype  = QuestionType.Date(rules)
+            val after = maxDate.plusDays(daysAfter.toLong)
+            val rules = List(RangeRule.Max(maxDate))
+            val qtype = QuestionType.Date(rules)
             val answer = AnswerValue.DateValue(after)
             failsWith(qtype, answer):
               case Error.DateOutOfRange(_, _, max, actual) =>
@@ -284,7 +288,7 @@ object ValidationFailureTests extends TestSuite:
       test("Required fails with empty text"):
         checkProp:
           forAll(Gen.const("")): emptyText =>
-            val qtype  = QuestionType.Input(Nil)
+            val qtype = QuestionType.Input(Nil)
             val answer = AnswerValue.Text(emptyText)
             failsWith(qtype, answer, List(CommonRule.Required)):
               case Error.RequiredAnswerMissing(_) =>
@@ -294,8 +298,8 @@ object ValidationFailureTests extends TestSuite:
         checkProp:
           forAll(Gen.chooseNum(1, 10)): spaces =>
             val whitespace = " " * spaces
-            val qtype      = QuestionType.Input(Nil)
-            val answer     = AnswerValue.Text(whitespace)
+            val qtype = QuestionType.Input(Nil)
+            val answer = AnswerValue.Text(whitespace)
             failsWith(qtype, answer, List(CommonRule.Required)):
               case Error.RequiredAnswerMissing(_) =>
                 true
@@ -303,7 +307,7 @@ object ValidationFailureTests extends TestSuite:
       test("Required fails with empty MultipleChoice"):
         checkProp:
           forAll(genQuestionOptions(3)): options =>
-            val qtype  = QuestionType.Checkbox(options, Nil)
+            val qtype = QuestionType.Checkbox(options, Nil)
             val answer = AnswerValue.MultipleChoice(Set.empty)
             failsWith(qtype, answer, List(CommonRule.Required)):
               case Error.RequiredAnswerMissing(_) =>
@@ -321,3 +325,4 @@ object ValidationFailureTests extends TestSuite:
             failsWith(qtype, answer):
               case Error.IncompatibleAnswerType(_, _) =>
                 true
+end ValidationFailureTests

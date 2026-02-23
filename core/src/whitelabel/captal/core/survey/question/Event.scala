@@ -2,42 +2,43 @@ package whitelabel.captal.core.survey.question
 
 import java.time.Instant
 
-import whitelabel.captal.core.survey.{AdvertiserId, SurveyId}
-import whitelabel.captal.core.user.{SessionId, UserId}
+import whitelabel.captal.core.survey.AdvertiserId
+import whitelabel.captal.core.user.SessionId
+import whitelabel.captal.core.{survey, user}
 
-/** User-facing events for answering questions */
 enum Event:
   case EmailQuestionAnswered(
-      userId: UserId,
+      userId: user.Id,
       sessionId: SessionId,
-      surveyId: SurveyId,
-      questionId: QuestionId,
+      surveyId: survey.Id,
+      questionId: Id,
       answer: QuestionAnswer,
       locale: String,
       occurredAt: Instant)
   case ProfilingQuestionAnswered(
-      userId: UserId,
+      userId: user.Id,
       sessionId: SessionId,
-      surveyId: SurveyId,
-      questionId: QuestionId,
+      surveyId: survey.Id,
+      questionId: Id,
       answer: QuestionAnswer,
       locale: String,
       occurredAt: Instant)
   case LocationQuestionAnswered(
-      userId: UserId,
+      userId: user.Id,
       sessionId: SessionId,
-      surveyId: SurveyId,
-      questionId: QuestionId,
+      surveyId: survey.Id,
+      questionId: Id,
       hierarchyLevel: HierarchyLevel,
       answer: QuestionAnswer,
       locale: String,
       occurredAt: Instant)
   case AdvertiserQuestionAnswered(
-      userId: UserId,
+      userId: user.Id,
       sessionId: SessionId,
-      surveyId: SurveyId,
+      surveyId: survey.Id,
       advertiserId: AdvertiserId,
-      questionId: QuestionId,
+      questionId: Id,
       answer: QuestionAnswer,
       locale: String,
       occurredAt: Instant)
+end Event

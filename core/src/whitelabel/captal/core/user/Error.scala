@@ -1,8 +1,8 @@
 package whitelabel.captal.core.user
 
 enum Error:
-  case EmailAlreadyRegistered(userId: UserId)
+  case EmailAlreadyRegistered(userId: Id)
   case InvalidEmailFormat(email: String)
   case SessionExpired(sessionId: SessionId)
-  case NoPendingQuestions(userId: UserId)
-  case QuestionNotPending(userId: UserId, questionId: String)
+  case NoPendingQuestions(userId: Id)
+  case QuestionNotPending(userId: Id, questionId: String)

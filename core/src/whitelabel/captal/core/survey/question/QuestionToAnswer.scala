@@ -1,8 +1,7 @@
 package whitelabel.captal.core.survey.question
 
-/** Minimum data needed to display and validate a question */
 final case class QuestionToAnswer(
-    id: QuestionId,
+    id: Id,
     text: LocalizedText,
     description: Option[LocalizedText],
     questionType: QuestionType,
