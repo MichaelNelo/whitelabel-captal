@@ -5,6 +5,7 @@
              (gnu packages java)
              (gnu packages elf)
              (gnu packages compression)
+             (gnu packages sqlite)
              ((guix licenses) #:prefix license:))
 
 (define-public coursier
@@ -44,4 +45,5 @@
    (license license:asl2.0)))
 
 (packages->manifest (list openjdk21
+                          sqlite
                           coursier))
