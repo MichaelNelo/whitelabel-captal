@@ -10,9 +10,10 @@ CREATE INDEX idx_users_email ON users(email);
 
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL REFERENCES users(id),
+    user_id TEXT REFERENCES users(id),
     device_id TEXT NOT NULL,
     locale TEXT NOT NULL,
+    phase TEXT NOT NULL,
     current_survey_id TEXT REFERENCES surveys(id),
     current_question_id TEXT REFERENCES questions(id),
     created_at TEXT NOT NULL
