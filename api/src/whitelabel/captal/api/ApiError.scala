@@ -15,9 +15,7 @@ enum ApiError:
 
   // Application errors
   case NoSurveyAssigned
-  case SurveyNotFound(surveyId: String)
-  case UserNotFound(userId: String)
-  case QuestionNotInExpectedState(surveyId: String, questionId: String)
+  case UserNotIdentified
   case InvalidEmailFormat(value: String)
 
   // Survey validation errors
@@ -46,22 +44,18 @@ enum ApiError:
   case QuestionNotPending(userId: String, questionId: String)
 
   // Internal
-  case InternalError(message: String)
+  case InternalError(cause: Throwable)
+end ApiError
 
 object ApiError:
-  def fromAppErrors(errors: NonEmptyChain[AppError]): ApiError =
-    fromAppError(errors.head)
+  def fromAppErrors(errors: NonEmptyChain[AppError]): ApiError = fromAppError(errors.head)
 
   def fromAppError(err: AppError): ApiError =
     err match
       case AppError.NoSurveyAssigned =>
         ApiError.NoSurveyAssigned
-      case AppError.SurveyNotFound(surveyId) =>
-        ApiError.SurveyNotFound(surveyId.asString)
-      case AppError.UserNotFound(userId) =>
-        ApiError.UserNotFound(userId.asString)
-      case AppError.QuestionNotInExpectedState(surveyId, questionId) =>
-        ApiError.QuestionNotInExpectedState(surveyId.asString, questionId.asString)
+      case AppError.UserNotIdentified =>
+        ApiError.UserNotIdentified
       case AppError.InvalidEmailFormat(value) =>
         ApiError.InvalidEmailFormat(value)
       case AppError.Survey(errors) =>
@@ -120,92 +114,128 @@ object ApiError:
         ApiError.QuestionNotPending(userId.asString, questionId)
 
   given Encoder[ApiError] = Encoder.instance: err =>
-    val (errorType, data) = err match
-      case SessionMissing =>
-        ("session_missing", Json.obj())
-      case SessionInvalid(reason) =>
-        ("session_invalid", Json.obj("reason" -> reason.asJson))
-      case SessionExpired =>
-        ("session_expired", Json.obj())
-      case NoSurveyAssigned =>
-        ("no_survey_assigned", Json.obj())
-      case SurveyNotFound(id) =>
-        ("survey_not_found", Json.obj("surveyId" -> id.asJson))
-      case UserNotFound(id) =>
-        ("user_not_found", Json.obj("userId" -> id.asJson))
-      case QuestionNotInExpectedState(sId, qId) =>
-        ("question_not_in_expected_state", Json.obj("surveyId" -> sId.asJson, "questionId" -> qId.asJson))
-      case InvalidEmailFormat(value) =>
-        ("invalid_email_format", Json.obj("value" -> value.asJson))
-      case RequiredAnswerMissing(qId) =>
-        ("required_answer_missing", Json.obj("questionId" -> qId.asJson))
-      case InvalidOptionSelected(qId, optId) =>
-        ("invalid_option_selected", Json.obj("questionId" -> qId.asJson, "optionId" -> optId.asJson))
-      case InvalidOptionsSelected(qId, optIds) =>
-        ("invalid_options_selected", Json.obj("questionId" -> qId.asJson, "optionIds" -> optIds.asJson))
-      case TooFewSelections(qId, min, actual) =>
-        ("too_few_selections", Json.obj("questionId" -> qId.asJson, "min" -> min.asJson, "actual" -> actual.asJson))
-      case TooManySelections(qId, max, actual) =>
-        ("too_many_selections", Json.obj("questionId" -> qId.asJson, "max" -> max.asJson, "actual" -> actual.asJson))
-      case TextTooShort(qId, minLen, actual) =>
-        ("text_too_short", Json.obj("questionId" -> qId.asJson, "minLength" -> minLen.asJson, "actual" -> actual.asJson))
-      case TextTooLong(qId, maxLen, actual) =>
-        ("text_too_long", Json.obj("questionId" -> qId.asJson, "maxLength" -> maxLen.asJson, "actual" -> actual.asJson))
-      case InvalidPattern(qId, pattern) =>
-        ("invalid_pattern", Json.obj("questionId" -> qId.asJson, "pattern" -> pattern.asJson))
-      case InvalidEmail(qId) =>
-        ("invalid_email", Json.obj("questionId" -> qId.asJson))
-      case InvalidUrl(qId) =>
-        ("invalid_url", Json.obj("questionId" -> qId.asJson))
-      case RatingOutOfRange(qId, min, max, actual) =>
-        ("rating_out_of_range", Json.obj("questionId" -> qId.asJson, "min" -> min.asJson, "max" -> max.asJson, "actual" -> actual.asJson))
-      case NumericOutOfRange(qId, min, max, actual) =>
-        ("numeric_out_of_range", Json.obj("questionId" -> qId.asJson, "min" -> min.asJson, "max" -> max.asJson, "actual" -> actual.asJson))
-      case DateOutOfRange(qId, min, max, actual) =>
-        ("date_out_of_range", Json.obj("questionId" -> qId.asJson, "min" -> min.asJson, "max" -> max.asJson, "actual" -> actual.asJson))
-      case IncompatibleAnswerType(qId, expected) =>
-        ("incompatible_answer_type", Json.obj("questionId" -> qId.asJson, "expectedType" -> expected.asJson))
-      case QuestionAlreadyAnswered(qId) =>
-        ("question_already_answered", Json.obj("questionId" -> qId.asJson))
-      case QuestionNotFound(qId) =>
-        ("question_not_found", Json.obj("questionId" -> qId.asJson))
-      case HierarchyViolation(qId, level) =>
-        ("hierarchy_violation", Json.obj("questionId" -> qId.asJson, "expectedLevel" -> level.asJson))
-      case EmailAlreadyRegistered(userId) =>
-        ("email_already_registered", Json.obj("userId" -> userId.asJson))
-      case UserSessionExpired(sessionId) =>
-        ("user_session_expired", Json.obj("sessionId" -> sessionId.asJson))
-      case NoPendingQuestions(userId) =>
-        ("no_pending_questions", Json.obj("userId" -> userId.asJson))
-      case QuestionNotPending(userId, qId) =>
-        ("question_not_pending", Json.obj("userId" -> userId.asJson, "questionId" -> qId.asJson))
-      case InternalError(message) =>
-        ("internal_error", Json.obj("message" -> message.asJson))
+    val (errorType, data) =
+      err match
+        case SessionMissing =>
+          ("session_missing", Json.obj())
+        case SessionInvalid(reason) =>
+          ("session_invalid", Json.obj("reason" -> reason.asJson))
+        case SessionExpired =>
+          ("session_expired", Json.obj())
+        case NoSurveyAssigned =>
+          ("no_survey_assigned", Json.obj())
+        case UserNotIdentified =>
+          ("user_not_identified", Json.obj())
+        case InvalidEmailFormat(value) =>
+          ("invalid_email_format", Json.obj("value" -> value.asJson))
+        case RequiredAnswerMissing(qId) =>
+          ("required_answer_missing", Json.obj("questionId" -> qId.asJson))
+        case InvalidOptionSelected(qId, optId) =>
+          (
+            "invalid_option_selected",
+            Json.obj("questionId" -> qId.asJson, "optionId" -> optId.asJson))
+        case InvalidOptionsSelected(qId, optIds) =>
+          (
+            "invalid_options_selected",
+            Json.obj("questionId" -> qId.asJson, "optionIds" -> optIds.asJson))
+        case TooFewSelections(qId, min, actual) =>
+          (
+            "too_few_selections",
+            Json.obj("questionId" -> qId.asJson, "min" -> min.asJson, "actual" -> actual.asJson))
+        case TooManySelections(qId, max, actual) =>
+          (
+            "too_many_selections",
+            Json.obj("questionId" -> qId.asJson, "max" -> max.asJson, "actual" -> actual.asJson))
+        case TextTooShort(qId, minLen, actual) =>
+          (
+            "text_too_short",
+            Json.obj(
+              "questionId" -> qId.asJson,
+              "minLength"  -> minLen.asJson,
+              "actual"     -> actual.asJson))
+        case TextTooLong(qId, maxLen, actual) =>
+          (
+            "text_too_long",
+            Json.obj(
+              "questionId" -> qId.asJson,
+              "maxLength"  -> maxLen.asJson,
+              "actual"     -> actual.asJson))
+        case InvalidPattern(qId, pattern) =>
+          ("invalid_pattern", Json.obj("questionId" -> qId.asJson, "pattern" -> pattern.asJson))
+        case InvalidEmail(qId) =>
+          ("invalid_email", Json.obj("questionId" -> qId.asJson))
+        case InvalidUrl(qId) =>
+          ("invalid_url", Json.obj("questionId" -> qId.asJson))
+        case RatingOutOfRange(qId, min, max, actual) =>
+          (
+            "rating_out_of_range",
+            Json.obj(
+              "questionId" -> qId.asJson,
+              "min"        -> min.asJson,
+              "max"        -> max.asJson,
+              "actual"     -> actual.asJson))
+        case NumericOutOfRange(qId, min, max, actual) =>
+          (
+            "numeric_out_of_range",
+            Json.obj(
+              "questionId" -> qId.asJson,
+              "min"        -> min.asJson,
+              "max"        -> max.asJson,
+              "actual"     -> actual.asJson))
+        case DateOutOfRange(qId, min, max, actual) =>
+          (
+            "date_out_of_range",
+            Json.obj(
+              "questionId" -> qId.asJson,
+              "min"        -> min.asJson,
+              "max"        -> max.asJson,
+              "actual"     -> actual.asJson))
+        case IncompatibleAnswerType(qId, expected) =>
+          (
+            "incompatible_answer_type",
+            Json.obj("questionId" -> qId.asJson, "expectedType" -> expected.asJson))
+        case QuestionAlreadyAnswered(qId) =>
+          ("question_already_answered", Json.obj("questionId" -> qId.asJson))
+        case QuestionNotFound(qId) =>
+          ("question_not_found", Json.obj("questionId" -> qId.asJson))
+        case HierarchyViolation(qId, level) =>
+          (
+            "hierarchy_violation",
+            Json.obj("questionId" -> qId.asJson, "expectedLevel" -> level.asJson))
+        case EmailAlreadyRegistered(userId) =>
+          ("email_already_registered", Json.obj("userId" -> userId.asJson))
+        case UserSessionExpired(sessionId) =>
+          ("user_session_expired", Json.obj("sessionId" -> sessionId.asJson))
+        case NoPendingQuestions(userId) =>
+          ("no_pending_questions", Json.obj("userId" -> userId.asJson))
+        case QuestionNotPending(userId, qId) =>
+          ("question_not_pending", Json.obj("userId" -> userId.asJson, "questionId" -> qId.asJson))
+        case InternalError(cause) =>
+          ("internal_error", Json.obj("message" -> cause.getMessage.asJson))
     Json.obj("error" -> errorType.asJson, "data" -> data)
 
   given Decoder[ApiError] = Decoder.instance: cursor =>
     for
       errorType <- cursor.downField("error").as[String]
       data = cursor.downField("data")
-      result <- errorType match
-        case "session_missing" =>
-          Right(SessionMissing)
-        case "session_invalid" =>
-          data.downField("reason").as[String].map(SessionInvalid(_))
-        case "session_expired" =>
-          Right(SessionExpired)
-        case "no_survey_assigned" =>
-          Right(NoSurveyAssigned)
-        case "survey_not_found" =>
-          data.downField("surveyId").as[String].map(SurveyNotFound(_))
-        case "user_not_found" =>
-          data.downField("userId").as[String].map(UserNotFound(_))
-        case "invalid_email_format" =>
-          data.downField("value").as[String].map(InvalidEmailFormat(_))
-        case "internal_error" =>
-          data.downField("message").as[String].map(InternalError(_))
-        case other =>
-          Right(InternalError(s"Unknown error type: $other"))
+      result <-
+        errorType match
+          case "session_missing" =>
+            Right(SessionMissing)
+          case "session_invalid" =>
+            data.downField("reason").as[String].map(SessionInvalid(_))
+          case "session_expired" =>
+            Right(SessionExpired)
+          case "no_survey_assigned" =>
+            Right(NoSurveyAssigned)
+          case "user_not_identified" =>
+            Right(UserNotIdentified)
+          case "invalid_email_format" =>
+            data.downField("value").as[String].map(InvalidEmailFormat(_))
+          case "internal_error" =>
+            data.downField("message").as[String].map(msg => InternalError(new Exception(msg)))
+          case other =>
+            Right(InternalError(new Exception(s"Unknown error type: $other")))
     yield result
 
   given Schema[ApiError] = Schema.string

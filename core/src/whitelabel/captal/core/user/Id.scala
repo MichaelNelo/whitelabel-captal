@@ -7,6 +7,7 @@ object Id:
   def apply(value: UUID): Id = value
   def generate: Id = UUID.randomUUID()
   def fromString(s: String): Option[Id] = scala.util.Try(UUID.fromString(s)).toOption
+  def unsafe(s: String): Id = UUID.fromString(s)
 
   extension (id: Id)
     def value: UUID = id
@@ -17,6 +18,7 @@ object SessionId:
   def apply(value: UUID): SessionId = value
   def generate: SessionId = UUID.randomUUID()
   def fromString(s: String): Option[SessionId] = scala.util.Try(UUID.fromString(s)).toOption
+  def unsafe(s: String): SessionId = UUID.fromString(s)
 
   extension (id: SessionId)
     def value: UUID = id
