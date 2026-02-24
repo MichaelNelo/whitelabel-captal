@@ -140,7 +140,7 @@ object codecs:
       Json.obj("type" -> Json.fromString("single"), "value" -> Json.fromString(optionId.asString))
     case AnswerValue.MultipleChoice(optionIds) =>
       Json.obj(
-        "type" -> Json.fromString("multiple"),
+        "type"  -> Json.fromString("multiple"),
         "value" -> Json.arr(optionIds.map(id => Json.fromString(id.asString)).toSeq*))
     case AnswerValue.Text(value) =>
       Json.obj("type" -> Json.fromString("text"), "value" -> Json.fromString(value))

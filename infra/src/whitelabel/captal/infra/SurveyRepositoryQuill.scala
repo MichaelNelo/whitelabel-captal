@@ -3,18 +3,14 @@ package whitelabel.captal.infra
 import io.circe
 import io.circe.parser.decode
 import io.getquill.*
-import io.getquill.context.sql.idiom.SqlIdiom
-import io.getquill.jdbczio.Quill
-import izumi.reflect.Tag
-import whitelabel.captal.core.application.commands.{
-  IdentificationSurveyType,
-  NextIdentificationSurvey
-}
+import whitelabel.captal.core.application.IdentificationSurveyType
+import whitelabel.captal.core.application.commands.NextIdentificationSurvey
 import whitelabel.captal.core.infrastructure.SurveyRepository
 import whitelabel.captal.core.survey.question.*
 import whitelabel.captal.core.survey.question.codecs.given
 import whitelabel.captal.core.survey.{State, Survey}
 import whitelabel.captal.core.{survey, user}
+import whitelabel.captal.infra.QuillSchema.given
 import zio.*
 
 object SurveyRepositoryQuill:
@@ -32,60 +28,61 @@ object SurveyRepositoryQuill:
       rule     <- query[QuestionRuleRow].leftJoin(_.questionId == questionId)
     yield QuestionWithDetails(survey, question, option, rule)
 
-  inline def surveyWithQuestionsQuery = quote: (surveyId: String) =>
-    for
-      survey   <- query[SurveyRow].filter(_.id == surveyId)
-      question <- query[QuestionRow].join(_.surveyId == surveyId)
-      option   <- query[QuestionOptionRow].leftJoin(_.questionId == question.id)
-      rule     <- query[QuestionRuleRow].leftJoin(_.questionId == question.id)
-    yield QuestionWithDetails(survey, question, option, rule)
+  inline def firstEmailSurveyQuery = quote:
+    query[SurveyRow]
+      .filter(s => s.isActive == 1 && s.category == "email")
+      .join(query[QuestionRow])
+      .on((s, q) => s.id == q.surveyId)
+      .sortBy((_, q) => q.displayOrder)(using Ord.asc)
+      .map((s, q) => NextIdentificationSurveyRow(s.id, q.id, s.category))
+
+  // Helper to check if user has completed a survey of given category
+  private inline def hasCompletedCategoryQuery(userId: String, category: String) =
+    query[UserSurveyProgressRow]
+      .filter(p =>
+        p.userId == userId &&
+          p.completedAt.isDefined &&
+          query[SurveyRow]
+            .filter(s => s.id == p.surveyId && s.category == category)
+            .nonEmpty)
+      .nonEmpty
 
   inline def nextIdentificationSurveyQuery = quote: (userId: String) =>
-    val completedSurveyCategories = query[UserSurveyProgressRow]
-      .filter(p => p.userId == userId && p.completedAt.isDefined)
-      .join(query[SurveyRow])
-      .on((p, s) => p.surveyId == s.id)
-      .map(_._2.category)
-
     val answeredQuestionIds = query[AnswerRow].filter(_.userId == userId).map(_.questionId)
-
     val hasEmail = query[UserRow].filter(u => u.id == userId && u.email.isDefined).nonEmpty
-    val hasCompletedEmail = completedSurveyCategories.filter(_ == "email").nonEmpty
-    val hasCompletedProfiling = completedSurveyCategories.filter(_ == "profiling").nonEmpty
+    val hasCompletedEmail = hasCompletedCategoryQuery(userId, "email")
+    val hasCompletedProfiling = hasCompletedCategoryQuery(userId, "profiling")
+    val hasCompletedLocation = hasCompletedCategoryQuery(userId, "location")
 
-    for
-      survey <- query[SurveyRow].filter: s =>
+    query[SurveyRow]
+      .filter: s =>
         s.isActive == 1 && (
           (s.category == "email" && !hasEmail && !hasCompletedEmail) ||
-            (s.category == "profiling" && hasEmail && !hasCompletedProfiling) || (
-              s.category == "location" && hasEmail && hasCompletedProfiling &&
-                !completedSurveyCategories.filter(_ == "location").nonEmpty
-            )
+            (s.category == "profiling" && hasEmail && !hasCompletedProfiling) ||
+            (s.category == "location" && hasEmail && hasCompletedProfiling && !hasCompletedLocation)
         )
-      question <- query[QuestionRow]
-        .filter(q => q.surveyId == survey.id && !answeredQuestionIds.contains(q.id))
-        .sortBy(_.displayOrder)(using Ord.asc)
-        .take(1)
-    yield NextIdentificationSurveyRow(survey.id, question.id, survey.category)
+      .join(query[QuestionRow])
+      .on: (s, q) =>
+        s.id == q.surveyId && !answeredQuestionIds.contains(q.id)
+      .sortBy((_, q) => q.displayOrder)(using Ord.asc)
+      .map((s, q) => NextIdentificationSurveyRow(s.id, q.id, s.category))
 
-  def apply[D <: SqlIdiom, N <: NamingStrategy](quill: Quill[D, N]): SurveyRepository[Task] =
+  def apply(quill: QuillSqlite, ctx: SessionContext): SurveyRepository[Task] =
     new SurveyRepository[Task]:
       import quill.*
 
-      def findById(id: survey.Id): Task[Option[Survey[State]]] =
-        run(surveyWithQuestionsQuery(lift(id.asString)))
-          .map: rows =>
-            for
-              first    <- rows.headOption
-              question <- buildQuestionToAnswer(first.question, rows)
-              state    <- buildState(first.survey, question)
-            yield Survey(id, state)
-          .orDie
-
-      def findWithEmailQuestion(
-          surveyId: survey.Id,
-          questionId: survey.question.Id): Task[Option[Survey[State.WithEmailQuestion]]] =
-        findQuestionWithCategory(surveyId, questionId, "email")(State.WithEmailQuestion.apply)
+      def findAssignedEmailSurvey(): Task[Option[Survey[State.WithEmailQuestion]]] = ctx
+        .get
+        .flatMap:
+          case Some(sessionData) =>
+            (sessionData.currentSurveyId, sessionData.currentQuestionId) match
+              case (Some(surveyId), Some(questionId)) =>
+                findQuestionWithCategory(surveyId, questionId, "email")(
+                  State.WithEmailQuestion.apply)
+              case _ =>
+                ZIO.none
+          case None =>
+            ZIO.none
 
       def findWithProfilingQuestion(
           surveyId: survey.Id,
@@ -127,10 +124,23 @@ object SurveyRepositoryQuill:
             result
           .orDie
 
-      def findNextIdentificationSurvey(userId: user.Id): Task[Option[NextIdentificationSurvey]] =
-        run(nextIdentificationSurveyQuery(lift(userId.asString)).take(1))
-          .map(_.headOption.map(toNextIdentificationSurvey))
-          .orDie
+      def findNextIdentificationSurvey(): Task[Option[NextIdentificationSurvey]] = ctx
+        .get
+        .flatMap:
+          case Some(sessionData) =>
+            sessionData.userId match
+              case Some(userId) =>
+                run(nextIdentificationSurveyQuery(lift(userId.asString)).take(1))
+                  .map(_.headOption.map(toNextIdentificationSurvey))
+                  .orDie
+              case None =>
+                run(firstEmailSurveyQuery.take(1))
+                  .map(_.headOption.map(toNextIdentificationSurvey))
+                  .orDie
+          case None =>
+            run(firstEmailSurveyQuery.take(1))
+              .map(_.headOption.map(toNextIdentificationSurvey))
+              .orDie
 
       private def findQuestionWithCategory[S <: State](
           surveyId: survey.Id,
@@ -207,23 +217,6 @@ object SurveyRepositoryQuill:
   private def parseHierarchyLevel(level: String): Option[HierarchyLevel] =
     decode[HierarchyLevel](s"\"$level\"").toOption
 
-  private def buildState(row: SurveyRow, question: QuestionToAnswer): Option[State] =
-    row.category match
-      case "email" =>
-        Some(State.WithEmailQuestion(question))
-      case "profiling" =>
-        Some(State.WithProfilingQuestion(question))
-      case "location" =>
-        parseHierarchyLevel(row.advertiserId.getOrElse("state")).map(
-          State.WithLocationQuestion(question, _))
-      case "advertiser" =>
-        row
-          .advertiserId
-          .flatMap(survey.AdvertiserId.fromString)
-          .map(State.WithAdvertiserQuestion(_, question))
-      case _ =>
-        None
-
   private def toNextIdentificationSurvey(
       row: NextIdentificationSurveyRow): NextIdentificationSurvey =
     val surveyType =
@@ -240,6 +233,6 @@ object SurveyRepositoryQuill:
       survey.question.Id.unsafe(row.questionId),
       surveyType)
 
-  def layer[D <: SqlIdiom: Tag, N <: NamingStrategy: Tag]
-      : ZLayer[Quill[D, N], Nothing, SurveyRepository[Task]] = ZLayer.fromFunction(apply[D, N])
+  val layer: ZLayer[QuillSqlite & SessionContext, Nothing, SurveyRepository[Task]] =
+    ZLayer.fromFunction(apply)
 end SurveyRepositoryQuill

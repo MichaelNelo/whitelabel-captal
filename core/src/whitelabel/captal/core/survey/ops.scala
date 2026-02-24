@@ -25,11 +25,9 @@ object ops:
       answer        = QuestionAnswer(q.id, value, now)
       questionEvent = QuestionEvent.EmailQuestionAnswered(
         userId = user.id,
-        sessionId = user.state.sessionId,
         surveyId = survey.id,
         questionId = q.id,
         answer = answer,
-        locale = user.state.locale,
         occurredAt = now)
       result <- Op.emit(SurveyEvent.QuestionAnswered(survey.id, questionEvent), answer)
     yield result
@@ -45,11 +43,9 @@ object ops:
       answer        = QuestionAnswer(q.id, value, now)
       questionEvent = QuestionEvent.ProfilingQuestionAnswered(
         userId = user.id,
-        sessionId = user.state.sessionId,
         surveyId = survey.id,
         questionId = q.id,
         answer = answer,
-        locale = user.state.locale,
         occurredAt = now)
       result <- Op.emit(SurveyEvent.QuestionAnswered(survey.id, questionEvent), answer)
     yield result
@@ -65,14 +61,11 @@ object ops:
       answer        = QuestionAnswer(q.id, value, now)
       questionEvent = QuestionEvent.LocationQuestionAnswered(
         userId = user.id,
-        sessionId = user.state.sessionId,
         surveyId = survey.id,
         questionId = q.id,
         hierarchyLevel = survey.state.hierarchyLevel,
         answer = answer,
-        locale = user.state.locale,
-        occurredAt = now
-      )
+        occurredAt = now)
       result <- Op.emit(SurveyEvent.QuestionAnswered(survey.id, questionEvent), answer)
     yield result
   end answerLocation
@@ -88,14 +81,11 @@ object ops:
       answer        = QuestionAnswer(q.id, value, now)
       questionEvent = QuestionEvent.AdvertiserQuestionAnswered(
         userId = user.id,
-        sessionId = user.state.sessionId,
         surveyId = survey.id,
         advertiserId = survey.state.advertiserId,
         questionId = q.id,
         answer = answer,
-        locale = user.state.locale,
-        occurredAt = now
-      )
+        occurredAt = now)
       result <- Op.emit(SurveyEvent.QuestionAnswered(survey.id, questionEvent), answer)
     yield result
   end answerAdvertiser
