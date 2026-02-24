@@ -1,4 +1,4 @@
-package whitelabel.captal.core.infrastructure
+package whitelabel.captal.infra
 
 import whitelabel.captal.core.{application, survey, user}
 

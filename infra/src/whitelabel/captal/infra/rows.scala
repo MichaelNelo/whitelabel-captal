@@ -9,9 +9,10 @@ final case class UserRow(
 
 final case class SessionRow(
     id: String,
-    userId: String,
+    userId: Option[String],
     deviceId: String,
     locale: String,
+    phase: String,
     currentSurveyId: Option[String],
     currentQuestionId: Option[String],
     createdAt: String)
