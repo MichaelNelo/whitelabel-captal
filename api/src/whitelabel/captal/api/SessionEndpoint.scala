@@ -1,59 +1,81 @@
 package whitelabel.captal.api
 
+import izumi.reflect.Tag
 import sttp.tapir.json.circe.*
 import sttp.tapir.ztapir.*
-import whitelabel.captal.core.application.commands.Handler
-import whitelabel.captal.core.application.{Event, EventHandler, Flow}
-import whitelabel.captal.core.infrastructure.{Session, SessionData, SessionRepository}
-import whitelabel.captal.core.{survey, user}
+import whitelabel.captal.core.application.{Flow, Phase}
+import whitelabel.captal.core.infrastructure.SessionData
+import whitelabel.captal.core.user
+import whitelabel.captal.core.user.DeviceId
+import whitelabel.captal.infra.{SessionContext, SessionService}
 import zio.*
-import zio.interop.catz.*
 
 object SessionEndpoint:
   val sessionCookie = cookie[Option[String]]("session_id")
 
-  private def validateSession(
+  enum OnMissing:
+    case Fail
+    case Create(deviceId: DeviceId, locale: String)
+
+  private def resolveSessionData(
       cookie: Option[String],
-      sessionRepo: SessionRepository[Task]): IO[ApiError, Session[Task]] =
+      sessionService: SessionService,
+      onMissing: OnMissing): IO[ApiError, SessionData] =
     cookie match
       case None =>
-        ZIO.fail(ApiError.SessionMissing)
+        onMissing match
+          case OnMissing.Fail =>
+            ZIO.fail(ApiError.SessionMissing)
+          case OnMissing.Create(deviceId, locale) =>
+            sessionService
+              .create(deviceId, locale, Phase.IdentificationQuestion)
+              .mapError(ApiError.InternalError(_))
       case Some(value) =>
         user.SessionId.fromString(value) match
           case None =>
             ZIO.fail(ApiError.SessionInvalid("Malformed session ID"))
           case Some(sessionId) =>
-            sessionRepo
+            sessionService
               .findById(sessionId)
-              .mapError(e => ApiError.InternalError(e.getMessage))
+              .mapError(ApiError.InternalError(_))
               .flatMap:
-                case None =>
-                  ZIO.fail(ApiError.SessionExpired)
                 case Some(data) =>
-                  ZIO.succeed(makeSession(data, sessionRepo))
+                  ZIO.succeed(data)
+                case None =>
+                  onMissing match
+                    case OnMissing.Fail =>
+                      ZIO.fail(ApiError.SessionExpired)
+                    case OnMissing.Create(deviceId, locale) =>
+                      sessionService
+                        .create(deviceId, locale, Phase.IdentificationQuestion)
+                        .mapError(ApiError.InternalError(_))
 
-  private def makeSession(data: SessionData, repo: SessionRepository[Task]): Session[Task] =
-    new Session[Task]:
-      def getSessionData: Task[SessionData] = ZIO.from(data)
-      def setCurrentSurvey(surveyId: survey.Id, questionId: survey.question.Id): Task[Unit] = repo
-        .setCurrentSurvey(data.sessionId, surveyId, questionId)
+  def securedFlow[C: Tag, Res: Tag](onMissing: OnMissing = OnMissing.Fail)
+      : ZPartialServerEndpoint[SessionContext & SessionService & Flow.Aux[Task, C, Res], Option[
+        String], Flow.Aux[Task, C, Res], Unit, ApiError, Unit, Any] = endpoint
+    .securityIn(sessionCookie)
+    .errorOut(jsonBody[ApiError])
+    .zServerSecurityLogic: cookie =>
+      (
+        for
+          _           <- ZIO.logTrace(s"securedFlow: cookie=$cookie")
+          sessionData <- ZIO.serviceWithZIO[SessionService](
+            resolveSessionData(cookie, _, onMissing))
+          _    <- ZIO.logTrace(s"securedFlow: sessionData=$sessionData")
+          _    <- SessionContext.set(sessionData)
+          flow <- ZIO.service[Flow.Aux[Task, C, Res]]
+          _    <- ZIO.logTrace("securedFlow: got flow")
+        yield flow
+      ).tapError(e => ZIO.logError(s"securedFlow error: $e"))
 
-  def securedFlow[R, C, Res](
-      handlerEffect: Session[Task] => ZIO[R, Nothing, Handler.Aux[Task, C, Res]])
-      : ZPartialServerEndpoint[
-        SessionRepository[Task] & EventHandler[Task, Event] & R,
-        Option[String],
-        Flow.Aux[Task, C, Res],
-        Unit,
-        ApiError,
-        Unit,
-        Any] = endpoint
+  def securedSessionData(onMissing: OnMissing = OnMissing.Fail)
+      : ZPartialServerEndpoint[SessionContext & SessionService, Option[
+        String], SessionData, Unit, ApiError, Unit, Any] = endpoint
     .securityIn(sessionCookie)
     .errorOut(jsonBody[ApiError])
     .zServerSecurityLogic: cookie =>
       for
-        session      <- ZIO.serviceWithZIO[SessionRepository[Task]](validateSession(cookie, _))
-        handler      <- handlerEffect(session)
-        eventHandler <- ZIO.service[EventHandler[Task, Event]]
-      yield Flow(handler, eventHandler)
+        sessionData <- ZIO.serviceWithZIO[SessionService](resolveSessionData(cookie, _, onMissing))
+        _           <- SessionContext.set(sessionData)
+      yield sessionData
 end SessionEndpoint
