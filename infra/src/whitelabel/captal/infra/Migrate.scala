@@ -8,11 +8,11 @@ import zio.interop.catz.*
 
 object Migrate extends ZIOAppDefault:
 
-  private val fly4sConfig = Fly4sConfig.default.copy(
-    locations = List(Location("db/migration")))
+  private val fly4sConfig = Fly4sConfig.default.copy(locations = List(Location("db/migration")))
 
-  override val run: ZIO[Any, Throwable, Unit] =
-    ZIO.attempt(ConfigFactory.load().getString("database.dataSource.url")).flatMap: url =>
+  override val run: ZIO[Any, Throwable, Unit] = ZIO
+    .attempt(ConfigFactory.load().getString("database.dataSource.url"))
+    .flatMap: url =>
       Fly4s
         .make[Task](url, config = fly4sConfig)
         .use: fly4s =>
