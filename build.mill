@@ -7,16 +7,14 @@ import mill.*, scalalib.*, scalafmt.*
 trait BaseModule extends ScalaModule with ScalafmtModule with ScalafixModule:
   def scalaVersion = "3.8.0"
   def scalacOptions = Seq("-Wunused:imports,locals,explicits,implicits")
-  object test extends ScalaTests with ScalafmtModule with ScalafixModule:
-    def mvnDeps = Seq(mvn"com.lihaoyi::utest:0.8.9", mvn"org.scalacheck::scalacheck:1.18.0")
-    def testFramework = "utest.runner.Framework"
-end BaseModule
 
 object core extends BaseModule:
   def mvnDeps = Seq(
     mvn"org.typelevel::cats-core:2.12.0",
     mvn"io.circe::circe-core:0.14.10",
     mvn"io.circe::circe-parser:0.14.10")
+  object test extends ScalaTests with TestModule.Utest with ScalafmtModule with ScalafixModule:
+    def mvnDeps = Seq(mvn"com.lihaoyi::utest:0.8.9", mvn"org.scalacheck::scalacheck:1.18.0")
 
 object infra extends BaseModule:
   def moduleDeps = Seq(core)
@@ -29,6 +27,14 @@ object infra extends BaseModule:
 
   def migrate() = Task.Command:
     runMain("whitelabel.captal.infra.Migrate")()
+
+  object test extends ScalaTests with ScalafmtModule with ScalafixModule:
+    def moduleDeps = super.moduleDeps ++ Seq(api)
+    def mvnDeps = Seq(
+      mvn"dev.zio::zio-test:2.1.14",
+      mvn"dev.zio::zio-test-sbt:2.1.14",
+      mvn"com.softwaremill.sttp.tapir::tapir-sttp-stub-server:1.11.11")
+    def testFramework = "zio.test.sbt.ZTestFramework"
 
 object api extends BaseModule:
   def moduleDeps = Seq(core, infra)
