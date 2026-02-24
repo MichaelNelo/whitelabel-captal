@@ -5,14 +5,14 @@ import java.time.{Instant, LocalDate}
 import utest.*
 import whitelabel.captal.core.survey.question.*
 import whitelabel.captal.core.user.ops.answerEmail
-import whitelabel.captal.core.user.{Email, SessionId, State as UserState, User}
+import whitelabel.captal.core.user.{Email, State as UserState, User}
 import whitelabel.captal.core.{Op, survey, user}
 
 object ValidationSuccessTests extends TestSuite:
   // Test fixtures using public API
   private def makeUser(): User[UserState.WithEmail] = User(
     user.Id.generate,
-    UserState.WithEmail(Email.unsafeFrom("test@example.com"), SessionId.generate, "en"))
+    UserState.WithEmail(Email.unsafeFrom("test@example.com")))
   private def makeEmailSurvey(question: QuestionToAnswer): Survey[State.WithEmailQuestion] = Survey(
     survey.Id.generate,
     State.WithEmailQuestion(question))
