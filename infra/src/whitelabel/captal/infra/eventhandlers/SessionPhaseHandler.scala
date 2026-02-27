@@ -4,8 +4,10 @@ import io.getquill.*
 import whitelabel.captal.core.application.{Event, Phase}
 import whitelabel.captal.core.survey.Event as SurveyEvent
 import whitelabel.captal.core.survey.question.Event as QuestionEvent
-import whitelabel.captal.infra.{DbEventHandler, QuillSchema, QuillSqlite, SessionContext, SessionService}
-import whitelabel.captal.infra.QuillSchema.given
+import whitelabel.captal.infra.schema.given
+import whitelabel.captal.infra.schema.core.given
+import whitelabel.captal.infra.{DbEventHandler, SessionContext, SessionService}
+import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
 
 object SessionPhaseHandler:
@@ -17,13 +19,9 @@ object SessionPhaseHandler:
         if phases.nonEmpty then
           for
             sessionData <- ctx.getOrFail
-            sessionId = sessionData.sessionId.asString
-            _ <-
+            _           <-
               ZIO.foreachDiscard(phases): phase =>
-                run(
-                  SessionService.updatePhaseQuery(
-                    lift(sessionId),
-                    lift(SessionService.phaseToString(phase)))).orDie
+                run(SessionService.updatePhaseQuery(lift(sessionData.sessionId), lift(phase))).orDie
           yield ()
         else
           ZIO.unit

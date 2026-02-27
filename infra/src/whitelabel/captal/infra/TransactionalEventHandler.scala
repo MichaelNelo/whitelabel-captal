@@ -1,6 +1,7 @@
 package whitelabel.captal.infra
 
 import whitelabel.captal.core.application.{Event, EventHandler}
+import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
 
 object TransactionalEventHandler:

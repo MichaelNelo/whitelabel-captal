@@ -1,25 +1,27 @@
 package whitelabel.captal.infra
 
 import io.getquill.*
+import whitelabel.captal.core.{survey, user}
 
 object SurveyService:
-  inline def findByUserAndSurveyQuery = quote: (visitorId: String, surveyId: String) =>
-    query[UserSurveyProgressRow].filter(p => p.userId == visitorId && p.surveyId == surveyId)
+  inline def findByUserAndSurveyQuery = quote: (userIdParam: user.Id, surveyIdParam: survey.Id) =>
+    query[UserSurveyProgressRow].filter(progress =>
+      progress.userId == userIdParam && progress.surveyId == surveyIdParam)
 
   inline def insertProgressQuery = quote:
     (
         id: String,
-        visitorId: String,
-        surveyId: String,
-        currentQuestionId: Option[String],
+        userIdParam: user.Id,
+        surveyIdParam: survey.Id,
+        currentQuestionIdParam: Option[survey.question.Id],
         completedAt: Option[String],
         createdAt: String,
         updatedAt: String) =>
       query[UserSurveyProgressRow].insert(
         _.id                -> id,
-        _.userId            -> visitorId,
-        _.surveyId          -> surveyId,
-        _.currentQuestionId -> currentQuestionId,
+        _.userId            -> userIdParam,
+        _.surveyId          -> surveyIdParam,
+        _.currentQuestionId -> currentQuestionIdParam,
         _.completedAt       -> completedAt,
         _.createdAt         -> createdAt,
         _.updatedAt         -> updatedAt
@@ -29,12 +31,15 @@ object SurveyService:
     query[UserSurveyProgressRow].filter(_.id == progressId).update(_.updatedAt -> updatedAt)
 
   // Check if survey is complete: all questions answered
-  inline def isSurveyCompleteQuery = quote: (visitorId: String, surveyId: String) =>
-    query[QuestionRow].filter(_.surveyId == surveyId).size <=
+  inline def isSurveyCompleteQuery = quote: (userIdParam: user.Id, surveyIdParam: survey.Id) =>
+    query[QuestionRow].filter(_.surveyId == surveyIdParam).size <=
       query[AnswerRow]
-        .filter(a =>
-          a.userId == visitorId &&
-            query[QuestionRow].filter(q => q.surveyId == surveyId && q.id == a.questionId).nonEmpty)
+        .filter(answer =>
+          answer.userId == userIdParam &&
+            query[QuestionRow]
+              .filter(question =>
+                question.surveyId == surveyIdParam && question.id == answer.questionId)
+              .nonEmpty)
         .size
 
   inline def markCompleteQuery = quote:
