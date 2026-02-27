@@ -1,37 +1,36 @@
 package whitelabel.captal.infra
 
+import whitelabel.captal.core.application.Phase
+import whitelabel.captal.core.{survey, user}
+
 final case class UserRow(
-    id: String,
-    email: Option[String],
+    id: user.Id,
+    email: Option[user.Email],
     locale: String,
     createdAt: String,
     updatedAt: String)
 
 final case class SessionRow(
-    id: String,
-    userId: Option[String],
-    deviceId: String,
+    id: user.SessionId,
+    userId: Option[user.Id],
+    deviceId: user.DeviceId,
     locale: String,
-    phase: String,
-    currentSurveyId: Option[String],
-    currentQuestionId: Option[String],
+    phase: Phase,
+    currentSurveyId: Option[survey.Id],
+    currentQuestionId: Option[survey.question.Id],
     createdAt: String)
 
 final case class SurveyRow(
-    id: String,
+    id: survey.Id,
     category: String,
     advertiserId: Option[String],
     isActive: Int,
     createdAt: String)
 
 final case class QuestionRow(
-    id: String,
-    surveyId: String,
+    id: survey.question.Id,
+    surveyId: survey.Id,
     questionType: String,
-    textContent: String,
-    textLocale: String,
-    descriptionContent: Option[String],
-    descriptionLocale: Option[String],
     pointsAwarded: Int,
     displayOrder: Int,
     hierarchyLevel: Option[String],
@@ -39,35 +38,44 @@ final case class QuestionRow(
     createdAt: String)
 
 final case class QuestionOptionRow(
-    id: String,
-    questionId: String,
-    textContent: String,
-    textLocale: String,
+    id: survey.question.OptionId,
+    questionId: survey.question.Id,
     displayOrder: Int,
-    parentOptionId: Option[String])
+    parentOptionId: Option[survey.question.OptionId])
 
 final case class QuestionRuleRow(
     id: String,
-    questionId: String,
+    questionId: survey.question.Id,
     ruleType: String,
     ruleConfig: String)
 
 final case class AnswerRow(
     id: String,
-    userId: String,
-    sessionId: String,
-    questionId: String,
+    userId: user.Id,
+    sessionId: user.SessionId,
+    questionId: survey.question.Id,
     answerValue: String,
     answeredAt: String,
     createdAt: String)
 
 final case class UserSurveyProgressRow(
     id: String,
-    userId: String,
-    surveyId: String,
-    currentQuestionId: Option[String],
+    userId: user.Id,
+    surveyId: survey.Id,
+    currentQuestionId: Option[survey.question.Id],
     completedAt: Option[String],
     createdAt: String,
     updatedAt: String)
 
-final case class NextIdentificationSurveyRow(surveyId: String, questionId: String, category: String)
+final case class NextIdentificationSurveyRow(
+    surveyId: survey.Id,
+    questionId: survey.question.Id,
+    category: String)
+
+final case class LocalizedTextRow(
+    id: String,
+    entityId: String,
+    locale: String,
+    value: String,
+    createdAt: String,
+    updatedAt: String)

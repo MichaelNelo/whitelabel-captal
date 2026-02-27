@@ -4,13 +4,16 @@ import io.getquill.*
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.infrastructure.SessionData
 import whitelabel.captal.core.{survey, user}
-import whitelabel.captal.infra.QuillSchema.given
+import whitelabel.captal.infra.schema.given
+import whitelabel.captal.infra.schema.core.given
+import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
 
 trait SessionService:
   def findById(sessionId: user.SessionId): Task[Option[SessionData]]
   def create(deviceId: user.DeviceId, locale: String, phase: Phase): Task[SessionData]
   def setPhase(sessionId: user.SessionId, phase: Phase): Task[Unit]
+  def setLocale(sessionId: user.SessionId, locale: String): Task[Unit]
   def setCurrentSurvey(
       sessionId: user.SessionId,
       surveyId: survey.Id,
@@ -18,43 +21,50 @@ trait SessionService:
   def clearCurrentSurvey(sessionId: user.SessionId): Task[Unit]
 
 object SessionService:
-  inline def findByIdQuery = quote: (sessionId: String) =>
-    query[SessionRow].filter(_.id == sessionId)
+  inline def findByIdQuery = quote: (sessionIdParam: user.SessionId) =>
+    query[SessionRow].filter(_.id == sessionIdParam)
 
   inline def updateCurrentSurveyQuery = quote:
-    (sessionId: String, surveyId: String, questionId: String) =>
+    (
+        sessionIdParam: user.SessionId,
+        surveyIdParam: survey.Id,
+        questionIdParam: survey.question.Id) =>
       query[SessionRow]
-        .filter(_.id == sessionId)
-        .update(_.currentSurveyId -> Some(surveyId), _.currentQuestionId -> Some(questionId))
+        .filter(_.id == sessionIdParam)
+        .update(
+          _.currentSurveyId   -> Some(surveyIdParam),
+          _.currentQuestionId -> Some(questionIdParam))
 
-  inline def clearCurrentSurveyQuery = quote: (sessionId: String) =>
+  inline def clearCurrentSurveyQuery = quote: (sessionIdParam: user.SessionId) =>
     query[SessionRow]
-      .filter(_.id == sessionId)
+      .filter(_.id == sessionIdParam)
       .update(_.currentSurveyId -> None, _.currentQuestionId -> None)
 
-  inline def updatePhaseQuery = quote: (sessionId: String, phase: String) =>
-    query[SessionRow].filter(_.id == sessionId).update(_.phase -> phase)
+  inline def updatePhaseQuery = quote: (sessionIdParam: user.SessionId, phaseParam: Phase) =>
+    query[SessionRow].filter(_.id == sessionIdParam).update(_.phase -> phaseParam)
+
+  inline def updateLocaleQuery = quote: (sessionIdParam: user.SessionId, localeParam: String) =>
+    query[SessionRow].filter(_.id == sessionIdParam).update(_.locale -> localeParam)
 
   def apply(quill: QuillSqlite): SessionService =
     new SessionService:
       import quill.*
 
       def findById(sessionId: user.SessionId): Task[Option[SessionData]] =
-        run(findByIdQuery(lift(sessionId.asString))).map(_.headOption.flatMap(toSessionData)).orDie
+        run(findByIdQuery(lift(sessionId))).map(_.headOption.map(toSessionData)).orDie
 
       def create(deviceId: user.DeviceId, locale: String, phase: Phase): Task[SessionData] =
         val sessionId = user.SessionId.generate
         val now = java.time.Instant.now.toString
         val row = SessionRow(
-          id = sessionId.asString,
+          id = sessionId,
           userId = None,
-          deviceId = deviceId.value,
+          deviceId = deviceId,
           locale = locale,
-          phase = phaseToString(phase),
+          phase = phase,
           currentSurveyId = None,
           currentQuestionId = None,
-          createdAt = now
-        )
+          createdAt = now)
         run(
           query[SessionRow].insert(
             _.id                -> lift(row.id),
@@ -72,54 +82,24 @@ object SessionService:
           sessionId: user.SessionId,
           surveyId: survey.Id,
           questionId: survey.question.Id): Task[Unit] =
-        run(
-          updateCurrentSurveyQuery(
-            lift(sessionId.asString),
-            lift(surveyId.asString),
-            lift(questionId.asString))).unit.orDie
+        run(updateCurrentSurveyQuery(lift(sessionId), lift(surveyId), lift(questionId))).unit.orDie
 
       def clearCurrentSurvey(sessionId: user.SessionId): Task[Unit] =
-        run(clearCurrentSurveyQuery(lift(sessionId.asString))).unit.orDie
+        run(clearCurrentSurveyQuery(lift(sessionId))).unit.orDie
 
       def setPhase(sessionId: user.SessionId, phase: Phase): Task[Unit] =
-        run(updatePhaseQuery(lift(sessionId.asString), lift(phaseToString(phase)))).unit.orDie
+        run(updatePhaseQuery(lift(sessionId), lift(phase))).unit.orDie
 
-  private def toSessionData(row: SessionRow): Option[SessionData] =
-    for
-      sessionId <- user.SessionId.fromString(row.id)
-      phase     <- parsePhase(row.phase)
-    yield SessionData(
-      sessionId,
-      row.userId.flatMap(user.Id.fromString),
-      row.locale,
-      phase,
-      row.currentSurveyId.flatMap(survey.Id.fromString),
-      row.currentQuestionId.flatMap(survey.question.Id.fromString)
-    )
+      def setLocale(sessionId: user.SessionId, locale: String): Task[Unit] =
+        run(updateLocaleQuery(lift(sessionId), lift(locale))).unit.orDie
 
-  private def parsePhase(s: String): Option[Phase] =
-    s match
-      case "identification_question" =>
-        Some(Phase.IdentificationQuestion)
-      case "advertiser_video" =>
-        Some(Phase.AdvertiserVideo)
-      case "advertiser_question" =>
-        Some(Phase.AdvertiserQuestion)
-      case "ready" =>
-        Some(Phase.Ready)
-      case _ =>
-        None
-
-  def phaseToString(phase: Phase): String =
-    phase match
-      case Phase.IdentificationQuestion =>
-        "identification_question"
-      case Phase.AdvertiserVideo =>
-        "advertiser_video"
-      case Phase.AdvertiserQuestion =>
-        "advertiser_question"
-      case Phase.Ready =>
-        "ready"
+  private def toSessionData(row: SessionRow): SessionData = SessionData(
+    row.id,
+    row.userId,
+    row.locale,
+    row.phase,
+    row.currentSurveyId,
+    row.currentQuestionId)
 
   val layer: ZLayer[QuillSqlite, Nothing, SessionService] = ZLayer.fromFunction(apply)
 end SessionService

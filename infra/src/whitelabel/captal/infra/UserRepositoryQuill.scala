@@ -3,13 +3,19 @@ package whitelabel.captal.infra
 import io.getquill.*
 import whitelabel.captal.core.infrastructure.UserRepository
 import whitelabel.captal.core.user.{State, User}
-import whitelabel.captal.core.{survey, user}
-import whitelabel.captal.infra.QuillSchema.given
+import whitelabel.captal.core.user
+import whitelabel.captal.infra.schema.given
+import whitelabel.captal.infra.schema.core.given
+import whitelabel.captal.infra.schema.users.given
+import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
 
 object UserRepositoryQuill:
-  inline def findByIdQuery = quote: (id: String) =>
-    query[UserRow].filter(_.id == id)
+  inline def findWithEmailByIdQuery = quote: (userIdParam: user.Id) =>
+    query[User[State.WithEmail]].filter(_.id == userIdParam)
+
+  inline def findAnsweringByIdQuery = quote: (userIdParam: user.Id) =>
+    query[User[State.AnsweringQuestion]].filter(_.id == userIdParam)
 
   def apply(quill: QuillSqlite, ctx: SessionContext): UserRepository[Task] =
     new UserRepository[Task]:
@@ -20,35 +26,18 @@ object UserRepositoryQuill:
         .flatMap: sessionData =>
           sessionData.userId match
             case Some(userId) =>
-              run(findByIdQuery(lift(userId.asString)))
-                .map(_.headOption.flatMap(toWithEmailUser))
-                .orDie
+              run(findWithEmailByIdQuery(lift(userId))).map(_.headOption).orDie
             case None =>
               ZIO.none
 
       def findAnswering(): Task[Option[User[State.AnsweringQuestion]]] = ctx
         .getOrFail
         .flatMap: sessionData =>
-          (sessionData.userId, sessionData.currentSurveyId, sessionData.currentQuestionId) match
-            case (Some(userId), Some(surveyId), Some(questionId)) =>
-              run(findByIdQuery(lift(userId.asString)))
-                .map(_.headOption.flatMap(toAnsweringUser(_, surveyId, questionId)))
-                .orDie
-            case _ =>
+          sessionData.userId match
+            case Some(userId) =>
+              run(findAnsweringByIdQuery(lift(userId))).map(_.headOption).orDie
+            case None =>
               ZIO.none
-
-  private def toWithEmailUser(row: UserRow): Option[User[State.WithEmail]] =
-    for
-      userId <- user.Id.fromString(row.id)
-      email  <- row.email.map(user.Email.unsafeFrom)
-    yield User(userId, State.WithEmail(email))
-
-  private def toAnsweringUser(
-      row: UserRow,
-      surveyId: survey.Id,
-      questionId: survey.question.Id): Option[User[State.AnsweringQuestion]] =
-    for userId <- user.Id.fromString(row.id)
-    yield User(userId, State.AnsweringQuestion(surveyId, questionId))
 
   val layer: ZLayer[QuillSqlite & SessionContext, Nothing, UserRepository[Task]] =
     ZLayer.fromFunction(apply)
