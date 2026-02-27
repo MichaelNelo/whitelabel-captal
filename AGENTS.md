@@ -51,7 +51,7 @@ Usuario escanea QR / accede al hotspot
 | Scala 3 | Lenguaje principal |
 | Mill | Build tool |
 | ZIO | Runtime, efectos, layers |
-| Quill | Acceso a base de datos |
+| Quill | Acceso a base de datos (con MappedEncoding) |
 | Tapir | Definicion de endpoints HTTP |
 | Cats | Typeclasses (Monad, Parallel) |
 
@@ -65,27 +65,48 @@ whitelabel-captal/
 │   ├── src/
 │   │   └── whitelabel/captal/core/
 │   │       ├── Op.scala          # Tipo Op[E, Er, A] para operaciones
-│   │       ├── application/      # Handlers (casos de uso)
+│   │       ├── application/      # Handlers, eventos, fases
 │   │       │   ├── commands/     # Comandos y handlers
 │   │       │   ├── Error.scala   # Errores de aplicacion
-│   │       │   └── Event.scala   # Eventos de aplicacion
-│   │       ├── infrastructure/   # Traits de repositorios y Session
+│   │       │   ├── Event.scala   # Eventos de aplicacion
+│   │       │   ├── EventHandler.scala  # Trait para event handlers
+│   │       │   ├── Flow.scala    # Ejecutor de comandos
+│   │       │   └── phase.scala   # Enum de fases del usuario
+│   │       ├── infrastructure/   # Traits de repositorios y SessionData
 │   │       ├── survey/           # Agregado Survey
 │   │       └── user/             # Agregado User
 │   └── test/
 ├── infra/                        # Implementaciones con Quill
-│   └── src/
+│   ├── src/
+│   │   └── whitelabel/captal/infra/
+│   │       ├── schema.scala             # MappedEncoding para tipos de dominio
+│   │       ├── rows.scala               # Row types (usan tipos de dominio)
+│   │       ├── DbEventHandler.scala     # Trait para handlers transaccionales
+│   │       ├── TransactionalEventHandler.scala  # Wrapper transaccional
+│   │       ├── SessionContext.scala     # FiberRef para sesion
+│   │       ├── SessionService.scala     # Servicio de sesiones
+│   │       ├── SurveyService.scala      # Queries de progreso de surveys
+│   │       ├── SurveyRepositoryQuill.scala
+│   │       ├── UserRepositoryQuill.scala
+│   │       └── eventhandlers/           # Event handlers
+│   │           ├── AnswerPersistenceHandler.scala
+│   │           ├── UserPersistenceHandler.scala
+│   │           ├── SessionPhaseHandler.scala
+│   │           ├── SessionSurveyHandler.scala
+│   │           └── SurveyProgressHandler.scala
+│   └── test/
 │       └── whitelabel/captal/infra/
-│           ├── rows.scala        # Row types para BD
-│           ├── SessionRepositoryQuill.scala
-│           ├── SurveyRepositoryQuill.scala
-│           └── UserRepositoryQuill.scala
+│           ├── E2ETests.scala           # Tests E2E con Tapir stub
+│           ├── TestFixtures.scala       # Fixtures de BD
+│           └── TestLayers.scala         # Layers para tests
 ├── api/                          # Capa HTTP con Tapir
 │   └── src/
 │       └── whitelabel/captal/api/
-│           ├── SessionEndpoint.scala    # Seguridad por cookie
-│           ├── SessionServiceLive.scala # Validacion de sesion
-│           └── SurveyEndpoints.scala    # Endpoints de encuestas
+│           ├── Main.scala              # Entry point, composicion de layers
+│           ├── ApiError.scala          # Errores HTTP
+│           ├── SessionEndpoint.scala   # Seguridad por cookie
+│           ├── SurveyEndpoints.scala   # Definicion de endpoints
+│           └── SurveyRoutes.scala      # Implementacion de rutas
 └── docs/
     └── EVENT_SOURCING_SUMMARY.md # Detalle del modelo ES
 ```
@@ -120,61 +141,170 @@ Los handlers encapsulan casos de uso. Usan parametros explicitos (no context bou
 // Patron de Handler
 trait Handler[F[_], C]:
   type Result
-  def handle(command: C): F[Op[Result]]
+  def handle(command: C): F[Op[Event, Error, Result]]
 
 object Handler:
   type Aux[F[_], C, R] = Handler[F, C] { type Result = R }
 
 // Ejemplo de implementacion
 object AnswerProfilingHandler:
-  def apply[F[_]](
-      session: Session[F],
+  def apply[F[_]: Monad: Parallel](
       surveyRepo: SurveyRepository[F],
       userRepo: UserRepository[F]
-  )(using F: Monad[F], P: Parallel[F]): Handler.Aux[F, AnswerProfilingCommand, QuestionAnswer] =
+  ): Handler.Aux[F, AnswerProfilingCommand, QuestionAnswer] =
     new Handler[F, AnswerProfilingCommand]:
       type Result = QuestionAnswer
       def handle(cmd: AnswerProfilingCommand) = ...
 ```
 
-### 3. Session Management
+### 3. Session Management con FiberRef
 
-La sesion se maneja en capas:
-
-```
-HTTP Request (cookie)
-       |
-SessionService.validate (valida cookie)
-       |
-SessionRepository.findById (consulta BD)
-       |
-SessionData (datos crudos)
-       |
-Session[Task] (capability para handlers)
-```
+La sesion se maneja con `SessionContext` (FiberRef) y `SessionData`:
 
 ```scala
 // core/infrastructure/Session.scala
 final case class SessionData(
     sessionId: user.SessionId,
-    userId: user.Id,
+    userId: Option[user.Id],
     locale: String,
+    phase: Phase,
     currentSurveyId: Option[survey.Id],
     currentQuestionId: Option[survey.question.Id])
 
-trait Session[F[_]]:
-  def userId: F[user.Id]
-  def locale: F[String]
-  def currentSurveyId: F[Option[survey.Id]]
-  def currentQuestionId: F[Option[survey.question.Id]]
-  def setCurrentSurvey(surveyId: survey.Id, questionId: survey.question.Id): F[Unit]
+// infra/SessionContext.scala
+trait SessionContext:
+  def get: UIO[Option[SessionData]]
+  def getOrFail: Task[SessionData]
+  def set(data: SessionData): UIO[Unit]
 
-trait SessionRepository[F[_]]:
-  def findById(sessionId: user.SessionId): F[Option[SessionData]]
-  def setCurrentSurvey(sessionId: user.SessionId, surveyId: survey.Id, questionId: survey.question.Id): F[Unit]
+object SessionContext:
+  val make: ZLayer[Any, Nothing, SessionContext] =
+    ZLayer.scoped:
+      FiberRef.make(Option.empty[SessionData]).map: ref =>
+        new SessionContext:
+          def get = ref.get
+          def getOrFail = ref.get.someOrFailException
+          def set(data: SessionData) = ref.set(Some(data))
+
+// infra/SessionService.scala
+trait SessionService:
+  def findById(sessionId: user.SessionId): Task[Option[SessionData]]
+  def create(deviceId: user.DeviceId, locale: String, phase: Phase): Task[SessionData]
+  def setPhase(sessionId: user.SessionId, phase: Phase): Task[Unit]
+  def setCurrentSurvey(sessionId: user.SessionId, surveyId: survey.Id, questionId: survey.question.Id): Task[Unit]
+  def clearCurrentSurvey(sessionId: user.SessionId): Task[Unit]
 ```
 
-### 4. Repository Pattern
+### 4. Event Handlers
+
+Los eventos se procesan mediante `EventHandler`. Para operaciones transaccionales se usa `DbEventHandler`:
+
+```scala
+// core/application/EventHandler.scala
+trait EventHandler[F[_], -E]:
+  def handle(events: List[E]): F[Unit]
+
+object EventHandler:
+  extension [F[_]: Monad, E](self: EventHandler[F, E])
+    def andThen(other: EventHandler[F, E]): EventHandler[F, E] =
+      events => self.handle(events) *> other.handle(events)
+
+// infra/DbEventHandler.scala
+trait DbEventHandler[-E]:
+  def handle(events: List[E], quill: QuillSqlite): Task[Unit]
+
+object DbEventHandler:
+  extension [E](self: DbEventHandler[E])
+    def andThen(other: DbEventHandler[E]): DbEventHandler[E] =
+      (events, quill) => self.handle(events, quill) *> other.handle(events, quill)
+```
+
+### 5. Composicion de Event Handlers
+
+Los handlers se componen con `andThen` y se envuelven en una transaccion:
+
+```scala
+// api/Main.scala
+private val eventHandlerLayer: ZLayer[QuillSqlite & SessionContext, Nothing, EventHandler[Task, Event]] =
+  ZLayer.fromFunction: (quill: QuillSqlite, ctx: SessionContext) =>
+    val dbHandler = AnswerPersistenceHandler(ctx)
+      .andThen(UserPersistenceHandler(ctx))
+      .andThen(SessionPhaseHandler(ctx))
+      .andThen(SessionSurveyHandler(ctx))
+      .andThen(SurveyProgressHandler())
+    TransactionalEventHandler(dbHandler, quill)
+```
+
+### 6. MappedEncoding para Tipos de Dominio
+
+Los Row types usan tipos de dominio directamente gracias a `MappedEncoding`:
+
+```scala
+// infra/schema.scala
+type QuillSqlite = Quill.Sqlite[SnakeCase]
+
+object QuillSchema:
+  // Schema Meta
+  inline given SchemaMeta[UserRow] = schemaMeta[UserRow]("users")
+  inline given SchemaMeta[SessionRow] = schemaMeta[SessionRow]("sessions")
+  // ...
+
+  // Mapped Encodings - User types
+  @targetName("userIdToString")
+  inline given MappedEncoding[user.Id, String] = MappedEncoding(_.asString)
+  @targetName("stringToUserId")
+  inline given MappedEncoding[String, user.Id] = MappedEncoding(user.Id.unsafe)
+
+  @targetName("sessionIdToString")
+  inline given MappedEncoding[user.SessionId, String] = MappedEncoding(_.asString)
+  @targetName("stringToSessionId")
+  inline given MappedEncoding[String, user.SessionId] = MappedEncoding(user.SessionId.unsafe)
+
+  // Mapped Encodings - Survey types
+  @targetName("surveyIdToString")
+  inline given MappedEncoding[survey.Id, String] = MappedEncoding(_.asString)
+  @targetName("stringToSurveyId")
+  inline given MappedEncoding[String, survey.Id] = MappedEncoding(survey.Id.unsafe)
+
+  // Mapped Encodings - Phase
+  @targetName("phaseToString")
+  inline given MappedEncoding[Phase, String] = MappedEncoding(Phase.toDbString)
+  @targetName("stringToPhase")
+  inline given MappedEncoding[String, Phase] = MappedEncoding(Phase.fromDbString)
+```
+
+### 7. Row Types con Tipos de Dominio
+
+```scala
+// infra/rows.scala
+final case class UserRow(
+    id: user.Id,
+    email: Option[user.Email],
+    locale: String,
+    createdAt: String,
+    updatedAt: String)
+
+final case class SessionRow(
+    id: user.SessionId,
+    userId: Option[user.Id],
+    deviceId: user.DeviceId,
+    locale: String,
+    phase: Phase,
+    currentSurveyId: Option[survey.Id],
+    currentQuestionId: Option[survey.question.Id],
+    createdAt: String)
+
+final case class AnswerRow(
+    id: String,
+    userId: user.Id,
+    sessionId: user.SessionId,
+    questionId: survey.question.Id,
+    answerValue: String,
+    answeredAt: String,
+    createdAt: String)
+```
+
+### 8. Repository Pattern
 
 Los repositorios siguen el patron:
 - Trait abstracto en `core/infrastructure/`
@@ -183,22 +313,44 @@ Los repositorios siguen el patron:
 ```scala
 // core/infrastructure/SurveyRepository.scala
 trait SurveyRepository[F[_]]:
-  def findById(id: survey.Id): F[Option[Survey[State]]]
-  def findWithEmailQuestion(surveyId: survey.Id, questionId: survey.question.Id): F[Option[Survey[State.WithEmailQuestion]]]
+  def findAssignedEmailSurvey(): F[Option[Survey[State.WithEmailQuestion]]]
   def findWithProfilingQuestion(surveyId: survey.Id, questionId: survey.question.Id): F[Option[Survey[State.WithProfilingQuestion]]]
   def findWithLocationQuestion(surveyId: survey.Id, questionId: survey.question.Id): F[Option[Survey[State.WithLocationQuestion]]]
-  def findWithAdvertiserQuestion(surveyId: survey.Id, questionId: survey.question.Id): F[Option[Survey[State.WithAdvertiserQuestion]]]
-  def findNextIdentificationSurvey(userId: user.Id): F[Option[NextIdentificationSurvey]]
+  def findNextIdentificationSurvey(): F[Option[NextIdentificationSurvey]]
 
 // infra/SurveyRepositoryQuill.scala
 object SurveyRepositoryQuill:
-  def apply[D <: SqlIdiom, N <: NamingStrategy](quill: Quill[D, N]): SurveyRepository[Task] = ...
-  def layer[D <: SqlIdiom: Tag, N <: NamingStrategy: Tag]: ZLayer[Quill[D, N], Nothing, SurveyRepository[Task]] = ...
+  def apply(quill: QuillSqlite, ctx: SessionContext): SurveyRepository[Task] = ...
+  val layer: ZLayer[QuillSqlite & SessionContext, Nothing, SurveyRepository[Task]] = ...
 ```
 
 ---
 
 ## Modelo de Dominio
+
+### Phase (Fases del Usuario)
+
+```scala
+// core/application/phase.scala
+enum Phase:
+  case IdentificationQuestion  // Respondiendo preguntas de identificacion
+  case AdvertiserVideo         // Viendo video publicitario
+  case AdvertiserQuestion      // Respondiendo encuesta del anunciante
+  case Ready                   // Listo para acceder a WiFi
+
+object Phase:
+  def toDbString(phase: Phase): String = phase match
+    case IdentificationQuestion => "identification_question"
+    case AdvertiserVideo => "advertiser_video"
+    case AdvertiserQuestion => "advertiser_question"
+    case Ready => "ready"
+
+  def fromDbString(s: String): Phase = s match
+    case "identification_question" => IdentificationQuestion
+    case "advertiser_video" => AdvertiserVideo
+    case "advertiser_question" => AdvertiserQuestion
+    case "ready" => Ready
+```
 
 ### Agregado Survey
 
@@ -229,183 +381,143 @@ enum QuestionType:
 ```scala
 // Estados del User
 enum State:
-  case PendingEmail(sessionId: SessionId, deviceId: DeviceId, locale: String)
-  case WithEmail(email: Email, sessionId: SessionId, locale: String)
-  case AnsweringQuestion(sessionId: SessionId, locale: String, questionId: survey.question.Id)
+  case WithEmail(email: Email)
+  case AnsweringQuestion(surveyId: survey.Id, questionId: survey.question.Id)
 
 // Entidad User tipada por estado
 final case class User[S <: State](id: user.Id, state: S)
 ```
 
-### Eventos y Errores
+### Eventos
 
 ```scala
 // Eventos de Survey
 enum Event:
-  case QuestionAnswered(userId: user.Id, questionId: survey.question.Id, answer: AnswerValue, occurredAt: Instant)
+  case QuestionAnswered(surveyId: survey.Id, questionEvent: question.Event)
+
+// Eventos de Question
+enum Event:
+  case EmailQuestionAnswered(userId, surveyId, questionId, answer, occurredAt)
+  case ProfilingQuestionAnswered(userId, surveyId, questionId, answer, occurredAt)
+  case LocationQuestionAnswered(userId, surveyId, questionId, hierarchyLevel, answer, occurredAt)
+  case AdvertiserQuestionAnswered(userId, advertiserId, surveyId, questionId, answer, occurredAt)
 
 // Eventos de User
 enum Event:
-  case UserCreatedWithEmail(id: user.Id, sessionId: SessionId, deviceId: DeviceId, email: Email, locale: String, occurredAt: Instant)
-
-// Errores de aplicacion
-enum Error:
-  case NoSurveyAssigned
-  case UserNotFound(userId: user.Id)
-  case SurveyNotFound(surveyId: survey.Id)
-  case InvalidEmailFormat(value: String)
+  case UserCreated(userId, email, occurredAt)
+  case SurveyAssigned(userId, surveyId, questionId, occurredAt)
+  case NewUserArrived(surveyId, questionId, occurredAt)
 ```
 
 ---
 
-## Handlers Disponibles
+## Event Handlers Disponibles
+
+| Handler | Tipo | Funcion |
+|---------|------|---------|
+| `AnswerPersistenceHandler` | `DbEventHandler` | Persiste respuestas en `answers` |
+| `UserPersistenceHandler` | `DbEventHandler` | Crea usuarios (o vincula existentes), actualiza session |
+| `SessionPhaseHandler` | `DbEventHandler` | Actualiza fase de la session |
+| `SessionSurveyHandler` | `DbEventHandler` | Actualiza survey/question actual en session |
+| `SurveyProgressHandler` | `DbEventHandler` | Actualiza progreso del survey, marca completado |
+
+Todos corren en una sola transaccion via `TransactionalEventHandler`.
+
+---
+
+## Command Handlers Disponibles
 
 | Handler | Comando | Resultado | Dependencias |
 |---------|---------|-----------|--------------|
-| `AnswerEmailHandler` | `AnswerEmailCommand` | `QuestionAnswer` | `Session` |
-| `AnswerProfilingHandler` | `AnswerProfilingCommand` | `QuestionAnswer` | `Session`, `SurveyRepository`, `UserRepository` |
-| `AnswerLocationHandler` | `AnswerLocationCommand` | `QuestionAnswer` | `Session`, `SurveyRepository`, `UserRepository` |
-| `AnswerAdvertiserHandler` | `AnswerAdvertiserCommand` | `QuestionAnswer` | `Session`, `SurveyRepository`, `UserRepository` |
-| `ProvideNextIdentificationSurveyHandler` | `ProvideNextIdentificationSurveyCommand` | `Option[NextIdentificationSurvey]` | `Session`, `SurveyRepository` |
+| `AnswerEmailHandler` | `AnswerEmailCommand` | `QuestionAnswer` | `SurveyRepository` |
+| `AnswerProfilingHandler` | `AnswerProfilingCommand` | `QuestionAnswer` | `SurveyRepository`, `UserRepository` |
+| `AnswerLocationHandler` | `AnswerLocationCommand` | `QuestionAnswer` | `SurveyRepository`, `UserRepository` |
+| `ProvideNextIdentificationSurveyHandler` | `ProvideNextIdentificationSurveyCommand` | `Option[NextIdentificationSurvey]` | `SurveyRepository`, `UserRepository` |
 
 ---
 
-## Validacion de Respuestas
+## API Endpoints
 
-El sistema valida respuestas segun el tipo de pregunta:
+| Endpoint | Metodo | Path | Request | Response |
+|----------|--------|------|---------|----------|
+| Status | GET | `/api/status` | - | `Phase` |
+| Next Survey | GET | `/api/survey/next` | - | `Option[NextIdentificationSurvey]` |
+| Answer Email | POST | `/api/survey/email` | `{ email: String }` | `QuestionAnswer` |
+| Answer Profiling | POST | `/api/survey/profiling` | `{ optionId: String }` | `QuestionAnswer` |
+| Answer Location | POST | `/api/survey/location` | `{ optionId: String }` | `QuestionAnswer` |
 
-```scala
-// Reglas de seleccion (Radio, Select, Checkbox)
-enum SelectionRule:
-  case MinSelections(min: Int)
-  case MaxSelections(max: Int)
-
-// Reglas de texto (Input)
-enum TextRule:
-  case MinLength(min: Int)
-  case MaxLength(max: Int)
-  case Email
-  case Url
-  case Pattern(regex: String)
-
-// Reglas de rango (Rating, Numeric, Date)
-enum RangeRule:
-  case Min(value: BigDecimal)
-  case Max(value: BigDecimal)
-  case DateMin(value: LocalDate)
-  case DateMax(value: LocalDate)
-
-// Reglas comunes
-enum CommonRule:
-  case Required
-```
-
----
-
-## Tipos de Identificacion
-
-El sistema usa newtypes para IDs:
-
-```scala
-// IDs opacos con validacion UUID
-opaque type Id = UUID
-object Id:
-  def generate: Id = UUID.randomUUID()
-  def fromString(s: String): Option[Id] = Try(UUID.fromString(s)).toOption
-  extension (id: Id) def asString: String = id.toString
-
-// Ejemplos
-survey.Id           // ID de encuesta
-survey.question.Id  // ID de pregunta
-user.Id             // ID de usuario
-user.SessionId      // ID de sesion
-user.DeviceId       // ID de dispositivo
-OptionId            // ID de opcion de pregunta
-AdvertiserId        // ID de anunciante
-```
-
----
-
-## Base de Datos
-
-### Tablas (rows.scala)
-
-```scala
-final case class UserRow(id, email, locale, createdAt, updatedAt)
-final case class SessionRow(id, userId, deviceId, locale, currentSurveyId, currentQuestionId, createdAt)
-final case class SurveyRow(id, category, advertiserId, isActive, createdAt)
-final case class QuestionRow(id, surveyId, questionType, textContent, textLocale, ...)
-final case class QuestionOptionRow(id, questionId, textContent, textLocale, displayOrder, parentOptionId)
-final case class QuestionRuleRow(id, questionId, ruleType, ruleConfig)
-final case class AnswerRow(id, userId, sessionId, questionId, answerValue, answeredAt, createdAt)
-final case class UserSurveyProgressRow(id, userId, surveyId, currentQuestionId, completedAt, ...)
-```
+Todos los endpoints usan autenticacion por cookie (`session_id`).
 
 ---
 
 ## Testing
 
-Los tests usan `cats.Id` como monad sincrono para evitar ZIO runtime:
+### E2E Tests con Tapir Stub
 
 ```scala
-// Mock de Session
-def mockSession(userId: user.Id, surveyId: Option[survey.Id] = None): Session[Id] =
-  new Session[Id]:
-    def userId: Id[user.Id] = userId
-    def locale: Id[String] = "en"
-    def currentSurveyId: Id[Option[survey.Id]] = surveyId
-    def currentQuestionId: Id[Option[survey.question.Id]] = None
-    def setCurrentSurvey(sId: survey.Id, qId: survey.question.Id): Id[Unit] = ()
-
-// Uso en test
-val session = mockSession(user.Id.generate)
-val handler = AnswerEmailHandler(session)
-val result = Op.run(handler.handle(cmd))
-assert(result.isRight)
+// infra/test/E2ETests.scala
+object E2ETests extends ZIOSpecDefault:
+  def spec: Spec[Any, Throwable] =
+    (suite("Identification Survey Flow")(
+      sessionManagementSuite,
+      emailSurveySuite,
+      surveyProgressionSuite,
+      multiQuestionSurveySuite,
+      validationSuite
+    ) @@ TestAspect.sequential @@ TestAspect.after(TestFixtures.clearAllData.orDie))
+      .provideShared(TestLayers.testEnv, ZLayer.fromZIO(TestFixtures.migrate.unit))
 ```
+
+### Escenarios Validados
+
+1. **Session Management**:
+   - Nuevo visitante recibe sesion en fase de identificacion
+   - Visitante recurrente mantiene su fase
+   - Sesion perdida con usuario existente vincula al usuario existente (no crea duplicado)
+
+2. **Email Survey**:
+   - Usuario anonimo recibe encuesta de email como primer paso
+   - Email valido crea usuario y transiciona a fase de video
+   - Email invalido es rechazado con error de validacion
+
+3. **Survey Progression**:
+   - Usuario con email completado recibe encuesta de profiling
+   - Usuario con email y profiling completados recibe encuesta de location
+   - Usuario con todas las encuestas completadas no recibe mas encuestas
+
+4. **Multi-Question Survey**:
+   - Despues de responder primera pregunta, se ofrece siguiente pregunta del mismo survey
+
+5. **Validation Rules**:
+   - Email vacio es rechazado como campo requerido
 
 ---
 
 ## Decisiones de Diseno
 
-### 1. Parametros Explicitos vs Context Bounds
+### 1. SessionContext con FiberRef
 
-Los handlers usan **parametros explicitos** para dependencias (Session, Repository) en vez de context bounds. Esto es compatible con ZIO layers:
+Se usa `FiberRef` para mantener el contexto de sesion durante una request. Los handlers acceden a la sesion via `SessionContext` inyectado.
 
-```scala
-// Antes (tagless final)
-def apply[F[_]: Monad: Session: SurveyRepository]: Handler[F, Cmd]
+### 2. Event Handlers Transaccionales
 
-// Ahora (parametros explicitos)
-def apply[F[_]](session: Session[F], surveyRepo: SurveyRepository[F])(using Monad[F]): Handler[F, Cmd]
-```
+Los `DbEventHandler` comparten el contexto Quill y corren en una sola transaccion. Esto garantiza consistencia entre:
+- Persistencia de respuestas
+- Creacion de usuarios
+- Actualizacion de fase
+- Actualizacion de progreso
 
-### 2. Session[Task] vs SessionContext
+### 3. MappedEncoding para Tipos de Dominio
 
-`SessionService.validate` retorna `Session[Task]` directamente, eliminando el DTO intermedio `SessionContext`.
+Los Row types usan tipos de dominio directamente (`user.Id`, `survey.Id`, `Phase`, etc.) gracias a `MappedEncoding`. Esto elimina conversiones manuales `.asString` / `.fromString` en las queries.
 
-### 3. Repositorios en core/infrastructure
+### 4. UserPersistenceHandler con Deteccion de Usuario Existente
 
-Los traits de repositorios estan en `core/infrastructure/` para que el dominio pueda depender de ellos sin conocer la implementacion.
+Cuando un usuario responde con un email que ya existe, el handler vincula la sesion al usuario existente en lugar de crear un duplicado.
 
-### 4. Typed States
+### 5. Typed States
 
 Las entidades (`Survey`, `User`) estan tipadas por su estado, lo que hace imposible invocar operaciones invalidas en tiempo de compilacion.
-
-### 5. Naming: Service vs ServiceLive
-
-Solo usar sufijo `Live` cuando hay multiples implementaciones. Si hay una sola implementacion:
-
-```scala
-// SessionEndpoint.scala
-object SessionEndpoint:
-  trait Service:
-    def validate(cookie: Option[String]): IO[SessionError, Session[Task]]
-
-// SessionService.scala (sin sufijo Live)
-object SessionService:
-  def apply(sessionRepo: SessionRepository[Task]): SessionEndpoint.Service = ...
-```
 
 ---
 
@@ -413,69 +525,33 @@ object SessionService:
 
 ### 1. Sintaxis Scala 3 con indentacion
 
-Usar `:` en vez de `{}` para bloques. Scalafmt lo aplica automaticamente:
+Usar `:` en vez de `{}` para bloques. Scalafmt lo aplica automaticamente.
+
+### 2. Nombres descriptivos en queries
 
 ```scala
 // Correcto
-object MyHandler:
-  def apply[F[_]](session: Session[F])(using Monad[F]): Handler[F, Cmd] =
-    new Handler[F, Cmd]:
-      type Result = Response
+inline def findByUserAndSurveyQuery = quote: (userIdParam: user.Id, surveyIdParam: survey.Id) =>
+  query[UserSurveyProgressRow].filter(progress =>
+    progress.userId == userIdParam && progress.surveyId == surveyIdParam)
 
-      def handle(cmd: Cmd) =
-        for
-          userId <- session.userId
-          result <- doSomething(userId)
-        yield result
-
-// Incorrecto (braces innecesarias)
-object MyHandler {
-  def apply[F[_]](session: Session[F])(using Monad[F]): Handler[F, Cmd] = {
-    new Handler[F, Cmd] {
-      ...
-    }
-  }
-}
+// Incorrecto (nombres de una letra)
+inline def findByUserAndSurveyQuery = quote: (u: user.Id, s: survey.Id) =>
+  query[UserSurveyProgressRow].filter(p => p.userId == u && p.surveyId == s)
 ```
 
-### 2. Evitar type annotations innecesarias
+### 3. @targetName para MappedEncoding
 
-No tipar variables locales ni retornos de funciones privadas cuando el tipo es obvio:
-
-```scala
-// Correcto
-val session = mockSession(user.Id.generate)
-val handler = AnswerEmailHandler(session)
-val result = Op.run(handler.handle(cmd))
-
-// Incorrecto (tipos innecesarios)
-val session: Session[Id] = mockSession(user.Id.generate)
-val handler: Handler.Aux[Id, AnswerEmailCommand, QuestionAnswer] = AnswerEmailHandler(session)
-val result: Either[NonEmptyChain[Error], (Chain[Event], QuestionAnswer)] = Op.run(handler.handle(cmd))
-```
-
-**Excepciones** - si tipar cuando:
-- Es un metodo publico de una API
-- El tipo no es obvio del contexto
-- Mejora la legibilidad significativamente
-
-### 3. Inferencia en parametros de funcion
-
-Dejar que el compilador infiera tipos en lambdas y pattern matching:
+Usar `@targetName` para evitar conflictos de erasure en encodings bidireccionales:
 
 ```scala
-// Correcto
-users.map(_.email)
-results.collect { case Right(value) => value }
-
-// Incorrecto
-users.map((u: User) => u.email)
-results.collect { case Right(value: QuestionAnswer) => value }
+@targetName("userIdToString")
+inline given MappedEncoding[user.Id, String] = MappedEncoding(_.asString)
+@targetName("stringToUserId")
+inline given MappedEncoding[String, user.Id] = MappedEncoding(user.Id.unsafe)
 ```
 
 ### 4. Formateo automatico
-
-Scalafmt y Scalafix aplican estas reglas automaticamente:
 
 ```bash
 # Formatear
@@ -499,9 +575,81 @@ Scalafmt y Scalafix aplican estas reglas automaticamente:
 # Solo core
 ./mill core.test
 
+# Solo infra (incluye E2E)
+./mill infra.test
+
 # Formatear codigo
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources
 ```
+
+---
+
+## TODOs
+
+### 1. Investigar QueryMeta para Eliminar Row Types
+
+Investigar si `QueryMeta` de Quill permite decodificar directamente a tipos de dominio (`Survey[State]`, `User[State]`) sin necesidad de Row types intermedios.
+
+Referencias:
+- [ZIO Quill - Extending Quill](https://zio.dev/zio-quill/extending-quill/)
+- [ProtoQuill GitHub](https://github.com/zio/zio-protoquill)
+
+```scala
+// Posible uso de QueryMeta
+inline given QueryMeta[User[State.WithEmail]] =
+  queryMeta(
+    quote { query[UserRow].filter(_.email.isDefined) }
+  )(row => User(row.id, State.WithEmail(row.email.get)))
+```
+
+### 2. Cross-Compilar Core para Scala.js
+
+Configurar Mill para cross-compilar el modulo `core` a JVM y JS:
+
+```scala
+// build.mill
+object core extends Cross[CoreModule]("jvm", "js")
+
+class CoreModule(platform: String) extends BaseModule with PlatformModule:
+  def platformSegment = platform
+  // ...
+```
+
+### 3. Cliente Laminar
+
+Crear un cliente web con Laminar que:
+- Consuma los endpoints del API
+- Comparta la logica del core (validaciones, tipos de dominio)
+- Use Tapir client para generar llamadas HTTP
+
+### 4. Compartir Definiciones de Endpoints
+
+Refactorizar `SurveyEndpoints` para que sea cross-compilable y pueda usarse tanto en:
+- **api**: Para generar rutas del servidor
+- **client**: Para generar llamadas HTTP tipadas
+
+```scala
+// shared/endpoints/SurveyEndpoints.scala (cross-compiled)
+object SurveyEndpoints:
+  val answerEmail = endpoint
+    .post
+    .in("api" / "survey" / "email")
+    .in(jsonBody[AnswerEmailRequest])
+    .out(jsonBody[QuestionAnswer])
+
+// api (JVM)
+val route = answerEmail.zServerLogic(...)
+
+// client (JS)
+val call = SttpClientInterpreter().toClient(answerEmail, baseUri, backend)
+```
+
+### 5. Compartir Logica del Core con Cliente
+
+El modulo `core` ya es independiente de ZIO y usa `cats.Monad`. Al cross-compilarlo:
+- Las validaciones funcionaran en el cliente
+- Los tipos de dominio seran compartidos
+- Los errores seran consistentes entre cliente y servidor
 
 ---
 

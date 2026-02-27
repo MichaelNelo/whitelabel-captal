@@ -3,8 +3,11 @@ package whitelabel.captal.infra
 import java.util.UUID
 
 import io.getquill.*
-import whitelabel.captal.core.survey
-import whitelabel.captal.infra.QuillSchema.given
+import whitelabel.captal.core.application.Phase
+import whitelabel.captal.core.{survey, user}
+import whitelabel.captal.infra.schema.QuillSqlite
+import whitelabel.captal.infra.schema.given
+import whitelabel.captal.infra.schema.core.given
 import zio.*
 
 object TestFixtures:
@@ -35,10 +38,6 @@ object TestFixtures:
     |    id TEXT PRIMARY KEY,
     |    survey_id TEXT NOT NULL REFERENCES surveys(id),
     |    question_type TEXT NOT NULL CHECK (question_type IN ('radio', 'checkbox', 'select', 'input', 'rating', 'numeric', 'date')),
-    |    text_content TEXT NOT NULL,
-    |    text_locale TEXT NOT NULL,
-    |    description_content TEXT,
-    |    description_locale TEXT,
     |    points_awarded INTEGER NOT NULL,
     |    display_order INTEGER NOT NULL,
     |    hierarchy_level TEXT CHECK (hierarchy_level IS NULL OR hierarchy_level IN ('state', 'city', 'municipality', 'urbanization')),
@@ -64,8 +63,6 @@ object TestFixtures:
     |CREATE TABLE question_options (
     |    id TEXT PRIMARY KEY,
     |    question_id TEXT NOT NULL REFERENCES questions(id),
-    |    text_content TEXT NOT NULL,
-    |    text_locale TEXT NOT NULL,
     |    display_order INTEGER NOT NULL,
     |    parent_option_id TEXT REFERENCES question_options(id)
     |);
@@ -106,6 +103,17 @@ object TestFixtures:
     |);
     |
     |CREATE UNIQUE INDEX idx_user_survey_progress_unique ON user_survey_progress(user_id, survey_id);
+    |
+    |CREATE TABLE localized_texts (
+    |    id TEXT PRIMARY KEY,
+    |    entity_id TEXT NOT NULL,
+    |    locale TEXT NOT NULL,
+    |    value TEXT NOT NULL,
+    |    created_at TEXT NOT NULL,
+    |    updated_at TEXT NOT NULL
+    |);
+    |
+    |CREATE UNIQUE INDEX idx_localized_texts_entity_locale ON localized_texts(entity_id, locale);
     |""".stripMargin
 
   def migrate: ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
@@ -125,13 +133,21 @@ object TestFixtures:
   final case class SurveyFixture(surveyId: survey.Id, questionId: survey.question.Id)
 
   def seedEmailSurvey: ZIO[QuillSqlite, Throwable, SurveyFixture] =
-    seedSurvey("email", "input", "What is your email?")
+    for
+      fixture <- seedSurvey("email", "input", "What is your email?")
+      _       <- addQuestionRule(fixture.questionId, "text", """{"type":"email"}""")
+    yield fixture
 
-  def seedProfilingSurvey: ZIO[QuillSqlite, Throwable, SurveyFixture] =
-    seedSurvey("profiling", "radio", "What is your age range?")
+  def seedProfilingSurvey: ZIO[QuillSqlite, Throwable, SurveyFixture] = seedSurvey(
+    "profiling",
+    "radio",
+    "What is your age range?")
 
-  def seedLocationSurvey: ZIO[QuillSqlite, Throwable, SurveyFixture] =
-    seedSurvey("location", "select", "What is your state?", hierarchyLevel = Some("state"))
+  def seedLocationSurvey: ZIO[QuillSqlite, Throwable, SurveyFixture] = seedSurvey(
+    "location",
+    "select",
+    "What is your state?",
+    hierarchyLevel = Some("state"))
 
   def seedAllIdentificationSurveys: ZIO[QuillSqlite, Throwable, AllSurveysFixture] =
     for
@@ -152,7 +168,7 @@ object TestFixtures:
   def seedMultiQuestionProfilingSurvey: ZIO[QuillSqlite, Throwable, MultiQuestionSurveyFixture] =
     ZIO.serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
-      val surveyId = UUID.randomUUID.toString
+      val surveyId = survey.Id.generate
       val now = java.time.Instant.now.toString
       val surveyRow = SurveyRow(
         id = surveyId,
@@ -160,40 +176,44 @@ object TestFixtures:
         advertiserId = None,
         isActive = 1,
         createdAt = now)
-      val questionRows = List(
+      val questionsWithText = List(
         ("What is your age range?", 1),
         ("What is your gender?", 2),
-        ("What is your occupation?", 3)
-      ).map: (text, order) =>
-        QuestionRow(
-          id = UUID.randomUUID.toString,
+        ("What is your occupation?", 3)).map: (text, order) =>
+        val questionId = survey.question.Id.generate
+        val questionRow = QuestionRow(
+          id = questionId,
           surveyId = surveyId,
           questionType = "radio",
-          textContent = text,
-          textLocale = "en",
-          descriptionContent = None,
-          descriptionLocale = None,
           pointsAwarded = 10,
           displayOrder = order,
           hierarchyLevel = None,
           isRequired = 1,
           createdAt = now)
+        val textRow = LocalizedTextRow(
+          id = UUID.randomUUID.toString,
+          entityId = questionId.asString,
+          locale = "en",
+          value = text,
+          createdAt = now,
+          updatedAt = now)
+        (questionRow, textRow)
       for
         _ <- run(query[SurveyRow].insertValue(lift(surveyRow)))
-        _ <- ZIO.foreach(questionRows)(row => run(query[QuestionRow].insertValue(lift(row))))
-      yield MultiQuestionSurveyFixture(
-        survey.Id.fromString(surveyId).get,
-        questionRows.map(q => survey.question.Id.fromString(q.id).get))
+        _ <- ZIO.foreach(questionsWithText): (qRow, tRow) =>
+          run(query[QuestionRow].insertValue(lift(qRow))) *>
+            run(query[LocalizedTextRow].insertValue(lift(tRow)))
+      yield MultiQuestionSurveyFixture(surveyId, questionsWithText.map(_._1.id))
 
   private def seedSurvey(
       category: String,
       questionType: String,
       questionText: String,
-      hierarchyLevel: Option[String] = None): ZIO[QuillSqlite, Throwable, SurveyFixture] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+      hierarchyLevel: Option[String] = None): ZIO[QuillSqlite, Throwable, SurveyFixture] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
-      val surveyId = UUID.randomUUID.toString
-      val questionId = UUID.randomUUID.toString
+      val surveyId = survey.Id.generate
+      val questionId = survey.question.Id.generate
       val now = java.time.Instant.now.toString
       val surveyRow = SurveyRow(
         id = surveyId,
@@ -205,67 +225,93 @@ object TestFixtures:
         id = questionId,
         surveyId = surveyId,
         questionType = questionType,
-        textContent = questionText,
-        textLocale = "en",
-        descriptionContent = None,
-        descriptionLocale = None,
         pointsAwarded = 10,
         displayOrder = 1,
         hierarchyLevel = hierarchyLevel,
         isRequired = 1,
         createdAt = now)
+      val textRow = LocalizedTextRow(
+        id = UUID.randomUUID.toString,
+        entityId = questionId.asString,
+        locale = "en",
+        value = questionText,
+        createdAt = now,
+        updatedAt = now)
       for
         _ <- run(query[SurveyRow].insertValue(lift(surveyRow)))
         _ <- run(query[QuestionRow].insertValue(lift(questionRow)))
-      yield SurveyFixture(
-        survey.Id.fromString(surveyId).get,
-        survey.question.Id.fromString(questionId).get)
+        _ <- run(query[LocalizedTextRow].insertValue(lift(textRow)))
+      yield SurveyFixture(surveyId, questionId)
 
   def addQuestionOptions(
       questionId: survey.question.Id,
-      options: List[String]): ZIO[QuillSqlite, Throwable, List[String]] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+      options: List[String]): ZIO[QuillSqlite, Throwable, List[survey.question.OptionId]] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
-      val optionRows = options.zipWithIndex.map: (text, idx) =>
-        QuestionOptionRow(
-          id = UUID.randomUUID.toString,
-          questionId = questionId.asString,
-          textContent = text,
-          textLocale = "en",
-          displayOrder = idx + 1,
-          parentOptionId = None)
-      for _ <- ZIO.foreach(optionRows)(row => run(query[QuestionOptionRow].insertValue(lift(row))))
-      yield optionRows.map(_.id)
+      val now = java.time.Instant.now.toString
+      val optionsWithText = options
+        .zipWithIndex
+        .map: (text, idx) =>
+          val optionId = survey.question.OptionId.generate
+          val optionRow = QuestionOptionRow(
+            id = optionId,
+            questionId = questionId,
+            displayOrder = idx + 1,
+            parentOptionId = None)
+          val textRow = LocalizedTextRow(
+            id = UUID.randomUUID.toString,
+            entityId = optionId.asString,
+            locale = "en",
+            value = text,
+            createdAt = now,
+            updatedAt = now)
+          (optionRow, textRow)
+      for _ <- ZIO.foreach(optionsWithText): (optRow, txtRow) =>
+        run(query[QuestionOptionRow].insertValue(lift(optRow))) *>
+          run(query[LocalizedTextRow].insertValue(lift(txtRow)))
+      yield optionsWithText.map(_._1.id)
+
+  def addQuestionRule(
+      questionId: survey.question.Id,
+      ruleType: String,
+      ruleConfig: String): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
+      import quill.*
+      val ruleRow = QuestionRuleRow(
+        id = UUID.randomUUID.toString,
+        questionId = questionId,
+        ruleType = ruleType,
+        ruleConfig = ruleConfig)
+      run(query[QuestionRuleRow].insertValue(lift(ruleRow))).unit
 
   // ─────────────────────────────────────────────────────────────────────────────
   // User and Progress Fixtures
   // ─────────────────────────────────────────────────────────────────────────────
 
-  final case class UserFixture(userId: String, email: String)
+  final case class UserFixture(userId: user.Id, email: user.Email)
 
-  def createUser(email: String): ZIO[QuillSqlite, Throwable, UserFixture] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      val userId = UUID.randomUUID.toString
-      val now = java.time.Instant.now.toString
-      val userRow = UserRow(
-        id = userId,
-        email = Some(email),
-        locale = "en",
-        createdAt = now,
-        updatedAt = now)
-      run(query[UserRow].insertValue(lift(userRow))).as(UserFixture(userId, email))
+  def createUser(email: String): ZIO[QuillSqlite, Throwable, UserFixture] = ZIO.serviceWithZIO[
+    QuillSqlite]: quill =>
+    import quill.*
+    val userId = user.Id.generate
+    val userEmail = user.Email.unsafeFrom(email)
+    val now = java.time.Instant.now.toString
+    val userRow = UserRow(
+      id = userId,
+      email = Some(userEmail),
+      locale = "en",
+      createdAt = now,
+      updatedAt = now)
+    run(query[UserRow].insertValue(lift(userRow))).as(UserFixture(userId, userEmail))
 
-  def markSurveyCompleted(
-      userId: String,
-      surveyId: survey.Id): ZIO[QuillSqlite, Throwable, Unit] =
+  def markSurveyCompleted(userId: user.Id, surveyId: survey.Id): ZIO[QuillSqlite, Throwable, Unit] =
     ZIO.serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
       val now = java.time.Instant.now.toString
       val progressRow = UserSurveyProgressRow(
         id = UUID.randomUUID.toString,
         userId = userId,
-        surveyId = surveyId.asString,
+        surveyId = surveyId,
         currentQuestionId = None,
         completedAt = Some(now),
         createdAt = now,
@@ -273,35 +319,36 @@ object TestFixtures:
       run(query[UserSurveyProgressRow].insertValue(lift(progressRow))).unit
 
   def createAnswer(
-      userId: String,
-      sessionId: String,
+      userId: user.Id,
+      sessionId: user.SessionId,
       questionId: survey.question.Id,
-      answerValue: String): ZIO[QuillSqlite, Throwable, Unit] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+      answerValue: String): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
       import quill.*
       val now = java.time.Instant.now.toString
       val answerRow = AnswerRow(
         id = UUID.randomUUID.toString,
         userId = userId,
         sessionId = sessionId,
-        questionId = questionId.asString,
+        questionId = questionId,
         answerValue = answerValue,
         answeredAt = now,
         createdAt = now)
       run(query[AnswerRow].insertValue(lift(answerRow))).unit
 
-  def linkSessionToUser(sessionId: String, userId: String): ZIO[QuillSqlite, Throwable, Unit] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+  def linkSessionToUser(
+      sessionId: user.SessionId,
+      userId: user.Id): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
       import quill.*
-      run(
-        query[SessionRow]
-          .filter(_.id == lift(sessionId))
-          .update(_.userId -> Some(lift(userId)))).unit
+      run(query[SessionRow].filter(_.id == lift(sessionId)).update(_.userId -> Some(lift(userId))))
+        .unit
 
-  def updateSessionPhase(sessionId: String, phase: String): ZIO[QuillSqlite, Throwable, Unit] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      run(query[SessionRow].filter(_.id == lift(sessionId)).update(_.phase -> lift(phase))).unit
+  def updateSessionPhase(
+      sessionId: user.SessionId,
+      phase: Phase): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.*
+    run(query[SessionRow].filter(_.id == lift(sessionId)).update(_.phase -> lift(phase))).unit
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Query Helpers
@@ -322,18 +369,18 @@ object TestFixtures:
       progress <- run(query[UserSurveyProgressRow])
     yield DbState(users, answers, sessions, progress)
 
-  def getSession(sessionId: String): ZIO[QuillSqlite, Throwable, Option[SessionRow]] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+  def getSession(sessionId: user.SessionId): ZIO[QuillSqlite, Throwable, Option[SessionRow]] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
       run(query[SessionRow].filter(_.id == lift(sessionId))).map(_.headOption)
 
-  def countUsersByEmail(email: String): ZIO[QuillSqlite, Throwable, Long] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      run(query[UserRow].filter(_.email.contains(lift(email))).size)
+  def countUsersByEmail(email: user.Email): ZIO[QuillSqlite, Throwable, Long] = ZIO.serviceWithZIO[
+    QuillSqlite]: quill =>
+    import quill.*
+    run(query[UserRow].filter(_.email.contains(lift(email))).size)
 
-  def getUserByEmail(email: String): ZIO[QuillSqlite, Throwable, Option[UserRow]] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+  def getUserByEmail(email: user.Email): ZIO[QuillSqlite, Throwable, Option[UserRow]] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
       run(query[UserRow].filter(_.email.contains(lift(email)))).map(_.headOption)
 
@@ -345,6 +392,7 @@ object TestFixtures:
         stmt.execute("DELETE FROM user_survey_progress")
         stmt.execute("DELETE FROM answers")
         stmt.execute("DELETE FROM sessions")
+        stmt.execute("DELETE FROM localized_texts")
         stmt.execute("DELETE FROM question_rules")
         stmt.execute("DELETE FROM question_options")
         stmt.execute("DELETE FROM questions")
@@ -353,4 +401,136 @@ object TestFixtures:
         stmt.close()
       finally
         conn.close()
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Locale Fixtures
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  def seedLocales(locales: List[String]): ZIO[QuillSqlite, Throwable, Unit] =
+    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      val now = java.time.Instant.now.toString
+      val rows = locales.map: locale =>
+        LocalizedTextRow(
+          id = UUID.randomUUID.toString,
+          entityId = s"ui.locale.$locale",
+          locale = locale,
+          value = locale,
+          createdAt = now,
+          updatedAt = now)
+      ZIO.foreach(rows)(row => run(query[LocalizedTextRow].insertValue(lift(row)))).unit
+
+  def countSessions: ZIO[QuillSqlite, Throwable, Long] =
+    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      run(query[SessionRow].size)
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Noise Data - Unrelated records to test query filtering
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  def seedNoiseData: ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.*
+    val now = java.time.Instant.now.toString
+
+    // Create multiple unrelated users
+    val noiseUsers = (1 to 5).map: i =>
+      UserRow(
+        id = user.Id.generate,
+        email = Some(user.Email.unsafeFrom(s"noise-user-$i@example.com")),
+        locale = "es",
+        createdAt = now,
+        updatedAt = now)
+
+    // Create inactive surveys (should be ignored by queries)
+    val inactiveSurveys = List("email", "profiling", "location").map: category =>
+      val surveyId = survey.Id.generate
+      val questionId = survey.question.Id.generate
+      val surveyRow = SurveyRow(
+        id = surveyId,
+        category = category,
+        advertiserId = None,
+        isActive = 0, // Inactive!
+        createdAt = now)
+      val questionRow = QuestionRow(
+        id = questionId,
+        surveyId = surveyId,
+        questionType = "input",
+        pointsAwarded = 5,
+        displayOrder = 1,
+        hierarchyLevel = None,
+        isRequired = 1,
+        createdAt = now)
+      val textRow = LocalizedTextRow(
+        id = UUID.randomUUID.toString,
+        entityId = questionId.asString,
+        locale = "en",
+        value = s"Inactive $category question",
+        createdAt = now,
+        updatedAt = now)
+      (surveyRow, questionRow, textRow)
+
+    // Create extra active surveys with different questions
+    val extraSurveys = List(
+      ("email", "What is your work email?"),
+      ("profiling", "What is your income range?"),
+      ("location", "What is your city?")).map: (category, text) =>
+      val surveyId = survey.Id.generate
+      val surveyRow = SurveyRow(
+        id = surveyId,
+        category = category,
+        advertiserId = None,
+        isActive = 1,
+        createdAt = now)
+      val questionsWithText = (1 to 3).map: order =>
+        val questionId = survey.question.Id.generate
+        val questionRow = QuestionRow(
+          id = questionId,
+          surveyId = surveyId,
+          questionType = if category == "email" then "input" else "radio",
+          pointsAwarded = 10,
+          displayOrder = order,
+          hierarchyLevel = if category == "location" then Some("city") else None,
+          isRequired = 1,
+          createdAt = now)
+        val textRow = LocalizedTextRow(
+          id = UUID.randomUUID.toString,
+          entityId = questionId.asString,
+          locale = "en",
+          value = s"$text (Q$order)",
+          createdAt = now,
+          updatedAt = now)
+        (questionRow, textRow)
+      (surveyRow, questionsWithText.toList)
+
+    // Create completed progress for noise users on some surveys
+    val noiseProgress = noiseUsers.take(3).flatMap: noiseUser =>
+      extraSurveys.map: (surveyRow, _) =>
+        UserSurveyProgressRow(
+          id = UUID.randomUUID.toString,
+          userId = noiseUser.id,
+          surveyId = surveyRow.id,
+          currentQuestionId = None,
+          completedAt = Some(now),
+          createdAt = now,
+          updatedAt = now)
+
+    for
+      // Insert noise users
+      _ <- ZIO.foreach(noiseUsers)(row => run(query[UserRow].insertValue(lift(row))))
+      // Insert inactive surveys with their questions and texts
+      _ <- ZIO.foreach(inactiveSurveys): (surveyRow, questionRow, textRow) =>
+        run(query[SurveyRow].insertValue(lift(surveyRow))) *>
+          run(query[QuestionRow].insertValue(lift(questionRow))) *>
+          run(query[LocalizedTextRow].insertValue(lift(textRow)))
+      // Insert extra active surveys with multiple questions
+      _ <- ZIO.foreach(extraSurveys): (surveyRow, questionsWithText) =>
+        run(query[SurveyRow].insertValue(lift(surveyRow))) *>
+          ZIO.foreach(questionsWithText): (qRow, tRow) =>
+            run(query[QuestionRow].insertValue(lift(qRow))) *>
+              run(query[LocalizedTextRow].insertValue(lift(tRow)))
+      // Insert noise progress
+      _ <- ZIO.foreach(noiseProgress)(row =>
+        run(query[UserSurveyProgressRow].insertValue(lift(row))))
+    yield ()
 end TestFixtures
