@@ -5,8 +5,30 @@ import java.time.LocalDate
 import scala.annotation.targetName
 
 import io.circe.{Decoder, Encoder, Json}
+import io.circe.syntax.*
+import whitelabel.captal.core.survey
 
 object codecs:
+  // ─────────────────────────────────────────────────────────────────────────────
+  // IDs
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  given surveyIdEncoder: Encoder[survey.Id] = Encoder.encodeString.contramap(_.asString)
+  given surveyIdDecoder: Decoder[survey.Id] = Decoder.decodeString.emap(s =>
+    survey.Id.fromString(s).toRight(s"Invalid survey id: $s"))
+
+  given questionIdEncoder: Encoder[Id] = Encoder.encodeString.contramap(_.asString)
+  given questionIdDecoder: Decoder[Id] = Decoder.decodeString.emap(s =>
+    Id.fromString(s).toRight(s"Invalid question id: $s"))
+
+  given optionIdEncoder: Encoder[OptionId] = Encoder.encodeString.contramap(_.asString)
+  given optionIdDecoder: Decoder[OptionId] = Decoder.decodeString.emap(s =>
+    OptionId.fromString(s).toRight(s"Invalid option id: $s"))
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Selection Rules
+  // ─────────────────────────────────────────────────────────────────────────────
+
   given Decoder[SelectionRule] = Decoder.instance: cursor =>
     cursor
       .get[String]("type")
@@ -23,6 +45,10 @@ object codecs:
       Json.obj("type" -> Json.fromString("min_selections"), "value" -> Json.fromInt(min))
     case SelectionRule.MaxSelections(max) =>
       Json.obj("type" -> Json.fromString("max_selections"), "value" -> Json.fromInt(max))
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Text Rules
+  // ─────────────────────────────────────────────────────────────────────────────
 
   given Decoder[TextRule] = Decoder.instance: cursor =>
     cursor
@@ -52,6 +78,10 @@ object codecs:
       Json.obj("type" -> Json.fromString("email"))
     case TextRule.Url =>
       Json.obj("type" -> Json.fromString("url"))
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Range Rules
+  // ─────────────────────────────────────────────────────────────────────────────
 
   @targetName("decoderRangeRuleInt")
   given Decoder[RangeRule[Int]] = Decoder.instance: cursor =>
@@ -110,6 +140,21 @@ object codecs:
     case RangeRule.Max(v) =>
       Json.obj("type" -> Json.fromString("max"), "value" -> Json.fromString(v.toString))
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Common Rules
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  given Encoder[CommonRule] = Encoder.encodeString.contramap:
+    case CommonRule.Required => "required"
+
+  given Decoder[CommonRule] = Decoder.decodeString.emap:
+    case "required" => Right(CommonRule.Required)
+    case other      => Left(s"Unknown common rule: $other")
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Hierarchy Level
+  // ─────────────────────────────────────────────────────────────────────────────
+
   given Decoder[HierarchyLevel] = Decoder
     .decodeString
     .emap:
@@ -135,6 +180,73 @@ object codecs:
         "municipality"
       case HierarchyLevel.Urbanization =>
         "urbanization"
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // LocalizedText & QuestionOption (derived)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  given Encoder[LocalizedText] = Encoder.AsObject.derived
+  given Decoder[LocalizedText] = Decoder.derived
+
+  given Encoder[QuestionOption] = Encoder.AsObject.derived
+  given Decoder[QuestionOption] = Decoder.derived
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // QuestionType
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  given Encoder[QuestionType] = Encoder.instance:
+    case QuestionType.Radio(options) =>
+      Json.obj("type" -> Json.fromString("radio"), "options" -> options.asJson)
+    case QuestionType.Checkbox(options, rules) =>
+      Json.obj(
+        "type"    -> Json.fromString("checkbox"),
+        "options" -> options.asJson,
+        "rules"   -> rules.asJson)
+    case QuestionType.Select(options) =>
+      Json.obj("type" -> Json.fromString("select"), "options" -> options.asJson)
+    case QuestionType.Input(rules) =>
+      Json.obj("type" -> Json.fromString("input"), "rules" -> rules.asJson)
+    case QuestionType.Rating(rules) =>
+      Json.obj("type" -> Json.fromString("rating"), "rules" -> rules.asJson)
+    case QuestionType.Numeric(rules) =>
+      Json.obj("type" -> Json.fromString("numeric"), "rules" -> rules.asJson)
+    case QuestionType.Date(rules) =>
+      Json.obj("type" -> Json.fromString("date"), "rules" -> rules.asJson)
+
+  given Decoder[QuestionType] = Decoder.instance: c =>
+    c.get[String]("type").flatMap:
+      case "radio" =>
+        c.get[List[QuestionOption]]("options").map(QuestionType.Radio(_))
+      case "checkbox" =>
+        for
+          options <- c.get[List[QuestionOption]]("options")
+          rules   <- c.getOrElse[List[SelectionRule]]("rules")(Nil)
+        yield QuestionType.Checkbox(options, rules)
+      case "select" =>
+        c.get[List[QuestionOption]]("options").map(QuestionType.Select(_))
+      case "input" =>
+        c.getOrElse[List[TextRule]]("rules")(Nil).map(QuestionType.Input(_))
+      case "rating" =>
+        c.getOrElse[List[RangeRule[Int]]]("rules")(Nil).map(QuestionType.Rating(_))
+      case "numeric" =>
+        c.getOrElse[List[RangeRule[BigDecimal]]]("rules")(Nil).map(QuestionType.Numeric(_))
+      case "date" =>
+        c.getOrElse[List[RangeRule[LocalDate]]]("rules")(Nil).map(QuestionType.Date(_))
+      case other =>
+        Left(io.circe.DecodingFailure(s"Unknown question type: $other", c.history))
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // QuestionToAnswer (derived)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  given Encoder[QuestionToAnswer] = Encoder.AsObject.derived
+  given Decoder[QuestionToAnswer] = Decoder.derived
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // AnswerValue
+  // ─────────────────────────────────────────────────────────────────────────────
+
   given Encoder[AnswerValue] = Encoder.instance:
     case AnswerValue.SingleChoice(optionId) =>
       Json.obj("type" -> Json.fromString("single"), "value" -> Json.fromString(optionId.asString))

@@ -7,6 +7,7 @@ import whitelabel.captal.core.application.{Event, EventHandler, Flow}
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository}
 import whitelabel.captal.core.survey.question.QuestionAnswer
 import whitelabel.captal.infra.eventhandlers.*
+import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
 import zio.interop.catz.*
 
@@ -17,18 +18,20 @@ object TestLayers:
 
   private val sessionServiceLayer = SessionService.layer
 
+  private val localeServiceLayer = LocaleService.layer
+
   private val surveyRepoLayer = SurveyRepositoryQuill.layer
 
   private val userRepoLayer = UserRepositoryQuill.layer
 
   private val eventHandlerLayer
-      : ZLayer[QuillSqlite & SessionContext, Nothing, EventHandler[Task, Event]] =
-    ZLayer.fromFunction: (quill: QuillSqlite, ctx: SessionContext) =>
+      : ZLayer[QuillSqlite & SessionContext, Nothing, EventHandler[Task, Event]] = ZLayer
+    .fromFunction: (quill: QuillSqlite, ctx: SessionContext) =>
       val dbHandler = AnswerPersistenceHandler(ctx)
         .andThen(UserPersistenceHandler(ctx))
         .andThen(SessionPhaseHandler(ctx))
         .andThen(SessionSurveyHandler(ctx))
-        .andThen(SurveyProgressHandler(ctx))
+        .andThen(SurveyProgressHandler())
       TransactionalEventHandler(dbHandler, quill)
 
   private val answerEmailFlowLayer: ZLayer[
@@ -80,6 +83,7 @@ object TestLayers:
     dataSourceLayer,
     quillLayer,
     sessionServiceLayer,
+    localeServiceLayer,
     surveyRepoLayer,
     userRepoLayer,
     eventHandlerLayer,
