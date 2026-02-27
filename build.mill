@@ -2,19 +2,71 @@
 //|   - com.goyeau::mill-scalafix::0.6.0
 package build
 import com.goyeau.mill.scalafix.ScalafixModule
-import mill.*, scalalib.*, scalafmt.*
+import mill.*, scalalib.*, scalafmt.*, scalajslib.*
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Base traits
+// ─────────────────────────────────────────────────────────────────────────────
 
 trait BaseModule extends ScalaModule with ScalafmtModule with ScalafixModule:
   def scalaVersion = "3.8.0"
   def scalacOptions = Seq("-Wunused:imports,locals,explicits,implicits")
 
-object core extends BaseModule:
+trait BaseJSModule extends ScalaJSModule with ScalafmtModule with ScalafixModule:
+  def scalaVersion = "3.8.0"
+  def scalaJSVersion = "1.20.1"
+  def scalacOptions = Seq("-Wunused:imports,locals,explicits,implicits")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Core: JVM + JS (shared sources)
+// ─────────────────────────────────────────────────────────────────────────────
+
+trait CoreDepsJVM extends ScalaModule:
   def mvnDeps = Seq(
     mvn"org.typelevel::cats-core:2.12.0",
     mvn"io.circe::circe-core:0.14.10",
+    mvn"io.circe::circe-generic:0.14.10",
     mvn"io.circe::circe-parser:0.14.10")
+
+trait CoreDepsJS extends ScalaJSModule:
+  def mvnDeps = Seq(
+    mvn"org.typelevel::cats-core::2.12.0",
+    mvn"io.circe::circe-core::0.14.10",
+    mvn"io.circe::circe-generic::0.14.10",
+    mvn"io.circe::circe-parser::0.14.10",
+    mvn"io.github.cquiroz::scala-java-time::2.6.0")
+
+object core extends BaseModule with CoreDepsJVM:
   object test extends ScalaTests with TestModule.Utest with ScalafmtModule with ScalafixModule:
     def mvnDeps = Seq(mvn"com.lihaoyi::utest:0.8.9", mvn"org.scalacheck::scalacheck:1.18.0")
+
+object `core-js` extends BaseJSModule with CoreDepsJS:
+  def sources = core.sources
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Endpoints: JVM + JS (shared sources) - Tapir definitions
+// ─────────────────────────────────────────────────────────────────────────────
+
+trait EndpointsDepsJVM extends ScalaModule:
+  def mvnDeps = Seq(
+    mvn"com.softwaremill.sttp.tapir::tapir-core:1.11.11",
+    mvn"com.softwaremill.sttp.tapir::tapir-json-circe:1.11.11")
+
+trait EndpointsDepsJS extends ScalaJSModule:
+  def mvnDeps = Seq(
+    mvn"com.softwaremill.sttp.tapir::tapir-core::1.11.11",
+    mvn"com.softwaremill.sttp.tapir::tapir-json-circe::1.11.11")
+
+object endpoints extends BaseModule with EndpointsDepsJVM:
+  def moduleDeps = Seq(core)
+
+object `endpoints-js` extends BaseJSModule with EndpointsDepsJS:
+  def moduleDeps = Seq(`core-js`)
+  def sources = endpoints.sources
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Infra: JVM only
+// ─────────────────────────────────────────────────────────────────────────────
 
 object infra extends BaseModule:
   def moduleDeps = Seq(core)
@@ -36,9 +88,26 @@ object infra extends BaseModule:
       mvn"com.softwaremill.sttp.tapir::tapir-sttp-stub-server:1.11.11")
     def testFramework = "zio.test.sbt.ZTestFramework"
 
+// ─────────────────────────────────────────────────────────────────────────────
+// API: JVM only (server implementation)
+// ─────────────────────────────────────────────────────────────────────────────
+
 object api extends BaseModule:
-  def moduleDeps = Seq(core, infra)
+  def moduleDeps = Seq(core, endpoints, infra)
   def mvnDeps = Seq(
     mvn"com.softwaremill.sttp.tapir::tapir-zio-http-server:1.11.11",
     mvn"com.softwaremill.sttp.tapir::tapir-json-circe:1.11.11",
     mvn"dev.zio::zio-interop-cats:23.1.0.3")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Client: JS only (Laminar app)
+// ─────────────────────────────────────────────────────────────────────────────
+
+object client extends BaseJSModule:
+  def moduleDeps = Seq(`core-js`, `endpoints-js`)
+  def mvnDeps = Seq(
+    mvn"com.raquo::laminar::17.2.0",
+    mvn"com.raquo::waypoint::9.0.0",
+    mvn"com.softwaremill.sttp.tapir::tapir-sttp-client::1.11.11",
+    mvn"com.softwaremill.sttp.client3::zio::3.10.3",
+    mvn"io.github.cquiroz::scala-java-time::2.6.0")

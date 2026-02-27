@@ -15,6 +15,7 @@ import whitelabel.captal.infra.eventhandlers.{
   UserPersistenceHandler
 }
 import whitelabel.captal.infra.{
+  LocaleService,
   SessionContext,
   SessionService,
   SurveyRepositoryQuill,
@@ -23,13 +24,26 @@ import whitelabel.captal.infra.{
 }
 import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
-import zio.http.Server
+import zio.http.*
 import zio.interop.catz.*
 
 object Main extends ZIOAppDefault:
   private val endpoints = SurveyRoutes.routes
 
-  private val routes = ZioHttpInterpreter().toHttp(endpoints)
+  private val apiRoutes = ZioHttpInterpreter().toHttp(endpoints)
+
+  // Static file serving for client
+  private def staticRoutes: Routes[Any, Response] = Routes(
+    // Serve index.html at root
+    Method.GET / "" -> zio.http.Handler.fromFile(java.io.File("client/index.html")),
+    // Serve compiled JS
+    Method.GET / "out" / "client" / "fastLinkJS.dest" / "main.js" ->
+      zio.http.Handler.fromFile(java.io.File("out/client/fastLinkJS.dest/main.js")),
+    Method.GET / "out" / "client" / "fastLinkJS.dest" / "main.js.map" ->
+      zio.http.Handler.fromFile(java.io.File("out/client/fastLinkJS.dest/main.js.map"))
+  ).handleError(e => Response.internalServerError(e.getMessage))
+
+  private def routes = staticRoutes ++ apiRoutes
 
   private val serverConfigLayer: ZLayer[Any, Throwable, Server.Config] = ZLayer.fromZIO:
     ZIO.attempt:
@@ -41,6 +55,8 @@ object Main extends ZIOAppDefault:
   private val dataSourceLayer = Quill.DataSource.fromPrefix("database")
 
   private val sessionServiceLayer = SessionService.layer
+
+  private val localeServiceLayer = LocaleService.layer
 
   private val surveyRepoLayer = SurveyRepositoryQuill.layer
 
@@ -103,6 +119,7 @@ object Main extends ZIOAppDefault:
     dataSourceLayer,
     quillLayer,
     sessionServiceLayer,
+    localeServiceLayer,
     surveyRepoLayer,
     userRepoLayer,
     eventHandlerLayer,
