@@ -15,13 +15,13 @@ import whitelabel.captal.infra.eventhandlers.{
   UserPersistenceHandler
 }
 import whitelabel.captal.infra.{
-  QuillSqlite,
   SessionContext,
   SessionService,
   SurveyRepositoryQuill,
   TransactionalEventHandler,
   UserRepositoryQuill
 }
+import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
 import zio.http.Server
 import zio.interop.catz.*
@@ -47,13 +47,13 @@ object Main extends ZIOAppDefault:
   private val userRepoLayer = UserRepositoryQuill.layer
 
   private val eventHandlerLayer
-      : ZLayer[QuillSqlite & SessionContext, Nothing, EventHandler[Task, Event]] =
-    ZLayer.fromFunction: (quill: QuillSqlite, ctx: SessionContext) =>
+      : ZLayer[QuillSqlite & SessionContext, Nothing, EventHandler[Task, Event]] = ZLayer
+    .fromFunction: (quill: QuillSqlite, ctx: SessionContext) =>
       val dbHandler = AnswerPersistenceHandler(ctx)
         .andThen(UserPersistenceHandler(ctx))
         .andThen(SessionPhaseHandler(ctx))
         .andThen(SessionSurveyHandler(ctx))
-        .andThen(SurveyProgressHandler(ctx))
+        .andThen(SurveyProgressHandler())
       TransactionalEventHandler(dbHandler, quill)
 
   private val answerEmailFlowLayer: ZLayer[

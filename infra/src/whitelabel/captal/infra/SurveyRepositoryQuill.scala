@@ -10,7 +10,9 @@ import whitelabel.captal.core.survey.question.*
 import whitelabel.captal.core.survey.question.codecs.given
 import whitelabel.captal.core.survey.{State, Survey}
 import whitelabel.captal.core.{survey, user}
-import whitelabel.captal.infra.QuillSchema.given
+import whitelabel.captal.infra.schema.given
+import whitelabel.captal.infra.schema.core.given
+import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
 
 object SurveyRepositoryQuill:
@@ -18,15 +20,58 @@ object SurveyRepositoryQuill:
       survey: SurveyRow,
       question: QuestionRow,
       option: Option[QuestionOptionRow],
-      rule: Option[QuestionRuleRow])
+      rule: Option[QuestionRuleRow],
+      questionText: Option[LocalizedTextRow],
+      questionDesc: Option[LocalizedTextRow],
+      optionText: Option[LocalizedTextRow])
 
-  inline def questionByIdQuery = quote: (surveyId: String, questionId: String) =>
-    for
-      survey   <- query[SurveyRow].filter(_.id == surveyId)
-      question <- query[QuestionRow].filter(q => q.id == questionId && q.surveyId == surveyId)
-      option   <- query[QuestionOptionRow].leftJoin(_.questionId == questionId)
-      rule     <- query[QuestionRuleRow].leftJoin(_.questionId == questionId)
-    yield QuestionWithDetails(survey, question, option, rule)
+  // Helper para seleccionar el texto preferido (locale del usuario > inglés)
+  private def selectPreferredText(
+      texts: List[LocalizedTextRow],
+      preferredLocale: String): Option[LocalizedText] =
+    texts
+      .sortBy(t => if t.locale == preferredLocale then 0 else 1)
+      .headOption
+      .map(t => LocalizedText(t.value, t.locale))
+
+  // Query con JOINs para textos localizados
+  inline def questionByIdQuery = quote:
+    (
+        surveyIdParam: survey.Id,
+        questionIdParam: survey.question.Id,
+        questionIdStr: String,
+        questionDescIdStr: String,
+        localeParam: String) =>
+      for
+        surveyRow   <- query[SurveyRow].filter(_.id == surveyIdParam)
+        questionRow <- query[QuestionRow].filter(row =>
+          row.id == questionIdParam && row.surveyId == surveyIdParam)
+        optionRow <- query[QuestionOptionRow].leftJoin(_.questionId == questionIdParam)
+        ruleRow   <- query[QuestionRuleRow].leftJoin(_.questionId == questionIdParam)
+        // JOIN para texto de pregunta
+        questionText <- query[LocalizedTextRow]
+          .filter(lt => lt.entityId == questionIdStr)
+          .filter(lt => lt.locale == localeParam || lt.locale == "en")
+          .leftJoin(_ => true)
+        // JOIN para descripción de pregunta
+        questionDesc <- query[LocalizedTextRow]
+          .filter(lt => lt.entityId == questionDescIdStr)
+          .filter(lt => lt.locale == localeParam || lt.locale == "en")
+          .leftJoin(_ => true)
+        // JOIN para texto de opción - comparamos String con String directamente
+        // El MappedEncoding convierte OptionId a String automáticamente
+        optionText <- query[LocalizedTextRow]
+          .leftJoin(lt =>
+            optionRow.exists(opt => lt.entityId == sql"${opt.id}".as[String]) &&
+              (lt.locale == localeParam || lt.locale == "en"))
+      yield QuestionWithDetails(
+        surveyRow,
+        questionRow,
+        optionRow,
+        ruleRow,
+        questionText,
+        questionDesc,
+        optionText)
 
   inline def firstEmailSurveyQuery = quote:
     query[SurveyRow]
@@ -37,35 +82,41 @@ object SurveyRepositoryQuill:
       .map((s, q) => NextIdentificationSurveyRow(s.id, q.id, s.category))
 
   // Helper to check if user has completed a survey of given category
-  private inline def hasCompletedCategoryQuery(userId: String, category: String) =
+  private inline def hasCompletedCategoryQuery(userIdParam: user.Id, category: String) =
     query[UserSurveyProgressRow]
-      .filter(p =>
-        p.userId == userId &&
-          p.completedAt.isDefined &&
+      .filter(progress =>
+        progress.userId == userIdParam && progress.completedAt.isDefined &&
           query[SurveyRow]
-            .filter(s => s.id == p.surveyId && s.category == category)
+            .filter(surveyRow =>
+              surveyRow.id == progress.surveyId && surveyRow.category == category)
             .nonEmpty)
       .nonEmpty
 
-  inline def nextIdentificationSurveyQuery = quote: (userId: String) =>
-    val answeredQuestionIds = query[AnswerRow].filter(_.userId == userId).map(_.questionId)
-    val hasEmail = query[UserRow].filter(u => u.id == userId && u.email.isDefined).nonEmpty
-    val hasCompletedEmail = hasCompletedCategoryQuery(userId, "email")
-    val hasCompletedProfiling = hasCompletedCategoryQuery(userId, "profiling")
-    val hasCompletedLocation = hasCompletedCategoryQuery(userId, "location")
+  inline def nextIdentificationSurveyQuery = quote: (userIdParam: user.Id) =>
+    val answeredQuestionIds = query[AnswerRow].filter(_.userId == userIdParam).map(_.questionId)
+    val hasEmail =
+      query[UserRow]
+        .filter(userRow => userRow.id == userIdParam && userRow.email.isDefined)
+        .nonEmpty
+    val hasCompletedEmail = hasCompletedCategoryQuery(userIdParam, "email")
+    val hasCompletedProfiling = hasCompletedCategoryQuery(userIdParam, "profiling")
+    val hasCompletedLocation = hasCompletedCategoryQuery(userIdParam, "location")
 
     query[SurveyRow]
-      .filter: s =>
-        s.isActive == 1 && (
-          (s.category == "email" && !hasEmail && !hasCompletedEmail) ||
-            (s.category == "profiling" && hasEmail && !hasCompletedProfiling) ||
-            (s.category == "location" && hasEmail && hasCompletedProfiling && !hasCompletedLocation)
+      .filter: surveyRow =>
+        surveyRow.isActive == 1 && (
+          (surveyRow.category == "email" && !hasEmail && !hasCompletedEmail) ||
+            (surveyRow.category == "profiling" && hasEmail && !hasCompletedProfiling) || (
+              surveyRow.category == "location" && hasEmail && hasCompletedProfiling &&
+                !hasCompletedLocation
+            )
         )
       .join(query[QuestionRow])
-      .on: (s, q) =>
-        s.id == q.surveyId && !answeredQuestionIds.contains(q.id)
-      .sortBy((_, q) => q.displayOrder)(using Ord.asc)
-      .map((s, q) => NextIdentificationSurveyRow(s.id, q.id, s.category))
+      .on: (surveyRow, questionRow) =>
+        surveyRow.id == questionRow.surveyId && !answeredQuestionIds.contains(questionRow.id)
+      .sortBy((_, questionRow) => questionRow.displayOrder)(using Ord.asc)
+      .map((surveyRow, questionRow) =>
+        NextIdentificationSurveyRow(surveyRow.id, questionRow.id, surveyRow.category))
 
   def apply(quill: QuillSqlite, ctx: SessionContext): SurveyRepository[Task] =
     new SurveyRepository[Task]:
@@ -93,36 +144,54 @@ object SurveyRepositoryQuill:
       def findWithLocationQuestion(
           surveyId: survey.Id,
           questionId: survey.question.Id): Task[Option[Survey[State.WithLocationQuestion]]] =
-        run(questionByIdQuery(lift(surveyId.asString), lift(questionId.asString)))
-          .map: rows =>
-            val result: Option[Survey[State.WithLocationQuestion]] =
-              for
-                first <- rows.headOption
-                if first.survey.category == "location"
-                question <- buildQuestionToAnswer(first.question, rows)
-                hierarchyLevel = first
-                  .question
-                  .hierarchyLevel
-                  .flatMap(parseHierarchyLevel)
-                  .getOrElse(HierarchyLevel.State)
-              yield Survey(surveyId, State.WithLocationQuestion(question, hierarchyLevel))
-            result
-          .orDie
+        (for
+          sessionData <- ctx.getOrFail
+          questionIdStr = questionId.asString
+          rows <- run(
+            questionByIdQuery(
+              lift(surveyId),
+              lift(questionId),
+              lift(questionIdStr),
+              lift(questionIdStr + "_desc"),
+              lift(sessionData.locale)))
+        yield
+          val result: Option[Survey[State.WithLocationQuestion]] =
+            for
+              first <- rows.headOption
+              if first.survey.category == "location"
+              question <- buildQuestionToAnswer(first.question, rows, sessionData.locale)
+              hierarchyLevel = first
+                .question
+                .hierarchyLevel
+                .flatMap(parseHierarchyLevel)
+                .getOrElse(HierarchyLevel.State)
+            yield Survey(surveyId, State.WithLocationQuestion(question, hierarchyLevel))
+          result
+        ).orDie
 
       def findWithAdvertiserQuestion(
           surveyId: survey.Id,
           questionId: survey.question.Id): Task[Option[Survey[State.WithAdvertiserQuestion]]] =
-        run(questionByIdQuery(lift(surveyId.asString), lift(questionId.asString)))
-          .map: rows =>
-            val result: Option[Survey[State.WithAdvertiserQuestion]] =
-              for
-                first <- rows.headOption
-                if first.survey.category == "advertiser"
-                question     <- buildQuestionToAnswer(first.question, rows)
-                advertiserId <- first.survey.advertiserId.flatMap(survey.AdvertiserId.fromString)
-              yield Survey(surveyId, State.WithAdvertiserQuestion(advertiserId, question))
-            result
-          .orDie
+        (for
+          sessionData <- ctx.getOrFail
+          questionIdStr = questionId.asString
+          rows <- run(
+            questionByIdQuery(
+              lift(surveyId),
+              lift(questionId),
+              lift(questionIdStr),
+              lift(questionIdStr + "_desc"),
+              lift(sessionData.locale)))
+        yield
+          val result: Option[Survey[State.WithAdvertiserQuestion]] =
+            for
+              first <- rows.headOption
+              if first.survey.category == "advertiser"
+              question     <- buildQuestionToAnswer(first.question, rows, sessionData.locale)
+              advertiserId <- first.survey.advertiserId.flatMap(survey.AdvertiserId.fromString)
+            yield Survey(surveyId, State.WithAdvertiserQuestion(advertiserId, question))
+          result
+        ).orDie
 
       def findNextIdentificationSurvey(): Task[Option[NextIdentificationSurvey]] = ctx
         .get
@@ -130,64 +199,106 @@ object SurveyRepositoryQuill:
           case Some(sessionData) =>
             sessionData.userId match
               case Some(userId) =>
-                run(nextIdentificationSurveyQuery(lift(userId.asString)).take(1))
-                  .map(_.headOption.map(toNextIdentificationSurvey))
+                run(nextIdentificationSurveyQuery(lift(userId)).take(1))
+                  .flatMap(_.headOption.fold(ZIO.none)(fetchQuestionDetails))
                   .orDie
               case None =>
                 run(firstEmailSurveyQuery.take(1))
-                  .map(_.headOption.map(toNextIdentificationSurvey))
+                  .flatMap(_.headOption.fold(ZIO.none)(fetchQuestionDetails))
                   .orDie
           case None =>
             run(firstEmailSurveyQuery.take(1))
-              .map(_.headOption.map(toNextIdentificationSurvey))
+              .flatMap(_.headOption.fold(ZIO.none)(fetchQuestionDetails))
               .orDie
+
+      private def fetchQuestionDetails(
+          row: NextIdentificationSurveyRow): Task[Option[NextIdentificationSurvey]] =
+        for
+          sessionData <- ctx.getOrFail
+          questionIdStr = row.questionId.asString
+          rows <- run(
+            questionByIdQuery(
+              lift(row.surveyId),
+              lift(row.questionId),
+              lift(questionIdStr),
+              lift(questionIdStr + "_desc"),
+              lift(sessionData.locale)))
+        yield
+          for
+            first    <- rows.headOption
+            question <- buildQuestionToAnswer(first.question, rows, sessionData.locale)
+          yield toNextIdentificationSurvey(row, question)
 
       private def findQuestionWithCategory[S <: State](
           surveyId: survey.Id,
           questionId: survey.question.Id,
           questionCategory: String)(stateFactory: QuestionToAnswer => S): Task[Option[Survey[S]]] =
-        run(questionByIdQuery(lift(surveyId.asString), lift(questionId.asString)))
-          .map: rows =>
-            for
-              first <- rows.headOption
-              if first.survey.category == questionCategory
-              question <- buildQuestionToAnswer(first.question, rows)
-            yield Survey(surveyId, stateFactory(question))
-          .orDie
+        (for
+          sessionData <- ctx.getOrFail
+          questionIdStr = questionId.asString
+          rows <- run(
+            questionByIdQuery(
+              lift(surveyId),
+              lift(questionId),
+              lift(questionIdStr),
+              lift(questionIdStr + "_desc"),
+              lift(sessionData.locale)))
+        yield
+          for
+            first <- rows.headOption
+            if first.survey.category == questionCategory
+            question <- buildQuestionToAnswer(first.question, rows, sessionData.locale)
+          yield Survey(surveyId, stateFactory(question))
+        ).orDie
 
   private def buildQuestionToAnswer(
       questionRow: QuestionRow,
-      rows: List[QuestionWithDetails]): Option[QuestionToAnswer] =
-    for questionId <- Id.fromString(questionRow.id)
-    yield
-      val options = rows.flatMap(_.option).distinctBy(_.id).flatMap(toQuestionOption)
-      val rules = rows.flatMap(_.rule).distinctBy(_.id)
-      val questionType = parseQuestionType(questionRow.questionType, options, rules)
-      val commonRules =
-        if questionRow.isRequired == 1 then
-          List(CommonRule.Required)
-        else
-          Nil
+      rows: List[QuestionWithDetails],
+      locale: String): Option[QuestionToAnswer] =
+    // Obtener textos de pregunta (preferir locale del usuario)
+    val questionTexts = rows.flatMap(_.questionText).distinctBy(_.id)
+    val questionDescs = rows.flatMap(_.questionDesc).distinctBy(_.id)
 
+    // Construir opciones con sus textos
+    val optionRows = rows.flatMap(_.option).distinctBy(_.id)
+    val optionTextsMap: Map[String, List[LocalizedTextRow]] = rows
+      .flatMap(r => r.option.map(_.id.asString).zip(r.optionText))
+      .groupBy(_._1)
+      .view
+      .mapValues(_.map(_._2))
+      .toMap
+    val options = optionRows.map(opt => toQuestionOption(opt, optionTextsMap, locale))
+
+    val rules = rows.flatMap(_.rule).distinctBy(_.id)
+    val questionType = parseQuestionType(questionRow.questionType, options, rules)
+    val commonRules =
+      if questionRow.isRequired == 1 then
+        List(CommonRule.Required)
+      else
+        Nil
+
+    val questionText = selectPreferredText(questionTexts, locale)
+    val questionDesc = selectPreferredText(questionDescs, locale)
+
+    questionText.map: text =>
       QuestionToAnswer(
-        id = questionId,
-        text = LocalizedText(questionRow.textContent, questionRow.textLocale),
-        description = questionRow
-          .descriptionContent
-          .map(c =>
-            LocalizedText(c, questionRow.descriptionLocale.getOrElse(questionRow.textLocale))),
+        id = questionRow.id,
+        text = text,
+        description = questionDesc,
         questionType = questionType,
         commonRules = commonRules,
         pointsAwarded = questionRow.pointsAwarded
       )
+  end buildQuestionToAnswer
 
-  private def toQuestionOption(row: QuestionOptionRow): Option[QuestionOption] =
-    for optionId <- OptionId.fromString(row.id)
-    yield QuestionOption(
-      optionId,
-      LocalizedText(row.textContent, row.textLocale),
-      row.displayOrder,
-      row.parentOptionId.flatMap(OptionId.fromString))
+  private def toQuestionOption(
+      row: QuestionOptionRow,
+      textsMap: Map[String, List[LocalizedTextRow]],
+      locale: String): QuestionOption =
+    val texts = textsMap.getOrElse(row.id.asString, Nil)
+    val text = selectPreferredText(texts, locale)
+      .getOrElse(LocalizedText(s"[${row.id.asString}]", locale))
+    QuestionOption(row.id, text, row.displayOrder, row.parentOptionId)
 
   private def parseQuestionType(
       typeStr: String,
@@ -218,7 +329,8 @@ object SurveyRepositoryQuill:
     decode[HierarchyLevel](s"\"$level\"").toOption
 
   private def toNextIdentificationSurvey(
-      row: NextIdentificationSurveyRow): NextIdentificationSurvey =
+      row: NextIdentificationSurveyRow,
+      question: QuestionToAnswer): NextIdentificationSurvey =
     val surveyType =
       row.category match
         case "email" =>
@@ -228,11 +340,8 @@ object SurveyRepositoryQuill:
         case "location" =>
           IdentificationSurveyType.Location
 
-    NextIdentificationSurvey(
-      survey.Id.unsafe(row.surveyId),
-      survey.question.Id.unsafe(row.questionId),
-      surveyType)
+    NextIdentificationSurvey(row.surveyId, surveyType, question)
 
-  val layer: ZLayer[QuillSqlite & SessionContext, Nothing, SurveyRepository[Task]] =
-    ZLayer.fromFunction(apply)
+  val layer: ZLayer[QuillSqlite & SessionContext, Nothing, SurveyRepository[Task]] = ZLayer
+    .fromFunction(apply)
 end SurveyRepositoryQuill

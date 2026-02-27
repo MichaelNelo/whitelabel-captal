@@ -8,14 +8,16 @@ import whitelabel.captal.core.application.Event
 import whitelabel.captal.core.survey.Event as SurveyEvent
 import whitelabel.captal.core.survey.question.Event as QuestionEvent
 import whitelabel.captal.core.{survey, user}
-import whitelabel.captal.infra.{DbEventHandler, QuillSchema, QuillSqlite, SessionContext, SurveyService}
-import whitelabel.captal.infra.QuillSchema.given
+import whitelabel.captal.infra.schema.given
+import whitelabel.captal.infra.schema.core.given
+import whitelabel.captal.infra.{DbEventHandler, SurveyService}
+import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
 
 object SurveyProgressHandler:
-  private final case class ProgressUpdate(userId: user.Id, surveyId: survey.Id)
+  final private case class ProgressUpdate(userId: user.Id, surveyId: survey.Id)
 
-  def apply(ctx: SessionContext): DbEventHandler[Event] =
+  def apply(): DbEventHandler[Event] =
     new DbEventHandler[Event]:
       def handle(events: List[Event], quill: QuillSqlite): Task[Unit] =
         import quill.*
@@ -25,9 +27,9 @@ object SurveyProgressHandler:
             now         <- ZIO.succeed(Instant.now.toString)
             existingOpt <-
               run(
-                SurveyService.findByUserAndSurveyQuery(
-                  lift(update.userId.asString),
-                  lift(update.surveyId.asString))).map(_.headOption).orDie
+                SurveyService.findByUserAndSurveyQuery(lift(update.userId), lift(update.surveyId)))
+                .map(_.headOption)
+                .orDie
             progressId <-
               existingOpt match
                 case Some(existing) =>
@@ -36,21 +38,20 @@ object SurveyProgressHandler:
                     .as(existing.id)
                 case None =>
                   val newId = UUID.randomUUID.toString
-                  val emptyOpt: Option[String] = None
+                  val emptyQuestionId: Option[survey.question.Id] = None
+                  val emptyCompletedAt: Option[String] = None
                   run(
                     SurveyService.insertProgressQuery(
                       lift(newId),
-                      lift(update.userId.asString),
-                      lift(update.surveyId.asString),
-                      lift(emptyOpt),
-                      lift(emptyOpt),
+                      lift(update.userId),
+                      lift(update.surveyId),
+                      lift(emptyQuestionId),
+                      lift(emptyCompletedAt),
                       lift(now),
                       lift(now))).orDie.as(newId)
             isComplete <-
-              run(
-                SurveyService.isSurveyCompleteQuery(
-                  lift(update.userId.asString),
-                  lift(update.surveyId.asString))).orDie
+              run(SurveyService.isSurveyCompleteQuery(lift(update.userId), lift(update.surveyId)))
+                .orDie
             _ <-
               ZIO.when(isComplete)(
                 run(SurveyService.markCompleteQuery(lift(progressId), lift(now), lift(now))).orDie)

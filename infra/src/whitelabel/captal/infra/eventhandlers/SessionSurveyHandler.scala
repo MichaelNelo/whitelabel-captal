@@ -4,12 +4,14 @@ import io.getquill.*
 import whitelabel.captal.core.application.Event
 import whitelabel.captal.core.survey
 import whitelabel.captal.core.user.Event as UserEvent
-import whitelabel.captal.infra.{DbEventHandler, QuillSchema, QuillSqlite, SessionContext, SessionService}
-import whitelabel.captal.infra.QuillSchema.given
+import whitelabel.captal.infra.schema.given
+import whitelabel.captal.infra.schema.core.given
+import whitelabel.captal.infra.{DbEventHandler, SessionContext, SessionService}
+import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
 
 object SessionSurveyHandler:
-  private final case class SurveyAssignment(surveyId: survey.Id, questionId: survey.question.Id)
+  final private case class SurveyAssignment(surveyId: survey.Id, questionId: survey.question.Id)
 
   def apply(ctx: SessionContext): DbEventHandler[Event] =
     new DbEventHandler[Event]:
@@ -19,14 +21,13 @@ object SessionSurveyHandler:
         if assignments.nonEmpty then
           for
             sessionData <- ctx.getOrFail
-            sessionId = sessionData.sessionId.asString
-            _ <-
+            _           <-
               ZIO.foreachDiscard(assignments): assignment =>
                 run(
                   SessionService.updateCurrentSurveyQuery(
-                    lift(sessionId),
-                    lift(assignment.surveyId.asString),
-                    lift(assignment.questionId.asString))).orDie
+                    lift(sessionData.sessionId),
+                    lift(assignment.surveyId),
+                    lift(assignment.questionId))).orDie
           yield ()
         else
           ZIO.unit

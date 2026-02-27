@@ -1,6 +1,7 @@
 package whitelabel.captal.infra
 
 import cats.kernel.Monoid
+import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
 
 trait DbEventHandler[-E]:
@@ -18,5 +19,6 @@ object DbEventHandler:
           a.handle(events, quill) *> b.handle(events, quill)
 
   extension [E](self: DbEventHandler[E])
-    def andThen(other: DbEventHandler[E]): DbEventHandler[E] =
-      Monoid[DbEventHandler[E]].combine(self, other)
+    def andThen(other: DbEventHandler[E]): DbEventHandler[E] = Monoid[DbEventHandler[E]].combine(
+      self,
+      other)
