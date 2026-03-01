@@ -10,7 +10,7 @@ import whitelabel.captal.core.survey.question.Event as QuestionEvent
 import whitelabel.captal.core.{survey, user}
 import whitelabel.captal.infra.schema.given
 import whitelabel.captal.infra.schema.core.given
-import whitelabel.captal.infra.{DbEventHandler, SurveyService}
+import whitelabel.captal.infra.services.SurveyService
 import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
 
