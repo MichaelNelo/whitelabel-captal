@@ -1,3 +1,15 @@
+.DS_Store
+.idea
+*.log
+tmp/
+
+# Mill
+.bsp/
+.metals/
+out/
+
+# SQLite databases
+*.db
 
 # Devenv
 .devenv*
