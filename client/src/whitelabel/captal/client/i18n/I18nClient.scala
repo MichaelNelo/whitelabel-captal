@@ -13,8 +13,7 @@ object I18nClient:
       subtitle = "",
       steps = I18n.Welcome.Steps("", "", ""),
       button = I18n.Welcome.Button("", ""),
-      selectLanguage = ""
-    ),
+      selectLanguage = ""),
     loading = I18n.Loading(""),
     error = I18n.Error("", "", ""),
     question = I18n.Question("", "", "", "", "", "", "", "", "", "", "", "", "", "", "")
@@ -35,12 +34,14 @@ object I18nClient:
     localeVar.set(code)
     load(code)
 
-  def load(locale: String): Unit =
-    Runtime.run:
-      ApiClient.getI18n(locale).tap:
+  def load(locale: String): Unit = Runtime.run:
+    ApiClient
+      .getI18n(locale)
+      .tap:
         case Right(data) =>
           ZIO.succeed:
             i18nVar.set(data)
             isLoadedVar.set(true)
         case Left(_) =>
           ZIO.succeed(isLoadedVar.set(true)) // Still mark as loaded to show UI
+end I18nClient

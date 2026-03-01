@@ -11,11 +11,7 @@ import whitelabel.captal.endpoints.i18n.given
 object LocaleEndpoints:
   val sessionCookie: EndpointInput[Option[String]] = cookie[Option[String]]("session_id")
 
-  val listLocales: PublicEndpoint[
-    Unit,
-    ApiError,
-    List[String],
-    Any] = endpoint
+  val listLocales: PublicEndpoint[Unit, ApiError, List[String], Any] = endpoint
     .get
     .in("api" / "locales")
     .out(jsonBody[List[String]])
@@ -36,11 +32,7 @@ object LocaleEndpoints:
     .errorOut(jsonBody[ApiError])
     .description("Set locale - creates session if needed")
 
-  val getI18n: PublicEndpoint[
-    String,
-    ApiError,
-    I18n,
-    Any] = endpoint
+  val getI18n: PublicEndpoint[String, ApiError, I18n, Any] = endpoint
     .get
     .in("api" / "i18n" / path[String]("locale"))
     .out(jsonBody[I18n])
@@ -48,11 +40,7 @@ object LocaleEndpoints:
     .description("Get i18n translations for a locale")
 
   // Dev-only endpoint to reset session phase to Welcome
-  val resetPhase: PublicEndpoint[
-    Option[String],
-    ApiError,
-    StatusResponse,
-    Any] = endpoint
+  val resetPhase: PublicEndpoint[Option[String], ApiError, StatusResponse, Any] = endpoint
     .post
     .in("api" / "dev" / "reset-phase")
     .in(sessionCookie)

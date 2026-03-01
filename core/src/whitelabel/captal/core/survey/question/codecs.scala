@@ -4,8 +4,8 @@ import java.time.LocalDate
 
 import scala.annotation.targetName
 
-import io.circe.{Decoder, Encoder, Json}
 import io.circe.syntax.*
+import io.circe.{Decoder, Encoder, Json}
 import whitelabel.captal.core.survey
 
 object codecs:
@@ -14,16 +14,19 @@ object codecs:
   // ─────────────────────────────────────────────────────────────────────────────
 
   given surveyIdEncoder: Encoder[survey.Id] = Encoder.encodeString.contramap(_.asString)
-  given surveyIdDecoder: Decoder[survey.Id] = Decoder.decodeString.emap(s =>
-    survey.Id.fromString(s).toRight(s"Invalid survey id: $s"))
+  given surveyIdDecoder: Decoder[survey.Id] = Decoder
+    .decodeString
+    .emap(s => survey.Id.fromString(s).toRight(s"Invalid survey id: $s"))
 
   given questionIdEncoder: Encoder[Id] = Encoder.encodeString.contramap(_.asString)
-  given questionIdDecoder: Decoder[Id] = Decoder.decodeString.emap(s =>
-    Id.fromString(s).toRight(s"Invalid question id: $s"))
+  given questionIdDecoder: Decoder[Id] = Decoder
+    .decodeString
+    .emap(s => Id.fromString(s).toRight(s"Invalid question id: $s"))
 
   given optionIdEncoder: Encoder[OptionId] = Encoder.encodeString.contramap(_.asString)
-  given optionIdDecoder: Decoder[OptionId] = Decoder.decodeString.emap(s =>
-    OptionId.fromString(s).toRight(s"Invalid option id: $s"))
+  given optionIdDecoder: Decoder[OptionId] = Decoder
+    .decodeString
+    .emap(s => OptionId.fromString(s).toRight(s"Invalid option id: $s"))
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Selection Rules
@@ -144,12 +147,19 @@ object codecs:
   // Common Rules
   // ─────────────────────────────────────────────────────────────────────────────
 
-  given Encoder[CommonRule] = Encoder.encodeString.contramap:
-    case CommonRule.Required => "required"
+  given Encoder[CommonRule] = Encoder
+    .encodeString
+    .contramap:
+      case CommonRule.Required =>
+        "required"
 
-  given Decoder[CommonRule] = Decoder.decodeString.emap:
-    case "required" => Right(CommonRule.Required)
-    case other      => Left(s"Unknown common rule: $other")
+  given Decoder[CommonRule] = Decoder
+    .decodeString
+    .emap:
+      case "required" =>
+        Right(CommonRule.Required)
+      case other =>
+        Left(s"Unknown common rule: $other")
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Hierarchy Level
@@ -215,26 +225,27 @@ object codecs:
       Json.obj("type" -> Json.fromString("date"), "rules" -> rules.asJson)
 
   given Decoder[QuestionType] = Decoder.instance: c =>
-    c.get[String]("type").flatMap:
-      case "radio" =>
-        c.get[List[QuestionOption]]("options").map(QuestionType.Radio(_))
-      case "checkbox" =>
-        for
-          options <- c.get[List[QuestionOption]]("options")
-          rules   <- c.getOrElse[List[SelectionRule]]("rules")(Nil)
-        yield QuestionType.Checkbox(options, rules)
-      case "select" =>
-        c.get[List[QuestionOption]]("options").map(QuestionType.Select(_))
-      case "input" =>
-        c.getOrElse[List[TextRule]]("rules")(Nil).map(QuestionType.Input(_))
-      case "rating" =>
-        c.getOrElse[List[RangeRule[Int]]]("rules")(Nil).map(QuestionType.Rating(_))
-      case "numeric" =>
-        c.getOrElse[List[RangeRule[BigDecimal]]]("rules")(Nil).map(QuestionType.Numeric(_))
-      case "date" =>
-        c.getOrElse[List[RangeRule[LocalDate]]]("rules")(Nil).map(QuestionType.Date(_))
-      case other =>
-        Left(io.circe.DecodingFailure(s"Unknown question type: $other", c.history))
+    c.get[String]("type")
+      .flatMap:
+        case "radio" =>
+          c.get[List[QuestionOption]]("options").map(QuestionType.Radio(_))
+        case "checkbox" =>
+          for
+            options <- c.get[List[QuestionOption]]("options")
+            rules   <- c.getOrElse[List[SelectionRule]]("rules")(Nil)
+          yield QuestionType.Checkbox(options, rules)
+        case "select" =>
+          c.get[List[QuestionOption]]("options").map(QuestionType.Select(_))
+        case "input" =>
+          c.getOrElse[List[TextRule]]("rules")(Nil).map(QuestionType.Input(_))
+        case "rating" =>
+          c.getOrElse[List[RangeRule[Int]]]("rules")(Nil).map(QuestionType.Rating(_))
+        case "numeric" =>
+          c.getOrElse[List[RangeRule[BigDecimal]]]("rules")(Nil).map(QuestionType.Numeric(_))
+        case "date" =>
+          c.getOrElse[List[RangeRule[LocalDate]]]("rules")(Nil).map(QuestionType.Date(_))
+        case other =>
+          Left(io.circe.DecodingFailure(s"Unknown question type: $other", c.history))
 
   // ─────────────────────────────────────────────────────────────────────────────
   // QuestionToAnswer (derived)

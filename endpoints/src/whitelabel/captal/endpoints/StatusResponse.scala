@@ -1,7 +1,7 @@
 package whitelabel.captal.endpoints
 
-import io.circe.{Decoder, Encoder}
 import io.circe.generic.semiauto.*
+import io.circe.{Decoder, Encoder}
 import sttp.tapir.Schema
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.endpoints.schemas.given

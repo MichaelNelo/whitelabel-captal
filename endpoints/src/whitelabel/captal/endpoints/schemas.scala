@@ -1,11 +1,11 @@
 package whitelabel.captal.endpoints
 
-import io.circe.{Decoder as CirceDecoder, Encoder as CirceEncoder}
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
+import io.circe.{Decoder as CirceDecoder, Encoder as CirceEncoder}
 import sttp.tapir.Schema
-import whitelabel.captal.core.application.{IdentificationSurveyType, NextStep, Phase}
 import whitelabel.captal.core.application.commands.NextIdentificationSurvey
+import whitelabel.captal.core.application.{IdentificationSurveyType, NextStep, Phase}
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.core.survey
 import whitelabel.captal.core.survey.question.*
@@ -18,18 +18,28 @@ enum SurveyResponse:
 object SurveyResponse:
   def from(value: NextIdentificationSurvey | NextStep): SurveyResponse =
     value match
-      case s: NextIdentificationSurvey => Survey(s)
-      case n: NextStep                 => Step(n)
+      case s: NextIdentificationSurvey =>
+        Survey(s)
+      case n: NextStep =>
+        Step(n)
 
   given CirceEncoder[SurveyResponse] = CirceEncoder.instance:
-    case Survey(data) => data.asJson.deepMerge(io.circe.Json.obj("type" -> "survey".asJson))
-    case Step(data)   => data.asJson.deepMerge(io.circe.Json.obj("type" -> "step".asJson))
+    case Survey(data) =>
+      data.asJson.deepMerge(io.circe.Json.obj("type" -> "survey".asJson))
+    case Step(data) =>
+      data.asJson.deepMerge(io.circe.Json.obj("type" -> "step".asJson))
 
   given CirceDecoder[SurveyResponse] = CirceDecoder.instance: cursor =>
-    cursor.get[String]("type").flatMap:
-      case "survey" => cursor.as[NextIdentificationSurvey].map(Survey.apply)
-      case "step"   => cursor.as[NextStep].map(Step.apply)
-      case other    => Left(io.circe.DecodingFailure(s"Unknown type: $other", cursor.history))
+    cursor
+      .get[String]("type")
+      .flatMap:
+        case "survey" =>
+          cursor.as[NextIdentificationSurvey].map(Survey.apply)
+        case "step" =>
+          cursor.as[NextStep].map(Step.apply)
+        case other =>
+          Left(io.circe.DecodingFailure(s"Unknown type: $other", cursor.history))
+end SurveyResponse
 
 object schemas:
   // Phase and IdentificationSurveyType
@@ -66,6 +76,7 @@ object schemas:
   given Schema[NextIdentificationSurvey] = Schema.derived
   given Schema[NextStep] = Schema.derived
   given Schema[SurveyResponse] = Schema.anyObject
+end schemas
 
 object i18n:
   // Circe codecs for nested types
@@ -92,3 +103,4 @@ object i18n:
   given Schema[I18n.Error] = Schema.derived
   given Schema[I18n.Question] = Schema.derived
   given Schema[I18n] = Schema.derived
+end i18n

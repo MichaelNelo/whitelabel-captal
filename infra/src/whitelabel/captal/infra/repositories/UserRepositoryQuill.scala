@@ -2,12 +2,12 @@ package whitelabel.captal.infra.repositories
 
 import io.getquill.*
 import whitelabel.captal.core.infrastructure.UserRepository
-import whitelabel.captal.core.user.{State, User}
 import whitelabel.captal.core.user
-import whitelabel.captal.infra.session.SessionContext
+import whitelabel.captal.core.user.{State, User}
+import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.users.given
-import whitelabel.captal.infra.schema.QuillSqlite
+import whitelabel.captal.infra.session.SessionContext
 import zio.*
 
 object UserRepositoryQuill:

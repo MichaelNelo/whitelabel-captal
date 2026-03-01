@@ -4,10 +4,10 @@ import io.getquill.*
 import whitelabel.captal.core.application.Event
 import whitelabel.captal.core.survey.question.FullyQualifiedQuestionId
 import whitelabel.captal.core.user.Event as UserEvent
-import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.schema.core.given
-import whitelabel.captal.infra.session.{SessionContext, SessionService}
 import whitelabel.captal.infra.schema.QuillSqlite
+import whitelabel.captal.infra.schema.core.given
+import whitelabel.captal.infra.schema.given
+import whitelabel.captal.infra.session.{SessionContext, SessionService}
 import zio.*
 
 object SessionSurveyHandler:

@@ -6,9 +6,9 @@ import whitelabel.captal.core.infrastructure.SessionData
 import whitelabel.captal.core.survey.question.FullyQualifiedQuestionId
 import whitelabel.captal.core.{survey, user}
 import whitelabel.captal.infra.SessionRow
-import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.QuillSqlite
+import whitelabel.captal.infra.schema.core.given
+import whitelabel.captal.infra.schema.given
 import zio.*
 
 trait SessionService:
@@ -77,8 +77,14 @@ object SessionService:
           )).orDie *> ZIO.succeed(SessionData(sessionId, None, locale, phase, None))
       end create
 
-      def setCurrentQuestion(sessionId: user.SessionId, question: FullyQualifiedQuestionId): Task[Unit] =
-        run(updateCurrentSurveyQuery(lift(sessionId), lift(question.surveyId), lift(question.questionId))).unit.orDie
+      def setCurrentQuestion(
+          sessionId: user.SessionId,
+          question: FullyQualifiedQuestionId): Task[Unit] =
+        run(
+          updateCurrentSurveyQuery(
+            lift(sessionId),
+            lift(question.surveyId),
+            lift(question.questionId))).unit.orDie
 
       def clearCurrentQuestion(sessionId: user.SessionId): Task[Unit] =
         run(clearCurrentSurveyQuery(lift(sessionId))).unit.orDie
@@ -90,9 +96,12 @@ object SessionService:
         run(updateLocaleQuery(lift(sessionId), lift(locale))).unit.orDie
 
   private def toSessionData(row: SessionRow): SessionData =
-    val currentQuestion = (row.currentSurveyId, row.currentQuestionId) match
-      case (Some(surveyId), Some(questionId)) => Some(FullyQualifiedQuestionId(surveyId, questionId))
-      case _                                  => None
+    val currentQuestion =
+      (row.currentSurveyId, row.currentQuestionId) match
+        case (Some(surveyId), Some(questionId)) =>
+          Some(FullyQualifiedQuestionId(surveyId, questionId))
+        case _ =>
+          None
     SessionData(row.id, row.userId, row.locale, row.phase, currentQuestion)
 
   val layer: ZLayer[QuillSqlite, Nothing, SessionService] = ZLayer.fromFunction(apply)

@@ -10,8 +10,8 @@ import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.{survey, user}
 import whitelabel.captal.infra.*
 import whitelabel.captal.infra.schema.QuillSqlite
-import whitelabel.captal.infra.schema.given
 import whitelabel.captal.infra.schema.core.given
+import whitelabel.captal.infra.schema.given
 import zio.*
 import zio.interop.catz.*
 
@@ -19,14 +19,10 @@ object TestFixtures:
   private val testConfig = ConfigFactory.load("test.conf")
   private val fly4sConfig = Fly4sConfig.default.copy(locations = List(Location("db/migration")))
 
-  def migrate: ZIO[Any, Throwable, Unit] =
-    ZIO
-      .attempt(testConfig.getString("database.dataSource.url"))
-      .flatMap: url =>
-        Fly4s
-          .make[Task](url, config = fly4sConfig)
-          .use(_.migrate)
-          .unit
+  def migrate: ZIO[Any, Throwable, Unit] = ZIO
+    .attempt(testConfig.getString("database.dataSource.url"))
+    .flatMap: url =>
+      Fly4s.make[Task](url, config = fly4sConfig).use(_.migrate).unit
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Survey Fixtures
@@ -103,9 +99,10 @@ object TestFixtures:
         (questionRow, textRow)
       for
         _ <- run(query[SurveyRow].insertValue(lift(surveyRow)))
-        _ <- ZIO.foreach(questionsWithText): (qRow, tRow) =>
-          run(query[QuestionRow].insertValue(lift(qRow))) *>
-            run(query[LocalizedTextRow].insertValue(lift(tRow)))
+        _ <-
+          ZIO.foreach(questionsWithText): (qRow, tRow) =>
+            run(query[QuestionRow].insertValue(lift(qRow))) *>
+              run(query[LocalizedTextRow].insertValue(lift(tRow)))
       yield MultiQuestionSurveyFixture(surveyId, questionsWithText.map(_._1.id))
 
   private def seedSurvey(
@@ -171,9 +168,10 @@ object TestFixtures:
             createdAt = now,
             updatedAt = now)
           (optionRow, textRow)
-      for _ <- ZIO.foreach(optionsWithText): (optRow, txtRow) =>
-        run(query[QuestionOptionRow].insertValue(lift(optRow))) *>
-          run(query[LocalizedTextRow].insertValue(lift(txtRow)))
+      for _ <-
+          ZIO.foreach(optionsWithText): (optRow, txtRow) =>
+            run(query[QuestionOptionRow].insertValue(lift(optRow))) *>
+              run(query[LocalizedTextRow].insertValue(lift(txtRow)))
       yield optionsWithText.map(_._1.id)
 
   def addQuestionRule(
@@ -311,25 +309,24 @@ object TestFixtures:
   // Locale Fixtures
   // ─────────────────────────────────────────────────────────────────────────────
 
-  def seedLocales(locales: List[String]): ZIO[QuillSqlite, Throwable, Unit] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      val now = java.time.Instant.now.toString
-      val rows = locales.map: locale =>
-        LocalizedTextRow(
-          id = UUID.randomUUID.toString,
-          entityId = s"ui.locale.$locale",
-          locale = locale,
-          value = locale,
-          category = "frontend",
-          createdAt = now,
-          updatedAt = now)
-      ZIO.foreach(rows)(row => run(query[LocalizedTextRow].insertValue(lift(row)))).unit
+  def seedLocales(locales: List[String]): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[
+    QuillSqlite]: quill =>
+    import quill.*
+    val now = java.time.Instant.now.toString
+    val rows = locales.map: locale =>
+      LocalizedTextRow(
+        id = UUID.randomUUID.toString,
+        entityId = s"ui.locale.$locale",
+        locale = locale,
+        value = locale,
+        category = "frontend",
+        createdAt = now,
+        updatedAt = now)
+    ZIO.foreach(rows)(row => run(query[LocalizedTextRow].insertValue(lift(row)))).unit
 
-  def countSessions: ZIO[QuillSqlite, Throwable, Long] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      run(query[SessionRow].size)
+  def countSessions: ZIO[QuillSqlite, Throwable, Long] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.*
+    run(query[SessionRow].size)
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Noise Data - Unrelated records to test query filtering
@@ -374,7 +371,8 @@ object TestFixtures:
         value = s"Inactive $category question",
         category = "backend",
         createdAt = now,
-        updatedAt = now)
+        updatedAt = now
+      )
       (surveyRow, questionRow, textRow)
 
     // Create extra active advertiser surveys (noise that shouldn't interfere with identification flow)
@@ -412,33 +410,38 @@ object TestFixtures:
       (surveyRow, questionsWithText.toList)
 
     // Create completed progress for noise users on some surveys
-    val noiseProgress = noiseUsers.take(3).flatMap: noiseUser =>
-      extraSurveys.map: (surveyRow, _) =>
-        UserSurveyProgressRow(
-          id = UUID.randomUUID.toString,
-          userId = noiseUser.id,
-          surveyId = surveyRow.id,
-          currentQuestionId = None,
-          completedAt = Some(now),
-          createdAt = now,
-          updatedAt = now)
+    val noiseProgress = noiseUsers
+      .take(3)
+      .flatMap: noiseUser =>
+        extraSurveys.map: (surveyRow, _) =>
+          UserSurveyProgressRow(
+            id = UUID.randomUUID.toString,
+            userId = noiseUser.id,
+            surveyId = surveyRow.id,
+            currentQuestionId = None,
+            completedAt = Some(now),
+            createdAt = now,
+            updatedAt = now)
 
     for
       // Insert noise users
       _ <- ZIO.foreach(noiseUsers)(row => run(query[UserRow].insertValue(lift(row))))
       // Insert inactive surveys with their questions and texts
-      _ <- ZIO.foreach(inactiveSurveys): (surveyRow, questionRow, textRow) =>
-        run(query[SurveyRow].insertValue(lift(surveyRow))) *>
-          run(query[QuestionRow].insertValue(lift(questionRow))) *>
-          run(query[LocalizedTextRow].insertValue(lift(textRow)))
+      _ <-
+        ZIO.foreach(inactiveSurveys): (surveyRow, questionRow, textRow) =>
+          run(query[SurveyRow].insertValue(lift(surveyRow))) *>
+            run(query[QuestionRow].insertValue(lift(questionRow))) *>
+            run(query[LocalizedTextRow].insertValue(lift(textRow)))
       // Insert extra active surveys with multiple questions
-      _ <- ZIO.foreach(extraSurveys): (surveyRow, questionsWithText) =>
-        run(query[SurveyRow].insertValue(lift(surveyRow))) *>
-          ZIO.foreach(questionsWithText): (qRow, tRow) =>
-            run(query[QuestionRow].insertValue(lift(qRow))) *>
-              run(query[LocalizedTextRow].insertValue(lift(tRow)))
+      _ <-
+        ZIO.foreach(extraSurveys): (surveyRow, questionsWithText) =>
+          run(query[SurveyRow].insertValue(lift(surveyRow))) *>
+            ZIO.foreach(questionsWithText): (qRow, tRow) =>
+              run(query[QuestionRow].insertValue(lift(qRow))) *>
+                run(query[LocalizedTextRow].insertValue(lift(tRow)))
       // Insert noise progress
-      _ <- ZIO.foreach(noiseProgress)(row =>
-        run(query[UserSurveyProgressRow].insertValue(lift(row))))
+      _ <-
+        ZIO.foreach(noiseProgress)(row => run(query[UserSurveyProgressRow].insertValue(lift(row))))
     yield ()
+    end for
 end TestFixtures

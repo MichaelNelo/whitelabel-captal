@@ -7,14 +7,14 @@ import cats.syntax.flatMap.*
 import cats.syntax.functor.*
 import io.circe.{Decoder, Encoder}
 import whitelabel.captal.core.Op.{convertError, convertEvent}
-import whitelabel.captal.core.application.{IdentificationSurveyType, NextStep, Phase}
 import whitelabel.captal.core.application.IdentificationSurveyType.given
 import whitelabel.captal.core.application.conversions.given
+import whitelabel.captal.core.application.{IdentificationSurveyType, NextStep, Phase}
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository}
-import whitelabel.captal.core.survey.question.{FullyQualifiedQuestionId, QuestionToAnswer}
 import whitelabel.captal.core.survey.question.codecs.given
+import whitelabel.captal.core.survey.question.{FullyQualifiedQuestionId, QuestionToAnswer}
 import whitelabel.captal.core.user.ops.*
-import whitelabel.captal.core.{Op as CoreOp, survey, user}
+import whitelabel.captal.core.{Op as CoreOp, survey}
 
 case object ProvideNextIdentificationSurveyCommand
 
@@ -48,10 +48,7 @@ object ProvideNextIdentificationSurveyHandler:
         yield (userOpt, nextOpt) match
           case (None, Some(next)) =>
             val nextQuestion = Some(FullyQualifiedQuestionId(next.surveyId, next.question.id))
-            createGuest(nextQuestion, Instant.now)
-              .convertEvent
-              .convertError
-              .as(next: Response)
+            createGuest(nextQuestion, Instant.now).convertEvent.convertError.as(next: Response)
           case (None, None) =>
             createGuest(None, Instant.now)
               .convertEvent

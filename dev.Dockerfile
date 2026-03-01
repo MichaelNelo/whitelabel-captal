@@ -14,10 +14,10 @@ COPY infra/ infra/
 COPY api/ api/
 COPY client/ client/
 
-# Build assembly JARs and client
+# Build assembly JARs and client (fullLinkJS for optimized JS)
 RUN ENVIRONMENT=dev ./mill api.assembly && \
     ./mill infra.assembly && \
-    ENVIRONMENT=dev ./mill client.fastLinkJS
+    ENVIRONMENT=dev ./mill client.fullLinkJS
 
 # Stage 2: Runtime
 FROM eclipse-temurin:21-jre-noble
@@ -28,9 +28,9 @@ WORKDIR /app
 COPY --from=builder /app/out/api/assembly.dest/out.jar api.jar
 COPY --from=builder /app/out/infra/assembly.dest/out.jar infra.jar
 
-# Copy client assets
-COPY --from=builder /app/out/client/fastLinkJS.dest/ out/client/fastLinkJS.dest/
-COPY client/index.html client/index.html
+# Copy client assets (use index.prod.html which references fullLinkJS)
+COPY --from=builder /app/out/client/fullLinkJS.dest/ out/client/fullLinkJS.dest/
+COPY client/index.prod.html client/index.html
 COPY client/assets/ client/assets/
 
 # Expose port

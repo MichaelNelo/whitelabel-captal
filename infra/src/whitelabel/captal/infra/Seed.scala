@@ -6,8 +6,8 @@ import io.getquill.*
 import io.getquill.jdbczio.Quill
 import whitelabel.captal.core.survey
 import whitelabel.captal.infra.schema.QuillSqlite
-import whitelabel.captal.infra.schema.given
 import whitelabel.captal.infra.schema.core.given
+import whitelabel.captal.infra.schema.given
 import zio.*
 
 /** Development-only seeder for populating the database with initial data. Run with: ./mill
@@ -40,7 +40,11 @@ object Seed extends ZIOAppDefault:
     ("question.minSelections", "es", "frontend", "Selecciona al menos {min} opciones"),
     ("question.maxSelections", "es", "frontend", "Selecciona máximo {max} opciones"),
     ("question.invalidOption", "es", "frontend", "Opción no válida"),
-    ("question.ratingOutOfRange", "es", "frontend", "La calificación debe estar entre {min} y {max}"),
+    (
+      "question.ratingOutOfRange",
+      "es",
+      "frontend",
+      "La calificación debe estar entre {min} y {max}"),
     ("question.numericOutOfRange", "es", "frontend", "El valor debe estar entre {min} y {max}"),
     ("question.dateOutOfRange", "es", "frontend", "La fecha debe estar entre {min} y {max}"),
     ("question.invalidAnswer", "es", "frontend", "Respuesta no válida"),
@@ -74,8 +78,8 @@ object Seed extends ZIOAppDefault:
     ("question.invalidAnswer", "en", "frontend", "Invalid answer")
   )
 
-  private def seedTranslations: ZIO[QuillSqlite, Throwable, Unit] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+  private def seedTranslations: ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
       import quill.{run as qrun, *}
       val now = java.time.Instant.now.toString
       val rows = translations.map: (entityId, locale, category, value) =>
@@ -86,8 +90,7 @@ object Seed extends ZIOAppDefault:
           value = value,
           category = category,
           createdAt = now,
-          updatedAt = now
-        )
+          updatedAt = now)
       // Delete existing frontend translations and insert new ones
       qrun(query[LocalizedTextRow].filter(_.category == "frontend").delete) *>
         ZIO
@@ -95,8 +98,8 @@ object Seed extends ZIOAppDefault:
             qrun(query[LocalizedTextRow].insertValue(lift(row)))
           .unit
 
-  private def seedEmailSurvey: ZIO[QuillSqlite, Throwable, Unit] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+  private def seedEmailSurvey: ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
       import quill.{run as qrun, *}
       val now = java.time.Instant.now.toString
       val surveyId = survey.Id.generate
@@ -139,7 +142,8 @@ object Seed extends ZIOAppDefault:
           value = "¿Cuál es tu correo electrónico?",
           category = "backend",
           createdAt = now,
-          updatedAt = now),
+          updatedAt = now
+        ),
         LocalizedTextRow(
           id = UUID.randomUUID.toString,
           entityId = questionId.asString,
@@ -147,7 +151,8 @@ object Seed extends ZIOAppDefault:
           value = "What is your email address?",
           category = "backend",
           createdAt = now,
-          updatedAt = now),
+          updatedAt = now
+        ),
         // Placeholder texts
         LocalizedTextRow(
           id = UUID.randomUUID.toString,
@@ -156,7 +161,8 @@ object Seed extends ZIOAppDefault:
           value = "correo@ejemplo.com",
           category = "backend",
           createdAt = now,
-          updatedAt = now),
+          updatedAt = now
+        ),
         LocalizedTextRow(
           id = UUID.randomUUID.toString,
           entityId = questionId.asString + "_placeholder",
@@ -164,7 +170,9 @@ object Seed extends ZIOAppDefault:
           value = "email@example.com",
           category = "backend",
           createdAt = now,
-          updatedAt = now))
+          updatedAt = now
+        )
+      )
 
       // Delete existing email surveys and insert new one
       qrun(query[SurveyRow].filter(_.category == "email").delete) *>
@@ -174,189 +182,377 @@ object Seed extends ZIOAppDefault:
         qrun(query[QuestionRuleRow].insertValue(lift(maxLengthRule))) *>
         ZIO.foreach(questionTexts)(row => qrun(query[LocalizedTextRow].insertValue(lift(row)))).unit
 
-  private def seedProfilingSurvey: ZIO[QuillSqlite, Throwable, Unit] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
-      import quill.{run as qrun, *}
-      val now = java.time.Instant.now.toString
-      val surveyId = survey.Id.generate
+  private def seedProfilingSurvey
+      : ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.{run as qrun, *}
+    val now = java.time.Instant.now.toString
+    val surveyId = survey.Id.generate
 
-      val surveyRow = SurveyRow(
-        id = surveyId,
-        category = "profiling",
-        advertiserId = None,
-        isActive = 1,
-        createdAt = now)
+    val surveyRow = SurveyRow(
+      id = surveyId,
+      category = "profiling",
+      advertiserId = None,
+      isActive = 1,
+      createdAt = now)
 
-      // Question 1: Name
-      val nameQuestionId = survey.question.Id.generate
-      val nameQuestion = QuestionRow(
-        id = nameQuestionId,
-        surveyId = surveyId,
-        questionType = "input",
-        pointsAwarded = 10,
-        displayOrder = 1,
-        hierarchyLevel = None,
-        isRequired = 1,
-        createdAt = now)
-      val nameMaxLengthRule = QuestionRuleRow(
-        id = UUID.randomUUID.toString,
-        questionId = nameQuestionId,
-        ruleType = "text",
-        ruleConfig = """{"type":"max_length","value":100}""")
-      val nameTexts = List(
-        LocalizedTextRow(UUID.randomUUID.toString, nameQuestionId.asString, "es", "¿Cuál es tu nombre?", "backend", now, now),
-        LocalizedTextRow(UUID.randomUUID.toString, nameQuestionId.asString, "en", "What is your name?", "backend", now, now),
-        LocalizedTextRow(UUID.randomUUID.toString, nameQuestionId.asString + "_placeholder", "es", "Tu nombre completo", "backend", now, now),
-        LocalizedTextRow(UUID.randomUUID.toString, nameQuestionId.asString + "_placeholder", "en", "Your full name", "backend", now, now))
+    // Question 1: Name
+    val nameQuestionId = survey.question.Id.generate
+    val nameQuestion = QuestionRow(
+      id = nameQuestionId,
+      surveyId = surveyId,
+      questionType = "input",
+      pointsAwarded = 10,
+      displayOrder = 1,
+      hierarchyLevel = None,
+      isRequired = 1,
+      createdAt = now)
+    val nameMaxLengthRule = QuestionRuleRow(
+      id = UUID.randomUUID.toString,
+      questionId = nameQuestionId,
+      ruleType = "text",
+      ruleConfig = """{"type":"max_length","value":100}""")
+    val nameTexts = List(
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        nameQuestionId.asString,
+        "es",
+        "¿Cuál es tu nombre?",
+        "backend",
+        now,
+        now),
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        nameQuestionId.asString,
+        "en",
+        "What is your name?",
+        "backend",
+        now,
+        now),
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        nameQuestionId.asString + "_placeholder",
+        "es",
+        "Tu nombre completo",
+        "backend",
+        now,
+        now),
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        nameQuestionId.asString + "_placeholder",
+        "en",
+        "Your full name",
+        "backend",
+        now,
+        now)
+    )
 
-      // Question 2: Gender (radio)
-      val genderQuestionId = survey.question.Id.generate
-      val genderQuestion = QuestionRow(
-        id = genderQuestionId,
-        surveyId = surveyId,
-        questionType = "radio",
-        pointsAwarded = 10,
-        displayOrder = 2,
-        hierarchyLevel = None,
-        isRequired = 1,
-        createdAt = now)
-      val genderMaleOptionId = survey.question.OptionId.generate
-      val genderFemaleOptionId = survey.question.OptionId.generate
-      val genderOtherOptionId = survey.question.OptionId.generate
-      val genderOptions = List(
-        QuestionOptionRow(genderMaleOptionId, genderQuestionId, 1, None),
-        QuestionOptionRow(genderFemaleOptionId, genderQuestionId, 2, None),
-        QuestionOptionRow(genderOtherOptionId, genderQuestionId, 3, None))
-      val genderTexts = List(
-        LocalizedTextRow(UUID.randomUUID.toString, genderQuestionId.asString, "es", "¿Cuál es tu sexo?", "backend", now, now),
-        LocalizedTextRow(UUID.randomUUID.toString, genderQuestionId.asString, "en", "What is your gender?", "backend", now, now),
-        LocalizedTextRow(UUID.randomUUID.toString, genderMaleOptionId.asString, "es", "Masculino", "backend", now, now),
-        LocalizedTextRow(UUID.randomUUID.toString, genderMaleOptionId.asString, "en", "Male", "backend", now, now),
-        LocalizedTextRow(UUID.randomUUID.toString, genderFemaleOptionId.asString, "es", "Femenino", "backend", now, now),
-        LocalizedTextRow(UUID.randomUUID.toString, genderFemaleOptionId.asString, "en", "Female", "backend", now, now),
-        LocalizedTextRow(UUID.randomUUID.toString, genderOtherOptionId.asString, "es", "Otro", "backend", now, now),
-        LocalizedTextRow(UUID.randomUUID.toString, genderOtherOptionId.asString, "en", "Other", "backend", now, now))
+    // Question 2: Gender (radio)
+    val genderQuestionId = survey.question.Id.generate
+    val genderQuestion = QuestionRow(
+      id = genderQuestionId,
+      surveyId = surveyId,
+      questionType = "radio",
+      pointsAwarded = 10,
+      displayOrder = 2,
+      hierarchyLevel = None,
+      isRequired = 1,
+      createdAt = now)
+    val genderMaleOptionId = survey.question.OptionId.generate
+    val genderFemaleOptionId = survey.question.OptionId.generate
+    val genderOtherOptionId = survey.question.OptionId.generate
+    val genderOptions = List(
+      QuestionOptionRow(genderMaleOptionId, genderQuestionId, 1, None),
+      QuestionOptionRow(genderFemaleOptionId, genderQuestionId, 2, None),
+      QuestionOptionRow(genderOtherOptionId, genderQuestionId, 3, None)
+    )
+    val genderTexts = List(
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        genderQuestionId.asString,
+        "es",
+        "¿Cuál es tu sexo?",
+        "backend",
+        now,
+        now),
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        genderQuestionId.asString,
+        "en",
+        "What is your gender?",
+        "backend",
+        now,
+        now),
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        genderMaleOptionId.asString,
+        "es",
+        "Masculino",
+        "backend",
+        now,
+        now),
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        genderMaleOptionId.asString,
+        "en",
+        "Male",
+        "backend",
+        now,
+        now),
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        genderFemaleOptionId.asString,
+        "es",
+        "Femenino",
+        "backend",
+        now,
+        now),
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        genderFemaleOptionId.asString,
+        "en",
+        "Female",
+        "backend",
+        now,
+        now),
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        genderOtherOptionId.asString,
+        "es",
+        "Otro",
+        "backend",
+        now,
+        now),
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        genderOtherOptionId.asString,
+        "en",
+        "Other",
+        "backend",
+        now,
+        now)
+    )
 
-      // Question 3: Date of Birth
-      val dobQuestionId = survey.question.Id.generate
-      val dobQuestion = QuestionRow(
-        id = dobQuestionId,
-        surveyId = surveyId,
-        questionType = "date",
-        pointsAwarded = 10,
-        displayOrder = 3,
-        hierarchyLevel = None,
-        isRequired = 1,
-        createdAt = now)
-      val dobTexts = List(
-        LocalizedTextRow(UUID.randomUUID.toString, dobQuestionId.asString, "es", "¿Cuál es tu fecha de nacimiento?", "backend", now, now),
-        LocalizedTextRow(UUID.randomUUID.toString, dobQuestionId.asString, "en", "What is your date of birth?", "backend", now, now))
+    // Question 3: Date of Birth
+    val dobQuestionId = survey.question.Id.generate
+    val dobQuestion = QuestionRow(
+      id = dobQuestionId,
+      surveyId = surveyId,
+      questionType = "date",
+      pointsAwarded = 10,
+      displayOrder = 3,
+      hierarchyLevel = None,
+      isRequired = 1,
+      createdAt = now)
+    val dobTexts = List(
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        dobQuestionId.asString,
+        "es",
+        "¿Cuál es tu fecha de nacimiento?",
+        "backend",
+        now,
+        now),
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        dobQuestionId.asString,
+        "en",
+        "What is your date of birth?",
+        "backend",
+        now,
+        now)
+    )
 
-      // Question 4: Phone number
-      val phoneQuestionId = survey.question.Id.generate
-      val phoneQuestion = QuestionRow(
-        id = phoneQuestionId,
-        surveyId = surveyId,
-        questionType = "input",
-        pointsAwarded = 10,
-        displayOrder = 4,
-        hierarchyLevel = None,
-        isRequired = 1,
-        createdAt = now)
-      val phonePatternRule = QuestionRuleRow(
-        id = UUID.randomUUID.toString,
-        questionId = phoneQuestionId,
-        ruleType = "text",
-        ruleConfig = """{"type":"pattern","value":"^[0-9+\\-\\s]+$"}""")
-      val phoneMaxLengthRule = QuestionRuleRow(
-        id = UUID.randomUUID.toString,
-        questionId = phoneQuestionId,
-        ruleType = "text",
-        ruleConfig = """{"type":"max_length","value":20}""")
-      val phoneTexts = List(
-        LocalizedTextRow(UUID.randomUUID.toString, phoneQuestionId.asString, "es", "¿Cuál es tu número de teléfono?", "backend", now, now),
-        LocalizedTextRow(UUID.randomUUID.toString, phoneQuestionId.asString, "en", "What is your phone number?", "backend", now, now),
-        LocalizedTextRow(UUID.randomUUID.toString, phoneQuestionId.asString + "_placeholder", "es", "+58 412 1234567", "backend", now, now),
-        LocalizedTextRow(UUID.randomUUID.toString, phoneQuestionId.asString + "_placeholder", "en", "+1 555 1234567", "backend", now, now))
+    // Question 4: Phone number
+    val phoneQuestionId = survey.question.Id.generate
+    val phoneQuestion = QuestionRow(
+      id = phoneQuestionId,
+      surveyId = surveyId,
+      questionType = "input",
+      pointsAwarded = 10,
+      displayOrder = 4,
+      hierarchyLevel = None,
+      isRequired = 1,
+      createdAt = now)
+    val phonePatternRule = QuestionRuleRow(
+      id = UUID.randomUUID.toString,
+      questionId = phoneQuestionId,
+      ruleType = "text",
+      ruleConfig = """{"type":"pattern","value":"^[0-9+\\-\\s]+$"}""")
+    val phoneMaxLengthRule = QuestionRuleRow(
+      id = UUID.randomUUID.toString,
+      questionId = phoneQuestionId,
+      ruleType = "text",
+      ruleConfig = """{"type":"max_length","value":20}""")
+    val phoneTexts = List(
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        phoneQuestionId.asString,
+        "es",
+        "¿Cuál es tu número de teléfono?",
+        "backend",
+        now,
+        now),
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        phoneQuestionId.asString,
+        "en",
+        "What is your phone number?",
+        "backend",
+        now,
+        now),
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        phoneQuestionId.asString + "_placeholder",
+        "es",
+        "+58 412 1234567",
+        "backend",
+        now,
+        now),
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        phoneQuestionId.asString + "_placeholder",
+        "en",
+        "+1 555 1234567",
+        "backend",
+        now,
+        now)
+    )
 
-      val allQuestions = List(nameQuestion, genderQuestion, dobQuestion, phoneQuestion)
-      val allOptions = genderOptions
-      val allRules = List(nameMaxLengthRule, phonePatternRule, phoneMaxLengthRule)
-      val allTexts = nameTexts ++ genderTexts ++ dobTexts ++ phoneTexts
+    val allQuestions = List(nameQuestion, genderQuestion, dobQuestion, phoneQuestion)
+    val allOptions = genderOptions
+    val allRules = List(nameMaxLengthRule, phonePatternRule, phoneMaxLengthRule)
+    val allTexts = nameTexts ++ genderTexts ++ dobTexts ++ phoneTexts
 
-      qrun(query[SurveyRow].filter(_.category == "profiling").delete) *>
-        qrun(query[SurveyRow].insertValue(lift(surveyRow))) *>
-        ZIO.foreach(allQuestions)(q => qrun(query[QuestionRow].insertValue(lift(q)))) *>
-        ZIO.foreach(allOptions)(o => qrun(query[QuestionOptionRow].insertValue(lift(o)))) *>
-        ZIO.foreach(allRules)(r => qrun(query[QuestionRuleRow].insertValue(lift(r)))) *>
-        ZIO.foreach(allTexts)(t => qrun(query[LocalizedTextRow].insertValue(lift(t)))).unit
+    qrun(query[SurveyRow].filter(_.category == "profiling").delete) *>
+      qrun(query[SurveyRow].insertValue(lift(surveyRow))) *>
+      ZIO.foreach(allQuestions)(q => qrun(query[QuestionRow].insertValue(lift(q)))) *>
+      ZIO.foreach(allOptions)(o => qrun(query[QuestionOptionRow].insertValue(lift(o)))) *>
+      ZIO.foreach(allRules)(r => qrun(query[QuestionRuleRow].insertValue(lift(r)))) *>
+      ZIO.foreach(allTexts)(t => qrun(query[LocalizedTextRow].insertValue(lift(t)))).unit
 
-  private def seedLocationSurvey: ZIO[QuillSqlite, Throwable, Unit] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
-      import quill.{run as qrun, *}
-      val now = java.time.Instant.now.toString
-      val surveyId = survey.Id.generate
+  private def seedLocationSurvey
+      : ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.{run as qrun, *}
+    val now = java.time.Instant.now.toString
+    val surveyId = survey.Id.generate
 
-      val surveyRow = SurveyRow(
-        id = surveyId,
-        category = "location",
-        advertiserId = None,
-        isActive = 1,
-        createdAt = now)
+    val surveyRow = SurveyRow(
+      id = surveyId,
+      category = "location",
+      advertiserId = None,
+      isActive = 1,
+      createdAt = now)
 
-      // Question 1: Estado (State)
-      val stateQuestionId = survey.question.Id.generate
-      val stateQuestion = QuestionRow(
-        id = stateQuestionId,
-        surveyId = surveyId,
-        questionType = "select",
-        pointsAwarded = 10,
-        displayOrder = 1,
-        hierarchyLevel = Some("state"),
-        isRequired = 1,
-        createdAt = now)
+    // Question 1: Estado (State)
+    val stateQuestionId = survey.question.Id.generate
+    val stateQuestion = QuestionRow(
+      id = stateQuestionId,
+      surveyId = surveyId,
+      questionType = "select",
+      pointsAwarded = 10,
+      displayOrder = 1,
+      hierarchyLevel = Some("state"),
+      isRequired = 1,
+      createdAt = now)
 
-      // Venezuelan states as options
-      val stateNames = List(
-        "Amazonas", "Anzoátegui", "Apure", "Aragua", "Barinas", "Bolívar",
-        "Carabobo", "Cojedes", "Delta Amacuro", "Distrito Capital", "Falcón",
-        "Guárico", "Lara", "Mérida", "Miranda", "Monagas", "Nueva Esparta",
-        "Portuguesa", "Sucre", "Táchira", "Trujillo", "Vargas", "Yaracuy", "Zulia")
+    // Venezuelan states as options
+    val stateNames = List(
+      "Amazonas",
+      "Anzoátegui",
+      "Apure",
+      "Aragua",
+      "Barinas",
+      "Bolívar",
+      "Carabobo",
+      "Cojedes",
+      "Delta Amacuro",
+      "Distrito Capital",
+      "Falcón",
+      "Guárico",
+      "Lara",
+      "Mérida",
+      "Miranda",
+      "Monagas",
+      "Nueva Esparta",
+      "Portuguesa",
+      "Sucre",
+      "Táchira",
+      "Trujillo",
+      "Vargas",
+      "Yaracuy",
+      "Zulia"
+    )
 
-      val stateOptions = stateNames.zipWithIndex.map: (name, idx) =>
+    val stateOptions = stateNames
+      .zipWithIndex
+      .map: (name, idx) =>
         val optionId = survey.question.OptionId.generate
         (QuestionOptionRow(optionId, stateQuestionId, idx + 1, None), optionId, name)
 
-      val stateTexts = List(
-        LocalizedTextRow(UUID.randomUUID.toString, stateQuestionId.asString, "es", "¿En qué estado vives?", "backend", now, now),
-        LocalizedTextRow(UUID.randomUUID.toString, stateQuestionId.asString, "en", "What state do you live in?", "backend", now, now))
+    val stateTexts = List(
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        stateQuestionId.asString,
+        "es",
+        "¿En qué estado vives?",
+        "backend",
+        now,
+        now),
+      LocalizedTextRow(
+        UUID.randomUUID.toString,
+        stateQuestionId.asString,
+        "en",
+        "What state do you live in?",
+        "backend",
+        now,
+        now)
+    )
 
-      val stateOptionTexts = stateOptions.flatMap: (_, optionId, name) =>
-        List(
-          LocalizedTextRow(UUID.randomUUID.toString, optionId.asString, "es", name, "backend", now, now),
-          LocalizedTextRow(UUID.randomUUID.toString, optionId.asString, "en", name, "backend", now, now))
+    val stateOptionTexts = stateOptions.flatMap: (_, optionId, name) =>
+      List(
+        LocalizedTextRow(
+          UUID.randomUUID.toString,
+          optionId.asString,
+          "es",
+          name,
+          "backend",
+          now,
+          now),
+        LocalizedTextRow(
+          UUID.randomUUID.toString,
+          optionId.asString,
+          "en",
+          name,
+          "backend",
+          now,
+          now)
+      )
 
-      val allTexts = stateTexts ++ stateOptionTexts
+    val allTexts = stateTexts ++ stateOptionTexts
 
-      qrun(query[SurveyRow].filter(_.category == "location").delete) *>
-        qrun(query[SurveyRow].insertValue(lift(surveyRow))) *>
-        qrun(query[QuestionRow].insertValue(lift(stateQuestion))) *>
-        ZIO.foreach(stateOptions.map(_._1))(o => qrun(query[QuestionOptionRow].insertValue(lift(o)))) *>
-        ZIO.foreach(allTexts)(t => qrun(query[LocalizedTextRow].insertValue(lift(t)))).unit
+    qrun(query[SurveyRow].filter(_.category == "location").delete) *>
+      qrun(query[SurveyRow].insertValue(lift(surveyRow))) *>
+      qrun(query[QuestionRow].insertValue(lift(stateQuestion))) *>
+      ZIO.foreach(stateOptions.map(_._1))(o =>
+        qrun(query[QuestionOptionRow].insertValue(lift(o)))) *>
+      ZIO.foreach(allTexts)(t => qrun(query[LocalizedTextRow].insertValue(lift(t)))).unit
 
   private val quillLayer = Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)
   private val dataSourceLayer = Quill.DataSource.fromPrefix("database")
 
   override val run: ZIO[Any, Throwable, Unit] =
-    (for
-      _ <- ZIO.logInfo("Seeding database...")
-      _ <- seedTranslations
-      _ <- ZIO.logInfo("Seeded translations")
-      _ <- seedEmailSurvey
-      _ <- ZIO.logInfo("Seeded email survey")
-      _ <- seedProfilingSurvey
-      _ <- ZIO.logInfo("Seeded profiling survey")
-      _ <- seedLocationSurvey
-      _ <- ZIO.logInfo("Seeded location survey")
-      _ <- ZIO.logInfo("Seeding complete!")
-    yield ()).provide(dataSourceLayer >>> quillLayer)
+    (
+      for
+        _ <- ZIO.logInfo("Seeding database...")
+        _ <- seedTranslations
+        _ <- ZIO.logInfo("Seeded translations")
+        _ <- seedEmailSurvey
+        _ <- ZIO.logInfo("Seeded email survey")
+        _ <- seedProfilingSurvey
+        _ <- ZIO.logInfo("Seeded profiling survey")
+        _ <- seedLocationSurvey
+        _ <- ZIO.logInfo("Seeded location survey")
+        _ <- ZIO.logInfo("Seeding complete!")
+      yield ()
+    ).provide(dataSourceLayer >>> quillLayer)
+end Seed
