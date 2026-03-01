@@ -9,7 +9,8 @@ import whitelabel.captal.core.user
 import whitelabel.captal.core.user.Event as UserEvent
 import whitelabel.captal.infra.schema.given
 import whitelabel.captal.infra.schema.core.given
-import whitelabel.captal.infra.{DbEventHandler, SessionContext, SessionRow, UserRow}
+import whitelabel.captal.infra.{SessionRow, UserRow}
+import whitelabel.captal.infra.session.SessionContext
 import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
 

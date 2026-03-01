@@ -12,7 +12,8 @@ import whitelabel.captal.core.survey.question.codecs.given
 import whitelabel.captal.core.{survey, user}
 import whitelabel.captal.infra.schema.given
 import whitelabel.captal.infra.schema.core.given
-import whitelabel.captal.infra.{AnswerRow, DbEventHandler, SessionContext}
+import whitelabel.captal.infra.AnswerRow
+import whitelabel.captal.infra.session.SessionContext
 import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
 
