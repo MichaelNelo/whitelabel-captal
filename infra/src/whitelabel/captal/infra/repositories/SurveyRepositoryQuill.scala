@@ -1,4 +1,4 @@
-package whitelabel.captal.infra
+package whitelabel.captal.infra.repositories
 
 import io.circe
 import io.circe.parser.decode
@@ -10,6 +10,8 @@ import whitelabel.captal.core.survey.question.*
 import whitelabel.captal.core.survey.question.codecs.given
 import whitelabel.captal.core.survey.{State, Survey}
 import whitelabel.captal.core.{survey, user}
+import whitelabel.captal.infra.*
+import whitelabel.captal.infra.session.SessionContext
 import whitelabel.captal.infra.schema.given
 import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.QuillSqlite
@@ -23,6 +25,7 @@ object SurveyRepositoryQuill:
       rule: Option[QuestionRuleRow],
       questionText: Option[LocalizedTextRow],
       questionDesc: Option[LocalizedTextRow],
+      questionPlaceholder: Option[LocalizedTextRow],
       optionText: Option[LocalizedTextRow])
 
   // Helper para seleccionar el texto preferido (locale del usuario > inglés)
@@ -41,6 +44,7 @@ object SurveyRepositoryQuill:
         questionIdParam: survey.question.Id,
         questionIdStr: String,
         questionDescIdStr: String,
+        questionPlaceholderIdStr: String,
         localeParam: String) =>
       for
         surveyRow   <- query[SurveyRow].filter(_.id == surveyIdParam)
@@ -58,6 +62,11 @@ object SurveyRepositoryQuill:
           .filter(lt => lt.entityId == questionDescIdStr)
           .filter(lt => lt.locale == localeParam || lt.locale == "en")
           .leftJoin(_ => true)
+        // JOIN para placeholder de pregunta
+        questionPlaceholder <- query[LocalizedTextRow]
+          .filter(lt => lt.entityId == questionPlaceholderIdStr)
+          .filter(lt => lt.locale == localeParam || lt.locale == "en")
+          .leftJoin(_ => true)
         // JOIN para texto de opción - comparamos String con String directamente
         // El MappedEncoding convierte OptionId a String automáticamente
         optionText <- query[LocalizedTextRow]
@@ -71,6 +80,7 @@ object SurveyRepositoryQuill:
         ruleRow,
         questionText,
         questionDesc,
+        questionPlaceholder,
         optionText)
 
   inline def firstEmailSurveyQuery = quote:
@@ -81,35 +91,35 @@ object SurveyRepositoryQuill:
       .sortBy((_, q) => q.displayOrder)(using Ord.asc)
       .map((s, q) => NextIdentificationSurveyRow(s.id, q.id, s.category))
 
-  // Helper to check if user has completed a survey of given category
-  private inline def hasCompletedCategoryQuery(userIdParam: user.Id, category: String) =
-    query[UserSurveyProgressRow]
-      .filter(progress =>
-        progress.userId == userIdParam && progress.completedAt.isDefined &&
-          query[SurveyRow]
-            .filter(surveyRow =>
-              surveyRow.id == progress.surveyId && surveyRow.category == category)
-            .nonEmpty)
-      .nonEmpty
-
   inline def nextIdentificationSurveyQuery = quote: (userIdParam: user.Id) =>
     val answeredQuestionIds = query[AnswerRow].filter(_.userId == userIdParam).map(_.questionId)
     val hasEmail =
       query[UserRow]
         .filter(userRow => userRow.id == userIdParam && userRow.email.isDefined)
         .nonEmpty
-    val hasCompletedEmail = hasCompletedCategoryQuery(userIdParam, "email")
-    val hasCompletedProfiling = hasCompletedCategoryQuery(userIdParam, "profiling")
-    val hasCompletedLocation = hasCompletedCategoryQuery(userIdParam, "location")
+
+    // Check if all questions in each category are answered (pool exhausted)
+    val hasExhaustedProfiling = query[SurveyRow]
+      .filter(s => s.isActive == 1 && s.category == "profiling")
+      .join(query[QuestionRow])
+      .on((s, q) => s.id == q.surveyId)
+      .filter((_, q) => !answeredQuestionIds.contains(q.id))
+      .isEmpty
+
+    val hasExhaustedLocation = query[SurveyRow]
+      .filter(s => s.isActive == 1 && s.category == "location")
+      .join(query[QuestionRow])
+      .on((s, q) => s.id == q.surveyId)
+      .filter((_, q) => !answeredQuestionIds.contains(q.id))
+      .isEmpty
 
     query[SurveyRow]
       .filter: surveyRow =>
         surveyRow.isActive == 1 && (
-          (surveyRow.category == "email" && !hasEmail && !hasCompletedEmail) ||
-            (surveyRow.category == "profiling" && hasEmail && !hasCompletedProfiling) || (
-              surveyRow.category == "location" && hasEmail && hasCompletedProfiling &&
-                !hasCompletedLocation
-            )
+          (surveyRow.category == "email" && !hasEmail) ||
+            (surveyRow.category == "profiling" && hasEmail && !hasExhaustedProfiling) ||
+            (surveyRow.category == "location" && hasEmail && hasExhaustedProfiling &&
+              !hasExhaustedLocation)
         )
       .join(query[QuestionRow])
       .on: (surveyRow, questionRow) =>
@@ -126,11 +136,11 @@ object SurveyRepositoryQuill:
         .get
         .flatMap:
           case Some(sessionData) =>
-            (sessionData.currentSurveyId, sessionData.currentQuestionId) match
-              case (Some(surveyId), Some(questionId)) =>
-                findQuestionWithCategory(surveyId, questionId, "email")(
+            sessionData.currentQuestion match
+              case Some(question) =>
+                findQuestionWithCategory(question.surveyId, question.questionId, "email")(
                   State.WithEmailQuestion.apply)
-              case _ =>
+              case None =>
                 ZIO.none
           case None =>
             ZIO.none
@@ -153,6 +163,7 @@ object SurveyRepositoryQuill:
               lift(questionId),
               lift(questionIdStr),
               lift(questionIdStr + "_desc"),
+              lift(questionIdStr + "_placeholder"),
               lift(sessionData.locale)))
         yield
           val result: Option[Survey[State.WithLocationQuestion]] =
@@ -181,6 +192,7 @@ object SurveyRepositoryQuill:
               lift(questionId),
               lift(questionIdStr),
               lift(questionIdStr + "_desc"),
+              lift(questionIdStr + "_placeholder"),
               lift(sessionData.locale)))
         yield
           val result: Option[Survey[State.WithAdvertiserQuestion]] =
@@ -222,6 +234,7 @@ object SurveyRepositoryQuill:
               lift(row.questionId),
               lift(questionIdStr),
               lift(questionIdStr + "_desc"),
+              lift(questionIdStr + "_placeholder"),
               lift(sessionData.locale)))
         yield
           for
@@ -242,6 +255,7 @@ object SurveyRepositoryQuill:
               lift(questionId),
               lift(questionIdStr),
               lift(questionIdStr + "_desc"),
+              lift(questionIdStr + "_placeholder"),
               lift(sessionData.locale)))
         yield
           for
@@ -258,6 +272,7 @@ object SurveyRepositoryQuill:
     // Obtener textos de pregunta (preferir locale del usuario)
     val questionTexts = rows.flatMap(_.questionText).distinctBy(_.id)
     val questionDescs = rows.flatMap(_.questionDesc).distinctBy(_.id)
+    val questionPlaceholders = rows.flatMap(_.questionPlaceholder).distinctBy(_.id)
 
     // Construir opciones con sus textos
     val optionRows = rows.flatMap(_.option).distinctBy(_.id)
@@ -279,12 +294,14 @@ object SurveyRepositoryQuill:
 
     val questionText = selectPreferredText(questionTexts, locale)
     val questionDesc = selectPreferredText(questionDescs, locale)
+    val questionPlaceholder = selectPreferredText(questionPlaceholders, locale)
 
     questionText.map: text =>
       QuestionToAnswer(
         id = questionRow.id,
         text = text,
         description = questionDesc,
+        placeholder = questionPlaceholder,
         questionType = questionType,
         commonRules = commonRules,
         pointsAwarded = questionRow.pointsAwarded

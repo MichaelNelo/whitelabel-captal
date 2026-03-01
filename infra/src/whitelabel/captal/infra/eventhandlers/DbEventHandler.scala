@@ -1,4 +1,4 @@
-package whitelabel.captal.infra
+package whitelabel.captal.infra.eventhandlers
 
 import cats.kernel.Monoid
 import whitelabel.captal.infra.schema.QuillSqlite

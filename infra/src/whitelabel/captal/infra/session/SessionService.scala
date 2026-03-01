@@ -1,9 +1,11 @@
-package whitelabel.captal.infra
+package whitelabel.captal.infra.session
 
 import io.getquill.*
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.infrastructure.SessionData
+import whitelabel.captal.core.survey.question.FullyQualifiedQuestionId
 import whitelabel.captal.core.{survey, user}
+import whitelabel.captal.infra.SessionRow
 import whitelabel.captal.infra.schema.given
 import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.QuillSqlite
@@ -14,11 +16,8 @@ trait SessionService:
   def create(deviceId: user.DeviceId, locale: String, phase: Phase): Task[SessionData]
   def setPhase(sessionId: user.SessionId, phase: Phase): Task[Unit]
   def setLocale(sessionId: user.SessionId, locale: String): Task[Unit]
-  def setCurrentSurvey(
-      sessionId: user.SessionId,
-      surveyId: survey.Id,
-      questionId: survey.question.Id): Task[Unit]
-  def clearCurrentSurvey(sessionId: user.SessionId): Task[Unit]
+  def setCurrentQuestion(sessionId: user.SessionId, question: FullyQualifiedQuestionId): Task[Unit]
+  def clearCurrentQuestion(sessionId: user.SessionId): Task[Unit]
 
 object SessionService:
   inline def findByIdQuery = quote: (sessionIdParam: user.SessionId) =>
@@ -75,16 +74,13 @@ object SessionService:
             _.currentSurveyId   -> lift(row.currentSurveyId),
             _.currentQuestionId -> lift(row.currentQuestionId),
             _.createdAt         -> lift(row.createdAt)
-          )).orDie *> ZIO.succeed(SessionData(sessionId, None, locale, phase, None, None))
+          )).orDie *> ZIO.succeed(SessionData(sessionId, None, locale, phase, None))
       end create
 
-      def setCurrentSurvey(
-          sessionId: user.SessionId,
-          surveyId: survey.Id,
-          questionId: survey.question.Id): Task[Unit] =
-        run(updateCurrentSurveyQuery(lift(sessionId), lift(surveyId), lift(questionId))).unit.orDie
+      def setCurrentQuestion(sessionId: user.SessionId, question: FullyQualifiedQuestionId): Task[Unit] =
+        run(updateCurrentSurveyQuery(lift(sessionId), lift(question.surveyId), lift(question.questionId))).unit.orDie
 
-      def clearCurrentSurvey(sessionId: user.SessionId): Task[Unit] =
+      def clearCurrentQuestion(sessionId: user.SessionId): Task[Unit] =
         run(clearCurrentSurveyQuery(lift(sessionId))).unit.orDie
 
       def setPhase(sessionId: user.SessionId, phase: Phase): Task[Unit] =
@@ -93,13 +89,11 @@ object SessionService:
       def setLocale(sessionId: user.SessionId, locale: String): Task[Unit] =
         run(updateLocaleQuery(lift(sessionId), lift(locale))).unit.orDie
 
-  private def toSessionData(row: SessionRow): SessionData = SessionData(
-    row.id,
-    row.userId,
-    row.locale,
-    row.phase,
-    row.currentSurveyId,
-    row.currentQuestionId)
+  private def toSessionData(row: SessionRow): SessionData =
+    val currentQuestion = (row.currentSurveyId, row.currentQuestionId) match
+      case (Some(surveyId), Some(questionId)) => Some(FullyQualifiedQuestionId(surveyId, questionId))
+      case _                                  => None
+    SessionData(row.id, row.userId, row.locale, row.phase, currentQuestion)
 
   val layer: ZLayer[QuillSqlite, Nothing, SessionService] = ZLayer.fromFunction(apply)
 end SessionService

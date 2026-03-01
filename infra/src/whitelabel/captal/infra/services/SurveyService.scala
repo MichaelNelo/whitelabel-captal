@@ -1,7 +1,8 @@
-package whitelabel.captal.infra
+package whitelabel.captal.infra.services
 
 import io.getquill.*
 import whitelabel.captal.core.{survey, user}
+import whitelabel.captal.infra.{AnswerRow, QuestionRow, UserSurveyProgressRow}
 
 object SurveyService:
   inline def findByUserAndSurveyQuery = quote: (userIdParam: user.Id, surveyIdParam: survey.Id) =>
