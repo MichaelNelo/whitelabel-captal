@@ -8,6 +8,8 @@ import whitelabel.captal.core.{survey, user}
 import whitelabel.captal.infra.SessionRow
 
 package object users:
+  // Re-export SessionRow SchemaMeta so QueryMeta can find it at inline expansion
+  inline given SchemaMeta[SessionRow] = schemaMeta[SessionRow]("sessions")
   // ─────────────────────────────────────────────────────────────────────────────
   // Schema Meta - User[State.WithEmail]
   // ─────────────────────────────────────────────────────────────────────────────

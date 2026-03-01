@@ -6,9 +6,11 @@ import sttp.client3.impl.zio.FetchZioBackend
 import sttp.model.Uri
 import sttp.tapir.DecodeResult
 import sttp.tapir.client.sttp.SttpClientInterpreter
-import whitelabel.captal.core.application.commands.NextIdentificationSurvey
+import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.core.survey.question.AnswerValue
-import whitelabel.captal.endpoints.{AnswerRequest, ApiError, SetLocaleRequest, StatusResponse, SurveyEndpoints}
+import whitelabel.captal.endpoints.{AnswerRequest, ApiError, LocaleEndpoints, SetLocaleRequest, StatusResponse, SurveyEndpoints, SurveyResponse}
+import whitelabel.captal.endpoints.i18n.given
+import whitelabel.captal.endpoints.SurveyResponse.given
 import zio.*
 
 object ApiClient:
@@ -29,25 +31,25 @@ object ApiClient:
       .apply(None)
       .map(unwrapDecodeResult)
 
-  def getNextSurvey(): Task[Either[ApiError, Option[NextIdentificationSurvey]]] =
+  def getNextSurvey(): Task[Either[ApiError, SurveyResponse]] =
     interpreter
       .toClient(SurveyEndpoints.nextSurvey, baseUri, backend)
       .apply(None)
       .map(unwrapDecodeResult)
 
-  def answerEmail(answer: AnswerValue): Task[Either[ApiError, Unit]] =
+  def answerEmail(answer: AnswerValue): Task[Either[ApiError, SurveyResponse]] =
     interpreter
       .toClient(SurveyEndpoints.answerEmail, baseUri, backend)
       .apply((None, AnswerRequest(answer)))
       .map(unwrapDecodeResult)
 
-  def answerProfiling(answer: AnswerValue): Task[Either[ApiError, Unit]] =
+  def answerProfiling(answer: AnswerValue): Task[Either[ApiError, SurveyResponse]] =
     interpreter
       .toClient(SurveyEndpoints.answerProfiling, baseUri, backend)
       .apply((None, AnswerRequest(answer)))
       .map(unwrapDecodeResult)
 
-  def answerLocation(answer: AnswerValue): Task[Either[ApiError, Unit]] =
+  def answerLocation(answer: AnswerValue): Task[Either[ApiError, SurveyResponse]] =
     interpreter
       .toClient(SurveyEndpoints.answerLocation, baseUri, backend)
       .apply((None, AnswerRequest(answer)))
@@ -55,13 +57,26 @@ object ApiClient:
 
   def getLocales(): Task[Either[ApiError, List[String]]] =
     interpreter
-      .toClient(SurveyEndpoints.listLocales, baseUri, backend)
+      .toClient(LocaleEndpoints.listLocales, baseUri, backend)
       .apply(())
       .map(unwrapDecodeResult)
 
-  def setLocale(locale: String): Task[Either[ApiError, Unit]] =
+  def setLocale(locale: String): Task[Either[ApiError, StatusResponse]] =
     interpreter
-      .toClient(SurveyEndpoints.setLocale, baseUri, backend)
+      .toClient(LocaleEndpoints.setLocale, baseUri, backend)
       .apply((None, None, SetLocaleRequest(locale)))
       .map(unwrapDecodeResult)
-      .map(_.map(_ => ()))
+      .map(_.map(_._2))
+
+  def getI18n(locale: String): Task[Either[ApiError, I18n]] =
+    interpreter
+      .toClient(LocaleEndpoints.getI18n, baseUri, backend)
+      .apply(locale)
+      .map(unwrapDecodeResult)
+
+  // Dev-only: Reset session phase to Welcome
+  def resetPhase(): Task[Either[ApiError, StatusResponse]] =
+    interpreter
+      .toClient(LocaleEndpoints.resetPhase, baseUri, backend)
+      .apply(None)
+      .map(unwrapDecodeResult)
