@@ -1,4 +1,4 @@
-package whitelabel.captal.infra
+package whitelabel.captal.infra.eventhandlers
 
 import whitelabel.captal.core.application.{Event, EventHandler}
 import whitelabel.captal.infra.schema.QuillSqlite

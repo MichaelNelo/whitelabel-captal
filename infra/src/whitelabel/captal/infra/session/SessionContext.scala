@@ -1,4 +1,4 @@
-package whitelabel.captal.infra
+package whitelabel.captal.infra.session
 
 import whitelabel.captal.core.infrastructure.SessionData
 import zio.*
