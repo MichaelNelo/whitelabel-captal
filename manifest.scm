@@ -6,6 +6,7 @@
              (gnu packages elf)
              (gnu packages compression)
              (gnu packages sqlite)
+             (gnu packages video)
              ((guix licenses) #:prefix license:))
 
 (define-public coursier
@@ -46,4 +47,5 @@
 
 (packages->manifest (list openjdk21
                           sqlite
+                          ffmpeg
                           coursier))
