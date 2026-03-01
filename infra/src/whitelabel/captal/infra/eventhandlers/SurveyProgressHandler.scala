@@ -8,10 +8,10 @@ import whitelabel.captal.core.application.Event
 import whitelabel.captal.core.survey.Event as SurveyEvent
 import whitelabel.captal.core.survey.question.Event as QuestionEvent
 import whitelabel.captal.core.{survey, user}
-import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.schema.core.given
-import whitelabel.captal.infra.services.SurveyService
 import whitelabel.captal.infra.schema.QuillSqlite
+import whitelabel.captal.infra.schema.core.given
+import whitelabel.captal.infra.schema.given
+import whitelabel.captal.infra.services.SurveyService
 import zio.*
 
 object SurveyProgressHandler:

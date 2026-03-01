@@ -116,8 +116,8 @@ object ApiError:
       case user.Error.QuestionNotPending(userId, questionId) =>
         ApiError.QuestionNotPending(userId.asString, questionId)
 
-  def fromThrowable(cause: Throwable): ApiError =
-    ApiError.InternalError(Option(cause.getMessage).getOrElse("Unknown error"))
+  def fromThrowable(cause: Throwable): ApiError = ApiError.InternalError(
+    Option(cause.getMessage).getOrElse("Unknown error"))
 
   given Encoder[ApiError] = Encoder.instance: err =>
     val (errorType, data) =
@@ -236,7 +236,7 @@ object ApiError:
             Right(SessionExpired)
           case "wrong_phase" =>
             for
-              current <- data.downField("current").as[String]
+              current  <- data.downField("current").as[String]
               expected <- data.downField("expected").as[List[String]]
             yield WrongPhase(current, expected)
           case "no_survey_assigned" =>

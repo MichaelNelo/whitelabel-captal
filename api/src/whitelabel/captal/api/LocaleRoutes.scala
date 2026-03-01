@@ -41,8 +41,7 @@ object LocaleRoutes:
           _ <- SessionContext.set(updatedData)
         yield (
           Some(CookieValueWithMeta.unsafeApply(updatedData.sessionId.asString, path = Some("/"))),
-          whitelabel.captal.endpoints.StatusResponse(updatedData.phase, updatedData.locale)
-        )
+          whitelabel.captal.endpoints.StatusResponse(updatedData.phase, updatedData.locale))
   end SetLocale
 
   object GetI18n:
@@ -62,14 +61,16 @@ object LocaleRoutes:
       .zServerLogic: cookie =>
         for
           sessionData <- SessionEndpoint.resolveSession(cookie, SessionEndpoint.OnMissing.Fail)
-          _ <- ZIO
+          _           <- ZIO
             .serviceWithZIO[SessionService](
               _.setPhase(sessionData.sessionId, whitelabel.captal.core.application.Phase.Welcome))
             .mapError(ApiError.fromThrowable)
-          _ <- SessionContext.set(sessionData.copy(phase = whitelabel.captal.core.application.Phase.Welcome))
-        yield whitelabel.captal.endpoints.StatusResponse(
-          whitelabel.captal.core.application.Phase.Welcome,
-          sessionData.locale)
+          _ <- SessionContext.set(
+            sessionData.copy(phase = whitelabel.captal.core.application.Phase.Welcome))
+        yield whitelabel
+          .captal
+          .endpoints
+          .StatusResponse(whitelabel.captal.core.application.Phase.Welcome, sessionData.locale)
   end ResetPhase
 
   type FullEnv = SessionContext & SessionService & LocaleService
@@ -77,11 +78,8 @@ object LocaleRoutes:
   def routes: List[ZServerEndpoint[FullEnv, Any]] = List(
     ListLocales.route.widen[FullEnv],
     SetLocale.route.widen[FullEnv],
-    GetI18n.route.widen[FullEnv]
-  )
+    GetI18n.route.widen[FullEnv])
 
   // Dev-only routes
-  def devRoutes: List[ZServerEndpoint[FullEnv, Any]] = List(
-    ResetPhase.route.widen[FullEnv]
-  )
+  def devRoutes: List[ZServerEndpoint[FullEnv, Any]] = List(ResetPhase.route.widen[FullEnv])
 end LocaleRoutes

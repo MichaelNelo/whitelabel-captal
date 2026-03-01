@@ -103,6 +103,11 @@ object api extends BaseModule:
 
   // Compile client before running server (for dev workflow)
   override def run(args: Task[Args] = Task.Anon(Args())) = Task.Command:
+    // Copy index.dev.html to index.html for local development
+    val indexHtml = os.pwd / "client" / "index.html"
+    val indexDevHtml = os.pwd / "client" / "index.dev.html"
+    if os.exists(indexHtml) then os.remove(indexHtml)
+    os.copy(indexDevHtml, indexHtml)
     client.fastLinkJS()
     super.run(args)()
 

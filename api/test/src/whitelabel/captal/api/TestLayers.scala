@@ -1,24 +1,26 @@
 package whitelabel.captal.api
 
+import javax.sql.DataSource
+
 import com.typesafe.config.ConfigFactory
 import io.getquill.jdbczio.Quill
-import javax.sql.DataSource
 import org.sqlite.SQLiteDataSource
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Event, EventHandler, Flow, NextStep, Phase}
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository}
 import whitelabel.captal.infra.eventhandlers.*
 import whitelabel.captal.infra.repositories.{SurveyRepositoryQuill, UserRepositoryQuill}
+import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.services.LocaleService
 import whitelabel.captal.infra.session.{SessionContext, SessionService}
-import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
 import zio.interop.catz.*
 
 object TestLayers:
   // Phase after identification question for tests
   private val nextPhaseAfterIdentificationQuestion: Phase = Phase.AdvertiserVideo
-  private val nextStepAfterIdentificationQuestion: NextStep = NextStep(nextPhaseAfterIdentificationQuestion)
+  private val nextStepAfterIdentificationQuestion: NextStep = NextStep(
+    nextPhaseAfterIdentificationQuestion)
   private val testConfig = ConfigFactory.load("test.conf")
 
   private val quillLayer = Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)
@@ -47,12 +49,11 @@ object TestLayers:
         .andThen(SurveyProgressHandler())
       TransactionalEventHandler(dbHandler, quill)
 
-  private val answerEmailFlowLayer: ZLayer[
-    SurveyRepository[Task] & EventHandler[Task, Event],
-    Nothing,
-    Flow.Aux[Task, AnswerEmailCommand, NextStep]] = ZLayer.fromFunction:
-    (surveyRepo: SurveyRepository[Task], eventHandler: EventHandler[Task, Event]) =>
-      Flow(AnswerEmailHandler(surveyRepo, nextStepAfterIdentificationQuestion), eventHandler)
+  private val answerEmailFlowLayer: ZLayer[SurveyRepository[
+    Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, AnswerEmailCommand, NextStep]] =
+    ZLayer.fromFunction:
+      (surveyRepo: SurveyRepository[Task], eventHandler: EventHandler[Task, Event]) =>
+        Flow(AnswerEmailHandler(surveyRepo, nextStepAfterIdentificationQuestion), eventHandler)
 
   private val answerProfilingFlowLayer: ZLayer[
     SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
@@ -62,7 +63,9 @@ object TestLayers:
         surveyRepo: SurveyRepository[Task],
         userRepo: UserRepository[Task],
         eventHandler: EventHandler[Task, Event]) =>
-      Flow(AnswerProfilingHandler(surveyRepo, userRepo, nextStepAfterIdentificationQuestion), eventHandler)
+      Flow(
+        AnswerProfilingHandler(surveyRepo, userRepo, nextStepAfterIdentificationQuestion),
+        eventHandler)
 
   private val answerLocationFlowLayer: ZLayer[
     SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
@@ -72,7 +75,9 @@ object TestLayers:
         surveyRepo: SurveyRepository[Task],
         userRepo: UserRepository[Task],
         eventHandler: EventHandler[Task, Event]) =>
-      Flow(AnswerLocationHandler(surveyRepo, userRepo, nextStepAfterIdentificationQuestion), eventHandler)
+      Flow(
+        AnswerLocationHandler(surveyRepo, userRepo, nextStepAfterIdentificationQuestion),
+        eventHandler)
 
   private val nextSurveyFlowLayer: ZLayer[
     SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
@@ -86,13 +91,19 @@ object TestLayers:
         surveyRepo: SurveyRepository[Task],
         userRepo: UserRepository[Task],
         eventHandler: EventHandler[Task, Event]) =>
-      Flow(ProvideNextIdentificationSurveyHandler(surveyRepo, userRepo, nextPhaseAfterIdentificationQuestion), eventHandler)
+      Flow(
+        ProvideNextIdentificationSurveyHandler(
+          surveyRepo,
+          userRepo,
+          nextPhaseAfterIdentificationQuestion),
+        eventHandler)
 
   val quill: ZLayer[Any, Throwable, QuillSqlite] = dataSourceLayer >>> quillLayer
 
-  type TestEnv = SessionContext & SessionService & LocaleService &
-    SurveyRoutes.AnswerEmailFlowType & SurveyRoutes.AnswerProfilingFlowType &
-    SurveyRoutes.AnswerLocationFlowType & SurveyRoutes.NextSurveyFlowType & QuillSqlite
+  type TestEnv =
+    SessionContext & SessionService & LocaleService & SurveyRoutes.AnswerEmailFlowType &
+      SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
+      SurveyRoutes.NextSurveyFlowType & QuillSqlite
 
   val testEnv: ZLayer[Any, Throwable, TestEnv] = ZLayer.make[TestEnv](
     SessionContext.make,

@@ -7,11 +7,11 @@ import whitelabel.captal.core.application.Event
 import whitelabel.captal.core.infrastructure.SessionData
 import whitelabel.captal.core.user
 import whitelabel.captal.core.user.Event as UserEvent
-import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.schema.core.given
-import whitelabel.captal.infra.{SessionRow, UserRow}
-import whitelabel.captal.infra.session.SessionContext
 import whitelabel.captal.infra.schema.QuillSqlite
+import whitelabel.captal.infra.schema.core.given
+import whitelabel.captal.infra.schema.given
+import whitelabel.captal.infra.session.SessionContext
+import whitelabel.captal.infra.{SessionRow, UserRow}
 import zio.*
 
 object UserPersistenceHandler:

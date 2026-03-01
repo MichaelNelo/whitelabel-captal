@@ -48,7 +48,5 @@ object AnswerEmailHandler:
                       yield nextStep
           case _ =>
             Monad[F].pure(
-              core
-                .Op
-                .fail[Event, Error, NextStep](Error.InvalidEmailFormat(cmd.answer.toString)))
+              core.Op.fail[Event, Error, NextStep](Error.InvalidEmailFormat(cmd.answer.toString)))
 end AnswerEmailHandler

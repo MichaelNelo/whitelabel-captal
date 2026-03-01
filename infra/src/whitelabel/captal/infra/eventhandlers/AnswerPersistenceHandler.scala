@@ -10,11 +10,11 @@ import whitelabel.captal.core.survey.Event as SurveyEvent
 import whitelabel.captal.core.survey.question.Event as QuestionEvent
 import whitelabel.captal.core.survey.question.codecs.given
 import whitelabel.captal.core.{survey, user}
-import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.AnswerRow
-import whitelabel.captal.infra.session.SessionContext
 import whitelabel.captal.infra.schema.QuillSqlite
+import whitelabel.captal.infra.schema.core.given
+import whitelabel.captal.infra.schema.given
+import whitelabel.captal.infra.session.SessionContext
 import zio.*
 
 object AnswerPersistenceHandler:

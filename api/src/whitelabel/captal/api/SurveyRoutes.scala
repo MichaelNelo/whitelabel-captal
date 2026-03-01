@@ -4,14 +4,14 @@ import java.time.Instant
 
 import sttp.tapir.json.circe.*
 import sttp.tapir.ztapir.*
-import whitelabel.captal.core.application.{Flow, NextStep, Phase}
 import whitelabel.captal.core.application.commands.*
+import whitelabel.captal.core.application.{Flow, NextStep, Phase}
 import whitelabel.captal.core.infrastructure.SessionData
-import whitelabel.captal.endpoints.{AnswerRequest, ApiError, StatusResponse, SurveyResponse}
 import whitelabel.captal.endpoints.AnswerRequest.given
-import whitelabel.captal.endpoints.SurveyResponse.given
 import whitelabel.captal.endpoints.StatusResponse.given
+import whitelabel.captal.endpoints.SurveyResponse.given
 import whitelabel.captal.endpoints.schemas.given
+import whitelabel.captal.endpoints.{AnswerRequest, ApiError, StatusResponse, SurveyResponse}
 import whitelabel.captal.infra.session.{SessionContext, SessionService}
 import zio.*
 
@@ -29,8 +29,10 @@ object SurveyRoutes:
   type AnswerEmailFlowType = Flow.Aux[Task, AnswerEmailCommand, NextStep]
   type AnswerProfilingFlowType = Flow.Aux[Task, AnswerProfilingCommand, NextStep]
   type AnswerLocationFlowType = Flow.Aux[Task, AnswerLocationCommand, NextStep]
-  type NextSurveyFlowType =
-    Flow.Aux[Task, ProvideNextIdentificationSurveyCommand.type, NextIdentificationSurvey | NextStep]
+  type NextSurveyFlowType = Flow.Aux[
+    Task,
+    ProvideNextIdentificationSurveyCommand.type,
+    NextIdentificationSurvey | NextStep]
 
   object AnswerEmail:
     type Env = SessionContext & SessionService & AnswerEmailFlowType
@@ -41,19 +43,26 @@ object SurveyRoutes:
       .in("api" / "survey" / "email")
       .in(jsonBody[AnswerRequest])
       .out(jsonBody[SurveyResponse])
-      .serverLogic(session => request => handleAnswer(session, request, AnswerEmailCommand(request.answer, Instant.now)))
+      .serverLogic(session =>
+        request => handleAnswer(session, request, AnswerEmailCommand(request.answer, Instant.now)))
 
-    private def handleAnswer(session: SessionData, @annotation.unused request: AnswerRequest, cmd: AnswerEmailCommand) =
+    private def handleAnswer(
+        session: SessionData,
+        @annotation.unused request: AnswerRequest,
+        cmd: AnswerEmailCommand) =
       for
         _          <- SessionContext.set(session)
         answerFlow <- ZIO.service[AnswerEmailFlowType]
-        result <- answerFlow
+        result     <- answerFlow
           .execute(cmd)
           .map(SurveyResponse.from)
           .catchAllCause: cause =>
-            val error = cause.failureOrCause match
-              case Left(e)  => e
-              case Right(c) => new Exception(s"Defect: ${c.prettyPrint}")
+            val error =
+              cause.failureOrCause match
+                case Left(e) =>
+                  e
+                case Right(c) =>
+                  new Exception(s"Defect: ${c.prettyPrint}")
             toApiError(error).flatMap(ZIO.fail(_))
       yield result
   end AnswerEmail
@@ -77,9 +86,12 @@ object SurveyRoutes:
               .execute(cmd)
               .map(SurveyResponse.from)
               .catchAllCause: cause =>
-                val error = cause.failureOrCause match
-                  case Left(e)  => e
-                  case Right(c) => new Exception(s"Defect: ${c.prettyPrint}")
+                val error =
+                  cause.failureOrCause match
+                    case Left(e) =>
+                      e
+                    case Right(c) =>
+                      new Exception(s"Defect: ${c.prettyPrint}")
                 toApiError(error).flatMap(ZIO.fail(_))
           yield result
   end AnswerProfiling
@@ -103,9 +115,12 @@ object SurveyRoutes:
               .execute(cmd)
               .map(SurveyResponse.from)
               .catchAllCause: cause =>
-                val error = cause.failureOrCause match
-                  case Left(e)  => e
-                  case Right(c) => new Exception(s"Defect: ${c.prettyPrint}")
+                val error =
+                  cause.failureOrCause match
+                    case Left(e) =>
+                      e
+                    case Right(c) =>
+                      new Exception(s"Defect: ${c.prettyPrint}")
                 toApiError(error).flatMap(ZIO.fail(_))
           yield result
   end AnswerLocation
@@ -129,15 +144,19 @@ object SurveyRoutes:
                   .serviceWithZIO[SessionService](
                     _.setPhase(session.sessionId, Phase.IdentificationQuestion))
                   .mapError(ApiError.fromThrowable)
-              else ZIO.unit
+              else
+                ZIO.unit
             flow   <- ZIO.service[NextSurveyFlowType]
             result <- flow
               .execute(ProvideNextIdentificationSurveyCommand)
               .map(SurveyResponse.from)
               .catchAllCause: cause =>
-                val error = cause.failureOrCause match
-                  case Left(e)  => e
-                  case Right(c) => new Exception(s"Defect: ${c.prettyPrint}")
+                val error =
+                  cause.failureOrCause match
+                    case Left(e) =>
+                      e
+                    case Right(c) =>
+                      new Exception(s"Defect: ${c.prettyPrint}")
                 toApiError(error).flatMap(ZIO.fail(_))
           yield result
   end NextSurvey
@@ -151,12 +170,11 @@ object SurveyRoutes:
       .in("api" / "status")
       .out(jsonBody[StatusResponse])
       .serverLogic: session =>
-        _ =>
-          SessionContext.set(session).as(StatusResponse(session.phase, session.locale))
+        _ => SessionContext.set(session).as(StatusResponse(session.phase, session.locale))
 
   type FullEnv =
-    SessionContext & SessionService & AnswerEmailFlowType &
-      AnswerProfilingFlowType & AnswerLocationFlowType & NextSurveyFlowType
+    SessionContext & SessionService & AnswerEmailFlowType & AnswerProfilingFlowType &
+      AnswerLocationFlowType & NextSurveyFlowType
 
   def routes: List[ZServerEndpoint[FullEnv, Any]] = List(
     AnswerEmail.route.widen[FullEnv],

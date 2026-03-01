@@ -1,9 +1,8 @@
 package whitelabel.captal.api.suites
 
-import whitelabel.captal.api.{TestFixtures, TestHelpers}
 import whitelabel.captal.api.TestHelpers.*
-import whitelabel.captal.core.application.Phase
-import whitelabel.captal.core.application.IdentificationSurveyType
+import whitelabel.captal.api.{TestFixtures, TestHelpers}
+import whitelabel.captal.core.application.{IdentificationSurveyType, Phase}
 import whitelabel.captal.core.survey.question.*
 import whitelabel.captal.core.user
 import zio.test.*
@@ -105,7 +104,7 @@ object SurveyProgressionSuite:
           for
             surveys  <- TestFixtures.seedAllIdentificationSurveys
             testUser <- TestFixtures.createUser("ready@example.com")
-            _ <- TestFixtures.createAnswer(
+            _        <- TestFixtures.createAnswer(
               testUser.userId,
               previousSessionId,
               surveys.email.questionId,

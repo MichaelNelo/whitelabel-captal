@@ -1,7 +1,7 @@
 package whitelabel.captal.core.infrastructure
 
-import whitelabel.captal.core.{application, survey, user}
 import whitelabel.captal.core.survey.question.FullyQualifiedQuestionId
+import whitelabel.captal.core.{application, user}
 
 final case class SessionData(
     sessionId: user.SessionId,
