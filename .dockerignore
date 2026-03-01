@@ -1,0 +1,29 @@
+# Git
+.git
+.gitignore
+
+# Keep .mill-version (needed for build)
+!.mill-version
+
+# IDE
+.idea
+.vscode
+.metals
+.bsp
+
+# Build artifacts (will be regenerated)
+out/
+
+# Local files
+*.db
+.envrc
+.claude
+
+# Documentation
+*.md
+docs/
+
+# Screenshots and images
+*.png
+*.jpg
+*.jpeg
