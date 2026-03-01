@@ -3,12 +3,16 @@ package whitelabel.captal.core.user
 import java.time.Instant
 
 import whitelabel.captal.core.survey
+import whitelabel.captal.core.survey.question.FullyQualifiedQuestionId
 
 enum Event:
   case UserCreated(userId: Id, email: Email, occurredAt: Instant)
   case SurveyAssigned(
       userId: Id,
-      surveyId: survey.Id,
-      questionId: survey.question.Id,
+      nextQuestion: FullyQualifiedQuestionId,
       occurredAt: Instant)
-  case NewUserArrived(surveyId: survey.Id, questionId: survey.question.Id, occurredAt: Instant)
+  case NewUserArrived(
+      userId: Id,
+      nextQuestion: Option[FullyQualifiedQuestionId],
+      occurredAt: Instant)
+  case IdentificationCompleted(userId: Id, occurredAt: Instant)
