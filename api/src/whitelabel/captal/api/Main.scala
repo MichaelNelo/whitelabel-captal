@@ -3,39 +3,63 @@ package whitelabel.captal.api
 import com.typesafe.config.ConfigFactory
 import io.getquill.jdbczio.Quill
 import sttp.tapir.server.ziohttp.ZioHttpInterpreter
+import sttp.tapir.ztapir.{RichZServerEndpoint, ZServerEndpoint}
 import whitelabel.captal.core.application.commands.*
-import whitelabel.captal.core.application.{Event, EventHandler, Flow}
+import whitelabel.captal.core.application.{Event, EventHandler, Flow, NextStep, Phase}
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository}
-import whitelabel.captal.core.survey.question.QuestionAnswer
 import whitelabel.captal.infra.eventhandlers.{
   AnswerPersistenceHandler,
+  DbEventHandler,
   SessionPhaseHandler,
   SessionSurveyHandler,
   SurveyProgressHandler,
+  TransactionalEventHandler,
   UserPersistenceHandler
 }
-import whitelabel.captal.infra.{
-  LocaleService,
-  SessionContext,
-  SessionService,
-  SurveyRepositoryQuill,
-  TransactionalEventHandler,
-  UserRepositoryQuill
-}
+import whitelabel.captal.infra.repositories.{SurveyRepositoryQuill, UserRepositoryQuill}
+import whitelabel.captal.infra.services.LocaleService
+import whitelabel.captal.infra.session.{SessionContext, SessionService}
 import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
 import zio.http.*
 import zio.interop.catz.*
 
 object Main extends ZIOAppDefault:
-  private val endpoints = SurveyRoutes.routes
+  // Phase after identification question:
+  // - Prod: Phase.AdvertiserVideo (full flow: Welcome -> Identification -> Video -> Ready)
+  // - Dev: Phase.Ready (skip videos: Welcome -> Identification -> Ready)
+  private val nextPhaseAfterIdentificationQuestion: Phase = Phase.AdvertiserVideo
+  private val nextStepAfterIdentificationQuestion: NextStep = NextStep(nextPhaseAfterIdentificationQuestion)
+  type FullEnv = SessionContext & SessionService & LocaleService &
+    SurveyRoutes.AnswerEmailFlowType & SurveyRoutes.AnswerProfilingFlowType &
+    SurveyRoutes.AnswerLocationFlowType & SurveyRoutes.NextSurveyFlowType
 
-  private val apiRoutes = ZioHttpInterpreter().toHttp(endpoints)
+  private val surveyEndpoints: List[ZServerEndpoint[FullEnv, Any]] =
+    SurveyRoutes.routes.map(_.widen[FullEnv])
 
-  // Static file serving for client
-  private def staticRoutes: Routes[Any, Response] = Routes(
-    // Serve index.html at root
-    Method.GET / "" -> zio.http.Handler.fromFile(java.io.File("client/index.html")),
+  private val localeEndpoints: List[ZServerEndpoint[FullEnv, Any]] =
+    LocaleRoutes.routes.map(_.widen[FullEnv])
+
+  private val devOnlyEndpoints: List[ZServerEndpoint[FullEnv, Any]] =
+    LocaleRoutes.devRoutes.map(_.widen[FullEnv])
+
+  private def endpoints(devMode: Boolean): List[ZServerEndpoint[FullEnv, Any]] =
+    val base = surveyEndpoints ++ localeEndpoints
+    if devMode then base ++ devOnlyEndpoints else base
+
+  private def apiRoutes(devMode: Boolean) = ZioHttpInterpreter().toHttp(endpoints(devMode))
+
+  // Static file serving for client (dev mode only)
+  // In production, nginx or similar serves static files
+  private def devStaticRoutes: Routes[Any, Response] = Routes(
+    // Serve assets
+    Method.GET / "assets" / "styles.css" ->
+      zio.http.Handler.fromFile(java.io.File("client/assets/styles.css")),
+    Method.GET / "assets" / "brand-icon.svg" ->
+      zio.http.Handler.fromFile(java.io.File("client/assets/brand-icon.svg")),
+    // Legacy path for brand icon (keep for compatibility)
+    Method.GET / "brand-icon.svg" ->
+      zio.http.Handler.fromFile(java.io.File("client/assets/brand-icon.svg")),
     // Serve compiled JS
     Method.GET / "out" / "client" / "fastLinkJS.dest" / "main.js" ->
       zio.http.Handler.fromFile(java.io.File("out/client/fastLinkJS.dest/main.js")),
@@ -43,12 +67,34 @@ object Main extends ZIOAppDefault:
       zio.http.Handler.fromFile(java.io.File("out/client/fastLinkJS.dest/main.js.map"))
   ).handleError(e => Response.internalServerError(e.getMessage))
 
-  private def routes = staticRoutes ++ apiRoutes
+  // SPA routes: serve index.html for client-side routing (dev mode only)
+  // Explicitly define SPA routes to avoid matching /api/*
+  private def spaCatchAllRoutes: Routes[Any, Response] =
+    val serveIndex = zio.http.Handler.fromFunctionZIO[Request]: _ =>
+      ZIO
+        .attemptBlocking(java.nio.file.Files.readAllBytes(java.io.File("client/index.html").toPath))
+        .map(bytes => Response(body = Body.fromArray(bytes), headers = Headers(Header.ContentType(MediaType.text.html))))
+        .orElse(ZIO.succeed(Response.notFound))
 
-  private val serverConfigLayer: ZLayer[Any, Throwable, Server.Config] = ZLayer.fromZIO:
+    Routes(
+      Method.GET / "" -> serveIndex,
+      Method.GET / "question" -> serveIndex,
+      Method.GET / "final" -> serveIndex,
+      Method.GET / "ready" -> serveIndex
+    )
+
+  private def routes(devMode: Boolean): Routes[FullEnv, Response] =
+    if devMode then devStaticRoutes ++ apiRoutes(devMode) ++ spaCatchAllRoutes
+    else apiRoutes(devMode)
+
+  private case class ServerSettings(config: Server.Config, devMode: Boolean)
+
+  private val serverSettingsLayer: ZLayer[Any, Throwable, ServerSettings] = ZLayer.fromZIO:
     ZIO.attempt:
       val c = ConfigFactory.load()
-      Server.Config.default.binding(c.getString("server.host"), c.getInt("server.port"))
+      val config = Server.Config.default.binding(c.getString("server.host"), c.getInt("server.port"))
+      val devMode = c.getBoolean("server.dev-mode")
+      ServerSettings(config, devMode)
 
   private val quillLayer = Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)
 
@@ -67,7 +113,7 @@ object Main extends ZIOAppDefault:
     .fromFunction: (quill: QuillSqlite, ctx: SessionContext) =>
       val dbHandler = AnswerPersistenceHandler(ctx)
         .andThen(UserPersistenceHandler(ctx))
-        .andThen(SessionPhaseHandler(ctx))
+        .andThen(SessionPhaseHandler(ctx, nextPhaseAfterIdentificationQuestion))
         .andThen(SessionSurveyHandler(ctx))
         .andThen(SurveyProgressHandler())
       TransactionalEventHandler(dbHandler, quill)
@@ -75,29 +121,29 @@ object Main extends ZIOAppDefault:
   private val answerEmailFlowLayer: ZLayer[
     SurveyRepository[Task] & EventHandler[Task, Event],
     Nothing,
-    Flow.Aux[Task, AnswerEmailCommand, QuestionAnswer]] = ZLayer.fromFunction:
+    Flow.Aux[Task, AnswerEmailCommand, NextStep]] = ZLayer.fromFunction:
     (surveyRepo: SurveyRepository[Task], eventHandler: EventHandler[Task, Event]) =>
-      Flow(AnswerEmailHandler(surveyRepo), eventHandler)
+      Flow(AnswerEmailHandler(surveyRepo, nextStepAfterIdentificationQuestion), eventHandler)
 
   private val answerProfilingFlowLayer: ZLayer[
     SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
     Nothing,
-    Flow.Aux[Task, AnswerProfilingCommand, QuestionAnswer]] = ZLayer.fromFunction:
+    Flow.Aux[Task, AnswerProfilingCommand, NextStep]] = ZLayer.fromFunction:
     (
         surveyRepo: SurveyRepository[Task],
         userRepo: UserRepository[Task],
         eventHandler: EventHandler[Task, Event]) =>
-      Flow(AnswerProfilingHandler(surveyRepo, userRepo), eventHandler)
+      Flow(AnswerProfilingHandler(surveyRepo, userRepo, nextStepAfterIdentificationQuestion), eventHandler)
 
   private val answerLocationFlowLayer: ZLayer[
     SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
     Nothing,
-    Flow.Aux[Task, AnswerLocationCommand, QuestionAnswer]] = ZLayer.fromFunction:
+    Flow.Aux[Task, AnswerLocationCommand, NextStep]] = ZLayer.fromFunction:
     (
         surveyRepo: SurveyRepository[Task],
         userRepo: UserRepository[Task],
         eventHandler: EventHandler[Task, Event]) =>
-      Flow(AnswerLocationHandler(surveyRepo, userRepo), eventHandler)
+      Flow(AnswerLocationHandler(surveyRepo, userRepo, nextStepAfterIdentificationQuestion), eventHandler)
 
   private val nextSurveyFlowLayer: ZLayer[
     SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
@@ -111,10 +157,9 @@ object Main extends ZIOAppDefault:
         surveyRepo: SurveyRepository[Task],
         userRepo: UserRepository[Task],
         eventHandler: EventHandler[Task, Event]) =>
-      Flow(ProvideNextIdentificationSurveyHandler(surveyRepo, userRepo), eventHandler)
+      Flow(ProvideNextIdentificationSurveyHandler(surveyRepo, userRepo, nextPhaseAfterIdentificationQuestion), eventHandler)
 
-  private val appLayers
-      : ZLayer[Any, Throwable, SurveyRoutes.FullEnv] = ZLayer.make[SurveyRoutes.FullEnv](
+  private val appLayers: ZLayer[Any, Throwable, FullEnv] = ZLayer.make[FullEnv](
     SessionContext.make,
     dataSourceLayer,
     quillLayer,
@@ -129,20 +174,28 @@ object Main extends ZIOAppDefault:
     nextSurveyFlowLayer
   )
 
-  private def logRoutes: ZIO[Server.Config, Nothing, Unit] =
+  private def logRoutes: ZIO[ServerSettings, Nothing, Unit] =
     for
-      config <- ZIO.service[Server.Config]
-      binding    = config.address
-      routeInfos = endpoints.map: e =>
+      settings <- ZIO.service[ServerSettings]
+      binding = settings.config.address
+      routeInfos = endpoints(settings.devMode).map: e =>
         val method = e.endpoint.method.map(_.method).getOrElse("*")
         val path = e.endpoint.showPathTemplate()
         s"  $method $path"
       _ <- ZIO.logInfo(s"Server starting on ${binding.getHostString}:${binding.getPort}")
+      _ <- ZIO.logInfo(s"Dev mode: ${settings.devMode}")
       _ <- ZIO.logInfo(s"Mounted routes:\n${routeInfos.mkString("\n")}")
     yield ()
 
-  override val run: ZIO[Any, Throwable, Nothing] = (logRoutes *> Server.serve(routes)).provide(
-    serverConfigLayer,
-    Server.live,
-    appLayers)
+  private val serverConfigFromSettings: ZLayer[ServerSettings, Nothing, Server.Config] =
+    ZLayer.fromFunction((s: ServerSettings) => s.config)
+
+  override val run: ZIO[Any, Throwable, Nothing] =
+    ZIO.serviceWithZIO[ServerSettings]: settings =>
+      logRoutes *> Server.serve(routes(settings.devMode))
+    .provide(
+      serverSettingsLayer,
+      serverConfigFromSettings,
+      Server.live,
+      appLayers)
 end Main
