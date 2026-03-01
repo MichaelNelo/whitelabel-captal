@@ -31,6 +31,7 @@ object ValidationFailureTests extends TestSuite:
     id = survey.question.Id.generate,
     text = LocalizedText("Test question", "en"),
     description = None,
+    placeholder = None,
     questionType = questionType,
     commonRules = commonRules,
     pointsAwarded = 10

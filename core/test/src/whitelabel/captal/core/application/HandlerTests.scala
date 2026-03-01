@@ -11,6 +11,9 @@ import whitelabel.captal.core.survey.{AdvertiserId, State as SurveyState, Survey
 import whitelabel.captal.core.user.{State as UserState, User}
 import whitelabel.captal.core.{Op, survey, user}
 
+// Test fixture for NextStep
+private val testNextStep = NextStep(Phase.Ready)
+
 object HandlerTests extends TestSuite:
 
   // Simple mock implementations using cats.Id
@@ -18,6 +21,7 @@ object HandlerTests extends TestSuite:
     id = survey.question.Id.generate,
     text = LocalizedText("Test question", "en"),
     description = None,
+    placeholder = None,
     questionType = QuestionType.Radio(
       List(QuestionOption(optionId, LocalizedText("Opt", "en"), 1, None))),
     commonRules = Nil,
@@ -28,6 +32,7 @@ object HandlerTests extends TestSuite:
     id = survey.question.Id.generate,
     text = LocalizedText("Enter your email", "en"),
     description = None,
+    placeholder = Some(LocalizedText("email@example.com", "en")),
     questionType = QuestionType.Input(List(TextRule.Email)),
     commonRules = Nil,
     pointsAwarded = 10
@@ -91,7 +96,7 @@ object HandlerTests extends TestSuite:
     test("AnswerEmailHandler"):
       test("returns NoSurveyAssigned when no email survey assigned"):
         val surveyRepo = mockSurveyRepo()
-        val handler = AnswerEmailHandler(surveyRepo)
+        val handler = AnswerEmailHandler(surveyRepo, testNextStep)
         val cmd = AnswerEmailCommand(
           answer = AnswerValue.Text("user@example.com"),
           occurredAt = Instant.now)
@@ -113,7 +118,7 @@ object HandlerTests extends TestSuite:
         val question = makeRadioQuestion(optionId)
         val emailSurvey = makeSurveyWithEmail(question)
         val surveyRepo = mockSurveyRepo(emailSurvey = Some(emailSurvey))
-        val handler = AnswerEmailHandler(surveyRepo)
+        val handler = AnswerEmailHandler(surveyRepo, testNextStep)
         val cmd = AnswerEmailCommand(
           answer = AnswerValue.SingleChoice(optionId),
           occurredAt = Instant.now)
@@ -134,7 +139,7 @@ object HandlerTests extends TestSuite:
         val question = makeInputQuestion()
         val emailSurvey = makeSurveyWithEmail(question)
         val surveyRepo = mockSurveyRepo(emailSurvey = Some(emailSurvey))
-        val handler = AnswerEmailHandler(surveyRepo)
+        val handler = AnswerEmailHandler(surveyRepo, testNextStep)
         val cmd = AnswerEmailCommand(
           answer = AnswerValue.Text("not-an-email"),
           occurredAt = Instant.now)
@@ -155,15 +160,15 @@ object HandlerTests extends TestSuite:
         val question = makeInputQuestion()
         val emailSurvey = makeSurveyWithEmail(question)
         val surveyRepo = mockSurveyRepo(emailSurvey = Some(emailSurvey))
-        val handler = AnswerEmailHandler(surveyRepo)
+        val handler = AnswerEmailHandler(surveyRepo, testNextStep)
         val cmd = AnswerEmailCommand(
           answer = AnswerValue.Text("user@example.com"),
           occurredAt = Instant.now)
         val result = Op.run(handler.handle(cmd))
         assert(result.isRight)
-        val (events, answer) = result.toOption.get
+        val (events, nextStep) = result.toOption.get
         assert(events.nonEmpty)
-        assert(answer.questionId == question.id)
+        assert(nextStep == testNextStep)
 
     test("AnswerProfilingHandler"):
       test("returns UserNotIdentified when user does not exist"):
@@ -172,7 +177,7 @@ object HandlerTests extends TestSuite:
         val profilingSurvey = makeSurveyWithProfiling(question)
         val surveyRepo = mockSurveyRepo(profilingSurvey = Some(profilingSurvey))
         val userRepo = mockUserRepo()
-        val handler = AnswerProfilingHandler(surveyRepo, userRepo)
+        val handler = AnswerProfilingHandler(surveyRepo, userRepo, testNextStep)
         val cmd = AnswerProfilingCommand(
           answer = AnswerValue.SingleChoice(optionId),
           occurredAt = Instant.now)
@@ -196,15 +201,15 @@ object HandlerTests extends TestSuite:
         val answeringUser = makeUserAnswering(profilingSurvey.id, question.id)
         val surveyRepo = mockSurveyRepo(profilingSurvey = Some(profilingSurvey))
         val userRepo = mockUserRepo(answeringUser = Some(answeringUser))
-        val handler = AnswerProfilingHandler(surveyRepo, userRepo)
+        val handler = AnswerProfilingHandler(surveyRepo, userRepo, testNextStep)
         val cmd = AnswerProfilingCommand(
           answer = AnswerValue.SingleChoice(optionId),
           occurredAt = Instant.now)
         val result = Op.run(handler.handle(cmd))
         assert(result.isRight)
-        val (events, answer) = result.toOption.get
+        val (events, nextStep) = result.toOption.get
         assert(events.nonEmpty)
-        assert(answer.questionId == question.id)
+        assert(nextStep == testNextStep)
 
     test("AnswerLocationHandler"):
       test("returns UserNotIdentified when user does not exist"):
@@ -213,7 +218,7 @@ object HandlerTests extends TestSuite:
         val locationSurvey = makeSurveyWithLocation(question)
         val surveyRepo = mockSurveyRepo(locationSurvey = Some(locationSurvey))
         val userRepo = mockUserRepo()
-        val handler = AnswerLocationHandler(surveyRepo, userRepo)
+        val handler = AnswerLocationHandler(surveyRepo, userRepo, testNextStep)
         val cmd = AnswerLocationCommand(
           answer = AnswerValue.SingleChoice(optionId),
           occurredAt = Instant.now)
@@ -237,13 +242,13 @@ object HandlerTests extends TestSuite:
         val answeringUser = makeUserAnswering(locationSurvey.id, question.id)
         val surveyRepo = mockSurveyRepo(locationSurvey = Some(locationSurvey))
         val userRepo = mockUserRepo(answeringUser = Some(answeringUser))
-        val handler = AnswerLocationHandler(surveyRepo, userRepo)
+        val handler = AnswerLocationHandler(surveyRepo, userRepo, testNextStep)
         val cmd = AnswerLocationCommand(
           answer = AnswerValue.SingleChoice(optionId),
           occurredAt = Instant.now)
         val result = Op.run(handler.handle(cmd))
         assert(result.isRight)
-        val (events, answer) = result.toOption.get
+        val (events, nextStep) = result.toOption.get
         assert(events.nonEmpty)
-        assert(answer.questionId == question.id)
+        assert(nextStep == testNextStep)
 end HandlerTests
