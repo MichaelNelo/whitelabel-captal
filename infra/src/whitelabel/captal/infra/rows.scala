@@ -77,5 +77,6 @@ final case class LocalizedTextRow(
     entityId: String,
     locale: String,
     value: String,
+    category: String,
     createdAt: String,
     updatedAt: String)

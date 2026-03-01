@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Central portal/connection hub -->
+  <circle cx="12" cy="12" r="3"/>
+  <!-- Signal arcs representing connectivity -->
+  <path d="M12 5a7 7 0 0 1 7 7"/>
+  <path d="M12 5a7 7 0 0 0-7 7"/>
+  <path d="M12 19a7 7 0 0 1-7-7"/>
+  <path d="M12 19a7 7 0 0 0 7-7"/>
+  <!-- Connection nodes at cardinal points -->
+  <circle cx="12" cy="2" r="1.5" fill="#ffffff" stroke="none"/>
+  <circle cx="22" cy="12" r="1.5" fill="#ffffff" stroke="none"/>
+  <circle cx="12" cy="22" r="1.5" fill="#ffffff" stroke="none"/>
+  <circle cx="2" cy="12" r="1.5" fill="#ffffff" stroke="none"/>
+</svg>
