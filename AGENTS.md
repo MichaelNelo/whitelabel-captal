@@ -12,6 +12,29 @@ El proyecto utiliza arquitectura **Event Sourcing** y esta implementado en **Sca
 
 ---
 
+## Estado Actual del Proyecto
+
+### Completado ✅
+- **Backend**: API REST completa con Tapir + ZIO
+- **Event Sourcing**: Handlers de eventos transaccionales
+- **Base de datos**: SQLite con Quill, migraciones con Flyway
+- **Cliente web**: Laminar + Scala.js con routing (Waypoint)
+- **i18n**: Sistema de traducciones (ES/EN) cargadas desde BD
+- **Cross-compilation**: Core y endpoints compartidos entre JVM y JS
+- **Validacion client-side**: Usa logica del core via `Op.run`
+- **Tests E2E**: 19 tests pasando (session, surveys, validation)
+
+### En Progreso 🚧
+- **IdentificationQuestionView**: Diseño visual necesita iteracion (ver TODOs)
+
+### Pendiente 📋
+- Fase de video publicitario (AdvertiserVideo)
+- Fase de encuesta de anunciante (AdvertiserQuestion)
+- Fase Ready (acceso WiFi)
+- Integracion con controlador de hotspot
+
+---
+
 ## Modelo de Negocio
 
 ### Propuesta de Valor
@@ -103,10 +126,30 @@ whitelabel-captal/
 │   └── src/
 │       └── whitelabel/captal/api/
 │           ├── Main.scala              # Entry point, composicion de layers
-│           ├── ApiError.scala          # Errores HTTP
 │           ├── SessionEndpoint.scala   # Seguridad por cookie
-│           ├── SurveyEndpoints.scala   # Definicion de endpoints
-│           └── SurveyRoutes.scala      # Implementacion de rutas
+│           ├── SurveyRoutes.scala      # Implementacion de rutas survey
+│           └── LocaleRoutes.scala      # Rutas de i18n/locale
+├── endpoints/                    # Definiciones de endpoints (cross-compiled)
+│   └── src/
+│       └── whitelabel/captal/endpoints/
+│           ├── SurveyEndpoints.scala   # Endpoints de surveys
+│           ├── LocaleEndpoints.scala   # Endpoints de i18n
+│           └── schemas.scala           # Schemas compartidos (JSON codecs)
+├── client/                       # Cliente Laminar (Scala.js)
+│   ├── index.html                # HTML con CSS variables para theming
+│   ├── STYLING.md                # Documentacion de variables CSS
+│   └── src/
+│       └── whitelabel/captal/client/
+│           ├── Main.scala              # Entry point, monta app en DOM
+│           ├── Router.scala            # Routing con Waypoint
+│           ├── AppState.scala          # Estado global (Var)
+│           ├── ApiClient.scala         # Llamadas HTTP con sttp
+│           ├── Runtime.scala           # Runtime ZIO para Scala.js
+│           ├── i18n/
+│           │   └── I18nClient.scala    # Servicio de i18n client-side
+│           └── views/
+│               ├── WelcomeView.scala           # Pantalla de bienvenida
+│               └── IdentificationQuestionView.scala  # Preguntas de identificacion
 └── docs/
     └── EVENT_SOURCING_SUMMARY.md # Detalle del modelo ES
 ```
@@ -438,15 +481,25 @@ Todos corren en una sola transaccion via `TransactionalEventHandler`.
 
 ## API Endpoints
 
+### Survey Endpoints
+
 | Endpoint | Metodo | Path | Request | Response |
 |----------|--------|------|---------|----------|
-| Status | GET | `/api/status` | - | `Phase` |
+| Status | GET | `/api/status` | - | `StatusResponse` (phase, locale) |
 | Next Survey | GET | `/api/survey/next` | - | `Option[NextIdentificationSurvey]` |
-| Answer Email | POST | `/api/survey/email` | `{ email: String }` | `QuestionAnswer` |
-| Answer Profiling | POST | `/api/survey/profiling` | `{ optionId: String }` | `QuestionAnswer` |
-| Answer Location | POST | `/api/survey/location` | `{ optionId: String }` | `QuestionAnswer` |
+| Answer Email | POST | `/api/survey/email` | `AnswerValue` | `QuestionAnswer` |
+| Answer Profiling | POST | `/api/survey/profiling` | `AnswerValue` | `QuestionAnswer` |
+| Answer Location | POST | `/api/survey/location` | `AnswerValue` | `QuestionAnswer` |
 
-Todos los endpoints usan autenticacion por cookie (`session_id`).
+### Locale/i18n Endpoints
+
+| Endpoint | Metodo | Path | Request | Response |
+|----------|--------|------|---------|----------|
+| Get Locales | GET | `/api/locales` | - | `List[String]` |
+| Get I18n | GET | `/api/i18n/{locale}` | - | `I18n` |
+| Set Locale | POST | `/api/locale` | `SetLocaleRequest` | `StatusResponse` + Set-Cookie |
+
+Todos los endpoints usan autenticacion por cookie (`session_id`). La cookie se crea automaticamente en la primera request.
 
 ---
 
@@ -586,7 +639,35 @@ inline given MappedEncoding[String, user.Id] = MappedEncoding(user.Id.unsafe)
 
 ## TODOs
 
-### 1. Investigar QueryMeta para Eliminar Row Types
+### 1. ~~[BUG] Botones no visibles en Welcome e Identification~~ ✅ CORREGIDO
+
+**Problema:** Los selectores CSS usaban `.welcome-text-content.visible` y `.question-text-content.visible` pero el Layout unificado usa `.view-content.visible`.
+
+**Solucion aplicada:** Actualizado `styles.css`:
+- `.app-layout:has(.welcome-text-content.visible)` → `.app-layout:has(.view-content.visible)`
+- `.app-layout:has(.question-text-content.visible)` → `.app-layout:has(.view-content.visible)`
+
+### 2. [EN PROGRESO] Diseño de IdentificationQuestionView
+
+La vista de preguntas de identificacion necesita iteracion de diseño:
+
+**Requisitos:**
+- Seguir el mismo estilo visual que WelcomeView (texto sobre gradiente, elementos glass)
+- Stack vertical de preguntas (preparado para multiples preguntas en pantalla)
+- Boton de submit al fondo de la pantalla
+- Usar variables CSS para whitelabeling (ver `client/STYLING.md`)
+
+**Estado actual:**
+- Logica de validacion client-side implementada usando `core.Op.run(questionOps.validate(...))`
+- Mensajes de error i18n completos para todos los tipos de `SurveyError`
+- Estilos parcialmente implementados pero necesitan ajustes visuales
+
+**Pendiente:**
+- Ajustar layout para que preguntas no esten centradas verticalmente
+- Mejorar diseño visual de las "cartas" de preguntas (actualmente usa glass-bg)
+- Probar con MCP de Playwright para validar diseño visualmente
+
+### 3. Investigar QueryMeta para Eliminar Row Types
 
 Investigar si `QueryMeta` de Quill permite decodificar directamente a tipos de dominio (`Survey[State]`, `User[State]`) sin necesidad de Row types intermedios.
 
@@ -602,54 +683,104 @@ inline given QueryMeta[User[State.WithEmail]] =
   )(row => User(row.id, State.WithEmail(row.email.get)))
 ```
 
-### 2. Cross-Compilar Core para Scala.js
+### 4. Pruebas E2E en UI usando Playwright
 
-Configurar Mill para cross-compilar el modulo `core` a JVM y JS:
+**Descripcion:**
+Implementar tests E2E para validar el flujo de usuario en el cliente web usando Playwright MCP.
 
-```scala
-// build.mill
-object core extends Cross[CoreModule]("jvm", "js")
+**Tareas:**
+- Configurar Playwright para el proyecto
+- Escribir tests para el flujo Welcome -> Question -> Video -> Ready
+- Validar estados visuales (loading, loaded, error)
+- Integrar con CI
 
-class CoreModule(platform: String) extends BaseModule with PlatformModule:
-  def platformSegment = platform
-  // ...
-```
+### 5. ~~Redirigir /* al cliente + endpoints estaticos solo en dev~~ ✅ COMPLETADO
 
-### 3. Cliente Laminar
+**Implementacion:**
+- `server.dev-mode` en `application.conf` (default: true, override con `SERVER_DEV_MODE=false`)
+- En dev mode: sirve assets (css, js, svg) y catch-all SPA (`/*` -> `index.html`)
+- En prod mode: solo API endpoints (`/api/*`)
+- Cliente (`Main.scala`): `syncPhaseOnLoad()` chequea fase y redirige al montar la app
 
-Crear un cliente web con Laminar que:
-- Consuma los endpoints del API
-- Comparta la logica del core (validaciones, tipos de dominio)
-- Use Tapir client para generar llamadas HTTP
+### 6. Validaciones agresivas de fase en cada endpoint
 
-### 4. Compartir Definiciones de Endpoints
+**Descripcion:**
+Agregar validaciones en cada endpoint para asegurar que el usuario esta en la fase correcta antes de procesar la request.
 
-Refactorizar `SurveyEndpoints` para que sea cross-compilable y pueda usarse tanto en:
-- **api**: Para generar rutas del servidor
-- **client**: Para generar llamadas HTTP tipadas
+**Tareas:**
+- `POST /api/survey/email` solo permitido en fase `IdentificationQuestion`
+- `POST /api/survey/profiling` solo permitido en fase `IdentificationQuestion`
+- `POST /api/survey/location` solo permitido en fase `IdentificationQuestion`
+- `GET /api/survey/next` solo permitido en fases `Welcome` o `IdentificationQuestion`
+- Retornar error descriptivo si la fase no coincide
 
-```scala
-// shared/endpoints/SurveyEndpoints.scala (cross-compiled)
-object SurveyEndpoints:
-  val answerEmail = endpoint
-    .post
-    .in("api" / "survey" / "email")
-    .in(jsonBody[AnswerEmailRequest])
-    .out(jsonBody[QuestionAnswer])
+### 7. ~~Cross-Compilar Core para Scala.js~~ ✅ COMPLETADO
 
-// api (JVM)
-val route = answerEmail.zServerLogic(...)
+Core y endpoints estan cross-compilados. Ver `build.mill`.
 
-// client (JS)
-val call = SttpClientInterpreter().toClient(answerEmail, baseUri, backend)
-```
+### 8. ~~Cliente Laminar~~ ✅ COMPLETADO
 
-### 5. Compartir Logica del Core con Cliente
+Cliente implementado con:
+- Laminar para UI reactiva
+- Waypoint para routing
+- sttp con Fetch backend para HTTP
+- I18n client-side cargando traducciones del servidor
 
-El modulo `core` ya es independiente de ZIO y usa `cats.Monad`. Al cross-compilarlo:
-- Las validaciones funcionaran en el cliente
-- Los tipos de dominio seran compartidos
-- Los errores seran consistentes entre cliente y servidor
+### 9. ~~Compartir Definiciones de Endpoints~~ ✅ COMPLETADO
+
+Modulo `endpoints` es cross-compiled y usado por:
+- `api` (JVM): Genera rutas del servidor
+- `client` (JS): Genera llamadas HTTP tipadas via sttp
+
+### 10. ~~Compartir Logica del Core con Cliente~~ ✅ COMPLETADO
+
+El cliente usa logica del core para:
+- Validaciones (`Op.run(questionOps.validate(...))`)
+- Tipos de dominio (`AnswerValue`, `QuestionType`, etc.)
+- Errores consistentes entre cliente y servidor
+
+---
+
+## Cambios Recientes (Session Actual)
+
+### CSS Extraido a Archivo Externo
+- **Antes**: CSS inline en `client/index.html` (~970 lineas)
+- **Ahora**: CSS en `client/assets/styles.css`
+- `Main.scala` sirve el CSS en `/assets/styles.css`
+
+### Ruta /video renombrada a /final
+- `Router.scala`: ruta `/video` -> `/final`
+- Serializacion: `"video"` -> `"final"`
+- Page title: `"Video"` -> `"Final"`
+
+### Layout Unificado con Loading State
+- `Layout.scala` ahora acepta `isLoading: Signal[Boolean]`
+- Nuevas clases CSS unificadas:
+  - `.layout-view.loading-state` / `.layout-view.loaded-state`
+  - `.view-icon` (antes `.welcome-icon`, `.question-icon`)
+  - `.view-content.hidden` / `.view-content.visible`
+- WelcomeView, IdentificationQuestionView y ReadyView usan el nuevo Layout
+- Brand icon centralizado en Layout (ya no se repite en cada view)
+
+### SPA Routing y Dev Mode
+- `api/resources/application.conf`: Agregado `server.dev-mode`
+- `api/src/.../Main.scala`:
+  - `ServerSettings` case class con config y devMode
+  - `devStaticRoutes`: assets solo en dev mode
+  - `spaCatchAllRoutes`: catch-all `/*` -> `index.html` para SPA routing
+  - `routes(devMode)`: compone rutas segun modo
+- `client/src/.../Main.scala`:
+  - `syncPhaseOnLoad()`: chequea fase del servidor y redirige al montar
+
+### Archivos Modificados (Session Anterior)
+- `client/index.html` - Solo estructura, sin CSS inline
+- `client/assets/styles.css` - CSS extraido + nuevas clases unificadas
+- `client/src/.../views/Layout.scala` - Acepta isLoading, maneja brand icon
+- `client/src/.../views/WelcomeView.scala` - Usa Layout con isLoading
+- `client/src/.../views/IdentificationQuestionView.scala` - Usa Layout con isLoading
+- `client/src/.../views/ReadyView.scala` - Usa Layout
+- `client/src/.../Router.scala` - Ruta /final en lugar de /video
+- `api/src/.../Main.scala` - Sirve styles.css
 
 ---
 
