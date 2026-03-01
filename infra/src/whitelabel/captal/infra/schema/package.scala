@@ -17,8 +17,7 @@ package object schema:
   inline given SchemaMeta[QuestionOptionRow] = schemaMeta[QuestionOptionRow]("question_options")
   inline given SchemaMeta[QuestionRuleRow] = schemaMeta[QuestionRuleRow]("question_rules")
   inline given SchemaMeta[AnswerRow] = schemaMeta[AnswerRow]("answers")
-  inline given SchemaMeta[UserSurveyProgressRow] =
-    schemaMeta[UserSurveyProgressRow]("user_survey_progress")
-  inline given SchemaMeta[LocalizedTextRow] =
-    schemaMeta[LocalizedTextRow]("localized_texts")
+  inline given SchemaMeta[UserSurveyProgressRow] = schemaMeta[UserSurveyProgressRow](
+    "user_survey_progress")
+  inline given SchemaMeta[LocalizedTextRow] = schemaMeta[LocalizedTextRow]("localized_texts")
 end schema

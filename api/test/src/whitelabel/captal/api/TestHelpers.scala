@@ -57,8 +57,10 @@ object TestHelpers:
         .split(";")
         .headOption
         .flatMap: cookie =>
-          if cookie.startsWith("session_id=") then Some(cookie.stripPrefix("session_id="))
-          else None
+          if cookie.startsWith("session_id=") then
+            Some(cookie.stripPrefix("session_id="))
+          else
+            None
 
   def getStatus(backend: SttpBackend[Task, Any], sessionCookie: Option[String] = None) =
     val request = basicRequest.get(uri"http://test/api/status").response(asStringAlways)
@@ -100,12 +102,14 @@ object TestHelpers:
       .response(asStringAlways)
       .send(backend)
 
-  def postProfilingAnswer(backend: SttpBackend[Task, Any], sessionCookie: String, optionId: String) =
-    basicRequest
-      .post(uri"http://test/api/survey/profiling")
-      .cookie("session_id", sessionCookie)
-      .body(s"""{"answer":{"type":"single","value":"$optionId"}}""")
-      .contentType("application/json")
-      .response(asStringAlways)
-      .send(backend)
+  def postProfilingAnswer(
+      backend: SttpBackend[Task, Any],
+      sessionCookie: String,
+      optionId: String) = basicRequest
+    .post(uri"http://test/api/survey/profiling")
+    .cookie("session_id", sessionCookie)
+    .body(s"""{"answer":{"type":"single","value":"$optionId"}}""")
+    .contentType("application/json")
+    .response(asStringAlways)
+    .send(backend)
 end TestHelpers

@@ -3,7 +3,11 @@ package whitelabel.captal.core.user
 import java.time.Instant
 
 import whitelabel.captal.core.application.{NextStep, Phase}
-import whitelabel.captal.core.survey.question.{AnswerValue, FullyQualifiedQuestionId, QuestionAnswer}
+import whitelabel.captal.core.survey.question.{
+  AnswerValue,
+  FullyQualifiedQuestionId,
+  QuestionAnswer
+}
 import whitelabel.captal.core.survey.{
   Error as SurveyError,
   Event as SurveyEvent,
@@ -53,6 +57,7 @@ object ops:
       survey,
       value,
       now)
+  end extension
 
   extension (user: User[State.AnsweringQuestion])
 

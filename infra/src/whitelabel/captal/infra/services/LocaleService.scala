@@ -13,17 +13,16 @@ trait LocaleService:
   def getI18n(locale: String): Task[I18n]
 
 object LocaleService:
-  def listAvailable(): ZIO[LocaleService, Throwable, List[String]] =
-    ZIO.serviceWithZIO[LocaleService](_.listAvailable())
+  def listAvailable()
+      : ZIO[LocaleService, Throwable, List[String]] = ZIO.serviceWithZIO[LocaleService](
+    _.listAvailable())
 
-  def getMessages(
-      locale: String,
-      category: String
-  ): ZIO[LocaleService, Throwable, Map[String, String]] =
-    ZIO.serviceWithZIO[LocaleService](_.getMessages(locale, category))
+  def getMessages(locale: String, category: String)
+      : ZIO[LocaleService, Throwable, Map[String, String]] = ZIO.serviceWithZIO[LocaleService](
+    _.getMessages(locale, category))
 
-  def getI18n(locale: String): ZIO[LocaleService, Throwable, I18n] =
-    ZIO.serviceWithZIO[LocaleService](_.getI18n(locale))
+  def getI18n(locale: String): ZIO[LocaleService, Throwable, I18n] = ZIO.serviceWithZIO[
+    LocaleService](_.getI18n(locale))
 
   def buildI18n(messages: Map[String, String]): I18n =
     def get(key: String): String = messages.getOrElse(key, s"[$key]")
@@ -32,25 +31,24 @@ object LocaleService:
       welcome = I18n.Welcome(
         title = get("welcome.title"),
         subtitle = get("welcome.subtitle"),
-        steps = I18n.Welcome.Steps(
-          step1 = get("welcome.steps.step1"),
-          step2 = get("welcome.steps.step2"),
-          step3 = get("welcome.steps.step3")
-        ),
-        button = I18n.Welcome.Button(
-          start = get("welcome.button.start"),
-          connecting = get("welcome.button.connecting")
-        ),
+        steps = I18n
+          .Welcome
+          .Steps(
+            step1 = get("welcome.steps.step1"),
+            step2 = get("welcome.steps.step2"),
+            step3 = get("welcome.steps.step3")),
+        button = I18n
+          .Welcome
+          .Button(
+            start = get("welcome.button.start"),
+            connecting = get("welcome.button.connecting")),
         selectLanguage = get("welcome.selectLanguage")
       ),
-      loading = I18n.Loading(
-        message = get("loading.message")
-      ),
+      loading = I18n.Loading(message = get("loading.message")),
       error = I18n.Error(
         title = get("error.title"),
         retry = get("error.retry"),
-        generic = get("error.generic")
-      ),
+        generic = get("error.generic")),
       question = I18n.Question(
         submit = get("question.submit"),
         next = get("question.next"),
@@ -69,9 +67,11 @@ object LocaleService:
         invalidAnswer = get("question.invalidAnswer")
       )
     )
+  end buildI18n
 
-  val layer: ZLayer[QuillSqlite, Nothing, LocaleService] =
-    ZLayer.fromFunction(LocaleServiceQuill.apply)
+  val layer: ZLayer[QuillSqlite, Nothing, LocaleService] = ZLayer.fromFunction(
+    LocaleServiceQuill.apply)
+end LocaleService
 
 object LocaleServiceQuill:
   def apply(quill: QuillSqlite): LocaleService =
@@ -79,18 +79,14 @@ object LocaleServiceQuill:
       import quill.*
 
       def listAvailable(): Task[List[String]] =
-        run(
-          query[LocalizedTextRow]
-            .map(_.locale)
-            .distinct
-            .sortBy(l => l)
-        ).orDie
+        run(query[LocalizedTextRow].map(_.locale).distinct.sortBy(l => l)).orDie
 
       def getMessages(locale: String, category: String): Task[Map[String, String]] =
         run(
-          query[LocalizedTextRow]
-            .filter(r => r.locale == lift(locale) && r.category == lift(category))
-        ).map(rows => rows.map(r => (r.entityId, r.value)).toMap).orDie
+          query[LocalizedTextRow].filter(r =>
+            r.locale == lift(locale) && r.category == lift(category)))
+          .map(rows => rows.map(r => (r.entityId, r.value)).toMap)
+          .orDie
 
-      def getI18n(locale: String): Task[I18n] =
-        getMessages(locale, "frontend").map(LocaleService.buildI18n)
+      def getI18n(locale: String): Task[I18n] = getMessages(locale, "frontend").map(
+        LocaleService.buildI18n)

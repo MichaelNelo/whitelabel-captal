@@ -21,8 +21,7 @@ object AppState:
 
   def getCurrentSurvey: Option[NextIdentificationSurvey] = currentSurveyVar.now()
 
-  def setCurrentSurvey(survey: NextIdentificationSurvey): Unit =
-    currentSurveyVar.set(Some(survey))
+  def setCurrentSurvey(survey: NextIdentificationSurvey): Unit = currentSurveyVar.set(Some(survey))
 
-  def clearCurrentSurvey(): Unit =
-    currentSurveyVar.set(None)
+  def clearCurrentSurvey(): Unit = currentSurveyVar.set(None)
+end AppState
