@@ -3,6 +3,7 @@ package whitelabel.captal.core.application
 import io.circe.{Decoder, Encoder}
 
 enum Phase:
+  case Welcome
   case IdentificationQuestion
   case AdvertiserVideo
   case AdvertiserQuestion
@@ -11,6 +12,8 @@ enum Phase:
 object Phase:
   def toDbString(phase: Phase): String =
     phase match
+      case Welcome =>
+        "welcome"
       case IdentificationQuestion =>
         "identification_question"
       case AdvertiserVideo =>
@@ -22,6 +25,8 @@ object Phase:
 
   def fromDbString(s: String): Phase =
     s match
+      case "welcome" =>
+        Welcome
       case "identification_question" =>
         IdentificationQuestion
       case "advertiser_video" =>
@@ -31,7 +36,7 @@ object Phase:
       case "ready" =>
         Ready
       case _ =>
-        IdentificationQuestion
+        Welcome
 
   given Encoder[Phase] = Encoder.encodeString.contramap(toDbString)
   given Decoder[Phase] = Decoder.decodeString.map(fromDbString)

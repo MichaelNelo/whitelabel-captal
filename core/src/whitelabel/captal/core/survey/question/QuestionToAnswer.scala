@@ -4,6 +4,7 @@ final case class QuestionToAnswer(
     id: Id,
     text: LocalizedText,
     description: Option[LocalizedText],
+    placeholder: Option[LocalizedText],
     questionType: QuestionType,
     commonRules: List[CommonRule],
     pointsAwarded: Int)

@@ -7,13 +7,13 @@ import cats.syntax.flatMap.*
 import cats.syntax.functor.*
 import io.circe.{Decoder, Encoder}
 import whitelabel.captal.core.Op.{convertError, convertEvent}
-import whitelabel.captal.core.application.IdentificationSurveyType
+import whitelabel.captal.core.application.{IdentificationSurveyType, NextStep, Phase}
 import whitelabel.captal.core.application.IdentificationSurveyType.given
 import whitelabel.captal.core.application.conversions.given
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository}
+import whitelabel.captal.core.survey.question.{FullyQualifiedQuestionId, QuestionToAnswer}
 import whitelabel.captal.core.survey.question.codecs.given
 import whitelabel.captal.core.user.ops.*
-import whitelabel.captal.core.survey.question.QuestionToAnswer
 import whitelabel.captal.core.{Op as CoreOp, survey, user}
 
 case object ProvideNextIdentificationSurveyCommand
@@ -28,36 +28,46 @@ object NextIdentificationSurvey:
   given Decoder[NextIdentificationSurvey] = Decoder.derived
 
 object ProvideNextIdentificationSurveyHandler:
-  type Response = Option[NextIdentificationSurvey]
+  type Response = NextIdentificationSurvey | NextStep
 
-  def apply[F[_]: Monad](surveyRepo: SurveyRepository[F], userRepo: UserRepository[F])
-      : Handler.Aux[F, ProvideNextIdentificationSurveyCommand.type, Response] =
+  def apply[F[_]: Monad](
+      surveyRepo: SurveyRepository[F],
+      userRepo: UserRepository[F],
+      terminalPhase: Phase): Handler.Aux[F, ProvideNextIdentificationSurveyCommand.type, Response] =
     new Handler[F, ProvideNextIdentificationSurveyCommand.type]:
       type Result = Response
 
       def handle(cmd: ProvideNextIdentificationSurveyCommand.type) =
         for
           nextOpt <- surveyRepo.findNextIdentificationSurvey()
-          result  <-
-            nextOpt match
-              case None =>
-                Monad[F].pure(CoreOp.pure(None: Response))
-              case Some(next) =>
-                handleNextSurvey(next)
+          result  <- handleSurveyResult(nextOpt)
         yield result
 
-      private def handleNextSurvey(next: NextIdentificationSurvey) =
+      private def handleSurveyResult(nextOpt: Option[NextIdentificationSurvey]) =
         for userOpt <- userRepo.findWithEmail()
-        yield userOpt match
-          case None =>
-            CoreOp
-              .emit(user.Event.NewUserArrived(next.surveyId, next.question.id, Instant.now))
-              .convertEvent
-              .as(Some(next): Response)
-          case Some(existingUser) =>
-            existingUser
-              .assignSurvey(next.surveyId, next.question.id, Instant.now)
+        yield (userOpt, nextOpt) match
+          case (None, Some(next)) =>
+            val nextQuestion = Some(FullyQualifiedQuestionId(next.surveyId, next.question.id))
+            createGuest(nextQuestion, Instant.now)
               .convertEvent
               .convertError
-              .as(Some(next): Response)
+              .as(next: Response)
+          case (None, None) =>
+            createGuest(None, Instant.now)
+              .convertEvent
+              .convertError
+              .as(NextStep(terminalPhase): Response)
+          case (Some(existingUser), Some(next)) =>
+            val nextQuestion = Some(FullyQualifiedQuestionId(next.surveyId, next.question.id))
+            existingUser
+              .assignSurvey(nextQuestion, terminalPhase, Instant.now)
+              .convertEvent
+              .convertError
+              .as(next: Response)
+          case (Some(existingUser), None) =>
+            existingUser
+              .assignSurvey(None, terminalPhase, Instant.now)
+              .convertEvent
+              .convertError
+              .as(NextStep(terminalPhase): Response)
 end ProvideNextIdentificationSurveyHandler
