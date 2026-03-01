@@ -10,3 +10,6 @@ out/
 
 # SQLite databases
 *.db
+
+# Generated index.html (copied from index.dev.html or index.prod.html)
+client/index.html
