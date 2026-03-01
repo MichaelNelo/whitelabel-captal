@@ -13,6 +13,9 @@ enum ApiError:
   case SessionInvalid(reason: String)
   case SessionExpired
 
+  // Phase errors
+  case WrongPhase(current: String, expected: List[String])
+
   // Application errors
   case NoSurveyAssigned
   case UserNotIdentified
@@ -125,6 +128,8 @@ object ApiError:
           ("session_invalid", Json.obj("reason" -> reason.asJson))
         case SessionExpired =>
           ("session_expired", Json.obj())
+        case WrongPhase(current, expected) =>
+          ("wrong_phase", Json.obj("current" -> current.asJson, "expected" -> expected.asJson))
         case NoSurveyAssigned =>
           ("no_survey_assigned", Json.obj())
         case UserNotIdentified =>
@@ -229,6 +234,11 @@ object ApiError:
             data.downField("reason").as[String].map(SessionInvalid(_))
           case "session_expired" =>
             Right(SessionExpired)
+          case "wrong_phase" =>
+            for
+              current <- data.downField("current").as[String]
+              expected <- data.downField("expected").as[List[String]]
+            yield WrongPhase(current, expected)
           case "no_survey_assigned" =>
             Right(NoSurveyAssigned)
           case "user_not_identified" =>
