@@ -22,7 +22,10 @@ El proyecto utiliza arquitectura **Event Sourcing** y esta implementado en **Sca
 - **i18n**: Sistema de traducciones (ES/EN) cargadas desde BD
 - **Cross-compilation**: Core y endpoints compartidos entre JVM y JS
 - **Validacion client-side**: Usa logica del core via `Op.run`
-- **Tests E2E**: 19 tests pasando (session, surveys, validation)
+- **Tests E2E API**: 34 tests pasando (session, surveys, validation, phase validation)
+- **Phase validation**: Endpoints protegidos por fase con Tapir partial server endpoints
+- **Docker**: Multi-stage Dockerfile para desarrollo (`dev.Dockerfile`)
+- **BuildInfo**: Variables de entorno en build time para cliente (ENVIRONMENT)
 
 ### En Progreso 🚧
 - **IdentificationQuestionView**: Diseño visual necesita iteracion (ver TODOs)
@@ -82,7 +85,11 @@ Usuario escanea QR / accede al hotspot
 
 ```
 whitelabel-captal/
-├── build.mill                    # Configuracion Mill
+├── build.mill                    # Configuracion Mill (genera BuildInfo para cliente)
+├── .mill-version                 # Version de Mill (1.1.2)
+├── mill                          # Mill launcher (tracked en repo)
+├── dev.Dockerfile                # Multi-stage build para desarrollo
+├── .dockerignore                 # Exclusiones para Docker build
 ├── AGENTS.md                     # Este archivo
 ├── core/                         # Dominio y logica de negocio
 │   ├── src/
@@ -123,12 +130,21 @@ whitelabel-captal/
 │           ├── TestFixtures.scala       # Fixtures de BD
 │           └── TestLayers.scala         # Layers para tests
 ├── api/                          # Capa HTTP con Tapir
-│   └── src/
+│   ├── src/
+│   │   └── whitelabel/captal/api/
+│   │       ├── Main.scala              # Entry point, composicion de layers
+│   │       ├── SessionEndpoint.scala   # Partial server endpoints (session + phase validation)
+│   │       ├── SurveyRoutes.scala      # Implementacion de rutas survey
+│   │       └── LocaleRoutes.scala      # Rutas de i18n/locale + dev routes
+│   └── test/
 │       └── whitelabel/captal/api/
-│           ├── Main.scala              # Entry point, composicion de layers
-│           ├── SessionEndpoint.scala   # Seguridad por cookie
-│           ├── SurveyRoutes.scala      # Implementacion de rutas survey
-│           └── LocaleRoutes.scala      # Rutas de i18n/locale
+│           └── suites/                 # Test suites E2E
+│               ├── SessionManagementSuite.scala
+│               ├── EmailSurveySuite.scala
+│               ├── SurveyProgressionSuite.scala
+│               ├── MultiQuestionSurveySuite.scala
+│               ├── ValidationSuite.scala
+│               └── PhaseValidationSuite.scala
 ├── endpoints/                    # Definiciones de endpoints (cross-compiled)
 │   └── src/
 │       └── whitelabel/captal/endpoints/
@@ -137,6 +153,8 @@ whitelabel-captal/
 │           └── schemas.scala           # Schemas compartidos (JSON codecs)
 ├── client/                       # Cliente Laminar (Scala.js)
 │   ├── index.html                # HTML con CSS variables para theming
+│   ├── assets/
+│   │   └── styles.css            # CSS extraido (variables, animaciones)
 │   ├── STYLING.md                # Documentacion de variables CSS
 │   └── src/
 │       └── whitelabel/captal/client/
@@ -145,11 +163,14 @@ whitelabel-captal/
 │           ├── AppState.scala          # Estado global (Var)
 │           ├── ApiClient.scala         # Llamadas HTTP con sttp
 │           ├── Runtime.scala           # Runtime ZIO para Scala.js
+│           ├── BuildInfo.scala         # [GENERADO] Variables de build (ENVIRONMENT)
 │           ├── i18n/
 │           │   └── I18nClient.scala    # Servicio de i18n client-side
 │           └── views/
+│               ├── Layout.scala                # Layout compartido con loading state
 │               ├── WelcomeView.scala           # Pantalla de bienvenida
-│               └── IdentificationQuestionView.scala  # Preguntas de identificacion
+│               ├── IdentificationQuestionView.scala  # Preguntas de identificacion
+│               └── ReadyView.scala             # Pantalla final (con reset en dev)
 └── docs/
     └── EVENT_SOURCING_SUMMARY.md # Detalle del modelo ES
 ```
@@ -472,10 +493,12 @@ Todos corren en una sola transaccion via `TransactionalEventHandler`.
 
 | Handler | Comando | Resultado | Dependencias |
 |---------|---------|-----------|--------------|
-| `AnswerEmailHandler` | `AnswerEmailCommand` | `QuestionAnswer` | `SurveyRepository` |
-| `AnswerProfilingHandler` | `AnswerProfilingCommand` | `QuestionAnswer` | `SurveyRepository`, `UserRepository` |
-| `AnswerLocationHandler` | `AnswerLocationCommand` | `QuestionAnswer` | `SurveyRepository`, `UserRepository` |
-| `ProvideNextIdentificationSurveyHandler` | `ProvideNextIdentificationSurveyCommand` | `Option[NextIdentificationSurvey]` | `SurveyRepository`, `UserRepository` |
+| `AnswerEmailHandler` | `AnswerEmailCommand` | `NextStep` | `SurveyRepository`, `nextStep` |
+| `AnswerProfilingHandler` | `AnswerProfilingCommand` | `NextStep` | `SurveyRepository`, `UserRepository`, `nextStep` |
+| `AnswerLocationHandler` | `AnswerLocationCommand` | `NextStep` | `SurveyRepository`, `UserRepository`, `nextStep` |
+| `ProvideNextIdentificationSurveyHandler` | `ProvideNextIdentificationSurveyCommand` | `NextIdentificationSurvey \| NextStep` | `SurveyRepository`, `UserRepository`, `terminalPhase` |
+
+**Nota:** Los handlers de respuesta ahora requieren un `NextStep` que indica la fase siguiente tras completar la accion.
 
 ---
 
@@ -497,9 +520,29 @@ Todos corren en una sola transaccion via `TransactionalEventHandler`.
 |----------|--------|------|---------|----------|
 | Get Locales | GET | `/api/locales` | - | `List[String]` |
 | Get I18n | GET | `/api/i18n/{locale}` | - | `I18n` |
-| Set Locale | POST | `/api/locale` | `SetLocaleRequest` | `StatusResponse` + Set-Cookie |
+| Set Locale | PUT | `/api/session/locale` | `SetLocaleRequest` | `StatusResponse` + Set-Cookie |
+
+### Dev-Only Endpoints (solo cuando `server.dev-mode=true`)
+
+| Endpoint | Metodo | Path | Request | Response |
+|----------|--------|------|---------|----------|
+| Reset Phase | POST | `/api/dev/reset-phase` | - | `StatusResponse` |
 
 Todos los endpoints usan autenticacion por cookie (`session_id`). La cookie se crea automaticamente en la primera request.
+
+### Phase Validation
+
+Los endpoints de survey validan la fase del usuario:
+
+| Endpoint | Fases Permitidas |
+|----------|------------------|
+| `GET /api/status` | Cualquiera |
+| `GET /api/survey/next` | Welcome, IdentificationQuestion |
+| `POST /api/survey/email` | IdentificationQuestion |
+| `POST /api/survey/profiling` | IdentificationQuestion |
+| `POST /api/survey/location` | IdentificationQuestion |
+
+Si la fase no coincide, retorna `ApiError.WrongPhase(current, expected)`.
 
 ---
 
@@ -628,11 +671,27 @@ inline given MappedEncoding[String, user.Id] = MappedEncoding(user.Id.unsafe)
 # Solo core
 ./mill core.test
 
-# Solo infra (incluye E2E)
-./mill infra.test
+# Solo API (incluye E2E)
+./mill api.test
 
 # Formatear codigo
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources
+
+# Build assembly JARs
+./mill api.assembly      # -> out/api/assembly.dest/out.jar
+./mill infra.assembly    # -> out/infra/assembly.dest/out.jar
+
+# Compilar cliente
+./mill client.fastLinkJS                    # Production
+ENVIRONMENT=dev ./mill client.fastLinkJS    # Dev mode
+
+# Docker
+docker build -f dev.Dockerfile -t captal-dev .
+docker run -p 8080:8080 -v $(pwd)/captal-dev.db:/app/captal-dev.db captal-dev
+
+# Migraciones y seed
+./mill infra.migrate
+./mill infra.seed
 ```
 
 ---
@@ -647,41 +706,21 @@ inline given MappedEncoding[String, user.Id] = MappedEncoding(user.Id.unsafe)
 - `.app-layout:has(.welcome-text-content.visible)` → `.app-layout:has(.view-content.visible)`
 - `.app-layout:has(.question-text-content.visible)` → `.app-layout:has(.view-content.visible)`
 
-### 2. [EN PROGRESO] Diseño de IdentificationQuestionView
+### 2. ~~Diseño de IdentificationQuestionView~~ ✅ COMPLETADO
 
-La vista de preguntas de identificacion necesita iteracion de diseño:
+Vista de preguntas de identificación implementada:
+- Estilo visual consistente con WelcomeView (texto sobre gradiente, elementos glass)
+- Stack vertical de preguntas
+- Validación client-side usando `core.Op.run(questionOps.validate(...))`
+- Mensajes de error i18n completos
+- Layout unificado con loading state
 
-**Requisitos:**
-- Seguir el mismo estilo visual que WelcomeView (texto sobre gradiente, elementos glass)
-- Stack vertical de preguntas (preparado para multiples preguntas en pantalla)
-- Boton de submit al fondo de la pantalla
-- Usar variables CSS para whitelabeling (ver `client/STYLING.md`)
+### 3. ~~Investigar QueryMeta para Eliminar Row Types~~ ❌ NO VIABLE
 
-**Estado actual:**
-- Logica de validacion client-side implementada usando `core.Op.run(questionOps.validate(...))`
-- Mensajes de error i18n completos para todos los tipos de `SurveyError`
-- Estilos parcialmente implementados pero necesitan ajustes visuales
-
-**Pendiente:**
-- Ajustar layout para que preguntas no esten centradas verticalmente
-- Mejorar diseño visual de las "cartas" de preguntas (actualmente usa glass-bg)
-- Probar con MCP de Playwright para validar diseño visualmente
-
-### 3. Investigar QueryMeta para Eliminar Row Types
-
-Investigar si `QueryMeta` de Quill permite decodificar directamente a tipos de dominio (`Survey[State]`, `User[State]`) sin necesidad de Row types intermedios.
-
-Referencias:
-- [ZIO Quill - Extending Quill](https://zio.dev/zio-quill/extending-quill/)
-- [ProtoQuill GitHub](https://github.com/zio/zio-protoquill)
-
-```scala
-// Posible uso de QueryMeta
-inline given QueryMeta[User[State.WithEmail]] =
-  queryMeta(
-    quote { query[UserRow].filter(_.email.isDefined) }
-  )(row => User(row.id, State.WithEmail(row.email.get)))
-```
+Se investigó `QueryMeta` de Quill pero no fue posible eliminar los Row types:
+- ProtoQuill requiere tipos concretos en compile-time
+- Los estados tipados (`Survey[State]`, `User[State]`) no son compatibles con el modelo de Quill
+- Los Row types intermedios son necesarios para el mapeo DB ↔ dominio
 
 ### 4. Pruebas E2E en UI usando Playwright
 
@@ -702,17 +741,21 @@ Implementar tests E2E para validar el flujo de usuario en el cliente web usando 
 - En prod mode: solo API endpoints (`/api/*`)
 - Cliente (`Main.scala`): `syncPhaseOnLoad()` chequea fase y redirige al montar la app
 
-### 6. Validaciones agresivas de fase en cada endpoint
+### 6. ~~Validaciones agresivas de fase en cada endpoint~~ ✅ COMPLETADO
 
-**Descripcion:**
-Agregar validaciones en cada endpoint para asegurar que el usuario esta en la fase correcta antes de procesar la request.
+**Implementacion:**
+- `SessionEndpoint.secured`: Partial server endpoint que resuelve sesion
+- `SessionEndpoint.withPhase(phases*)`: Partial server endpoint que valida fase
+- Todos los endpoints de survey usan el patron de partial server endpoints
+- `ApiError.WrongPhase(current, expected)`: Error cuando fase no coincide
+- 15 tests E2E en `PhaseValidationSuite` validan todas las combinaciones
 
-**Tareas:**
-- `POST /api/survey/email` solo permitido en fase `IdentificationQuestion`
-- `POST /api/survey/profiling` solo permitido en fase `IdentificationQuestion`
-- `POST /api/survey/location` solo permitido en fase `IdentificationQuestion`
-- `GET /api/survey/next` solo permitido en fases `Welcome` o `IdentificationQuestion`
-- Retornar error descriptivo si la fase no coincide
+**Endpoints protegidos:**
+- `POST /api/survey/email` - solo `IdentificationQuestion`
+- `POST /api/survey/profiling` - solo `IdentificationQuestion`
+- `POST /api/survey/location` - solo `IdentificationQuestion`
+- `GET /api/survey/next` - `Welcome` o `IdentificationQuestion`
+- `GET /api/status` - cualquier fase (usa `secured` sin validacion de fase)
 
 ### 7. ~~Cross-Compilar Core para Scala.js~~ ✅ COMPLETADO
 
@@ -738,6 +781,69 @@ El cliente usa logica del core para:
 - Validaciones (`Op.run(questionOps.validate(...))`)
 - Tipos de dominio (`AnswerValue`, `QuestionType`, etc.)
 - Errores consistentes entre cliente y servidor
+
+---
+
+## Docker (Desarrollo)
+
+### dev.Dockerfile
+
+Multi-stage build para desarrollo:
+
+```dockerfile
+# Stage 1: Build - compila API, infra y cliente
+FROM eclipse-temurin:21-jdk AS builder
+COPY mill build.mill .mill-version ./
+COPY core/ endpoints/ infra/ api/ client/ ./
+RUN ENVIRONMENT=dev ./mill api.assembly && \
+    ./mill infra.assembly && \
+    ENVIRONMENT=dev ./mill client.fastLinkJS
+
+# Stage 2: Runtime - solo JRE + JARs
+FROM eclipse-temurin:21-jre-noble
+COPY --from=builder /app/out/api/assembly.dest/out.jar api.jar
+COPY --from=builder /app/out/infra/assembly.dest/out.jar infra.jar
+COPY --from=builder /app/out/client/fastLinkJS.dest/ out/client/fastLinkJS.dest/
+CMD java -cp infra.jar whitelabel.captal.infra.Migrate && \
+    java -cp infra.jar whitelabel.captal.infra.Seed && \
+    java -jar api.jar
+```
+
+**Uso:**
+```bash
+docker build -f dev.Dockerfile -t captal-dev .
+docker run -p 8080:8080 -v $(pwd)/captal-dev.db:/app/captal-dev.db captal-dev
+```
+
+---
+
+## BuildInfo (Cliente)
+
+El cliente usa `BuildInfo` generado en build time para features condicionales:
+
+```scala
+// build.mill - generatedSources en client
+def generatedSources: T[Seq[PathRef]] = Task:
+  val env = Task.env.getOrElse("ENVIRONMENT", "production")
+  val isDevMode = env == "dev"
+  val dest = Task.dest / "BuildInfo.scala"
+  os.write(dest, s"""
+    package whitelabel.captal.client
+    object BuildInfo:
+      val environment: String = "$env"
+      val isDevMode: Boolean = $isDevMode
+  """)
+  Seq(PathRef(Task.dest))
+```
+
+**Uso:**
+```bash
+# Dev mode (incluye boton reset, etc.)
+ENVIRONMENT=dev ./mill client.fastLinkJS
+
+# Production (features dev eliminadas por dead code elimination)
+./mill client.fastLinkJS
+```
 
 ---
 
@@ -781,6 +887,34 @@ El cliente usa logica del core para:
 - `client/src/.../views/ReadyView.scala` - Usa Layout
 - `client/src/.../Router.scala` - Ruta /final en lugar de /video
 - `api/src/.../Main.scala` - Sirve styles.css
+
+### Phase Validation con Tapir Partial Server Endpoints
+- `SessionEndpoint.scala`: `secured` y `withPhase(phases*)` para validacion
+- `SurveyRoutes.scala`: Todos los endpoints usan partial server endpoints
+- `ApiError.scala`: Agregado `WrongPhase(current, expected)`
+- `PhaseValidationSuite.scala`: 15 tests E2E para validacion de fases
+
+### Dev Reset Endpoint
+- `LocaleEndpoints.resetPhase`: `POST /api/dev/reset-phase` (solo dev mode)
+- `LocaleRoutes.devRoutes`: Lista de rutas solo para dev
+- `Main.scala`: Monta `devRoutes` solo cuando `server.dev-mode=true`
+- `ReadyView.scala`: Boton "Reset (Dev)" que llama al endpoint (solo en dev)
+
+### BuildInfo para Cliente
+- `build.mill`: `generatedSources` genera `BuildInfo.scala` con `ENVIRONMENT`
+- `ReadyView.scala`: Usa `BuildInfo.isDevMode` en lugar de detectar hostname
+- Dead code elimination: En production, codigo dev no se incluye en el JS
+
+### Docker Multi-Stage
+- `dev.Dockerfile`: Build con Mill, runtime con JRE + JARs
+- `.mill-version`: Version de Mill (1.1.2)
+- `.dockerignore`: Exclusiones para build mas rapido
+- Usa `api.assembly` e `infra.assembly` para JARs ejecutables
+
+### Core Tests Actualizados
+- `HandlerTests.scala`: Handlers ahora requieren `nextStep: NextStep`
+- Assertions actualizadas para validar `NextStep` en lugar de `answer`
+- 48 tests pasando (8 Handler + 21 ValidationSuccess + 19 ValidationFailure)
 
 ---
 
