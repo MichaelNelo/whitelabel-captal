@@ -7,7 +7,7 @@ import fly4s.Fly4s
 import fly4s.data.{Fly4sConfig, Location}
 import io.getquill.*
 import whitelabel.captal.core.application.Phase
-import whitelabel.captal.core.{survey, user}
+import whitelabel.captal.core.{survey, user, video}
 import whitelabel.captal.infra.*
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.core.given
@@ -292,6 +292,7 @@ object TestFixtures:
       val conn = quill.ds.getConnection
       try
         val stmt = conn.createStatement()
+        stmt.execute("DELETE FROM video_views")
         stmt.execute("DELETE FROM user_survey_progress")
         stmt.execute("DELETE FROM answers")
         stmt.execute("DELETE FROM sessions")
@@ -300,6 +301,8 @@ object TestFixtures:
         stmt.execute("DELETE FROM question_options")
         stmt.execute("DELETE FROM questions")
         stmt.execute("DELETE FROM surveys")
+        stmt.execute("DELETE FROM advertiser_videos")
+        stmt.execute("DELETE FROM advertisers")
         stmt.execute("DELETE FROM users")
         stmt.close()
       finally
@@ -444,4 +447,129 @@ object TestFixtures:
         ZIO.foreach(noiseProgress)(row => run(query[UserSurveyProgressRow].insertValue(lift(row))))
     yield ()
     end for
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Video Fixtures
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  final case class VideoFixture(
+      advertiserId: String,
+      videoId: video.Id,
+      videoUrl: String,
+      durationSeconds: Int,
+      title: Option[String] = None)
+
+  def seedAdvertiserWithVideo(
+      advertiserName: String = "Test Advertiser",
+      videoUrl: String = "https://cdn.example.com/video.mp4",
+      videoTitle: String = "Test Video",
+      durationSeconds: Int = 15): ZIO[QuillSqlite, Throwable, VideoFixture] = ZIO.serviceWithZIO[
+    QuillSqlite]: quill =>
+    import quill.*
+    val now = java.time.Instant.now.toString
+    val advertiserId = UUID.randomUUID.toString
+    val videoId = video.Id.generate
+
+    val advertiserRow = AdvertiserRow(
+      id = advertiserId,
+      name = advertiserName,
+      priority = 10,
+      isActive = 1,
+      createdAt = now,
+      updatedAt = now)
+
+    val videoRow = AdvertiserVideoRow(
+      id = videoId,
+      advertiserId = Some(advertiserId),
+      videoType = "publicidad",
+      videoUrl = videoUrl,
+      durationSeconds = durationSeconds,
+      minWatchSeconds = 8,
+      showCountdown = 1,
+      noRepeatSeconds = None,
+      isActive = 1,
+      priority = 10,
+      createdAt = now,
+      updatedAt = now)
+
+    // Localized text for video title
+    val titleRow = LocalizedTextRow(
+      id = UUID.randomUUID.toString,
+      entityId = videoId.asString,
+      locale = "en",
+      value = videoTitle,
+      category = "backend",
+      createdAt = now,
+      updatedAt = now)
+
+    for
+      _ <- run(query[AdvertiserRow].insertValue(lift(advertiserRow)))
+      _ <- run(query[AdvertiserVideoRow].insertValue(lift(videoRow)))
+      _ <- run(query[LocalizedTextRow].insertValue(lift(titleRow)))
+    yield VideoFixture(advertiserId, videoId, videoUrl, durationSeconds, Some(videoTitle))
+
+  def seedPromoVideo(
+      videoUrl: String = "https://cdn.example.com/promo.mp4",
+      videoTitle: String = "Promo Video",
+      durationSeconds: Int = 10,
+      priority: Int = 1): ZIO[QuillSqlite, Throwable, VideoFixture] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
+      import quill.*
+      val now = java.time.Instant.now.toString
+      val videoId = video.Id.generate
+
+      val videoRow = AdvertiserVideoRow(
+        id = videoId,
+        advertiserId = None,
+        videoType = "propaganda",
+        videoUrl = videoUrl,
+        durationSeconds = durationSeconds,
+        minWatchSeconds = 5,
+        showCountdown = 0,
+        noRepeatSeconds = None,
+        isActive = 1,
+        priority = priority,
+        createdAt = now,
+        updatedAt = now)
+
+      // Localized text for video title
+      val titleRow = LocalizedTextRow(
+        id = UUID.randomUUID.toString,
+        entityId = videoId.asString,
+        locale = "en",
+        value = videoTitle,
+        category = "backend",
+        createdAt = now,
+        updatedAt = now)
+
+      for
+        _ <- run(query[AdvertiserVideoRow].insertValue(lift(videoRow)))
+        _ <- run(query[LocalizedTextRow].insertValue(lift(titleRow)))
+      yield VideoFixture("", videoId, videoUrl, durationSeconds, Some(videoTitle))
+
+  def getVideoViews: ZIO[QuillSqlite, Throwable, List[VideoViewRow]] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
+      import quill.*
+      run(query[VideoViewRow])
+
+  def updateSessionCurrentVideo(
+      sessionId: user.SessionId,
+      videoId: video.Id): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.*
+    run(
+      query[SessionRow]
+        .filter(_.id == lift(sessionId))
+        .update(_.currentVideoId -> Some(lift(videoId)))).unit
+
+  def clearVideoData: ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    ZIO.attemptBlocking:
+      val conn = quill.ds.getConnection
+      try
+        val stmt = conn.createStatement()
+        stmt.execute("DELETE FROM video_views")
+        stmt.execute("DELETE FROM advertiser_videos")
+        stmt.execute("DELETE FROM advertisers")
+        stmt.close()
+      finally
+        conn.close()
 end TestFixtures

@@ -12,11 +12,10 @@ object MultiQuestionSurveySuite:
       .suite("Multi-Question Survey")(
         test("after answering email, user transitions to advertiser video (1 question per visit)"):
           for
-            _          <- TestFixtures.seedEmailSurvey
-            _          <- TestFixtures.seedMultiQuestionProfilingSurvey
-            backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            _       <- TestFixtures.seedEmailSurvey
+            _       <- TestFixtures.seedMultiQuestionProfilingSurvey
+            backend <- testBackend
+            cookie  <- createSession(backend)
             // First call returns email question
             emailNext <- getNextSurvey(backend, cookie)
             emailParsed = parseNextSurvey(emailNext.body)

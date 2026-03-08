@@ -11,20 +11,22 @@ object SessionManagementSuite:
     zio
       .test
       .suite("Session Management")(
-        test("setLocale creates session in welcome phase"):
+        test("status creates session in welcome phase"):
           for
             backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            sessionCookie = extractSessionCookie(localeResp).get
-            statusResp <- getStatus(backend, Some(sessionCookie))
-          yield assertTrue(localeResp.code.isSuccess, statusResp.body.contains("welcome"))
+            statusResp <- getStatus(backend, None)
+            cookie = extractSessionCookie(statusResp).get
+            verifyResp <- getStatus(backend, Some(cookie))
+          yield assertTrue(
+            statusResp.code.isSuccess,
+            statusResp.body.contains("welcome"),
+            verifyResp.body.contains("welcome"))
         ,
         test("getNextSurvey transitions phase from welcome to identification_question"):
           for
-            _          <- TestFixtures.seedEmailSurvey
-            backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            _            <- TestFixtures.seedEmailSurvey
+            backend      <- testBackend
+            cookie       <- createSession(backend)
             statusBefore <- getStatus(backend, Some(cookie))
             _            <- getNextSurvey(backend, cookie)
             statusAfter  <- getStatus(backend, Some(cookie))
@@ -34,14 +36,13 @@ object SessionManagementSuite:
         ,
         test("returning visitor with existing session maintains their phase"):
           for
-            backend   <- testBackend
-            firstResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(firstResp).get
+            backend <- testBackend
+            cookie  <- createSession(backend)
             _ <- TestFixtures.updateSessionPhase(
               user.SessionId.unsafe(cookie),
               Phase.AdvertiserVideo)
-            secondResp <- getStatus(backend, Some(cookie))
-          yield assertTrue(secondResp.code.isSuccess, secondResp.body.contains("advertiser_video"))
+            statusResp <- getStatus(backend, Some(cookie))
+          yield assertTrue(statusResp.code.isSuccess, statusResp.body.contains("advertiser_video"))
         ,
         test(
           "lost session with existing user links to existing user instead of creating duplicate"):
@@ -49,14 +50,13 @@ object SessionManagementSuite:
           for
             _           <- TestFixtures.seedEmailSurvey
             backend     <- testBackend
-            firstLocale <- putSetLocale(backend, "es")
-            firstCookie = extractSessionCookie(firstLocale).get
+            firstCookie <- createSession(backend)
             _               <- getNextSurvey(backend, firstCookie)
             _               <- postEmailAnswer(backend, firstCookie, "returning@example.com")
             userCountBefore <- TestFixtures.countUsersByEmail(testEmail)
             existingUser    <- TestFixtures.getUserByEmail(testEmail)
-            secondLocale    <- putSetLocale(backend, "es")
-            secondCookie = extractSessionCookie(secondLocale).get
+            // Simulate "lost session" - create new session
+            secondCookie   <- createSession(backend)
             _              <- getNextSurvey(backend, secondCookie)
             _              <- postEmailAnswer(backend, secondCookie, "returning@example.com")
             userCountAfter <- TestFixtures.countUsersByEmail(testEmail)
