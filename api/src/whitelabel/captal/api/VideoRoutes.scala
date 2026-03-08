@@ -6,11 +6,9 @@ import sttp.tapir.json.circe.*
 import sttp.tapir.ztapir.*
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Flow, NextStep, Phase}
-import whitelabel.captal.core.infrastructure.SessionData
 import whitelabel.captal.endpoints.MarkVideoWatchedRequest.given
 import whitelabel.captal.endpoints.VideoResponse.given
 import whitelabel.captal.endpoints.VideoWatchedResponse.given
-import whitelabel.captal.endpoints.schemas.given
 import whitelabel.captal.endpoints.{ApiError, MarkVideoWatchedRequest, VideoResponse, VideoWatchedResponse}
 import whitelabel.captal.infra.session.{SessionContext, SessionService}
 import zio.*

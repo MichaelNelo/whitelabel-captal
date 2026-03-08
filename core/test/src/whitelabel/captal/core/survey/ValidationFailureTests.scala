@@ -65,7 +65,7 @@ object ValidationFailureTests extends TestSuite:
     val option = QuestionOption(OptionId.generate, LocalizedText("opt", "en"), 1, None)
     Gen.oneOf(
       Gen.const((QuestionType.Radio(List(option)), "radio")),
-      Gen.const((QuestionType.Select(List(option)), "select")),
+      Gen.const((QuestionType.Select(List(option)), "dropdown")),
       Gen.const((QuestionType.Checkbox(List(option), Nil), "checkbox")),
       Gen.const((QuestionType.Input(Nil), "input")),
       Gen.const((QuestionType.Rating(Nil), "rating")),
@@ -84,7 +84,7 @@ object ValidationFailureTests extends TestSuite:
     )
     val compatible: Set[String] =
       questionTag match
-        case "radio" | "select" =>
+        case "radio" | "dropdown" =>
           Set("singleChoice")
         case "checkbox" =>
           Set("multipleChoice")

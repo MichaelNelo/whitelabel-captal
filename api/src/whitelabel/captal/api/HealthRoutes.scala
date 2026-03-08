@@ -1,8 +1,8 @@
 package whitelabel.captal.api
 
-import sttp.tapir.{PublicEndpoint, Schema}
 import sttp.tapir.json.circe.*
 import sttp.tapir.ztapir.*
+import sttp.tapir.{PublicEndpoint, Schema}
 import zio.*
 
 object HealthRoutes:

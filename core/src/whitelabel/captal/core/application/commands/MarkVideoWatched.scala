@@ -3,13 +3,12 @@ package whitelabel.captal.core.application.commands
 import java.time.Instant
 
 import cats.Monad
-import cats.syntax.flatMap.*
 import cats.syntax.functor.*
 import whitelabel.captal.core.Op.{convertError, convertEvent}
 import whitelabel.captal.core.application.conversions.given
-import whitelabel.captal.core.application.{Error, NextStep, Phase}
+import whitelabel.captal.core.application.{NextStep, Phase}
 import whitelabel.captal.core.infrastructure.{SessionData, VideoRepository}
-import whitelabel.captal.core.video.{Error as VideoError, Event as VideoEvent, VideoType}
+import whitelabel.captal.core.video.{Error as VideoError, Event as VideoEvent}
 import whitelabel.captal.core.{Op as CoreOp, video as videoPkg}
 
 final case class MarkVideoWatchedCommand(
