@@ -9,8 +9,9 @@ import whitelabel.captal.endpoints.SurveyResponse.given
 import whitelabel.captal.endpoints.schemas.given
 
 object SurveyEndpoints:
-  // Common security input
-  val sessionCookie: EndpointInput[Option[String]] = cookie[Option[String]]("session_id")
+  // Common session cookie
+  val sessionCookieName = "session_id"
+  val sessionCookie: EndpointInput[Option[String]] = cookie[Option[String]](sessionCookieName)
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Answer Endpoints - all use AnswerRequest with AnswerValue
@@ -59,12 +60,16 @@ object SurveyEndpoints:
     .errorOut(jsonBody[ApiError])
     .description("Get the next identification survey for the user")
 
-  val status: PublicEndpoint[Option[String], ApiError, StatusResponse, Any] = endpoint
+  val status: PublicEndpoint[
+    Option[String],
+    ApiError,
+    (Option[sttp.model.headers.CookieValueWithMeta], StatusResponse),
+    Any] = endpoint
     .get
     .in("api" / "status")
     .in(sessionCookie)
-    .out(jsonBody[StatusResponse])
+    .out(setCookieOpt(sessionCookieName).and(jsonBody[StatusResponse]))
     .errorOut(jsonBody[ApiError])
-    .description("Get the current phase/status - returns error if no session")
+    .description("Get the current phase/status - creates session if needed")
 
 end SurveyEndpoints

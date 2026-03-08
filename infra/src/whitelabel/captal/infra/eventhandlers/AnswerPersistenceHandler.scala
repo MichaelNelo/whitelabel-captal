@@ -50,6 +50,8 @@ object AnswerPersistenceHandler:
         Some(questionEventToRow(questionEvent, sessionId))
       case Event.User(_) =>
         None
+      case Event.Video(_) =>
+        None
 
   private def questionEventToRow(event: QuestionEvent, sessionId: user.SessionId): AnswerRow =
     val now = Instant.now.toString

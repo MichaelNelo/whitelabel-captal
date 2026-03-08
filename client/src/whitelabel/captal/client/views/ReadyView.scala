@@ -1,6 +1,7 @@
 package whitelabel.captal.client.views
 
 import com.raquo.laminar.api.L.*
+import whitelabel.captal.client.i18n.I18nClient
 import whitelabel.captal.client.{ApiClient, BuildInfo, Router, Runtime}
 import whitelabel.captal.core.application.Phase
 import zio.ZIO
@@ -25,8 +26,8 @@ object ReadyView:
   def render: HtmlElement = Layout(
     content = div(
       cls := "ready-view",
-      h1(cls := "ready-title", styleAttr    := "animation-delay: 300ms", "Gracias!"),
-      p(cls  := "ready-subtitle", styleAttr := "animation-delay: 500ms", "Ya puedes navegar")
+      h1(cls := "ready-title", styleAttr := "animation-delay: 1000ms", child.text <-- I18nClient.i18n.map(_.ready.title)),
+      p(cls := "ready-subtitle", styleAttr := "animation-delay: 1200ms", child.text <-- I18nClient.i18n.map(_.ready.subtitle))
     ),
     footer =
       if BuildInfo.isDevMode then
@@ -37,11 +38,9 @@ object ReadyView:
             child.text <--
               isResetting
                 .signal
-                .map(
-                  if _ then
-                    "..."
-                  else
-                    "Reset (Dev)"),
+                .combineWith(I18nClient.i18n.map(_.ready.resetButton))
+                .map: (resetting, resetText) =>
+                  if resetting then "..." else resetText,
             onClick --> { _ =>
               resetPhase()
             }

@@ -44,6 +44,10 @@ object LocaleService:
             connecting = get("welcome.button.connecting")),
         selectLanguage = get("welcome.selectLanguage")
       ),
+      ready = I18n.Ready(
+        title = get("ready.title"),
+        subtitle = get("ready.subtitle"),
+        resetButton = get("ready.resetButton")),
       loading = I18n.Loading(message = get("loading.message")),
       error = I18n.Error(
         title = get("error.title"),
@@ -65,6 +69,15 @@ object LocaleService:
         numericOutOfRange = get("question.numericOutOfRange"),
         dateOutOfRange = get("question.dateOutOfRange"),
         invalidAnswer = get("question.invalidAnswer")
+      ),
+      video = I18n.Video(
+        pageTitle = get("video.pageTitle"),
+        continueIn = get("video.continueIn"),
+        watchComplete = get("video.watchComplete"),
+        markWatched = get("video.markWatched"),
+        loading = get("video.loading"),
+        noVideoAvailable = get("video.noVideoAvailable"),
+        payAttention = get("video.payAttention")
       )
     )
   end buildI18n

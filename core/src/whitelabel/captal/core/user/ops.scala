@@ -3,6 +3,7 @@ package whitelabel.captal.core.user
 import java.time.Instant
 
 import whitelabel.captal.core.application.{NextStep, Phase}
+import whitelabel.captal.core.survey.AdvertiserId
 import whitelabel.captal.core.survey.question.{
   AnswerValue,
   FullyQualifiedQuestionId,
@@ -15,7 +16,7 @@ import whitelabel.captal.core.survey.{
   Survey,
   ops as surveyOps
 }
-import whitelabel.captal.core.{Op, survey}
+import whitelabel.captal.core.{Op, survey, video}
 
 object ops:
   type UserOp[A] = Op[Event, Error, A]
@@ -57,6 +58,15 @@ object ops:
       survey,
       value,
       now)
+
+    def assignVideo(
+        videoId: video.Id,
+        advertiserId: Option[AdvertiserId],
+        videoType: video.VideoType,
+        now: Instant): UserOp[User[State.WatchingVideo]] =
+      val event = Event.VideoAssigned(user.id, videoId, advertiserId, videoType, now)
+      val newUser = user.copy[State.WatchingVideo](state = State.WatchingVideo(videoId))
+      Op.emit(event, newUser)
   end extension
 
   extension (user: User[State.AnsweringQuestion])

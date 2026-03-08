@@ -6,17 +6,18 @@ import sttp.tapir.server.ziohttp.ZioHttpInterpreter
 import sttp.tapir.ztapir.{RichZServerEndpoint, ZServerEndpoint}
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Event, EventHandler, Flow, NextStep, Phase}
-import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository}
+import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository, VideoRepository}
 import whitelabel.captal.infra.eventhandlers.{
   AnswerPersistenceHandler,
   DbEventHandler,
   SessionPhaseHandler,
   SessionSurveyHandler,
+  SessionVideoHandler,
   SurveyProgressHandler,
   TransactionalEventHandler,
   UserPersistenceHandler
 }
-import whitelabel.captal.infra.repositories.{SurveyRepositoryQuill, UserRepositoryQuill}
+import whitelabel.captal.infra.repositories.{SurveyRepositoryQuill, UserRepositoryQuill, VideoRepositoryQuill}
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.services.LocaleService
 import whitelabel.captal.infra.session.{SessionContext, SessionService}
@@ -51,10 +52,20 @@ object Main extends ZIOAppDefault:
   private val nextPhaseAfterIdentificationQuestion: Phase = Phase.AdvertiserVideo
   private val nextStepAfterIdentificationQuestion: NextStep = NextStep(
     nextPhaseAfterIdentificationQuestion)
+
+  // Phase after advertiser video:
+  // - Prod: Phase.AdvertiserVideoSurvey (when video surveys are implemented)
+  // - Dev: Phase.Ready (skip video surveys for now)
+  private val nextPhaseAfterVideo: Phase = Phase.Ready
   type FullEnv =
     SessionContext & SessionService & LocaleService & SurveyRoutes.AnswerEmailFlowType &
       SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
-      SurveyRoutes.NextSurveyFlowType
+      SurveyRoutes.NextSurveyFlowType & VideoRoutes.NextVideoFlowType &
+      VideoRoutes.MarkVideoWatchedFlowType
+
+  private val healthEndpoints: List[ZServerEndpoint[FullEnv, Any]] = HealthRoutes
+    .routes
+    .map(_.widen[FullEnv])
 
   private val surveyEndpoints: List[ZServerEndpoint[FullEnv, Any]] = SurveyRoutes
     .routes
@@ -64,12 +75,16 @@ object Main extends ZIOAppDefault:
     .routes
     .map(_.widen[FullEnv])
 
+  private val videoEndpoints: List[ZServerEndpoint[FullEnv, Any]] = VideoRoutes
+    .routes
+    .map(_.widen[FullEnv])
+
   private val devOnlyEndpoints: List[ZServerEndpoint[FullEnv, Any]] = LocaleRoutes
     .devRoutes
     .map(_.widen[FullEnv])
 
   private def endpoints(devMode: Boolean): List[ZServerEndpoint[FullEnv, Any]] =
-    val base = surveyEndpoints ++ localeEndpoints
+    val base = healthEndpoints ++ surveyEndpoints ++ localeEndpoints ++ videoEndpoints
     if devMode then
       base ++ devOnlyEndpoints
     else
@@ -118,7 +133,7 @@ object Main extends ZIOAppDefault:
     Routes(
       Method.GET / ""         -> serveIndex,
       Method.GET / "question" -> serveIndex,
-      Method.GET / "final"    -> serveIndex,
+      Method.GET / "video"    -> serveIndex,
       Method.GET / "ready"    -> serveIndex)
 
   private def routes(devMode: Boolean): Routes[FullEnv, Response] =
@@ -151,13 +166,16 @@ object Main extends ZIOAppDefault:
 
   private val userRepoLayer = UserRepositoryQuill.layer
 
+  private val videoRepoLayer = VideoRepositoryQuill.layer
+
   private val eventHandlerLayer
       : ZLayer[QuillSqlite & SessionContext, Nothing, EventHandler[Task, Event]] = ZLayer
     .fromFunction: (quill: QuillSqlite, ctx: SessionContext) =>
       val dbHandler = AnswerPersistenceHandler(ctx)
         .andThen(UserPersistenceHandler(ctx))
-        .andThen(SessionPhaseHandler(ctx, nextPhaseAfterIdentificationQuestion))
+        .andThen(SessionPhaseHandler(ctx, nextPhaseAfterIdentificationQuestion, nextPhaseAfterVideo))
         .andThen(SessionSurveyHandler(ctx))
+        .andThen(SessionVideoHandler(ctx))
         .andThen(SurveyProgressHandler())
       TransactionalEventHandler(dbHandler, quill)
 
@@ -210,6 +228,39 @@ object Main extends ZIOAppDefault:
           nextPhaseAfterIdentificationQuestion),
         eventHandler)
 
+  private val nextVideoFlowLayer: ZLayer[
+    VideoRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[Task, ProvideNextVideoCommand.type, ProvideNextVideoHandler.Response]
+  ] = ZLayer.fromFunction:
+    (
+        videoRepo: VideoRepository[Task],
+        userRepo: UserRepository[Task],
+        eventHandler: EventHandler[Task, Event]) =>
+      Flow(ProvideNextVideoHandler(videoRepo, userRepo, nextPhaseAfterVideo), eventHandler)
+
+  // Custom Flow for MarkVideoWatched that accesses SessionContext at request time
+  private val markVideoWatchedFlowLayer: ZLayer[
+    VideoRepository[Task] & SessionContext & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[Task, MarkVideoWatchedCommand, NextStep]
+  ] = ZLayer.fromFunction:
+    (videoRepo: VideoRepository[Task], ctx: SessionContext, eventHandler: EventHandler[Task, Event]) =>
+      import zio.interop.catz.given
+      new Flow[Task, MarkVideoWatchedCommand]:
+        type Result = NextStep
+
+        def execute(command: MarkVideoWatchedCommand): Task[NextStep] =
+          for
+            session <- ctx.getOrFail
+            handler = MarkVideoWatchedHandler.withSession(videoRepo, session, nextPhaseAfterVideo)
+            opResult <- handler.handle(command)
+            result <- ZIO.fromEither(
+              whitelabel.captal.core.Op.run(opResult).left.map(Flow.HandlerError(_)))
+            (events, value) = result
+            _ <- eventHandler.handle(events)
+          yield value
+
   private val appLayers: ZLayer[Any, Throwable, FullEnv] = ZLayer.make[FullEnv](
     SessionContext.make,
     dataSourceLayer,
@@ -218,11 +269,14 @@ object Main extends ZIOAppDefault:
     localeServiceLayer,
     surveyRepoLayer,
     userRepoLayer,
+    videoRepoLayer,
     eventHandlerLayer,
     answerEmailFlowLayer,
     answerProfilingFlowLayer,
     answerLocationFlowLayer,
-    nextSurveyFlowLayer
+    nextSurveyFlowLayer,
+    nextVideoFlowLayer,
+    markVideoWatchedFlowLayer
   )
 
   private def logRoutes: ZIO[ServerSettings, Nothing, Unit] =

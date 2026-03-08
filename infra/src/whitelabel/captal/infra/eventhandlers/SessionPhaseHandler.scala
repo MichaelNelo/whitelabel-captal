@@ -4,6 +4,7 @@ import io.getquill.*
 import whitelabel.captal.core.application.{Event, Phase}
 import whitelabel.captal.core.survey.Event as SurveyEvent
 import whitelabel.captal.core.survey.question.Event as QuestionEvent
+import whitelabel.captal.core.video.Event as VideoEvent
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.given
@@ -23,22 +24,30 @@ import zio.*
 object SessionPhaseHandler:
   def apply(
       ctx: SessionContext,
-      nextPhaseAfterIdentificationQuestion: Phase): DbEventHandler[Event] =
+      nextPhaseAfterIdentificationQuestion: Phase,
+      nextPhaseAfterVideo: Phase = Phase.Ready): DbEventHandler[Event] =
     new DbEventHandler[Event]:
       def handle(events: List[Event], quill: QuillSqlite): Task[Unit] =
         import quill.*
         val hasIdentificationAnswer = events.exists(isIdentificationAnswer)
-        if hasIdentificationAnswer then
-          for
-            sessionData <- ctx.getOrFail
-            _           <-
+        val hasVideoVisualized = events.exists(isVideoVisualized)
+
+        for
+          sessionData <- ctx.getOrFail
+          _ <-
+            if hasIdentificationAnswer then
               run(
                 SessionService.updatePhaseQuery(
                   lift(sessionData.sessionId),
                   lift(nextPhaseAfterIdentificationQuestion))).orDie
-          yield ()
-        else
-          ZIO.unit
+            else if hasVideoVisualized then
+              run(
+                SessionService.updatePhaseQuery(
+                  lift(sessionData.sessionId),
+                  lift(nextPhaseAfterVideo))).orDie
+            else
+              ZIO.unit
+        yield ()
 
   private def isIdentificationAnswer(event: Event): Boolean =
     event match
@@ -52,6 +61,13 @@ object SessionPhaseHandler:
             true
           case _ =>
             false
+      case _ =>
+        false
+
+  private def isVideoVisualized(event: Event): Boolean =
+    event match
+      case Event.Video(_: VideoEvent.VideoVisualized) =>
+        true
       case _ =>
         false
 end SessionPhaseHandler

@@ -5,7 +5,7 @@ import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, Json}
 import sttp.tapir.Schema
 import whitelabel.captal.core.application.Error as AppError
-import whitelabel.captal.core.{survey, user}
+import whitelabel.captal.core.{survey, user, video}
 
 enum ApiError:
   // Session errors
@@ -46,6 +46,10 @@ enum ApiError:
   case NoPendingQuestions(userId: String)
   case QuestionNotPending(userId: String, questionId: String)
 
+  // Video errors
+  case VideoNotFound(videoId: String)
+  case NoVideoAvailable
+
   // Internal
   case InternalError(message: String)
 end ApiError
@@ -65,6 +69,8 @@ object ApiError:
         fromSurveyError(errors.head)
       case AppError.User(errors) =>
         fromUserError(errors.head)
+      case AppError.Video(errors) =>
+        fromVideoError(errors.head)
 
   private def fromSurveyError(err: survey.Error): ApiError =
     err match
@@ -115,6 +121,13 @@ object ApiError:
         ApiError.NoPendingQuestions(userId.asString)
       case user.Error.QuestionNotPending(userId, questionId) =>
         ApiError.QuestionNotPending(userId.asString, questionId)
+
+  private def fromVideoError(err: video.Error): ApiError =
+    err match
+      case video.Error.VideoNotFound(videoId) =>
+        ApiError.VideoNotFound(videoId.asString)
+      case video.Error.NoVideoAvailable =>
+        ApiError.NoVideoAvailable
 
   def fromThrowable(cause: Throwable): ApiError = ApiError.InternalError(
     Option(cause.getMessage).getOrElse("Unknown error"))
@@ -218,6 +231,10 @@ object ApiError:
           ("no_pending_questions", Json.obj("userId" -> userId.asJson))
         case QuestionNotPending(userId, qId) =>
           ("question_not_pending", Json.obj("userId" -> userId.asJson, "questionId" -> qId.asJson))
+        case VideoNotFound(videoId) =>
+          ("video_not_found", Json.obj("videoId" -> videoId.asJson))
+        case NoVideoAvailable =>
+          ("no_video_available", Json.obj())
         case InternalError(message) =>
           ("internal_error", Json.obj("message" -> message.asJson))
     Json.obj("error" -> errorType.asJson, "data" -> data)

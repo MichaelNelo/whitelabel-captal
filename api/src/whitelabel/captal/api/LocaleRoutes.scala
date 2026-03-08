@@ -20,28 +20,33 @@ object LocaleRoutes:
   object SetLocale:
     type Env = SessionContext & SessionService
 
-    val route: ZServerEndpoint[Env, Any] = LocaleEndpoints
-      .setLocale
-      .zServerLogic: (cookie, _, request) =>
-        val locale = request.locale
-        for
-          sessionData <- SessionEndpoint.resolveSession(
-            cookie,
-            SessionEndpoint
-              .OnMissing
-              .Create(whitelabel.captal.core.user.DeviceId("unknown"), locale))
-          updatedData <-
-            if sessionData.locale != locale then
-              ZIO
-                .serviceWithZIO[SessionService](_.setLocale(sessionData.sessionId, locale))
-                .mapError(ApiError.fromThrowable)
-                .as(sessionData.copy(locale = locale))
-            else
-              ZIO.succeed(sessionData)
-          _ <- SessionContext.set(updatedData)
-        yield (
-          Some(CookieValueWithMeta.unsafeApply(updatedData.sessionId.asString, path = Some("/"))),
-          whitelabel.captal.endpoints.StatusResponse(updatedData.phase, updatedData.locale))
+    import sttp.tapir.json.circe.*
+    import sttp.tapir.{header, setCookieOpt}
+    import whitelabel.captal.endpoints.{SetLocaleRequest, StatusResponse, SurveyEndpoints}
+    import whitelabel.captal.endpoints.SetLocaleRequest.given
+
+    val route: ZServerEndpoint[Env, Any] = SessionEndpoint
+      .secured()
+      .put
+      .in("api" / "session" / "locale")
+      .in(header[Option[String]]("Accept-Language"))
+      .in(jsonBody[SetLocaleRequest])
+      .out(setCookieOpt(SurveyEndpoints.sessionCookieName).and(jsonBody[StatusResponse]))
+      .serverLogic: session =>
+        (_, request) =>
+          val locale = request.locale
+          for
+            updatedData <-
+              if session.locale != locale then
+                ZIO
+                  .serviceWithZIO[SessionService](_.setLocale(session.sessionId, locale))
+                  .mapError(ApiError.fromThrowable)
+                  .as(session.copy(locale = locale))
+              else
+                ZIO.succeed(session)
+          yield (
+            Some(CookieValueWithMeta.unsafeApply(updatedData.sessionId.asString, path = Some("/"))),
+            StatusResponse(updatedData.phase, updatedData.locale))
   end SetLocale
 
   object GetI18n:
@@ -56,21 +61,21 @@ object LocaleRoutes:
   object ResetPhase:
     type Env = SessionContext & SessionService
 
-    val route: ZServerEndpoint[Env, Any] = LocaleEndpoints
-      .resetPhase
-      .zServerLogic: cookie =>
-        for
-          sessionData <- SessionEndpoint.resolveSession(cookie, SessionEndpoint.OnMissing.Fail)
-          _           <- ZIO
-            .serviceWithZIO[SessionService](
-              _.setPhase(sessionData.sessionId, whitelabel.captal.core.application.Phase.Welcome))
+    import sttp.tapir.json.circe.*
+    import whitelabel.captal.core.application.Phase
+    import whitelabel.captal.endpoints.StatusResponse
+
+    val route: ZServerEndpoint[Env, Any] = SessionEndpoint
+      .secured()
+      .post
+      .in("api" / "dev" / "reset-phase")
+      .out(jsonBody[StatusResponse])
+      .serverLogic: session =>
+        _ =>
+          ZIO
+            .serviceWithZIO[SessionService](_.setPhase(session.sessionId, Phase.Welcome))
             .mapError(ApiError.fromThrowable)
-          _ <- SessionContext.set(
-            sessionData.copy(phase = whitelabel.captal.core.application.Phase.Welcome))
-        yield whitelabel
-          .captal
-          .endpoints
-          .StatusResponse(whitelabel.captal.core.application.Phase.Welcome, sessionData.locale)
+            .as(StatusResponse(Phase.Welcome, session.locale))
   end ResetPhase
 
   type FullEnv = SessionContext & SessionService & LocaleService
