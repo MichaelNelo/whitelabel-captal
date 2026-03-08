@@ -3,19 +3,12 @@ package whitelabel.captal.core.user
 import java.time.Instant
 
 import whitelabel.captal.core.application.{NextStep, Phase}
-import whitelabel.captal.core.survey.AdvertiserId
 import whitelabel.captal.core.survey.question.{
   AnswerValue,
   FullyQualifiedQuestionId,
   QuestionAnswer
 }
-import whitelabel.captal.core.survey.{
-  Error as SurveyError,
-  Event as SurveyEvent,
-  State as SurveyState,
-  Survey,
-  ops as surveyOps
-}
+import whitelabel.captal.core.survey.{AdvertiserId, Error as SurveyError, Event as SurveyEvent, State as SurveyState, Survey, ops as surveyOps}
 import whitelabel.captal.core.{Op, survey, video}
 
 object ops:

@@ -5,17 +5,16 @@ import com.raquo.laminar.codecs.BooleanAsAttrPresenceCodec
 import org.scalajs.dom
 import org.scalajs.dom.html.{Div, Video}
 import org.scalajs.dom.svg.Circle
-import scala.scalajs.js
-import whitelabel.captal.client.{ApiClient, Router, Runtime}
 import whitelabel.captal.client.i18n.I18nClient
+import whitelabel.captal.client.{ApiClient, Router, Runtime}
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.application.commands.NextVideo
 import whitelabel.captal.endpoints.VideoResponse
 import zio.ZIO
 
 object AdvertiserVideoView:
-  // Duration to show the intro card (in milliseconds)
-  private val IntroCardDuration = 4000
+  // Max wait time for video preload (in milliseconds)
+  private val PreloadTimeout = 10000
 
   def render: HtmlElement =
     val videoData: Var[Option[NextVideo]] = Var(None)
@@ -28,7 +27,7 @@ object AdvertiserVideoView:
 
     def onMount(el: Div): Unit =
       containerRef.set(Some(el))
-      loadNextVideo(videoData, showIntro)
+      loadNextVideo(videoData, showIntro, videoRef)
       // Listen for fullscreen changes (exit via Escape, etc.)
       dom.document.addEventListener(
         "fullscreenchange",
@@ -49,7 +48,7 @@ object AdvertiserVideoView:
       child <-- videoData.signal
         .combineWith(showIntro.signal)
         .map:
-          case (Some(video), true) => renderIntroCard(video)
+          case (Some(video), true) => renderIntroCard(video, showIntro)
           case _                   => emptyNode
       ,
       // Video content (shown after intro)
@@ -71,7 +70,7 @@ object AdvertiserVideoView:
             emptyNode
     )
 
-  private def renderIntroCard(video: NextVideo): HtmlElement =
+  private def renderIntroCard(video: NextVideo, showIntro: Var[Boolean]): HtmlElement =
     div(
       cls := "video-intro",
       div(
@@ -87,8 +86,18 @@ object AdvertiserVideoView:
           cls := "video-intro-warning",
           child.text <-- I18nClient.i18n.map(_.video.payAttention)
         ),
-        // Pulse indicator
-        div(cls := "video-intro-pulse")
+        // Progress bar — fadeout when animation completes
+        div(
+          cls := "video-intro-pulse",
+          onMountCallback { ctx =>
+            val el = ctx.thisNode.ref
+            el.addEventListener(
+              "animationend",
+              (e: dom.AnimationEvent) =>
+                if e.animationName == "introProgress" then showIntro.set(false)
+            )
+          }
+        )
       )
     )
 
@@ -110,22 +119,23 @@ object AdvertiserVideoView:
             e.stopPropagation()
             containerRef.now().foreach(_.classList.toggle("controls-visible"))
         },
-        videoTag(
-          cls := "video-hero-video",
-          src := video.videoUrl,
-          htmlAttr("playsinline", BooleanAsAttrPresenceCodec) := true,
+        // Mount the preloaded video element directly
+        div(
+          cls := "video-hero-video-wrapper",
           onMountCallback { ctx =>
-            val videoEl = ctx.thisNode.ref.asInstanceOf[Video]
-            videoRef.set(Some(videoEl))
-            // Auto-play muted
-            videoEl.muted = true
-            videoEl.play()
-          },
-          onPlay --> { _ => isPlaying.set(true) },
-          onPause --> { _ => isPlaying.set(false) },
-          onEnded --> { _ =>
-            videoCompleted.set(true)
-            isPlaying.set(false)
+            videoRef.now().foreach { videoEl =>
+              videoEl.addEventListener("play", (_: dom.Event) => isPlaying.set(true))
+              videoEl.addEventListener("pause", (_: dom.Event) => isPlaying.set(false))
+              videoEl.addEventListener(
+                "ended",
+                (_: dom.Event) => {
+                  videoCompleted.set(true)
+                  isPlaying.set(false)
+                })
+              ctx.thisNode.ref.appendChild(videoEl)
+              videoEl.muted = true
+              videoEl.play()
+            }
           }
         ),
         // Custom controls (includes progress button)
@@ -288,19 +298,24 @@ object AdvertiserVideoView:
 
   private def loadNextVideo(
       videoData: Var[Option[NextVideo]],
-      showIntro: Var[Boolean]): Unit =
+      showIntro: Var[Boolean],
+      videoRef: Var[Option[Video]]): Unit =
     Runtime.run:
       ApiClient
         .getNextVideo()
         .tap:
           case Right(VideoResponse.Video(data)) =>
             ZIO.succeed:
+              // Create the actual video element and start preloading
+              val videoEl = dom.document.createElement("video").asInstanceOf[Video]
+              videoEl.className = "video-hero-video"
+              videoEl.setAttribute("playsinline", "")
+              videoEl.preload = "auto"
+              videoEl.src = data.videoUrl
+              videoEl.load()
+              videoRef.set(Some(videoEl))
               videoData.set(Some(data))
-              // Hide intro after delay
-              dom.window.setTimeout(
-                () => showIntro.set(false),
-                IntroCardDuration
-              )
+              // showIntro will be set to false by animationend on the progress bar
           case Right(VideoResponse.Step(nextStep)) =>
             ZIO.succeed:
               Router.syncWithPhase(nextStep.phase)

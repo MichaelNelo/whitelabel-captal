@@ -4,10 +4,10 @@ import javax.sql.DataSource
 
 import com.typesafe.config.ConfigFactory
 import io.getquill.jdbczio.Quill
-import org.sqlite.SQLiteDataSource
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Event, EventHandler, Flow, NextStep, Phase}
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository, VideoRepository}
+import whitelabel.captal.infra.RqliteDataSource
 import whitelabel.captal.infra.eventhandlers.*
 import whitelabel.captal.infra.repositories.{SurveyRepositoryQuill, UserRepositoryQuill, VideoRepositoryQuill}
 import whitelabel.captal.infra.schema.QuillSqlite
@@ -30,9 +30,8 @@ object TestLayers:
 
   private val dataSourceLayer: ZLayer[Any, Throwable, DataSource] = ZLayer.fromZIO:
     ZIO.attempt:
-      val ds = new SQLiteDataSource()
-      ds.setUrl(testConfig.getString("database.dataSource.url"))
-      ds
+      val url = testConfig.getString("database.jdbcUrl")
+      RqliteDataSource.create(url)
 
   private val sessionServiceLayer = SessionService.layer
 

@@ -4,6 +4,7 @@ import io.getquill.*
 import whitelabel.captal.core.application.{Event, Phase}
 import whitelabel.captal.core.survey.Event as SurveyEvent
 import whitelabel.captal.core.survey.question.Event as QuestionEvent
+import whitelabel.captal.core.user.Event as UserEvent
 import whitelabel.captal.core.video.Event as VideoEvent
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.core.given
@@ -30,12 +31,18 @@ object SessionPhaseHandler:
       def handle(events: List[Event], quill: QuillSqlite): Task[Unit] =
         import quill.*
         val hasIdentificationAnswer = events.exists(isIdentificationAnswer)
+        val hasIdentificationCompleted = events.exists(isIdentificationCompleted)
         val hasVideoVisualized = events.exists(isVideoVisualized)
 
         for
           sessionData <- ctx.getOrFail
           _ <-
-            if hasIdentificationAnswer then
+            if hasIdentificationCompleted then
+              run(
+                SessionService.updatePhaseQuery(
+                  lift(sessionData.sessionId),
+                  lift(nextPhaseAfterIdentificationQuestion))).orDie
+            else if hasIdentificationAnswer then
               run(
                 SessionService.updatePhaseQuery(
                   lift(sessionData.sessionId),
@@ -63,6 +70,11 @@ object SessionPhaseHandler:
             false
       case _ =>
         false
+
+  private def isIdentificationCompleted(event: Event): Boolean =
+    event match
+      case Event.User(_: UserEvent.IdentificationCompleted) => true
+      case _                                                => false
 
   private def isVideoVisualized(event: Event): Boolean =
     event match

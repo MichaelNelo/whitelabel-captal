@@ -214,7 +214,7 @@ object codecs:
         "options" -> options.asJson,
         "rules"   -> rules.asJson)
     case QuestionType.Select(options) =>
-      Json.obj("type" -> Json.fromString("select"), "options" -> options.asJson)
+      Json.obj("type" -> Json.fromString("dropdown"), "options" -> options.asJson)
     case QuestionType.Input(rules) =>
       Json.obj("type" -> Json.fromString("input"), "rules" -> rules.asJson)
     case QuestionType.Rating(rules) =>
@@ -234,7 +234,7 @@ object codecs:
             options <- c.get[List[QuestionOption]]("options")
             rules   <- c.getOrElse[List[SelectionRule]]("rules")(Nil)
           yield QuestionType.Checkbox(options, rules)
-        case "select" =>
+        case "dropdown" =>
           c.get[List[QuestionOption]]("options").map(QuestionType.Select(_))
         case "input" =>
           c.getOrElse[List[TextRule]]("rules")(Nil).map(QuestionType.Input(_))

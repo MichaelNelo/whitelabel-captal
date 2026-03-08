@@ -335,7 +335,7 @@ object SurveyRepositoryQuill:
         QuestionType.Radio(options)
       case "checkbox" =>
         QuestionType.Checkbox(options, decodeRules[SelectionRule](rules))
-      case "select" =>
+      case "dropdown" =>
         QuestionType.Select(options)
       case "input" =>
         QuestionType.Input(decodeRules[TextRule](rules))

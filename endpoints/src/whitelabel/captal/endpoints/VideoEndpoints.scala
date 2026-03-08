@@ -1,15 +1,13 @@
 package whitelabel.captal.endpoints
 
-import io.circe.{Decoder as CirceDecoder, Encoder as CirceEncoder}
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
-import sttp.tapir.*
+import io.circe.{Decoder as CirceDecoder, Encoder as CirceEncoder}
 import sttp.tapir.json.circe.*
-import sttp.tapir.Schema
+import sttp.tapir.{Schema, *}
 import whitelabel.captal.core.application.NextStep
 import whitelabel.captal.core.application.commands.NextVideo
 import whitelabel.captal.endpoints.ApiError.given
-import whitelabel.captal.endpoints.schemas.given
 
 // Response type for video endpoints - discriminated union
 enum VideoResponse:

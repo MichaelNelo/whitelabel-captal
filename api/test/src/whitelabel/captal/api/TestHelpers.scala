@@ -7,12 +7,11 @@ import sttp.monad.MonadError
 import sttp.tapir.server.ServerEndpoint
 import sttp.tapir.server.stub.TapirStubInterpreter
 import sttp.tapir.ztapir.ZServerEndpoint
-import whitelabel.captal.core.application.commands.{NextIdentificationSurvey, NextVideo}
 import whitelabel.captal.core.application.commands.NextIdentificationSurvey.given
-import whitelabel.captal.core.application.commands.NextVideo.given
-import whitelabel.captal.endpoints.{VideoResponse, VideoWatchedResponse}
+import whitelabel.captal.core.application.commands.{NextIdentificationSurvey, NextVideo}
 import whitelabel.captal.endpoints.VideoResponse.given
 import whitelabel.captal.endpoints.VideoWatchedResponse.given
+import whitelabel.captal.endpoints.{VideoResponse, VideoWatchedResponse}
 import zio.*
 
 object TestHelpers:
