@@ -14,9 +14,11 @@ object I18nClient:
       steps = I18n.Welcome.Steps("", "", ""),
       button = I18n.Welcome.Button("", ""),
       selectLanguage = ""),
+    ready = I18n.Ready("", "", ""),
     loading = I18n.Loading(""),
     error = I18n.Error("", "", ""),
-    question = I18n.Question("", "", "", "", "", "", "", "", "", "", "", "", "", "", "")
+    question = I18n.Question("", "", "", "", "", "", "", "", "", "", "", "", "", "", ""),
+    video = I18n.Video("", "", "", "", "", "", "")
   )
 
   private val localeVar: Var[String] = Var("es")

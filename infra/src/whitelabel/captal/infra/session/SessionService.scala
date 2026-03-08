@@ -4,8 +4,8 @@ import io.getquill.*
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.infrastructure.SessionData
 import whitelabel.captal.core.survey.question.FullyQualifiedQuestionId
-import whitelabel.captal.core.{survey, user}
-import whitelabel.captal.infra.SessionRow
+import whitelabel.captal.core.{survey, user, video}
+import whitelabel.captal.infra.{DeviceRow, SessionRow}
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.given
@@ -13,7 +13,7 @@ import zio.*
 
 trait SessionService:
   def findById(sessionId: user.SessionId): Task[Option[SessionData]]
-  def create(deviceId: user.DeviceId, locale: String, phase: Phase): Task[SessionData]
+  def create(userAgent: String, locale: String, phase: Phase): Task[SessionData]
   def setPhase(sessionId: user.SessionId, phase: Phase): Task[Unit]
   def setLocale(sessionId: user.SessionId, locale: String): Task[Unit]
   def setCurrentQuestion(sessionId: user.SessionId, question: FullyQualifiedQuestionId): Task[Unit]
@@ -45,6 +45,23 @@ object SessionService:
   inline def updateLocaleQuery = quote: (sessionIdParam: user.SessionId, localeParam: String) =>
     query[SessionRow].filter(_.id == sessionIdParam).update(_.locale -> localeParam)
 
+  inline def updateCurrentVideoQuery = quote:
+    (sessionIdParam: user.SessionId, videoIdParam: video.Id) =>
+      query[SessionRow]
+        .filter(_.id == sessionIdParam)
+        .update(_.currentVideoId -> Some(videoIdParam))
+
+  inline def clearCurrentVideoQuery = quote: (sessionIdParam: user.SessionId) =>
+    query[SessionRow]
+      .filter(_.id == sessionIdParam)
+      .update(_.currentVideoId -> None)
+
+  inline def updateLastPromoVideoQuery = quote:
+    (sessionIdParam: user.SessionId, videoIdParam: video.Id) =>
+      query[SessionRow]
+        .filter(_.id == sessionIdParam)
+        .update(_.lastPromoVideoId -> Some(videoIdParam))
+
   def apply(quill: QuillSqlite): SessionService =
     new SessionService:
       import quill.*
@@ -52,10 +69,27 @@ object SessionService:
       def findById(sessionId: user.SessionId): Task[Option[SessionData]] =
         run(findByIdQuery(lift(sessionId))).map(_.headOption.map(toSessionData)).orDie
 
-      def create(deviceId: user.DeviceId, locale: String, phase: Phase): Task[SessionData] =
+      def create(userAgent: String, locale: String, phase: Phase): Task[SessionData] =
         val sessionId = user.SessionId.generate
+        val deviceId = user.DeviceId.fromUserAgent(userAgent)
         val now = java.time.Instant.now.toString
-        val row = SessionRow(
+
+        // Upsert device record
+        val deviceRow = DeviceRow(
+          id = deviceId,
+          userAgent = userAgent,
+          createdAt = now,
+          updatedAt = now)
+
+        val upsertDevice = run(
+          query[DeviceRow]
+            .insertValue(lift(deviceRow))
+            .onConflictUpdate(_.id)(
+              (t, e) => t.userAgent -> e.userAgent,
+              (t, _) => t.updatedAt -> lift(now)))
+
+        // Create session
+        val sessionRow = SessionRow(
           id = sessionId,
           userId = None,
           deviceId = deviceId,
@@ -63,18 +97,25 @@ object SessionService:
           phase = phase,
           currentSurveyId = None,
           currentQuestionId = None,
+          currentVideoId = None,
+          lastPromoVideoId = None,
           createdAt = now)
-        run(
+
+        val insertSession = run(
           query[SessionRow].insert(
-            _.id                -> lift(row.id),
-            _.userId            -> lift(row.userId),
-            _.deviceId          -> lift(row.deviceId),
-            _.locale            -> lift(row.locale),
-            _.phase             -> lift(row.phase),
-            _.currentSurveyId   -> lift(row.currentSurveyId),
-            _.currentQuestionId -> lift(row.currentQuestionId),
-            _.createdAt         -> lift(row.createdAt)
-          )).orDie *> ZIO.succeed(SessionData(sessionId, None, locale, phase, None))
+            _.id               -> lift(sessionRow.id),
+            _.userId           -> lift(sessionRow.userId),
+            _.deviceId         -> lift(sessionRow.deviceId),
+            _.locale           -> lift(sessionRow.locale),
+            _.phase            -> lift(sessionRow.phase),
+            _.currentSurveyId  -> lift(sessionRow.currentSurveyId),
+            _.currentQuestionId -> lift(sessionRow.currentQuestionId),
+            _.currentVideoId   -> lift(sessionRow.currentVideoId),
+            _.lastPromoVideoId -> lift(sessionRow.lastPromoVideoId),
+            _.createdAt        -> lift(sessionRow.createdAt)))
+
+        (upsertDevice *> insertSession).orDie *>
+          ZIO.succeed(SessionData(sessionId, None, locale, phase, None, None, None))
       end create
 
       def setCurrentQuestion(
@@ -102,7 +143,14 @@ object SessionService:
           Some(FullyQualifiedQuestionId(surveyId, questionId))
         case _ =>
           None
-    SessionData(row.id, row.userId, row.locale, row.phase, currentQuestion)
+    SessionData(
+      row.id,
+      row.userId,
+      row.locale,
+      row.phase,
+      currentQuestion,
+      row.currentVideoId,
+      row.lastPromoVideoId)
 
   val layer: ZLayer[QuillSqlite, Nothing, SessionService] = ZLayer.fromFunction(apply)
 end SessionService

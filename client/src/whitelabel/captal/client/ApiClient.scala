@@ -12,10 +12,14 @@ import whitelabel.captal.endpoints.{
   AnswerRequest,
   ApiError,
   LocaleEndpoints,
+  MarkVideoWatchedRequest,
   SetLocaleRequest,
   StatusResponse,
   SurveyEndpoints,
-  SurveyResponse
+  SurveyResponse,
+  VideoEndpoints,
+  VideoResponse,
+  VideoWatchedResponse
 }
 import zio.*
 
@@ -31,11 +35,12 @@ object ApiClient:
       case f: DecodeResult.Failure =>
         throw new RuntimeException(s"Decode failure: ${f.toString}")
 
-  /** Get status - requires session cookie to be set */
+  /** Get status - creates session if needed */
   def getStatus(): Task[Either[ApiError, StatusResponse]] = interpreter
     .toClient(SurveyEndpoints.status, baseUri, backend)
     .apply(None)
     .map(unwrapDecodeResult)
+    .map(_.map(_._2)) // Extract StatusResponse from (cookie, response) tuple
 
   def getNextSurvey(): Task[Either[ApiError, SurveyResponse]] = interpreter
     .toClient(SurveyEndpoints.nextSurvey, baseUri, backend)
@@ -77,5 +82,17 @@ object ApiClient:
   def resetPhase(): Task[Either[ApiError, StatusResponse]] = interpreter
     .toClient(LocaleEndpoints.resetPhase, baseUri, backend)
     .apply(None)
+    .map(unwrapDecodeResult)
+
+  def getNextVideo(): Task[Either[ApiError, VideoResponse]] = interpreter
+    .toClient(VideoEndpoints.nextVideo, baseUri, backend)
+    .apply(None)
+    .map(unwrapDecodeResult)
+
+  def markVideoWatched(
+      durationWatched: Int,
+      completed: Boolean): Task[Either[ApiError, VideoWatchedResponse]] = interpreter
+    .toClient(VideoEndpoints.markWatched, baseUri, backend)
+    .apply((None, MarkVideoWatchedRequest(durationWatched, completed)))
     .map(unwrapDecodeResult)
 end ApiClient

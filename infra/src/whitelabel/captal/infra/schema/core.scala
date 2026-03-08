@@ -4,7 +4,7 @@ import scala.annotation.targetName
 
 import io.getquill.*
 import whitelabel.captal.core.application.{IdentificationSurveyType, Phase}
-import whitelabel.captal.core.{survey, user}
+import whitelabel.captal.core.{survey, user, video}
 
 package object core:
   // Mapped Encodings - User types
@@ -19,9 +19,9 @@ package object core:
   inline given MappedEncoding[String, user.SessionId] = MappedEncoding(user.SessionId.unsafe)
 
   @targetName("deviceIdToString")
-  inline given MappedEncoding[user.DeviceId, String] = MappedEncoding(_.value)
+  inline given MappedEncoding[user.DeviceId, String] = MappedEncoding(_.asString)
   @targetName("stringToDeviceId")
-  inline given MappedEncoding[String, user.DeviceId] = MappedEncoding(user.DeviceId(_))
+  inline given MappedEncoding[String, user.DeviceId] = MappedEncoding(user.DeviceId.unsafe)
 
   @targetName("emailToString")
   inline given MappedEncoding[user.Email, String] = MappedEncoding(_.value)
@@ -59,4 +59,15 @@ package object core:
   @targetName("stringToIdentificationSurveyType")
   inline given MappedEncoding[String, IdentificationSurveyType] = MappedEncoding(
     IdentificationSurveyType.fromDbString)
+
+  // Mapped Encodings - Video types
+  @targetName("videoIdToString")
+  inline given MappedEncoding[video.Id, String] = MappedEncoding(_.asString)
+  @targetName("stringToVideoId")
+  inline given MappedEncoding[String, video.Id] = MappedEncoding(video.Id.unsafe)
+
+  @targetName("videoTypeToString")
+  inline given MappedEncoding[video.VideoType, String] = MappedEncoding(video.VideoType.toDbString)
+  @targetName("stringToVideoType")
+  inline given MappedEncoding[String, video.VideoType] = MappedEncoding(video.VideoType.fromDbString)
 end core

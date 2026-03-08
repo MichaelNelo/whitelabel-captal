@@ -1085,3 +1085,457 @@ body {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   VIDEO HERO VIEW
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Hero container - fullscreen-like experience */
+.video-hero {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(var(--bg-gradient-angle), var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
+}
+
+/* Content wrapper */
+.video-hero-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(
+    var(--bg-gradient-angle),
+    color-mix(in srgb, var(--bg-gradient-start) 80%, #000) 0%,
+    color-mix(in srgb, var(--bg-gradient-end) 70%, #000) 100%
+  );
+  animation: fadeIn 0.5s ease-out;
+}
+
+/* Video player container */
+.video-hero-player {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: var(--space-md);
+  padding-top: calc(var(--space-md) + env(safe-area-inset-top, 0px));
+}
+
+/* Video element */
+.video-hero-video {
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* Info overlay - positioned at TOP of video to not cover controls */
+.video-hero-info {
+  position: absolute;
+  top: var(--space-lg);
+  left: var(--space-md);
+  right: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  border-radius: var(--radius-md);
+  text-align: center;
+  pointer-events: none;
+}
+
+.video-hero-title {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--text-inverse);
+  margin: 0 0 var(--space-xs) 0;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.video-hero-description {
+  font-size: var(--font-size-sm);
+  color: rgba(255, 255, 255, 0.85);
+  margin: 0;
+  line-height: var(--line-height);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+/* Progress bar - hidden since native controls have one */
+.video-hero-progress {
+  display: none;
+}
+
+/* Footer with button */
+.video-hero-footer {
+  padding: var(--space-md) var(--space-lg);
+  padding-bottom: calc(var(--space-lg) + env(safe-area-inset-bottom, 0px));
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.video-hero-button {
+  width: 100%;
+  padding: var(--space-md) var(--space-xl);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: var(--radius-sm);
+  cursor: not-allowed;
+  transition: all var(--transition-base);
+}
+
+.video-hero-button.active {
+  color: var(--text-inverse);
+  background: var(--color-success);
+  border-color: var(--color-success);
+  box-shadow: var(--shadow-success);
+  cursor: pointer;
+  animation: buttonPulse 0.5s ease-out;
+}
+
+.video-hero-button.active:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-success-hover);
+}
+
+@keyframes buttonPulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.02);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* Empty state */
+.video-hero-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: var(--font-size-base);
+  background: linear-gradient(var(--bg-gradient-angle), var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   VIDEO INTRO CARD
+   ═══════════════════════════════════════════════════════════════════ */
+.video-intro {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-bottom: 20vh;
+  background: linear-gradient(var(--bg-gradient-angle), var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
+  z-index: 10;
+}
+
+.video-intro-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: var(--space-2xl);
+  max-width: 320px;
+}
+
+.video-intro-icon {
+  margin-bottom: var(--space-lg);
+  animation: videoIntroIconSlide 0.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.video-intro-icon .brand-icon {
+  width: var(--icon-size-lg);
+  height: var(--icon-size-lg);
+  color: var(--text-inverse);
+}
+
+.video-intro-title {
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--text-inverse);
+  margin: 0 0 var(--space-md) 0;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  opacity: 0;
+  animation: fadeIn 0.5s ease-out 0.6s forwards;
+}
+
+.video-intro-warning {
+  font-size: var(--font-size-base);
+  color: rgba(255, 255, 255, 0.85);
+  margin: 0 0 var(--space-xl) 0;
+  line-height: var(--line-height);
+  opacity: 0;
+  animation: fadeIn 0.5s ease-out 0.8s forwards;
+}
+
+.video-intro-pulse {
+  width: 60px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  position: relative;
+  opacity: 0;
+  animation: fadeIn 0.5s ease-out 1s forwards;
+}
+
+.video-intro-pulse::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 0%;
+  background: var(--text-inverse);
+  border-radius: var(--radius-full);
+  animation: introProgress 4s linear 1s forwards;
+}
+
+@keyframes introProgress {
+  from { width: 0%; }
+  to { width: 100%; }
+}
+
+@keyframes videoIntroIconSlide {
+  0% {
+    transform: translateY(calc(10vh + var(--space-2xl) + var(--space-lg) + var(--icon-size-lg) / 2));
+    opacity: 0;
+  }
+  40% {
+    transform: translateY(calc(10vh + var(--space-2xl) + var(--space-lg) + var(--icon-size-lg) / 2));
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   VIDEO CONTROLS
+   ═══════════════════════════════════════════════════════════════════ */
+.video-controls {
+  position: absolute;
+  bottom: var(--space-lg);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(8px);
+  border-radius: var(--radius-full);
+  margin-bottom: var(--space-sm);
+  will-change: transform, opacity;
+  transition: transform 0.3s ease-out, opacity 0.3s ease-out;
+}
+
+.video-control-btn {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-full);
+  color: var(--text-inverse);
+  cursor: pointer;
+  transition: all var(--transition-base);
+}
+
+.video-control-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.video-control-btn:active {
+  transform: scale(0.95);
+}
+
+.control-icon {
+  width: 24px;
+  height: 24px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   VIDEO FULLSCREEN MODE (CSS-based, no native controls)
+   ═══════════════════════════════════════════════════════════════════ */
+.video-hero.fullscreen {
+  background: #000;
+}
+
+.video-hero.fullscreen .video-hero-content {
+  background: #000;
+}
+
+.video-hero.fullscreen .video-hero-player {
+  padding: 0;
+}
+
+.video-hero.fullscreen .video-hero-video {
+  border-radius: 0;
+  object-fit: contain;
+  width: 100vw;
+  height: 100vh;
+}
+
+.video-hero.fullscreen .video-controls {
+  bottom: calc(var(--space-xl) + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%) translateY(200%);
+  pointer-events: none;
+}
+
+.video-hero.fullscreen.controls-visible .video-controls {
+  transform: translateX(-50%) translateY(0);
+  pointer-events: auto;
+}
+
+.video-hero.fullscreen .video-hero-footer {
+  display: none;
+}
+
+@media (orientation: portrait) {
+  .video-hero.fullscreen .video-controls {
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2), 0 0 20px rgba(255, 255, 255, 0.1);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   VIDEO LANDSCAPE MODE
+   ═══════════════════════════════════════════════════════════════════ */
+@media (orientation: landscape) {
+  .video-hero {
+    padding: 0;
+  }
+
+  .video-hero-player {
+    padding: 0;
+    height: 100%;
+  }
+
+  .video-hero-video {
+    border-radius: 0;
+    max-height: 100vh;
+    object-fit: contain;
+  }
+
+  .video-hero-footer {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: var(--space-sm) var(--space-lg);
+    padding-bottom: calc(var(--space-sm) + env(safe-area-inset-bottom, 0px));
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+  }
+
+  .video-controls {
+    bottom: calc(var(--space-3xl) + var(--space-lg) + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   VIDEO PROGRESS BUTTON (Circular with checkmark)
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Progress button in controls bar */
+.video-progress-btn {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-full);
+  cursor: not-allowed;
+  transition: all var(--transition-base);
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.video-progress-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.video-progress-btn.active {
+  cursor: pointer;
+}
+
+.video-progress-btn.active:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.video-progress-btn:active.active {
+  transform: scale(0.95);
+}
+
+/* SVG progress ring */
+.progress-ring {
+  width: 36px;
+  height: 36px;
+  transform: rotate(-90deg);
+}
+
+.progress-ring-bg {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.2);
+  stroke-width: 3;
+}
+
+.progress-ring-progress {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.5);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 100;
+  stroke-dashoffset: var(--offset, 100);
+  transform: rotate(-90deg);
+  transform-origin: center;
+  transition: stroke-dashoffset 0.25s linear;
+}
+
+.video-progress-btn.active .progress-ring-progress {
+  stroke: var(--color-success);
+}
+
+/* Checkmark icon */
+.progress-checkmark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 18px;
+  height: 18px;
+  color: rgba(255, 255, 255, 0.5);
+  transition: all var(--transition-base);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.progress-checkmark svg {
+  width: 18px;
+  height: 18px;
+}
+
+.video-progress-btn.active .progress-checkmark {
+  color: var(--color-success);
+  animation: checkPulse 0.5s ease-out;
+}
+
+@keyframes checkPulse {
+  0% { transform: translate(-50%, -50%) scale(1); }
+  50% { transform: translate(-50%, -50%) scale(1.2); }
+  100% { transform: translate(-50%, -50%) scale(1); }

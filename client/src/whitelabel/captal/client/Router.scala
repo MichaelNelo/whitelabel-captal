@@ -2,7 +2,7 @@ package whitelabel.captal.client
 
 import com.raquo.laminar.api.L.*
 import com.raquo.waypoint.*
-import whitelabel.captal.client.views.{IdentificationQuestionView, ReadyView, WelcomeView}
+import whitelabel.captal.client.views.{AdvertiserVideoView, IdentificationQuestionView, ReadyView, WelcomeView}
 import whitelabel.captal.core.application.Phase
 
 // Pages for the router
@@ -24,7 +24,7 @@ object Router:
 
   private val advertiserVideoRoute: Route[AdvertiserVideoPage.type, Unit] = Route.static(
     AdvertiserVideoPage,
-    root / "final" / endOfSegments)
+    root / "video" / endOfSegments)
 
   private val readyRoute: Route[ReadyPage.type, Unit] = Route.static(
     ReadyPage,
@@ -39,7 +39,7 @@ object Router:
           case IdentificationQuestionPage =>
             "Pregunta"
           case AdvertiserVideoPage =>
-            "Final"
+            "Video"
           case ReadyPage =>
             "Listo"
         },
@@ -49,7 +49,7 @@ object Router:
           case IdentificationQuestionPage =>
             "question"
           case AdvertiserVideoPage =>
-            "final"
+            "video"
           case ReadyPage =>
             "ready"
         },
@@ -58,7 +58,7 @@ object Router:
             WelcomePage
           case "question" =>
             IdentificationQuestionPage
-          case "final" =>
+          case "video" =>
             AdvertiserVideoPage
           case "ready" =>
             ReadyPage
@@ -83,6 +83,8 @@ object Router:
         IdentificationQuestionPage
       case Phase.AdvertiserVideo =>
         AdvertiserVideoPage
+      case Phase.AdvertiserVideoSurvey =>
+        AdvertiserVideoPage // Survey after video, redirect to video for now
       case Phase.AdvertiserQuestion =>
         AdvertiserVideoPage // For now, redirect to video
       case Phase.Ready =>
@@ -93,6 +95,6 @@ object Router:
     SplitRender[Page, HtmlElement](router.currentPageSignal)
       .collectStatic(WelcomePage)(WelcomeView.render)
       .collectStatic(IdentificationQuestionPage)(IdentificationQuestionView.render)
-      .collectStatic(AdvertiserVideoPage)(ReadyView.render) // TODO: Replace with actual video view
+      .collectStatic(AdvertiserVideoPage)(AdvertiserVideoView.render)
       .collectStatic(ReadyPage)(ReadyView.render)
 end Router
