@@ -5,7 +5,7 @@
   # env.GREET = "devenv";
 
   # https://devenv.sh/packages/
-  packages = [ pkgs.coursier pkgs.sqlite pkgs.ffmpeg ];
+  packages = [ pkgs.coursier pkgs.sqlite pkgs.ffmpeg pkgs.jq ];
 
   # https://devenv.sh/languages/
   languages.java.enable = true;
