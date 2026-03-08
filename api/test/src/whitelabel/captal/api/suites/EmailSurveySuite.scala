@@ -1,7 +1,7 @@
 package whitelabel.captal.api.suites
 
+import whitelabel.captal.api.TestFixtures
 import whitelabel.captal.api.TestHelpers.*
-import whitelabel.captal.api.{TestFixtures, TestHelpers}
 import whitelabel.captal.core.application.{IdentificationSurveyType, Phase}
 import whitelabel.captal.core.survey.question.*
 import whitelabel.captal.core.user

@@ -5,10 +5,10 @@ import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.infrastructure.SessionData
 import whitelabel.captal.core.survey.question.FullyQualifiedQuestionId
 import whitelabel.captal.core.{survey, user, video}
-import whitelabel.captal.infra.{DeviceRow, SessionRow}
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.given
+import whitelabel.captal.infra.{DeviceRow, SessionRow}
 import zio.*
 
 trait SessionService:

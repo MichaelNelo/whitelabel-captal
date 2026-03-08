@@ -1124,7 +1124,12 @@ body {
   padding-top: calc(var(--space-md) + env(safe-area-inset-top, 0px));
 }
 
-/* Video element */
+/* Video element wrapper + video */
+.video-hero-video-wrapper {
+  width: 100%;
+  height: 100%;
+}
+
 .video-hero-video {
   width: 100%;
   height: 100%;

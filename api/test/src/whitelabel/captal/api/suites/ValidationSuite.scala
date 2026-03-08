@@ -1,7 +1,7 @@
 package whitelabel.captal.api.suites
 
+import whitelabel.captal.api.TestFixtures
 import whitelabel.captal.api.TestHelpers.*
-import whitelabel.captal.api.{TestFixtures, TestHelpers}
 import zio.test.*
 
 object ValidationSuite:

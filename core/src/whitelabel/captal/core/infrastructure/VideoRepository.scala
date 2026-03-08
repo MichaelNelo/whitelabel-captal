@@ -1,8 +1,7 @@
 package whitelabel.captal.core.infrastructure
 
-import whitelabel.captal.core.user
-import whitelabel.captal.core.video
 import whitelabel.captal.core.video.VideoToWatch
+import whitelabel.captal.core.{user, video}
 
 trait VideoRepository[F[_]]:
   def findById(id: video.Id): F[Option[video.AdvertiserVideo]]

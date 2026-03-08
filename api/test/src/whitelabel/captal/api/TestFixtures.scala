@@ -4,7 +4,7 @@ import java.util.UUID
 
 import com.typesafe.config.ConfigFactory
 import fly4s.Fly4s
-import fly4s.data.{Fly4sConfig, Location}
+import fly4s.data.{Fly4sConfig, Location, MigrationVersion}
 import io.getquill.*
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.{survey, user, video}
@@ -17,12 +17,18 @@ import zio.interop.catz.*
 
 object TestFixtures:
   private val testConfig = ConfigFactory.load("test.conf")
-  private val fly4sConfig = Fly4sConfig.default.copy(locations = List(Location("db/migration")))
+  private val fly4sConfig = Fly4sConfig.default.copy(
+    locations = List(Location("db/migration")),
+    baselineOnMigrate = true,
+    baselineVersion = MigrationVersion("0"),
+    cleanOnValidationError = true)
 
   def migrate: ZIO[Any, Throwable, Unit] = ZIO
-    .attempt(testConfig.getString("database.dataSource.url"))
-    .flatMap: url =>
-      Fly4s.make[Task](url, config = fly4sConfig).use(_.migrate).unit
+    .attempt:
+      val url = testConfig.getString("database.jdbcUrl")
+      RqliteDataSource.create(url)
+    .flatMap: ds =>
+      Fly4s.makeFor[Task](ZIO.succeed(ds), config = fly4sConfig).use(_.migrate).unit
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Survey Fixtures
@@ -43,7 +49,7 @@ object TestFixtures:
 
   def seedLocationSurvey: ZIO[QuillSqlite, Throwable, SurveyFixture] = seedSurvey(
     "location",
-    "select",
+    "dropdown",
     "What is your state?",
     hierarchyLevel = Some("state"))
 

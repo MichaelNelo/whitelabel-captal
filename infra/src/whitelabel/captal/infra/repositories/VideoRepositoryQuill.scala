@@ -4,12 +4,12 @@ import io.getquill.*
 import whitelabel.captal.core.infrastructure.VideoRepository
 import whitelabel.captal.core.survey.AdvertiserId
 import whitelabel.captal.core.survey.question.LocalizedText
-import whitelabel.captal.core.{user, video}
 import whitelabel.captal.core.video.{AdvertiserVideo, VideoToWatch, VideoType}
+import whitelabel.captal.core.{user, video}
 import whitelabel.captal.infra.*
-import whitelabel.captal.infra.schema.{QuillSqlite, strGt}
-import whitelabel.captal.infra.schema.given
 import whitelabel.captal.infra.schema.core.given
+import whitelabel.captal.infra.schema.given
+import whitelabel.captal.infra.schema.{QuillSqlite, strGt}
 import whitelabel.captal.infra.session.SessionContext
 import zio.*
 
