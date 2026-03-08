@@ -4,7 +4,7 @@ import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import io.circe.{Decoder as CirceDecoder, Encoder as CirceEncoder}
 import sttp.tapir.Schema
-import whitelabel.captal.core.application.commands.NextIdentificationSurvey
+import whitelabel.captal.core.application.commands.{NextIdentificationSurvey, NextVideo}
 import whitelabel.captal.core.application.{IdentificationSurveyType, NextStep, Phase}
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.core.survey
@@ -72,8 +72,9 @@ object schemas:
   // AnswerValue
   given Schema[AnswerValue] = Schema.anyObject
 
-  // NextIdentificationSurvey and NextStep
+  // NextIdentificationSurvey, NextVideo and NextStep
   given Schema[NextIdentificationSurvey] = Schema.derived
+  given Schema[NextVideo] = Schema.derived
   given Schema[NextStep] = Schema.derived
   given Schema[SurveyResponse] = Schema.anyObject
 end schemas
@@ -92,6 +93,10 @@ object i18n:
   given CirceDecoder[I18n.Error] = deriveDecoder
   given CirceEncoder[I18n.Question] = deriveEncoder
   given CirceDecoder[I18n.Question] = deriveDecoder
+  given CirceEncoder[I18n.Ready] = deriveEncoder
+  given CirceDecoder[I18n.Ready] = deriveDecoder
+  given CirceEncoder[I18n.Video] = deriveEncoder
+  given CirceDecoder[I18n.Video] = deriveDecoder
   given CirceEncoder[I18n] = deriveEncoder
   given CirceDecoder[I18n] = deriveDecoder
 
@@ -99,8 +104,10 @@ object i18n:
   given Schema[I18n.Welcome.Steps] = Schema.derived
   given Schema[I18n.Welcome.Button] = Schema.derived
   given Schema[I18n.Welcome] = Schema.derived
+  given Schema[I18n.Ready] = Schema.derived
   given Schema[I18n.Loading] = Schema.derived
   given Schema[I18n.Error] = Schema.derived
   given Schema[I18n.Question] = Schema.derived
+  given Schema[I18n.Video] = Schema.derived
   given Schema[I18n] = Schema.derived
 end i18n

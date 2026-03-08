@@ -11,7 +11,7 @@ import whitelabel.captal.endpoints.AnswerRequest.given
 import whitelabel.captal.endpoints.StatusResponse.given
 import whitelabel.captal.endpoints.SurveyResponse.given
 import whitelabel.captal.endpoints.schemas.given
-import whitelabel.captal.endpoints.{AnswerRequest, ApiError, StatusResponse, SurveyResponse}
+import whitelabel.captal.endpoints.{AnswerRequest, ApiError, StatusResponse, SurveyEndpoints, SurveyResponse}
 import whitelabel.captal.infra.session.{SessionContext, SessionService}
 import zio.*
 
@@ -38,7 +38,9 @@ object SurveyRoutes:
     type Env = SessionContext & SessionService & AnswerEmailFlowType
 
     val route: ZServerEndpoint[Env, Any] = SessionEndpoint
-      .withPhase(Phase.IdentificationQuestion)
+      .secured(
+        onMissingSession = SessionEndpoint.OnMissing.Fail,
+        allowedPhases = Seq(Phase.IdentificationQuestion))
       .post
       .in("api" / "survey" / "email")
       .in(jsonBody[AnswerRequest])
@@ -47,11 +49,10 @@ object SurveyRoutes:
         request => handleAnswer(session, request, AnswerEmailCommand(request.answer, Instant.now)))
 
     private def handleAnswer(
-        session: SessionData,
+        @annotation.unused session: SessionData,
         @annotation.unused request: AnswerRequest,
         cmd: AnswerEmailCommand) =
       for
-        _          <- SessionContext.set(session)
         answerFlow <- ZIO.service[AnswerEmailFlowType]
         result     <- answerFlow
           .execute(cmd)
@@ -71,15 +72,16 @@ object SurveyRoutes:
     type Env = SessionContext & SessionService & AnswerProfilingFlowType
 
     val route: ZServerEndpoint[Env, Any] = SessionEndpoint
-      .withPhase(Phase.IdentificationQuestion)
+      .secured(
+        onMissingSession = SessionEndpoint.OnMissing.Fail,
+        allowedPhases = Seq(Phase.IdentificationQuestion))
       .post
       .in("api" / "survey" / "profiling")
       .in(jsonBody[AnswerRequest])
       .out(jsonBody[SurveyResponse])
-      .serverLogic: session =>
+      .serverLogic: _ =>
         request =>
           for
-            _          <- SessionContext.set(session)
             answerFlow <- ZIO.service[AnswerProfilingFlowType]
             cmd = AnswerProfilingCommand(answer = request.answer, occurredAt = Instant.now)
             result <- answerFlow
@@ -100,15 +102,16 @@ object SurveyRoutes:
     type Env = SessionContext & SessionService & AnswerLocationFlowType
 
     val route: ZServerEndpoint[Env, Any] = SessionEndpoint
-      .withPhase(Phase.IdentificationQuestion)
+      .secured(
+        onMissingSession = SessionEndpoint.OnMissing.Fail,
+        allowedPhases = Seq(Phase.IdentificationQuestion))
       .post
       .in("api" / "survey" / "location")
       .in(jsonBody[AnswerRequest])
       .out(jsonBody[SurveyResponse])
-      .serverLogic: session =>
+      .serverLogic: _ =>
         request =>
           for
-            _          <- SessionContext.set(session)
             answerFlow <- ZIO.service[AnswerLocationFlowType]
             cmd = AnswerLocationCommand(answer = request.answer, occurredAt = Instant.now)
             result <- answerFlow
@@ -129,14 +132,15 @@ object SurveyRoutes:
     type Env = SessionContext & SessionService & NextSurveyFlowType
 
     val route: ZServerEndpoint[Env, Any] = SessionEndpoint
-      .withPhase(Phase.Welcome, Phase.IdentificationQuestion)
+      .secured(
+        onMissingSession = SessionEndpoint.OnMissing.Fail,
+        allowedPhases = Seq(Phase.Welcome, Phase.IdentificationQuestion))
       .get
       .in("api" / "survey" / "next")
       .out(jsonBody[SurveyResponse])
       .serverLogic: session =>
         _ =>
           for
-            _ <- SessionContext.set(session)
             // Transition from Welcome to IdentificationQuestion when user requests next survey
             _ <-
               if session.phase == Phase.Welcome then
@@ -164,13 +168,33 @@ object SurveyRoutes:
   object Status:
     type Env = SessionContext & SessionService
 
-    val route: ZServerEndpoint[Env, Any] = SessionEndpoint
-      .secured
+    import sttp.model.headers.CookieValueWithMeta
+    import sttp.tapir.{header, setCookieOpt}
+
+    private val defaultLocale = "es"
+    private val defaultUserAgent = "unknown"
+
+    // Custom endpoint that extracts User-Agent before session resolution
+    val route: ZServerEndpoint[Env, Any] = endpoint
+      .securityIn(SurveyEndpoints.sessionCookie)
+      .securityIn(header[Option[String]]("User-Agent"))
+      .errorOut(jsonBody[ApiError])
+      .zServerSecurityLogic: (cookie, userAgentOpt) =>
+        val userAgent = userAgentOpt.getOrElse(defaultUserAgent)
+        for
+          session <- SessionEndpoint.resolveSession(
+            cookie,
+            SessionEndpoint.OnMissing.Create(userAgent, defaultLocale))
+          _ <- SessionContext.set(session)
+        yield session
       .get
       .in("api" / "status")
-      .out(jsonBody[StatusResponse])
+      .out(setCookieOpt(SurveyEndpoints.sessionCookieName).and(jsonBody[StatusResponse]))
       .serverLogic: session =>
-        _ => SessionContext.set(session).as(StatusResponse(session.phase, session.locale))
+        _ =>
+          ZIO.succeed(
+            Some(CookieValueWithMeta.unsafeApply(session.sessionId.asString, path = Some("/"))),
+            StatusResponse(session.phase, session.locale))
 
   type FullEnv =
     SessionContext & SessionService & AnswerEmailFlowType & AnswerProfilingFlowType &

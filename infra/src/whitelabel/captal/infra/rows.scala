@@ -1,7 +1,7 @@
 package whitelabel.captal.infra
 
 import whitelabel.captal.core.application.Phase
-import whitelabel.captal.core.{survey, user}
+import whitelabel.captal.core.{survey, user, video}
 
 final case class UserRow(
     id: user.Id,
@@ -18,6 +18,8 @@ final case class SessionRow(
     phase: Phase,
     currentSurveyId: Option[survey.Id],
     currentQuestionId: Option[survey.question.Id],
+    currentVideoId: Option[video.Id],
+    lastPromoVideoId: Option[video.Id],
     createdAt: String)
 
 final case class SurveyRow(
@@ -80,3 +82,47 @@ final case class LocalizedTextRow(
     category: String,
     createdAt: String,
     updatedAt: String)
+
+final case class AdvertiserRow(
+    id: String,
+    name: String,
+    priority: Int,
+    isActive: Int,
+    createdAt: String,
+    updatedAt: String)
+
+final case class AdvertiserVideoRow(
+    id: video.Id,
+    advertiserId: Option[String],
+    videoType: String,
+    videoUrl: String,
+    durationSeconds: Int,
+    minWatchSeconds: Int,
+    showCountdown: Int,
+    noRepeatSeconds: Option[Int],
+    isActive: Int,
+    priority: Int,
+    createdAt: String,
+    updatedAt: String)
+
+final case class VideoViewRow(
+    id: String,
+    sessionId: user.SessionId,
+    userId: Option[user.Id],
+    videoId: video.Id,
+    durationWatchedSeconds: Int,
+    completed: Int,
+    viewedAt: String,
+    createdAt: String)
+
+final case class DeviceRow(
+    id: user.DeviceId,
+    userAgent: String,
+    createdAt: String,
+    updatedAt: String)
+
+final case class DeviceUserRow(
+    deviceId: user.DeviceId,
+    userId: user.Id,
+    firstSeenAt: String,
+    lastSeenAt: String)

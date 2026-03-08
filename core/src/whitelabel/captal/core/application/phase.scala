@@ -6,6 +6,7 @@ enum Phase:
   case Welcome
   case IdentificationQuestion
   case AdvertiserVideo
+  case AdvertiserVideoSurvey
   case AdvertiserQuestion
   case Ready
 
@@ -18,6 +19,8 @@ object Phase:
         "identification_question"
       case AdvertiserVideo =>
         "advertiser_video"
+      case AdvertiserVideoSurvey =>
+        "advertiser_video_survey"
       case AdvertiserQuestion =>
         "advertiser_question"
       case Ready =>
@@ -31,6 +34,8 @@ object Phase:
         IdentificationQuestion
       case "advertiser_video" =>
         AdvertiserVideo
+      case "advertiser_video_survey" =>
+        AdvertiserVideoSurvey
       case "advertiser_question" =>
         AdvertiserQuestion
       case "ready" =>
