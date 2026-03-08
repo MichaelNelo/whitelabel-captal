@@ -91,6 +91,7 @@ object infra extends BaseModule:
   def seed() = Task.Command:
     runMain("whitelabel.captal.infra.Seed")()
 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // API: JVM only (server implementation)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -122,6 +123,51 @@ object api extends BaseModule:
       mvn"dev.zio::zio-test-sbt:2.1.14",
       mvn"com.softwaremill.sttp.tapir::tapir-sttp-stub-server:1.11.11")
     def testFramework = "zio.test.sbt.ZTestFramework"
+
+    private val rqliteTestPort = 4011
+    private val rqliteContainerName = "rqlite-test"
+
+    /** Ensure rqlite test container is running. Returns the JDBC URL. */
+    def rqliteSetup: T[String] = Task:
+      val running = os
+        .proc("docker", "ps", "-q", "-f", s"name=$rqliteContainerName")
+        .call()
+        .out
+        .trim()
+      if running.isEmpty then
+        os.proc("docker", "rm", "-f", rqliteContainerName).call(check = false)
+        os.proc(
+          "docker",
+          "run",
+          "-d",
+          "--name",
+          rqliteContainerName,
+          "-p",
+          s"$rqliteTestPort:4001",
+          "-e",
+          "SQLITE_EXTENSIONS=sqlean",
+          "rqlite/rqlite:8.36.2"
+        ).call()
+        var ready = false
+        var attempts = 0
+        while !ready && attempts < 30 do
+          Thread.sleep(500)
+          ready = scala.util
+            .Try(
+              os.proc("curl", "-sf", s"http://localhost:$rqliteTestPort/readyz").call())
+            .isSuccess
+          attempts += 1
+        if !ready then sys.error("rqlite test container failed to start")
+      println(s"rqlite test instance ready on port $rqliteTestPort")
+      s"jdbc:rqlite:http://localhost:$rqliteTestPort"
+
+    override def forkEnv: T[Map[String, String]] = Task:
+      val url = rqliteSetup()
+      super.forkEnv() ++ Map("TEST_DB_URL" -> url)
+
+    def stopRqlite() = Task.Command:
+      os.proc("docker", "rm", "-f", rqliteContainerName).call(check = false)
+      println("rqlite test container stopped")
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Client: JS only (Laminar app)
