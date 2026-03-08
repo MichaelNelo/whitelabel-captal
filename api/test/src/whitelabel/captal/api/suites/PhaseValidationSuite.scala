@@ -18,8 +18,8 @@ object PhaseValidationSuite:
           for
             _          <- TestFixtures.seedEmailSurvey
             backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            statusResp <- getStatus(backend, None)
+            cookie = extractSessionCookie(statusResp).get
             // Session starts in Welcome phase
             response <- postEmailAnswer(backend, cookie, "test@example.com")
           yield assertTrue(
@@ -32,8 +32,8 @@ object PhaseValidationSuite:
           for
             _          <- TestFixtures.seedEmailSurvey
             backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            statusResp <- getStatus(backend, None)
+            cookie = extractSessionCookie(statusResp).get
             _ <- TestFixtures.updateSessionPhase(
               user.SessionId.unsafe(cookie),
               Phase.AdvertiserVideo)
@@ -47,8 +47,8 @@ object PhaseValidationSuite:
           for
             _          <- TestFixtures.seedEmailSurvey
             backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            statusResp <- getStatus(backend, None)
+            cookie = extractSessionCookie(statusResp).get
             _        <- TestFixtures.updateSessionPhase(user.SessionId.unsafe(cookie), Phase.Ready)
             response <- postEmailAnswer(backend, cookie, "test@example.com")
           yield assertTrue(
@@ -60,8 +60,8 @@ object PhaseValidationSuite:
           for
             _          <- TestFixtures.seedEmailSurvey
             backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            statusResp <- getStatus(backend, None)
+            cookie = extractSessionCookie(statusResp).get
             _ <- TestFixtures.updateSessionPhase(
               user.SessionId.unsafe(cookie),
               Phase.IdentificationQuestion)
@@ -76,8 +76,8 @@ object PhaseValidationSuite:
             fixture <- TestFixtures.seedProfilingSurvey
             options <- TestFixtures.addQuestionOptions(fixture.questionId, List("18-25", "26-35"))
             backend <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            statusResp <- getStatus(backend, None)
+            cookie = extractSessionCookie(statusResp).get
             // Session starts in Welcome phase
             response <- postProfilingAnswer(backend, cookie, options.head.asString)
           yield assertTrue(response.code.code == 400, response.body.contains("wrong_phase"))
@@ -87,8 +87,8 @@ object PhaseValidationSuite:
             fixture <- TestFixtures.seedProfilingSurvey
             options <- TestFixtures.addQuestionOptions(fixture.questionId, List("18-25", "26-35"))
             backend <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            statusResp <- getStatus(backend, None)
+            cookie = extractSessionCookie(statusResp).get
             _ <- TestFixtures.updateSessionPhase(
               user.SessionId.unsafe(cookie),
               Phase.AdvertiserVideo)
@@ -101,8 +101,8 @@ object PhaseValidationSuite:
             options <- TestFixtures.addQuestionOptions(fixture.questionId, List("18-25", "26-35"))
             userFixture <- TestFixtures.createUser("profiling-test@example.com")
             backend     <- testBackend
-            localeResp  <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            statusResp  <- getStatus(backend, None)
+            cookie = extractSessionCookie(statusResp).get
             _ <- TestFixtures.updateSessionPhase(
               user.SessionId.unsafe(cookie),
               Phase.IdentificationQuestion)
@@ -117,8 +117,8 @@ object PhaseValidationSuite:
           for
             _          <- TestFixtures.seedEmailSurvey
             backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            statusResp <- getStatus(backend, None)
+            cookie = extractSessionCookie(statusResp).get
             // Session starts in Welcome phase
             response <- getNextSurvey(backend, cookie)
           yield assertTrue(response.code.isSuccess)
@@ -127,8 +127,8 @@ object PhaseValidationSuite:
           for
             _          <- TestFixtures.seedEmailSurvey
             backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            statusResp <- getStatus(backend, None)
+            cookie = extractSessionCookie(statusResp).get
             _ <- TestFixtures.updateSessionPhase(
               user.SessionId.unsafe(cookie),
               Phase.IdentificationQuestion)
@@ -139,8 +139,8 @@ object PhaseValidationSuite:
           for
             _          <- TestFixtures.seedEmailSurvey
             backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            statusResp <- getStatus(backend, None)
+            cookie = extractSessionCookie(statusResp).get
             _ <- TestFixtures.updateSessionPhase(
               user.SessionId.unsafe(cookie),
               Phase.AdvertiserVideo)
@@ -154,8 +154,8 @@ object PhaseValidationSuite:
           for
             _          <- TestFixtures.seedEmailSurvey
             backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            statusResp <- getStatus(backend, None)
+            cookie = extractSessionCookie(statusResp).get
             _        <- TestFixtures.updateSessionPhase(user.SessionId.unsafe(cookie), Phase.Ready)
             response <- getNextSurvey(backend, cookie)
           yield assertTrue(
@@ -169,16 +169,16 @@ object PhaseValidationSuite:
         test("status endpoint accepts Welcome phase"):
           for
             backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            statusResp <- getStatus(backend, None)
+            cookie = extractSessionCookie(statusResp).get
             response <- getStatus(backend, Some(cookie))
           yield assertTrue(response.code.isSuccess, response.body.contains("welcome"))
         ,
         test("status endpoint accepts IdentificationQuestion phase"):
           for
             backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            statusResp <- getStatus(backend, None)
+            cookie = extractSessionCookie(statusResp).get
             _ <- TestFixtures.updateSessionPhase(
               user.SessionId.unsafe(cookie),
               Phase.IdentificationQuestion)
@@ -190,8 +190,8 @@ object PhaseValidationSuite:
         test("status endpoint accepts AdvertiserVideo phase"):
           for
             backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            statusResp <- getStatus(backend, None)
+            cookie = extractSessionCookie(statusResp).get
             _ <- TestFixtures.updateSessionPhase(
               user.SessionId.unsafe(cookie),
               Phase.AdvertiserVideo)
@@ -201,8 +201,8 @@ object PhaseValidationSuite:
         test("status endpoint accepts Ready phase"):
           for
             backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            statusResp <- getStatus(backend, None)
+            cookie = extractSessionCookie(statusResp).get
             _        <- TestFixtures.updateSessionPhase(user.SessionId.unsafe(cookie), Phase.Ready)
             response <- getStatus(backend, Some(cookie))
           yield assertTrue(response.code.isSuccess, response.body.contains("ready"))

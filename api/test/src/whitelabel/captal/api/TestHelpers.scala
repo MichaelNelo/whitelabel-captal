@@ -7,8 +7,12 @@ import sttp.monad.MonadError
 import sttp.tapir.server.ServerEndpoint
 import sttp.tapir.server.stub.TapirStubInterpreter
 import sttp.tapir.ztapir.ZServerEndpoint
-import whitelabel.captal.core.application.commands.NextIdentificationSurvey
+import whitelabel.captal.core.application.commands.{NextIdentificationSurvey, NextVideo}
 import whitelabel.captal.core.application.commands.NextIdentificationSurvey.given
+import whitelabel.captal.core.application.commands.NextVideo.given
+import whitelabel.captal.endpoints.{VideoResponse, VideoWatchedResponse}
+import whitelabel.captal.endpoints.VideoResponse.given
+import whitelabel.captal.endpoints.VideoWatchedResponse.given
 import zio.*
 
 object TestHelpers:
@@ -46,8 +50,9 @@ object TestHelpers:
     .map: env =>
       val surveyEndpoints = SurveyRoutes.routes.map(e => provideEnvToEndpoint(e, env))
       val localeEndpoints = LocaleRoutes.routes.map(e => provideEnvToEndpoint(e, env))
+      val videoEndpoints = VideoRoutes.routes.map(e => provideEnvToEndpoint(e, env))
       TapirStubInterpreter(SttpBackendStub[Task, Any](taskMonadError))
-        .whenServerEndpointsRunLogic(surveyEndpoints ++ localeEndpoints)
+        .whenServerEndpointsRunLogic(surveyEndpoints ++ localeEndpoints ++ videoEndpoints)
         .backend()
 
   def extractSessionCookie(response: Response[String]): Option[String] = response
@@ -66,6 +71,10 @@ object TestHelpers:
     val request = basicRequest.get(uri"http://test/api/status").response(asStringAlways)
     val withCookie = sessionCookie.fold(request)(c => request.cookie("session_id", c))
     withCookie.send(backend)
+
+  /** Create a new session via /api/status and return the session cookie */
+  def createSession(backend: SttpBackend[Task, Any]): Task[String] =
+    getStatus(backend, None).map(r => extractSessionCookie(r).get)
 
   def getLocales(backend: SttpBackend[Task, Any]) = basicRequest
     .get(uri"http://test/api/locales")
@@ -112,4 +121,36 @@ object TestHelpers:
     .contentType("application/json")
     .response(asStringAlways)
     .send(backend)
+
+  // Video helpers
+  def getNextVideo(backend: SttpBackend[Task, Any], sessionCookie: String) = basicRequest
+    .get(uri"http://test/api/video/next")
+    .cookie("session_id", sessionCookie)
+    .response(asStringAlways)
+    .send(backend)
+
+  def parseNextVideo(body: String): Option[NextVideo] =
+    decode[VideoResponse](body).toOption.flatMap:
+      case VideoResponse.Video(data) => Some(data)
+      case VideoResponse.Step(_)     => None
+
+  def parseVideoStep(body: String): Boolean =
+    decode[VideoResponse](body).toOption.exists:
+      case VideoResponse.Step(_) => true
+      case _                     => false
+
+  def postMarkVideoWatched(
+      backend: SttpBackend[Task, Any],
+      sessionCookie: String,
+      durationWatched: Int,
+      completed: Boolean) = basicRequest
+    .post(uri"http://test/api/video/watched")
+    .cookie("session_id", sessionCookie)
+    .body(s"""{"durationWatched":$durationWatched,"completed":$completed}""")
+    .contentType("application/json")
+    .response(asStringAlways)
+    .send(backend)
+
+  def parseVideoWatchedResponse(body: String): Option[VideoWatchedResponse] =
+    decode[VideoWatchedResponse](body).toOption
 end TestHelpers

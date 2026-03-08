@@ -11,10 +11,9 @@ object ValidationSuite:
       .suite("Validation Rules")(
         test("empty email is rejected as required field"):
           for
-            _          <- TestFixtures.seedEmailSurvey
-            backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            _         <- TestFixtures.seedEmailSurvey
+            backend   <- testBackend
+            cookie    <- createSession(backend)
             _         <- getNextSurvey(backend, cookie)
             emailResp <- postEmailAnswer(backend, cookie, "")
           yield assertTrue(!emailResp.code.isSuccess || emailResp.body.contains("error")))

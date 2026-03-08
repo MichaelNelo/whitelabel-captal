@@ -22,66 +22,79 @@ object LocaleSessionSuite:
             response.body.contains("en"),
             response.body.contains("pt"))
         ,
-        test("GET /api/status without session returns error"):
+        test("GET /api/status without session creates new session"):
+          for
+            countBefore <- TestFixtures.countSessions
+            backend     <- testBackend
+            response    <- getStatus(backend, None)
+            countAfter  <- TestFixtures.countSessions
+            cookie = extractSessionCookie(response)
+          yield assertTrue(
+            response.code.isSuccess,
+            response.body.contains("welcome"),
+            response.body.contains("es"), // default locale
+            cookie.isDefined,
+            countAfter == countBefore + 1)
+        ,
+        test("PUT /api/session/locale without session returns error"):
           for
             backend  <- testBackend
-            response <- getStatus(backend, None)
+            response <- putSetLocale(backend, "es")
           yield assertTrue(
             !response.code.isSuccess,
             response.body.contains("session_missing") || response.body.contains("error"))
         ,
-        test("PUT /api/session/locale creates session if none exists"):
-          for
-            countBefore <- TestFixtures.countSessions
-            backend     <- testBackend
-            response    <- putSetLocale(backend, "es")
-            countAfter  <- TestFixtures.countSessions
-            cookie = extractSessionCookie(response)
-          yield assertTrue(response.code.isSuccess, cookie.isDefined, countAfter == countBefore + 1)
-        ,
-        test("PUT /api/session/locale preserves existing session"):
+        test("PUT /api/session/locale with existing session updates locale"):
           for
             backend       <- testBackend
-            firstResponse <- putSetLocale(backend, "es")
-            firstCookie = extractSessionCookie(firstResponse).get
-            countBefore    <- TestFixtures.countSessions
-            secondResponse <- putSetLocale(backend, "en", Some(firstCookie))
-            secondCookie = extractSessionCookie(secondResponse).get
-            countAfter <- TestFixtures.countSessions
+            // First call status to create session
+            statusResp    <- getStatus(backend, None)
+            cookie = extractSessionCookie(statusResp).get
+            countBefore   <- TestFixtures.countSessions
+            // Then update locale
+            localeResp    <- putSetLocale(backend, "en", Some(cookie))
+            updatedCookie = extractSessionCookie(localeResp).get
+            countAfter    <- TestFixtures.countSessions
           yield assertTrue(
-            firstResponse.code.isSuccess,
-            secondResponse.code.isSuccess,
-            firstCookie == secondCookie,
-            countAfter == countBefore)
+            statusResp.code.isSuccess,
+            localeResp.code.isSuccess,
+            cookie == updatedCookie,
+            localeResp.body.contains("en"),
+            countAfter == countBefore) // No new session created
         ,
-        test("setLocale creates session, then status uses same session"):
+        test("status creates session, setLocale updates same session"):
           for
             backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            localeCookie = extractSessionCookie(localeResp).get
-            statusResp <- getStatus(backend, Some(localeCookie))
+            statusResp <- getStatus(backend, None)
+            cookie = extractSessionCookie(statusResp).get
+            localeResp <- putSetLocale(backend, "en", Some(cookie))
+            finalStatusResp <- getStatus(backend, Some(cookie))
           yield assertTrue(
-            localeResp.code.isSuccess,
             statusResp.code.isSuccess,
-            statusResp.body.contains("es"),
-            statusResp.body.contains("welcome"))
+            localeResp.code.isSuccess,
+            finalStatusResp.code.isSuccess,
+            finalStatusResp.body.contains("en"),
+            finalStatusResp.body.contains("welcome"))
         ,
         test("setLocale with existing session updates locale but preserves session state"):
           for
             backend    <- testBackend
-            createResp <- putSetLocale(backend, "en")
-            cookie    = extractSessionCookie(createResp).get
-            sessionId = user.SessionId.unsafe(cookie)
+            // Create session via status
+            statusResp <- getStatus(backend, None)
+            cookie     = extractSessionCookie(statusResp).get
+            sessionId  = user.SessionId.unsafe(cookie)
+            // Update phase directly
             _          <- TestFixtures.updateSessionPhase(sessionId, Phase.AdvertiserVideo)
-            updateResp <- putSetLocale(backend, "es", Some(cookie))
+            // Update locale
+            updateResp <- putSetLocale(backend, "pt", Some(cookie))
             updatedCookie = extractSessionCookie(updateResp).get
-            statusResp <- getStatus(backend, Some(updatedCookie))
+            finalResp  <- getStatus(backend, Some(updatedCookie))
           yield assertTrue(
-            createResp.code.isSuccess,
+            statusResp.code.isSuccess,
             updateResp.code.isSuccess,
             cookie == updatedCookie,
-            statusResp.body.contains("es"),
-            statusResp.body.contains("advertiser_video")
+            finalResp.body.contains("pt"),
+            finalResp.body.contains("advertiser_video")
           )
       )
 end LocaleSessionSuite

@@ -14,10 +14,9 @@ object EmailSurveySuite:
       .suite("Email Survey")(
         test("anonymous user is offered email survey with correct QuestionToAnswer"):
           for
-            seeded     <- TestFixtures.seedEmailSurvey
-            backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            seeded   <- TestFixtures.seedEmailSurvey
+            backend  <- testBackend
+            cookie   <- createSession(backend)
             nextResp <- getNextSurvey(backend, cookie)
             parsed = parseNextSurvey(nextResp.body)
           yield assertTrue(
@@ -38,10 +37,9 @@ object EmailSurveySuite:
         test("valid email answer creates user and transitions to advertiser video phase"):
           val testEmail = user.Email.unsafeFrom("user@example.com")
           for
-            _          <- TestFixtures.seedEmailSurvey
-            backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            _         <- TestFixtures.seedEmailSurvey
+            backend   <- testBackend
+            cookie    <- createSession(backend)
             _         <- getNextSurvey(backend, cookie)
             emailResp <- postEmailAnswer(backend, cookie, "user@example.com")
             dbState   <- TestFixtures.queryDbState
@@ -55,10 +53,9 @@ object EmailSurveySuite:
         ,
         test("invalid email format is rejected with validation error"):
           for
-            _          <- TestFixtures.seedEmailSurvey
-            backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            _         <- TestFixtures.seedEmailSurvey
+            backend   <- testBackend
+            cookie    <- createSession(backend)
             _         <- getNextSurvey(backend, cookie)
             emailResp <- postEmailAnswer(backend, cookie, "not-an-email")
           yield assertTrue(
