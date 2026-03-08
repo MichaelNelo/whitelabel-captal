@@ -82,6 +82,7 @@ object infra extends BaseModule:
     mvn"com.github.geirolz::fly4s:1.0.8",
     mvn"dev.zio::zio-interop-cats:23.1.0.3",
     mvn"org.xerial:sqlite-jdbc:3.45.1.0",
+    mvn"io.rqlite:rqlite-jdbc:9.1.2.1",
     mvn"ch.qos.logback:logback-classic:1.5.6")
 
   def migrate() = Task.Command:
@@ -101,13 +102,17 @@ object api extends BaseModule:
     mvn"com.softwaremill.sttp.tapir::tapir-json-circe:1.11.11",
     mvn"dev.zio::zio-interop-cats:23.1.0.3")
 
-  // Compile client before running server (for dev workflow)
-  override def run(args: Task[Args] = Task.Anon(Args())) = Task.Command:
-    // Copy index.dev.html to index.html for local development
-    val indexHtml = os.pwd / "client" / "index.html"
-    val indexDevHtml = os.pwd / "client" / "index.dev.html"
+  // Copy index.dev.html to index.html for local development
+  def copyIndex() = Task.Command:
+    val root = moduleDir / os.up
+    val indexHtml = root / "client" / "index.html"
+    val indexDevHtml = root / "client" / "index.dev.html"
     if os.exists(indexHtml) then os.remove(indexHtml)
     os.copy(indexDevHtml, indexHtml)
+
+  // Compile client before running server (for dev workflow)
+  override def run(args: Task[Args] = Task.Anon(Args())) = Task.Command:
+    copyIndex()()
     client.fastLinkJS()
     super.run(args)()
 

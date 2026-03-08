@@ -35,7 +35,7 @@ CREATE INDEX idx_surveys_advertiser ON surveys(advertiser_id);
 CREATE TABLE questions (
     id TEXT PRIMARY KEY,
     survey_id TEXT NOT NULL REFERENCES surveys(id),
-    question_type TEXT NOT NULL CHECK (question_type IN ('radio', 'checkbox', 'select', 'input', 'rating', 'numeric', 'date')),
+    question_type TEXT NOT NULL CHECK (question_type IN ('radio', 'checkbox', 'dropdown', 'input', 'rating', 'numeric', 'date')),
     points_awarded INTEGER NOT NULL,
     display_order INTEGER NOT NULL,
     hierarchy_level TEXT CHECK (hierarchy_level IS NULL OR hierarchy_level IN ('state', 'city', 'municipality', 'urbanization')),
