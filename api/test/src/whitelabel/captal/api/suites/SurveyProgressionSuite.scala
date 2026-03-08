@@ -25,9 +25,8 @@ object SurveyProgressionSuite:
               previousSessionId,
               surveys.email.questionId,
               "completed@example.com")
-            backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            backend <- testBackend
+            cookie  <- createSession(backend)
             _ <- TestFixtures.linkSessionToUser(user.SessionId.unsafe(cookie), testUser.userId)
             nextResp <- getNextSurvey(backend, cookie)
             parsed = parseNextSurvey(nextResp.body)
@@ -55,9 +54,8 @@ object SurveyProgressionSuite:
               previousSessionId,
               surveys.profiling.questionId,
               "some-answer")
-            backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            backend <- testBackend
+            cookie  <- createSession(backend)
             _ <- TestFixtures.linkSessionToUser(user.SessionId.unsafe(cookie), testUser.userId)
             nextResp <- getNextSurvey(backend, cookie)
             parsed = parseNextSurvey(nextResp.body)
@@ -90,9 +88,8 @@ object SurveyProgressionSuite:
               previousSessionId,
               surveys.location.questionId,
               "some-state")
-            backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie = extractSessionCookie(localeResp).get
+            backend <- testBackend
+            cookie  <- createSession(backend)
             _ <- TestFixtures.linkSessionToUser(user.SessionId.unsafe(cookie), testUser.userId)
             nextResp <- getNextSurvey(backend, cookie)
           yield assertTrue(
@@ -119,9 +116,8 @@ object SurveyProgressionSuite:
               previousSessionId,
               surveys.location.questionId,
               "some-state")
-            backend    <- testBackend
-            localeResp <- putSetLocale(backend, "es")
-            cookie    = extractSessionCookie(localeResp).get
+            backend   <- testBackend
+            cookie    <- createSession(backend)
             sessionId = user.SessionId.unsafe(cookie)
             _           <- TestFixtures.linkSessionToUser(sessionId, testUser.userId)
             _           <- TestFixtures.updateSessionPhase(sessionId, Phase.AdvertiserVideo)
