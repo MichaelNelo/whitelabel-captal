@@ -17,6 +17,7 @@ import whitelabel.captal.infra.eventhandlers.{
   TransactionalEventHandler,
   UserPersistenceHandler
 }
+import whitelabel.captal.infra.RqliteDataSource
 import whitelabel.captal.infra.repositories.{SurveyRepositoryQuill, UserRepositoryQuill, VideoRepositoryQuill}
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.services.LocaleService
@@ -156,7 +157,7 @@ object Main extends ZIOAppDefault:
 
   private val quillLayer = Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)
 
-  private val dataSourceLayer = Quill.DataSource.fromPrefix("database")
+  private val dataSourceLayer = RqliteDataSource.layer
 
   private val sessionServiceLayer = SessionService.layer
 

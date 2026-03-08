@@ -48,6 +48,17 @@ object Seed extends ZIOAppDefault:
     ("question.numericOutOfRange", "es", "frontend", "El valor debe estar entre {min} y {max}"),
     ("question.dateOutOfRange", "es", "frontend", "La fecha debe estar entre {min} y {max}"),
     ("question.invalidAnswer", "es", "frontend", "Respuesta no válida"),
+    ("ready.title", "es", "frontend", "¡Gracias!"),
+    ("ready.subtitle", "es", "frontend", "Ya puedes navegar"),
+    ("ready.resetButton", "es", "frontend", "Reiniciar (Dev)"),
+    // Video - Spanish
+    ("video.pageTitle", "es", "frontend", "Mira este video"),
+    ("video.continueIn", "es", "frontend", "Continuar en {seconds}s"),
+    ("video.watchComplete", "es", "frontend", "¡Video completado!"),
+    ("video.markWatched", "es", "frontend", "Marcar como visto"),
+    ("video.loading", "es", "frontend", "Cargando video..."),
+    ("video.noVideoAvailable", "es", "frontend", "No hay videos disponibles"),
+    ("video.payAttention", "es", "frontend", "Presta atención al video"),
     // English translations
     ("welcome.title", "en", "frontend", "Welcome to Captal"),
     ("welcome.subtitle", "en", "frontend", "Earn money by answering surveys and watching ads"),
@@ -75,7 +86,18 @@ object Seed extends ZIOAppDefault:
     ("question.ratingOutOfRange", "en", "frontend", "Rating must be between {min} and {max}"),
     ("question.numericOutOfRange", "en", "frontend", "Value must be between {min} and {max}"),
     ("question.dateOutOfRange", "en", "frontend", "Date must be between {min} and {max}"),
-    ("question.invalidAnswer", "en", "frontend", "Invalid answer")
+    ("question.invalidAnswer", "en", "frontend", "Invalid answer"),
+    ("ready.title", "en", "frontend", "Thank you!"),
+    ("ready.subtitle", "en", "frontend", "You can now browse"),
+    ("ready.resetButton", "en", "frontend", "Reset (Dev)"),
+    // Video - English
+    ("video.pageTitle", "en", "frontend", "Watch this video"),
+    ("video.continueIn", "en", "frontend", "Continue in {seconds}s"),
+    ("video.watchComplete", "en", "frontend", "Video complete!"),
+    ("video.markWatched", "en", "frontend", "Mark as watched"),
+    ("video.loading", "en", "frontend", "Loading video..."),
+    ("video.noVideoAvailable", "en", "frontend", "No videos available"),
+    ("video.payAttention", "en", "frontend", "Pay attention to the video")
   )
 
   private def seedTranslations: ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]:
@@ -430,6 +452,188 @@ object Seed extends ZIOAppDefault:
       ZIO.foreach(allRules)(r => qrun(query[QuestionRuleRow].insertValue(lift(r)))) *>
       ZIO.foreach(allTexts)(t => qrun(query[LocalizedTextRow].insertValue(lift(t)))).unit
 
+  // Google Sample Videos - public CDN URLs for testing
+  private object SampleVideos:
+    val base = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample"
+    val forBiggerBlazes = s"$base/ForBiggerBlazes.mp4"
+    val forBiggerEscapes = s"$base/ForBiggerEscapes.mp4"
+    val forBiggerFun = s"$base/ForBiggerFun.mp4"
+    val forBiggerJoyrides = s"$base/ForBiggerJoyrides.mp4"
+    val forBiggerMeltdowns = s"$base/ForBiggerMeltdowns.mp4"
+    val bigBuckBunny = s"$base/BigBuckBunny.mp4"
+
+  private def seedVideoData: ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
+      import quill.{run as qrun, *}
+      import whitelabel.captal.core.video
+      val now = java.time.Instant.now.toString
+
+      // Create advertisers
+      val advertiser1Id = UUID.randomUUID.toString
+      val advertiser1 = AdvertiserRow(
+        id = advertiser1Id,
+        name = "Chromecast",
+        priority = 10,
+        isActive = 1,
+        createdAt = now,
+        updatedAt = now)
+
+      val advertiser2Id = UUID.randomUUID.toString
+      val advertiser2 = AdvertiserRow(
+        id = advertiser2Id,
+        name = "Google Play",
+        priority = 8,
+        isActive = 1,
+        createdAt = now,
+        updatedAt = now)
+
+      // Ad videos (publicidad) - using Google Sample Videos
+      val adVideo1Id = video.Id.generate
+      val adVideo1 = AdvertiserVideoRow(
+        id = adVideo1Id,
+        advertiserId = Some(advertiser1Id),
+        videoType = "publicidad",
+        videoUrl = SampleVideos.forBiggerBlazes,
+        durationSeconds = 15,
+        minWatchSeconds = 5,
+        showCountdown = 1,
+        noRepeatSeconds = Some(3600),
+        isActive = 1,
+        priority = 10,
+        createdAt = now,
+        updatedAt = now)
+
+      val adVideo2Id = video.Id.generate
+      val adVideo2 = AdvertiserVideoRow(
+        id = adVideo2Id,
+        advertiserId = Some(advertiser1Id),
+        videoType = "publicidad",
+        videoUrl = SampleVideos.forBiggerEscapes,
+        durationSeconds = 15,
+        minWatchSeconds = 5,
+        showCountdown = 1,
+        noRepeatSeconds = Some(3600),
+        isActive = 1,
+        priority = 9,
+        createdAt = now,
+        updatedAt = now)
+
+      val adVideo3Id = video.Id.generate
+      val adVideo3 = AdvertiserVideoRow(
+        id = adVideo3Id,
+        advertiserId = Some(advertiser2Id),
+        videoType = "publicidad",
+        videoUrl = SampleVideos.forBiggerFun,
+        durationSeconds = 15,
+        minWatchSeconds = 5,
+        showCountdown = 1,
+        noRepeatSeconds = Some(3600),
+        isActive = 1,
+        priority = 8,
+        createdAt = now,
+        updatedAt = now)
+
+      val adVideo4Id = video.Id.generate
+      val adVideo4 = AdvertiserVideoRow(
+        id = adVideo4Id,
+        advertiserId = Some(advertiser2Id),
+        videoType = "publicidad",
+        videoUrl = SampleVideos.forBiggerJoyrides,
+        durationSeconds = 15,
+        minWatchSeconds = 5,
+        showCountdown = 1,
+        noRepeatSeconds = Some(3600),
+        isActive = 1,
+        priority = 7,
+        createdAt = now,
+        updatedAt = now)
+
+      // Promo video (propaganda) - fallback when no ads available
+      val promoVideoId = video.Id.generate
+      val promoVideo = AdvertiserVideoRow(
+        id = promoVideoId,
+        advertiserId = None,
+        videoType = "propaganda",
+        videoUrl = SampleVideos.forBiggerMeltdowns,
+        durationSeconds = 15,
+        minWatchSeconds = 3,
+        showCountdown = 0,
+        noRepeatSeconds = None,
+        isActive = 1,
+        priority = 1,
+        createdAt = now,
+        updatedAt = now)
+
+      val advertisers = List(advertiser1, advertiser2)
+      val adVideos = List(adVideo1, adVideo2, adVideo3, adVideo4, promoVideo)
+
+      // Helper to create localized texts for a video
+      def videoTexts(
+          videoId: video.Id,
+          titleEs: String,
+          titleEn: String,
+          descEs: String,
+          descEn: String): List[LocalizedTextRow] = List(
+        LocalizedTextRow(UUID.randomUUID.toString, videoId.asString, "es", titleEs, "backend", now, now),
+        LocalizedTextRow(UUID.randomUUID.toString, videoId.asString, "en", titleEn, "backend", now, now),
+        LocalizedTextRow(
+          UUID.randomUUID.toString,
+          videoId.asString + "_desc",
+          "es",
+          descEs,
+          "backend",
+          now,
+          now),
+        LocalizedTextRow(
+          UUID.randomUUID.toString,
+          videoId.asString + "_desc",
+          "en",
+          descEn,
+          "backend",
+          now,
+          now)
+      )
+
+      val allVideoTexts =
+        videoTexts(
+          adVideo1Id,
+          "Chromecast - Enciende tu mundo",
+          "Chromecast - Light up your world",
+          "Descubre el poder de transmitir contenido a tu TV",
+          "Discover the power of streaming to your TV") ++
+          videoTexts(
+            adVideo2Id,
+            "Chromecast - Escapa a nuevas aventuras",
+            "Chromecast - Escape to new adventures",
+            "Lleva el entretenimiento a donde quieras",
+            "Take entertainment wherever you go") ++
+          videoTexts(
+            adVideo3Id,
+            "Google Play - Diversión sin límites",
+            "Google Play - Unlimited fun",
+            "Millones de apps, juegos y más",
+            "Millions of apps, games and more") ++
+          videoTexts(
+            adVideo4Id,
+            "Google Play - Tu próxima aventura",
+            "Google Play - Your next adventure",
+            "Descarga las mejores apps del momento",
+            "Download the best apps of the moment") ++
+          videoTexts(
+            promoVideoId,
+            "Captal - Gana recompensas",
+            "Captal - Earn rewards",
+            "Responde encuestas, mira videos y gana",
+            "Answer surveys, watch videos and earn")
+
+      // Delete existing video data and insert new
+      qrun(query[VideoViewRow].delete) *>
+        qrun(query[AdvertiserVideoRow].delete) *>
+        qrun(query[AdvertiserRow].delete) *>
+        ZIO.foreach(advertisers)(a => qrun(query[AdvertiserRow].insertValue(lift(a)))) *>
+        ZIO.foreach(adVideos)(v => qrun(query[AdvertiserVideoRow].insertValue(lift(v)))) *>
+        ZIO.foreach(allVideoTexts)(t => qrun(query[LocalizedTextRow].insertValue(lift(t)))).unit
+
   private def seedLocationSurvey
       : ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.{run as qrun, *}
@@ -448,7 +652,7 @@ object Seed extends ZIOAppDefault:
     val stateQuestion = QuestionRow(
       id = stateQuestionId,
       surveyId = surveyId,
-      questionType = "select",
+      questionType = "dropdown",
       pointsAwarded = 10,
       displayOrder = 1,
       hierarchyLevel = Some("state"),
@@ -552,6 +756,8 @@ object Seed extends ZIOAppDefault:
         _ <- ZIO.logInfo("Seeded profiling survey")
         _ <- seedLocationSurvey
         _ <- ZIO.logInfo("Seeded location survey")
+        _ <- seedVideoData
+        _ <- ZIO.logInfo("Seeded video data")
         _ <- ZIO.logInfo("Seeding complete!")
       yield ()
     ).provide(dataSourceLayer >>> quillLayer)

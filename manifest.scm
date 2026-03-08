@@ -48,4 +48,5 @@
 (packages->manifest (list openjdk21
                           sqlite
                           ffmpeg
-                          coursier))
+                          coursier
+                          (specification->package "jq"))
