@@ -49,4 +49,4 @@
                           sqlite
                           ffmpeg
                           coursier
-                          (specification->package "jq"))
+                          (specification->package "jq")))
