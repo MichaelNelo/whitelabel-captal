@@ -84,14 +84,14 @@ object Main extends ZIOAppDefault:
     .devRoutes
     .map(_.widen[FullEnv])
 
-  private def endpoints(devMode: Boolean): List[ZServerEndpoint[FullEnv, Any]] =
+  private def endpoints(devEndpoints: Boolean): List[ZServerEndpoint[FullEnv, Any]] =
     val base = healthEndpoints ++ surveyEndpoints ++ localeEndpoints ++ videoEndpoints
-    if devMode then
+    if devEndpoints then
       base ++ devOnlyEndpoints
     else
       base
 
-  private def apiRoutes(devMode: Boolean) = ZioHttpInterpreter().toHttp(endpoints(devMode))
+  private def apiRoutes(devEndpoints: Boolean) = ZioHttpInterpreter().toHttp(endpoints(devEndpoints))
 
   // Static file serving for client (dev mode only)
   // In production, nginx or similar serves static files
@@ -137,13 +137,13 @@ object Main extends ZIOAppDefault:
       Method.GET / "video"    -> serveIndex,
       Method.GET / "ready"    -> serveIndex)
 
-  private def routes(devMode: Boolean): Routes[FullEnv, Response] =
+  private def routes(devMode: Boolean, devEndpoints: Boolean): Routes[FullEnv, Response] =
     val baseRoutes =
-      if devMode then devStaticRoutes ++ apiRoutes(devMode) ++ spaCatchAllRoutes
-      else apiRoutes(devMode)
+      if devMode then devStaticRoutes ++ apiRoutes(devEndpoints) ++ spaCatchAllRoutes
+      else apiRoutes(devEndpoints)
     baseRoutes @@ loggingMiddleware
 
-  private case class ServerSettings(config: Server.Config, devMode: Boolean)
+  private case class ServerSettings(config: Server.Config, devMode: Boolean, devEndpoints: Boolean)
 
   private val serverSettingsLayer: ZLayer[Any, Throwable, ServerSettings] = ZLayer.fromZIO:
     ZIO.attempt:
@@ -153,7 +153,8 @@ object Main extends ZIOAppDefault:
         .default
         .binding(c.getString("server.host"), c.getInt("server.port"))
       val devMode = c.getBoolean("server.dev-mode")
-      ServerSettings(config, devMode)
+      val devEndpoints = c.getBoolean("server.dev-endpoints")
+      ServerSettings(config, devMode, devEndpoints)
 
   private val quillLayer = Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)
 
@@ -284,12 +285,12 @@ object Main extends ZIOAppDefault:
     for
       settings <- ZIO.service[ServerSettings]
       binding    = settings.config.address
-      routeInfos = endpoints(settings.devMode).map: e =>
+      routeInfos = endpoints(settings.devEndpoints).map: e =>
         val method = e.endpoint.method.map(_.method).getOrElse("*")
         val path = e.endpoint.showPathTemplate()
         s"  $method $path"
       _ <- ZIO.logInfo(s"Server starting on ${binding.getHostString}:${binding.getPort}")
-      _ <- ZIO.logInfo(s"Dev mode: ${settings.devMode}")
+      _ <- ZIO.logInfo(s"Dev mode: ${settings.devMode}, Dev endpoints: ${settings.devEndpoints}")
       _ <- ZIO.logInfo(s"Mounted routes:\n${routeInfos.mkString("\n")}")
     yield ()
 
@@ -298,6 +299,6 @@ object Main extends ZIOAppDefault:
 
   override val run: ZIO[Any, Throwable, Nothing] = ZIO
     .serviceWithZIO[ServerSettings]: settings =>
-      logRoutes *> Server.serve(routes(settings.devMode))
+      logRoutes *> Server.serve(routes(settings.devMode, settings.devEndpoints))
     .provide(serverSettingsLayer, serverConfigFromSettings, Server.live, appLayers)
 end Main
