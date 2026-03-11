@@ -1,16 +1,10 @@
 package whitelabel.captal.client
 
-import zio.*
+import org.scalajs.dom
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.Future
 
 object Runtime:
-  private val runtime: zio.Runtime[Any] = zio.Runtime.default
-
-  /** Run a ZIO effect, ignoring the result. Errors are logged to console. */
-  def run[E, A](effect: ZIO[Any, E, A]): Unit = Unsafe.unsafe { (u: Unsafe) =>
-    given Unsafe = u
-    runtime
-      .unsafe
-      .runToFuture(
-        effect.catchAll(e => ZIO.succeed(org.scalajs.dom.console.error(s"ZIO error: $e"))))
-    ()
-  }
+  /** Run a Future, ignoring the result. Errors are logged to console. */
+  def run[A](body: => Future[A]): Unit =
+    body.failed.foreach(e => dom.console.error(s"Error: ${e.getMessage}"))
