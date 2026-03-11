@@ -3,7 +3,7 @@ package whitelabel.captal.client.i18n
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.{ApiClient, Runtime}
 import whitelabel.captal.core.i18n.I18n
-import zio.*
+import scala.concurrent.ExecutionContext.Implicits.global
 
 object I18nClient:
   // Default empty I18n for initial state
@@ -37,13 +37,10 @@ object I18nClient:
     load(code)
 
   def load(locale: String): Unit = Runtime.run:
-    ApiClient
-      .getI18n(locale)
-      .tap:
-        case Right(data) =>
-          ZIO.succeed:
-            i18nVar.set(data)
-            isLoadedVar.set(true)
-        case Left(_) =>
-          ZIO.succeed(isLoadedVar.set(true)) // Still mark as loaded to show UI
+    ApiClient.getI18n(locale).map:
+      case Right(data) =>
+        i18nVar.set(data)
+        isLoadedVar.set(true)
+      case Left(_) =>
+        isLoadedVar.set(true)
 end I18nClient

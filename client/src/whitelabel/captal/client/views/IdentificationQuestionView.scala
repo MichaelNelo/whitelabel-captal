@@ -15,7 +15,7 @@ import whitelabel.captal.core.survey.question.{
   ops as questionOps
 }
 import whitelabel.captal.endpoints.SurveyResponse
-import zio.*
+import scala.concurrent.ExecutionContext.Implicits.global
 
 object IdentificationQuestionView:
   private val answerValue: Var[Option[AnswerValue]] = Var(None)
@@ -82,36 +82,27 @@ object IdentificationQuestionView:
     div(cls := "questions-list", questionCard(survey)))
 
   private def checkPhaseAndLoad(): Unit = Runtime.run:
-    for
-      statusResult <- ApiClient.getStatus()
-      _            <- ZIO.succeed:
-        statusResult match
-          case Right(status) if status.phase == Phase.Welcome =>
-            // Redirect: user should not be here
-            Router.syncWithPhase(Phase.Welcome)
-          case Right(status) =>
-            // OK, load question if not already in state
-            AppState.getCurrentSurvey match
-              case None =>
-                loadQuestion()
-              case Some(_) =>
-                ()
-          case Left(_) =>
-            // Error: redirect to welcome
-            Router.syncWithPhase(Phase.Welcome)
-    yield ()
+    ApiClient.getStatus().map:
+      case Right(status) if status.phase == Phase.Welcome =>
+        Router.syncWithPhase(Phase.Welcome)
+      case Right(status) =>
+        AppState.getCurrentSurvey match
+          case None =>
+            loadQuestion()
+          case Some(_) =>
+            ()
+      case Left(_) =>
+        Router.syncWithPhase(Phase.Welcome)
 
   private def loadQuestion(): Unit = Runtime.run:
-    ApiClient
-      .getNextSurvey()
-      .map:
-        case Right(SurveyResponse.Survey(survey)) =>
-          AppState.setCurrentSurvey(survey)
-        case Right(SurveyResponse.Step(nextStep)) =>
-          AppState.setPhase(nextStep.phase)
-          Router.syncWithPhase(nextStep.phase)
-        case Left(_) =>
-          ()
+    ApiClient.getNextSurvey().map:
+      case Right(SurveyResponse.Survey(survey)) =>
+        AppState.setCurrentSurvey(survey)
+      case Right(SurveyResponse.Step(nextStep)) =>
+        AppState.setPhase(nextStep.phase)
+        Router.syncWithPhase(nextStep.phase)
+      case Left(_) =>
+        ()
 
   private def questionCard(survey: NextIdentificationSurvey): HtmlElement =
     val cardStateSignal = isTouched
@@ -383,32 +374,26 @@ object IdentificationQuestionView:
             ApiClient.answerLocation(answer)
 
       Runtime.run:
-        for
-          result <- apiCall
-          _      <- ZIO.succeed:
-            result match
-              case Right(SurveyResponse.Survey(nextSurvey)) =>
-                // Success: clear state and show next question
-                isSubmitting.set(false)
-                answerValue.set(None)
-                textInput.set("")
-                validationError.set(None)
-                isTouched.set(false)
-                AppState.setCurrentSurvey(nextSurvey)
-              case Right(SurveyResponse.Step(nextStep)) =>
-                // Success: identification complete, navigate to next phase
-                isSubmitting.set(false)
-                answerValue.set(None)
-                textInput.set("")
-                validationError.set(None)
-                isTouched.set(false)
-                AppState.clearCurrentSurvey()
-                AppState.setPhase(nextStep.phase)
-                Router.syncWithPhase(nextStep.phase)
-              case Left(error) =>
-                isSubmitting.set(false)
-                serverError.set(Some(errorToMessage(error)))
-        yield ()
+        apiCall.map:
+          case Right(SurveyResponse.Survey(nextSurvey)) =>
+            isSubmitting.set(false)
+            answerValue.set(None)
+            textInput.set("")
+            validationError.set(None)
+            isTouched.set(false)
+            AppState.setCurrentSurvey(nextSurvey)
+          case Right(SurveyResponse.Step(nextStep)) =>
+            isSubmitting.set(false)
+            answerValue.set(None)
+            textInput.set("")
+            validationError.set(None)
+            isTouched.set(false)
+            AppState.clearCurrentSurvey()
+            AppState.setPhase(nextStep.phase)
+            Router.syncWithPhase(nextStep.phase)
+          case Left(error) =>
+            isSubmitting.set(false)
+            serverError.set(Some(errorToMessage(error)))
 
   private def errorToMessage(error: whitelabel.captal.endpoints.ApiError): String =
     import whitelabel.captal.endpoints.ApiError.*

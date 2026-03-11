@@ -1,7 +1,6 @@
 package whitelabel.captal.client.views
 
 import com.raquo.laminar.api.L.*
-import com.raquo.laminar.codecs.BooleanAsAttrPresenceCodec
 import org.scalajs.dom
 import org.scalajs.dom.html.{Div, Video}
 import org.scalajs.dom.svg.Circle
@@ -10,7 +9,7 @@ import whitelabel.captal.client.{ApiClient, Router, Runtime}
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.application.commands.NextVideo
 import whitelabel.captal.endpoints.VideoResponse
-import zio.ZIO
+import scala.concurrent.ExecutionContext.Implicits.global
 
 object AdvertiserVideoView:
   // Max wait time for video preload (in milliseconds)
@@ -301,38 +300,28 @@ object AdvertiserVideoView:
       showIntro: Var[Boolean],
       videoRef: Var[Option[Video]]): Unit =
     Runtime.run:
-      ApiClient
-        .getNextVideo()
-        .tap:
-          case Right(VideoResponse.Video(data)) =>
-            ZIO.succeed:
-              // Create the actual video element and start preloading
-              val videoEl = dom.document.createElement("video").asInstanceOf[Video]
-              videoEl.className = "video-hero-video"
-              videoEl.setAttribute("playsinline", "")
-              videoEl.preload = "auto"
-              videoEl.src = data.videoUrl
-              videoEl.load()
-              videoRef.set(Some(videoEl))
-              videoData.set(Some(data))
-              // showIntro will be set to false by animationend on the progress bar
-          case Right(VideoResponse.Step(nextStep)) =>
-            ZIO.succeed:
-              Router.syncWithPhase(nextStep.phase)
-          case Left(_) =>
-            ZIO.succeed:
-              showIntro.set(false)
+      ApiClient.getNextVideo().map:
+        case Right(VideoResponse.Video(data)) =>
+          val videoEl = dom.document.createElement("video").asInstanceOf[Video]
+          videoEl.className = "video-hero-video"
+          videoEl.setAttribute("playsinline", "")
+          videoEl.preload = "auto"
+          videoEl.src = data.videoUrl
+          videoEl.load()
+          videoRef.set(Some(videoEl))
+          videoData.set(Some(data))
+        case Right(VideoResponse.Step(nextStep)) =>
+          Router.syncWithPhase(nextStep.phase)
+        case Left(_) =>
+          showIntro.set(false)
 
   private def markAsWatched(duration: Int, completed: Boolean): Unit =
     Runtime.run:
-      ApiClient
-        .markVideoWatched(duration, completed)
-        .tap:
-          case Right(_) =>
-            ZIO.succeed:
-              Router.syncWithPhase(Phase.Ready)
-          case Left(_) =>
-            ZIO.unit
+      ApiClient.markVideoWatched(duration, completed).map:
+        case Right(_) =>
+          Router.syncWithPhase(Phase.Ready)
+        case Left(_) =>
+          ()
 
   private def brandIcon: HtmlElement = img(
     src := "/brand-icon.svg",

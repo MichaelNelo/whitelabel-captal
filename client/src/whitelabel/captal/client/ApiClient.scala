@@ -1,98 +1,91 @@
 package whitelabel.captal.client
 
+import io.circe.{Decoder, Encoder, parser}
+import io.circe.syntax.*
 import org.scalajs.dom
-import sttp.client3.*
-import sttp.client3.impl.zio.FetchZioBackend
-import sttp.model.Uri
-import sttp.tapir.DecodeResult
-import sttp.tapir.client.sttp.SttpClientInterpreter
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.Future
+import scala.scalajs.js
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.core.survey.question.AnswerValue
 import whitelabel.captal.endpoints.{
   AnswerRequest,
   ApiError,
-  LocaleEndpoints,
   MarkVideoWatchedRequest,
   SetLocaleRequest,
   StatusResponse,
-  SurveyEndpoints,
   SurveyResponse,
-  VideoEndpoints,
   VideoResponse,
   VideoWatchedResponse
 }
-import zio.*
+import whitelabel.captal.endpoints.i18n.given
 
 object ApiClient:
-  private val backend: SttpBackend[Task, Any] = FetchZioBackend()
-  private val baseUri: Option[Uri] = Some(uri"${dom.window.location.origin}")
-  private val interpreter: SttpClientInterpreter = SttpClientInterpreter()
+  private def fetchApi[A: Decoder](
+      method: String,
+      path: String,
+      body: Option[io.circe.Json] = None
+  ): Future[Either[ApiError, A]] =
+    val options = js.Dynamic.literal(method = method)
+    body.foreach { json =>
+      options.headers = js.Dynamic.literal("Content-Type" -> "application/json")
+      options.body = json.noSpaces
+    }
+    for
+      response <- dom.fetch(path, options.asInstanceOf[dom.RequestInit]).toFuture
+      text     <- response.text().toFuture
+    yield
+      if response.ok then
+        parser.decode[A](text).left.map(e => ApiError.InternalError(e.getMessage))
+      else
+        parser.decode[ApiError](text) match
+          case Right(err) => Left(err)
+          case Left(_)    => Left(ApiError.InternalError(s"HTTP ${response.status}: $text"))
 
-  private def unwrapDecodeResult[T](result: DecodeResult[T]): T =
-    result match
-      case DecodeResult.Value(v) =>
-        v
-      case f: DecodeResult.Failure =>
-        throw new RuntimeException(s"Decode failure: ${f.toString}")
+  private def get[A: Decoder](path: String): Future[Either[ApiError, A]] =
+    fetchApi("GET", path)
 
-  /** Get status - creates session if needed */
-  def getStatus(): Task[Either[ApiError, StatusResponse]] = interpreter
-    .toClient(SurveyEndpoints.status, baseUri, backend)
-    .apply(None)
-    .map(unwrapDecodeResult)
-    .map(_.map(_._2)) // Extract StatusResponse from (cookie, response) tuple
+  private def post[A: Decoder](path: String): Future[Either[ApiError, A]] =
+    fetchApi("POST", path)
 
-  def getNextSurvey(): Task[Either[ApiError, SurveyResponse]] = interpreter
-    .toClient(SurveyEndpoints.nextSurvey, baseUri, backend)
-    .apply(None)
-    .map(unwrapDecodeResult)
+  private def postJson[B: Encoder, A: Decoder](path: String, body: B): Future[Either[ApiError, A]] =
+    fetchApi("POST", path, Some(body.asJson))
 
-  def answerEmail(answer: AnswerValue): Task[Either[ApiError, SurveyResponse]] = interpreter
-    .toClient(SurveyEndpoints.answerEmail, baseUri, backend)
-    .apply((None, AnswerRequest(answer)))
-    .map(unwrapDecodeResult)
+  private def putJson[B: Encoder, A: Decoder](path: String, body: B): Future[Either[ApiError, A]] =
+    fetchApi("PUT", path, Some(body.asJson))
 
-  def answerProfiling(answer: AnswerValue): Task[Either[ApiError, SurveyResponse]] = interpreter
-    .toClient(SurveyEndpoints.answerProfiling, baseUri, backend)
-    .apply((None, AnswerRequest(answer)))
-    .map(unwrapDecodeResult)
+  def getStatus(): Future[Either[ApiError, StatusResponse]] =
+    get("/api/status")
 
-  def answerLocation(answer: AnswerValue): Task[Either[ApiError, SurveyResponse]] = interpreter
-    .toClient(SurveyEndpoints.answerLocation, baseUri, backend)
-    .apply((None, AnswerRequest(answer)))
-    .map(unwrapDecodeResult)
+  def getNextSurvey(): Future[Either[ApiError, SurveyResponse]] =
+    get("/api/survey/next")
 
-  def getLocales(): Task[Either[ApiError, List[String]]] = interpreter
-    .toClient(LocaleEndpoints.listLocales, baseUri, backend)
-    .apply(())
-    .map(unwrapDecodeResult)
+  def answerEmail(answer: AnswerValue): Future[Either[ApiError, SurveyResponse]] =
+    postJson("/api/survey/email", AnswerRequest(answer))
 
-  def setLocale(locale: String): Task[Either[ApiError, StatusResponse]] = interpreter
-    .toClient(LocaleEndpoints.setLocale, baseUri, backend)
-    .apply((None, None, SetLocaleRequest(locale)))
-    .map(unwrapDecodeResult)
-    .map(_.map(_._2))
+  def answerProfiling(answer: AnswerValue): Future[Either[ApiError, SurveyResponse]] =
+    postJson("/api/survey/profiling", AnswerRequest(answer))
 
-  def getI18n(locale: String): Task[Either[ApiError, I18n]] = interpreter
-    .toClient(LocaleEndpoints.getI18n, baseUri, backend)
-    .apply(locale)
-    .map(unwrapDecodeResult)
+  def answerLocation(answer: AnswerValue): Future[Either[ApiError, SurveyResponse]] =
+    postJson("/api/survey/location", AnswerRequest(answer))
 
-  // Dev-only: Reset session phase to Welcome
-  def resetPhase(): Task[Either[ApiError, StatusResponse]] = interpreter
-    .toClient(LocaleEndpoints.resetPhase, baseUri, backend)
-    .apply(None)
-    .map(unwrapDecodeResult)
+  def getLocales(): Future[Either[ApiError, List[String]]] =
+    get("/api/locales")
 
-  def getNextVideo(): Task[Either[ApiError, VideoResponse]] = interpreter
-    .toClient(VideoEndpoints.nextVideo, baseUri, backend)
-    .apply(None)
-    .map(unwrapDecodeResult)
+  def setLocale(locale: String): Future[Either[ApiError, StatusResponse]] =
+    putJson("/api/session/locale", SetLocaleRequest(locale))
+
+  def getI18n(locale: String): Future[Either[ApiError, I18n]] =
+    get(s"/api/i18n/$locale")
+
+  def resetPhase(): Future[Either[ApiError, StatusResponse]] =
+    post("/api/dev/reset-phase")
+
+  def getNextVideo(): Future[Either[ApiError, VideoResponse]] =
+    get("/api/video/next")
 
   def markVideoWatched(
       durationWatched: Int,
-      completed: Boolean): Task[Either[ApiError, VideoWatchedResponse]] = interpreter
-    .toClient(VideoEndpoints.markWatched, baseUri, backend)
-    .apply((None, MarkVideoWatchedRequest(durationWatched, completed)))
-    .map(unwrapDecodeResult)
+      completed: Boolean): Future[Either[ApiError, VideoWatchedResponse]] =
+    postJson("/api/video/watched", MarkVideoWatchedRequest(durationWatched, completed))
 end ApiClient

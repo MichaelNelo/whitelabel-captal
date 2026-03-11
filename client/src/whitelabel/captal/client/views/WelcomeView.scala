@@ -5,7 +5,7 @@ import whitelabel.captal.client.i18n.I18nClient
 import whitelabel.captal.client.{ApiClient, AppState, Router, Runtime}
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.endpoints.SurveyResponse
-import zio.*
+import scala.concurrent.ExecutionContext.Implicits.global
 
 object WelcomeView:
   private val isStarting: Var[Boolean] = Var(false)
@@ -67,26 +67,23 @@ object WelcomeView:
 
   private def loadLocales(): Unit = Runtime.run:
     for
-      // Try to get existing session locale first
       statusResult <- ApiClient.getStatus()
       locale =
         statusResult match
           case Right(status) =>
-            // If phase is not Welcome, redirect to the correct page
             if status.phase != Phase.Welcome then
               Router.syncWithPhase(status.phase)
             status.locale
           case Left(_) =>
             detectBrowserLocale()
-      _             <- ZIO.succeed(I18nClient.setLocale(locale))
+      _ = I18nClient.setLocale(locale)
       localesResult <- ApiClient.getLocales()
-      _             <- ZIO.succeed:
-        localesResult match
-          case Right(locales) if locales.nonEmpty =>
-            availableLocales.set(locales)
-          case _ =>
-            ()
-    yield ()
+    yield
+      localesResult match
+        case Right(locales) if locales.nonEmpty =>
+          availableLocales.set(locales)
+        case _ =>
+          ()
 
   private def detectBrowserLocale(): String =
     import org.scalajs.dom
@@ -99,7 +96,7 @@ object WelcomeView:
       "es" // default
 
   private def setLocaleOnServer(locale: String): Unit = Runtime.run:
-    ApiClient.setLocale(locale).ignore
+    ApiClient.setLocale(locale)
 
   private def startFlow(): Unit =
     isStarting.set(true)
@@ -107,19 +104,17 @@ object WelcomeView:
       for
         _            <- ApiClient.setLocale(I18nClient.currentLocale)
         surveyResult <- ApiClient.getNextSurvey()
-        _            <- ZIO.succeed:
-          surveyResult match
-            case Right(SurveyResponse.Survey(survey)) =>
-              AppState.setCurrentSurvey(survey)
-              AppState.setPhase(Phase.IdentificationQuestion)
-              Router.syncWithPhase(Phase.IdentificationQuestion)
-            case Right(SurveyResponse.Step(nextStep)) =>
-              AppState.setPhase(nextStep.phase)
-              Router.syncWithPhase(nextStep.phase)
-            case Left(_) =>
-              // Error - stay on welcome
-              ()
-          isStarting.set(false)
-      yield ()
+      yield
+        surveyResult match
+          case Right(SurveyResponse.Survey(survey)) =>
+            AppState.setCurrentSurvey(survey)
+            AppState.setPhase(Phase.IdentificationQuestion)
+            Router.syncWithPhase(Phase.IdentificationQuestion)
+          case Right(SurveyResponse.Step(nextStep)) =>
+            AppState.setPhase(nextStep.phase)
+            Router.syncWithPhase(nextStep.phase)
+          case Left(_) =>
+            ()
+        isStarting.set(false)
   end startFlow
 end WelcomeView
