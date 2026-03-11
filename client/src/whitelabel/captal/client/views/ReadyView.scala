@@ -4,7 +4,7 @@ import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.i18n.I18nClient
 import whitelabel.captal.client.{ApiClient, BuildInfo, Router, Runtime}
 import whitelabel.captal.core.application.Phase
-import zio.ZIO
+import scala.concurrent.ExecutionContext.Implicits.global
 
 object ReadyView:
   private val isResetting: Var[Boolean] = Var(false)
@@ -12,16 +12,13 @@ object ReadyView:
   private def resetPhase(): Unit =
     isResetting.set(true)
     Runtime.run:
-      for
-        result <- ApiClient.resetPhase()
-        _      <- ZIO.succeed:
-          result match
-            case Right(_) =>
-              Router.syncWithPhase(Phase.Welcome)
-            case Left(_) =>
-              ()
-          isResetting.set(false)
-      yield ()
+      ApiClient.resetPhase().map: result =>
+        result match
+          case Right(_) =>
+            Router.syncWithPhase(Phase.Welcome)
+          case Left(_) =>
+            ()
+        isResetting.set(false)
 
   def render: HtmlElement = Layout(
     content = div(

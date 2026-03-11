@@ -2,7 +2,7 @@ package whitelabel.captal.client
 
 import com.raquo.laminar.api.L.*
 import org.scalajs.dom
-import zio.ZIO
+import scala.concurrent.ExecutionContext.Implicits.global
 
 @main
 def main(): Unit =
@@ -36,17 +36,10 @@ object App:
     * entering via direct URLs (e.g., /question, /final) are redirected to the correct phase.
     */
   def syncPhaseOnLoad(): Unit = Runtime.run:
-    for
-      statusResult <- ApiClient.getStatus()
-      _            <- ZIO.succeed:
-        statusResult match
-          case Right(status) =>
-            // Sync i18n locale
-            i18n.I18nClient.setLocale(status.locale)
-            // Redirect to correct phase
-            Router.syncWithPhase(status.phase)
-          case Left(_) =>
-            // No session yet, stay where we are (will be handled by WelcomeView)
-            ()
-    yield ()
+    ApiClient.getStatus().map:
+      case Right(status) =>
+        i18n.I18nClient.setLocale(status.locale)
+        Router.syncWithPhase(status.phase)
+      case Left(_) =>
+        ()
 end App
