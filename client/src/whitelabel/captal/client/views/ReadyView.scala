@@ -2,7 +2,7 @@ package whitelabel.captal.client.views
 
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.i18n.I18nClient
-import whitelabel.captal.client.{ApiClient, BuildInfo, Router, Runtime}
+import whitelabel.captal.client.{ApiClient, AppState, BuildInfo, Router, Runtime}
 import whitelabel.captal.core.application.Phase
 import scala.concurrent.ExecutionContext.Implicits.global
 
@@ -11,6 +11,7 @@ object ReadyView:
 
   private def resetPhase(): Unit =
     isResetting.set(true)
+    AppState.setNavigating(true)
     Runtime.run:
       ApiClient.resetPhase().map: result =>
         result match
@@ -19,6 +20,7 @@ object ReadyView:
           case Left(_) =>
             ()
         isResetting.set(false)
+        AppState.setNavigating(false)
 
   def render: HtmlElement = Layout(
     content = div(

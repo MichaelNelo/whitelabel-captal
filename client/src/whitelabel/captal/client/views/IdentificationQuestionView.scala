@@ -383,6 +383,7 @@ object IdentificationQuestionView:
             isTouched.set(false)
             AppState.setCurrentSurvey(nextSurvey)
           case Right(SurveyResponse.Step(nextStep)) =>
+            AppState.setNavigating(true)
             isSubmitting.set(false)
             answerValue.set(None)
             textInput.set("")
@@ -391,6 +392,7 @@ object IdentificationQuestionView:
             AppState.clearCurrentSurvey()
             AppState.setPhase(nextStep.phase)
             Router.syncWithPhase(nextStep.phase)
+            AppState.setNavigating(false)
           case Left(error) =>
             isSubmitting.set(false)
             serverError.set(Some(errorToMessage(error)))
