@@ -5,7 +5,7 @@ import org.scalajs.dom
 import org.scalajs.dom.html.{Div, Video}
 import org.scalajs.dom.svg.Circle
 import whitelabel.captal.client.i18n.I18nClient
-import whitelabel.captal.client.{ApiClient, Router, Runtime}
+import whitelabel.captal.client.{ApiClient, AppState, Router, Runtime}
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.application.commands.NextVideo
 import whitelabel.captal.endpoints.VideoResponse
@@ -316,12 +316,14 @@ object AdvertiserVideoView:
           showIntro.set(false)
 
   private def markAsWatched(duration: Int, completed: Boolean): Unit =
+    AppState.setNavigating(true)
     Runtime.run:
       ApiClient.markVideoWatched(duration, completed).map:
         case Right(_) =>
           Router.syncWithPhase(Phase.Ready)
+          AppState.setNavigating(false)
         case Left(_) =>
-          ()
+          AppState.setNavigating(false)
 
   private def brandIcon: HtmlElement = img(
     src := "/brand-icon.svg",

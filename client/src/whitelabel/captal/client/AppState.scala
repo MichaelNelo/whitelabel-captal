@@ -24,4 +24,9 @@ object AppState:
   def setCurrentSurvey(survey: NextIdentificationSurvey): Unit = currentSurveyVar.set(Some(survey))
 
   def clearCurrentSurvey(): Unit = currentSurveyVar.set(None)
+
+  // Navigation transition state
+  private val navigatingVar: Var[Boolean] = Var(false)
+  val isNavigating: Signal[Boolean] = navigatingVar.signal
+  def setNavigating(v: Boolean): Unit = navigatingVar.set(v)
 end AppState
