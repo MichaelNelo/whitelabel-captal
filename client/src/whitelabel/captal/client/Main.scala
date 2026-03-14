@@ -30,7 +30,18 @@ def main(): Unit =
 end main
 
 object App:
-  val app: HtmlElement = div(cls := "app-root", child <-- Router.splitter.signal)
+  val app: HtmlElement = div(
+    cls := "app-root",
+    child <-- AppState.isNavigating.combineWith(Router.splitter.signal).map:
+      case (true, _)     => navigationLoader
+      case (false, view) => view
+  )
+
+  private def navigationLoader: HtmlElement = div(
+    cls := "nav-loader",
+    div(cls := "loader-icon brand-pulse",
+      img(src := "/brand-icon.svg", cls := "brand-icon", alt := "Loading"))
+  )
 
   /** Check the server-side phase and redirect if the current URL doesn't match. This ensures users
     * entering via direct URLs (e.g., /question, /final) are redirected to the correct phase.

@@ -100,6 +100,7 @@ object WelcomeView:
 
   private def startFlow(): Unit =
     isStarting.set(true)
+    AppState.setNavigating(true)
     Runtime.run:
       for
         _            <- ApiClient.setLocale(I18nClient.currentLocale)
@@ -116,5 +117,6 @@ object WelcomeView:
           case Left(_) =>
             ()
         isStarting.set(false)
+        AppState.setNavigating(false)
   end startFlow
 end WelcomeView
