@@ -5,6 +5,77 @@ import com.goyeau.mill.scalafix.ScalafixModule
 import mill.*, scalalib.*, scalafmt.*, scalajslib.*
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Ensure an rqlite Docker container is running. Starts one if needed. */
+private def ensureRqlite(containerName: String, hostPort: Int): String =
+  // Check Docker is available
+  println(s"[rqlite] Checking Docker availability...")
+  val dockerCheck = os.proc("docker", "info").call(check = false, stderr = os.Pipe)
+  if dockerCheck.exitCode != 0 then
+    sys.error(s"Docker is not running or not accessible: ${dockerCheck.err.trim()}")
+
+  // Check if container is already running
+  println(s"[rqlite] Checking for existing container '$containerName'...")
+  val running = os
+    .proc("docker", "ps", "-q", "-f", s"name=$containerName")
+    .call()
+    .out
+    .trim()
+
+  if running.nonEmpty then
+    println(s"[rqlite] Container '$containerName' already running")
+  else
+    // Clean up any stopped container with the same name
+    os.proc("docker", "rm", "-f", containerName).call(check = false, stderr = os.Pipe)
+
+    // Check if port is already in use
+    val portCheck = os.proc("docker", "ps", "-q", "-f", s"publish=$hostPort").call().out.trim()
+    if portCheck.nonEmpty then
+      sys.error(s"[rqlite] Port $hostPort is already in use by another container")
+
+    println(s"[rqlite] Starting container '$containerName' on port $hostPort...")
+    val startResult = os.proc(
+      "docker",
+      "run",
+      "-d",
+      "--name",
+      containerName,
+      "-p",
+      s"$hostPort:4001",
+      "-e",
+      "SQLITE_EXTENSIONS=sqlean",
+      "rqlite/rqlite:8.36.2"
+    ).call(check = false, stderr = os.Pipe)
+
+    if startResult.exitCode != 0 then
+      sys.error(s"[rqlite] Failed to start container: ${startResult.err.trim()}")
+
+    println(s"[rqlite] Waiting for container to be ready...")
+    var ready = false
+    var attempts = 0
+    while !ready && attempts < 30 do
+      Thread.sleep(500)
+      ready = scala.util
+        .Try(os.proc("curl", "-sf", s"http://localhost:$hostPort/readyz").call())
+        .isSuccess
+      attempts += 1
+
+    if !ready then
+      // Grab container logs for diagnosis
+      val logs = os
+        .proc("docker", "logs", "--tail", "20", containerName)
+        .call(check = false, stderr = os.Pipe)
+      sys.error(
+        s"[rqlite] Container '$containerName' failed to become ready after ${attempts * 500}ms.\n" +
+          s"Container logs:\n${logs.out.trim()}\n${logs.err.trim()}"
+      )
+
+  println(s"[rqlite] '$containerName' ready on port $hostPort")
+  s"jdbc:rqlite:http://localhost:$hostPort"
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Base traits
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -110,11 +181,30 @@ object api extends BaseModule:
     if os.exists(indexHtml) then os.remove(indexHtml)
     os.copy(indexDevHtml, indexHtml)
 
-  // Compile client before running server (for dev workflow)
+  private val rqliteDevPort = 4001
+  private val rqliteDevContainerName = "rqlite-dev"
+
+  def rqliteSetup = Task:
+    ensureRqlite(rqliteDevContainerName, rqliteDevPort)
+
+  // Compile client before running server
   override def run(args: Task[Args] = Task.Anon(Args())) = Task.Command:
     copyIndex()()
     client.fastLinkJS()
     super.run(args)()
+
+  /** Full dev workflow: rqlite + migrations + seed + client + server.
+    * Usage: ./mill api.dev
+    */
+  def dev(args: Task[Args] = Task.Anon(Args())) = Task.Command:
+    println("[dev] Step 1/4: Ensuring rqlite container...")
+    rqliteSetup()
+    println("[dev] Step 2/4: Running migrations...")
+    infra.migrate()()
+    println("[dev] Step 3/4: Running seed...")
+    infra.seed()()
+    println("[dev] Step 4/4: Preparing server...")
+    run()()
 
   object test extends ScalaTests with ScalafmtModule with ScalafixModule:
     def mvnDeps = Seq(
@@ -126,39 +216,8 @@ object api extends BaseModule:
     private val rqliteTestPort = 4011
     private val rqliteContainerName = "rqlite-test"
 
-    /** Ensure rqlite test container is running. Returns the JDBC URL. */
     def rqliteSetup: T[String] = Task:
-      val running = os
-        .proc("docker", "ps", "-q", "-f", s"name=$rqliteContainerName")
-        .call()
-        .out
-        .trim()
-      if running.isEmpty then
-        os.proc("docker", "rm", "-f", rqliteContainerName).call(check = false)
-        os.proc(
-          "docker",
-          "run",
-          "-d",
-          "--name",
-          rqliteContainerName,
-          "-p",
-          s"$rqliteTestPort:4001",
-          "-e",
-          "SQLITE_EXTENSIONS=sqlean",
-          "rqlite/rqlite:8.36.2"
-        ).call()
-        var ready = false
-        var attempts = 0
-        while !ready && attempts < 30 do
-          Thread.sleep(500)
-          ready = scala.util
-            .Try(
-              os.proc("curl", "-sf", s"http://localhost:$rqliteTestPort/readyz").call())
-            .isSuccess
-          attempts += 1
-        if !ready then sys.error("rqlite test container failed to start")
-      println(s"rqlite test instance ready on port $rqliteTestPort")
-      s"jdbc:rqlite:http://localhost:$rqliteTestPort"
+      ensureRqlite(rqliteContainerName, rqliteTestPort)
 
     override def forkEnv: T[Map[String, String]] = Task:
       val url = rqliteSetup()
