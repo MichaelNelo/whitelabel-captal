@@ -8,6 +8,14 @@ import mill.*, scalalib.*, scalafmt.*, scalajslib.*
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Render index.html.template replacing {{JS_PATH}} and {{CSS_PATH}} placeholders. */
+private def renderIndex(templatePath: os.Path, destPath: os.Path, jsPath: String, cssPath: String): Unit =
+  val template = os.read(templatePath)
+  val rendered = template
+    .replace("{{JS_PATH}}", jsPath)
+    .replace("{{CSS_PATH}}", cssPath)
+  os.write.over(destPath, rendered)
+
 /** Ensure an rqlite Docker container is running. Starts one if needed. */
 private def ensureRqlite(containerName: String, hostPort: Int): String =
   // Check Docker is available
@@ -158,9 +166,6 @@ object infra extends BaseModule:
   def migrate() = Task.Command:
     runMain("whitelabel.captal.infra.Migrate")()
 
-  def seed() = Task.Command:
-    runMain("whitelabel.captal.infra.Seed")()
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // API: JVM only (server implementation)
@@ -173,19 +178,25 @@ object api extends BaseModule:
     mvn"com.softwaremill.sttp.tapir::tapir-json-circe:1.11.11",
     mvn"dev.zio::zio-interop-cats:23.1.0.3")
 
-  // Copy index.dev.html to index.html for local development
+  // Render index.html from template for local development
   def copyIndex() = Task.Command:
     val root = moduleDir / os.up
-    val indexHtml = root / "client" / "index.html"
-    val indexDevHtml = root / "client" / "index.dev.html"
-    if os.exists(indexHtml) then os.remove(indexHtml)
-    os.copy(indexDevHtml, indexHtml)
+    renderIndex(
+      root / "client" / "index.html.template",
+      root / "client" / "index.html",
+      jsPath = "/out/client/fastLinkJS.dest/main.js",
+      cssPath = "/assets/styles.css"
+    )
 
   private val rqliteDevPort = 4001
   private val rqliteDevContainerName = "rqlite-dev"
 
-  def rqliteSetup = Task:
+  def rqliteSetup() = Task.Command:
     ensureRqlite(rqliteDevContainerName, rqliteDevPort)
+    
+  def stopRqlite() = Task.Command:
+    os.proc("docker", "rm", "-f", rqliteDevContainerName).call(check = false)
+    println("rqlite test container stopped")
 
   // Compile client before running server
   override def run(args: Task[Args] = Task.Anon(Args())) = Task.Command:
@@ -193,17 +204,15 @@ object api extends BaseModule:
     client.fastLinkJS()
     super.run(args)()
 
-  /** Full dev workflow: rqlite + migrations + seed + client + server.
+  /** Full dev workflow: rqlite + migrations (with dev seeds) + client + server.
     * Usage: ./mill api.dev
     */
   def dev(args: Task[Args] = Task.Anon(Args())) = Task.Command:
-    println("[dev] Step 1/4: Ensuring rqlite container...")
-    rqliteSetup()
-    println("[dev] Step 2/4: Running migrations...")
+    println("[dev] Step 1/3: Ensuring rqlite container...")
+    rqliteSetup()()
+    println("[dev] Step 2/3: Running migrations...")
     infra.migrate()()
-    println("[dev] Step 3/4: Running seed...")
-    infra.seed()()
-    println("[dev] Step 4/4: Preparing server...")
+    println("[dev] Step 3/3: Preparing server...")
     run()()
 
   object test extends ScalaTests with ScalafmtModule with ScalafixModule:
@@ -216,16 +225,31 @@ object api extends BaseModule:
     private val rqliteTestPort = 4011
     private val rqliteContainerName = "rqlite-test"
 
-    def rqliteSetup: T[String] = Task:
-      ensureRqlite(rqliteContainerName, rqliteTestPort)
-
     override def forkEnv: T[Map[String, String]] = Task:
-      val url = rqliteSetup()
+      val url = ensureRqlite(rqliteContainerName, rqliteTestPort)
       super.forkEnv() ++ Map("TEST_DB_URL" -> url)
 
     def stopRqlite() = Task.Command:
       os.proc("docker", "rm", "-f", rqliteContainerName).call(check = false)
       println("rqlite test container stopped")
+
+  /** Build the dev Docker image.
+    * Usage: ./mill api.dockerBuildDev 0.1.0
+    */
+  def dockerBuildDev(version: String) = Task.Command:
+    val root = moduleDir / os.up
+    val tag = s"captal-dev:$version"
+    println(s"[docker] Building $tag ...")
+    val result = os.proc(
+      "docker", "build",
+      "-f", (root / "Dockerfile").toString,
+      "--build-arg", "SERVER_DEV_ENDPOINTS=true",
+      "-t", tag,
+      root.toString
+    ).call(check = false, stderr = os.Pipe)
+    if result.exitCode != 0 then
+      sys.error(s"[docker] Build failed:\n${result.err.trim()}")
+    println(s"[docker] Built $tag")
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Client: JS only (Laminar app)
@@ -253,4 +277,45 @@ object client extends BaseJSModule:
          |""".stripMargin
     )
     Seq(PathRef(Task.dest))
+
+  private def gzipFile(src: os.Path, dest: os.Path): Unit =
+    val in = java.io.FileInputStream(src.toIO)
+    val out = java.util.zip.GZIPOutputStream(java.io.FileOutputStream(dest.toIO))
+    try
+      val buf = new Array[Byte](8192)
+      var n = in.read(buf)
+      while n > 0 do
+        out.write(buf, 0, n)
+        n = in.read(buf)
+    finally
+      out.close()
+      in.close()
+
+  /** Build production bundle and gzip assets.
+    * Usage: ./mill client.bundle
+    * Output: out/client/bundle.dest/
+    */
+  def bundle = Task:
+    val src = fullLinkJS().dest.path
+    val root = moduleDir / os.up
+    val dest = Task.dest
+
+    // Copy assets
+    os.copy(src / "main.js", dest / "main.js")
+    os.copy(root / "client" / "assets" / "styles.css", dest / "styles.css")
+    os.copy(root / "client" / "assets" / "brand-icon.svg", dest / "brand-icon.svg")
+
+    // Render index.html from template with production paths
+    renderIndex(
+      root / "client" / "index.html.template",
+      dest / "index.html",
+      jsPath = "/main.js.gz",
+      cssPath = "/styles.css.gz"
+    )
+
+    // Gzip JS and CSS
+    gzipFile(dest / "main.js", dest / "main.js.gz")
+    gzipFile(dest / "styles.css", dest / "styles.css.gz")
+
+    PathRef(dest)
 
