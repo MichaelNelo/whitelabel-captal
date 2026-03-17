@@ -40,8 +40,8 @@ object VideoRoutes:
       .serverLogic: session =>
         _ =>
           for
-            flow   <- ZIO.service[NextVideoFlowType]
-            result <- flow
+            flow     <- ZIO.service[NextVideoFlowType]
+            response <- flow
               .execute(ProvideNextVideoCommand)
               .map(VideoResponse.from)
               .catchAllCause: cause =>
@@ -52,7 +52,16 @@ object VideoRoutes:
                     case Right(c) =>
                       new Exception(s"Defect: ${c.prettyPrint}")
                 toApiError(error).flatMap(ZIO.fail(_))
-          yield result
+            // Update phase when no video is available
+            _ <- response match
+              case VideoResponse.Step(step) =>
+                ZIO
+                  .serviceWithZIO[SessionService](
+                    _.setPhase(session.sessionId, step.phase))
+                  .mapError(ApiError.fromThrowable)
+              case _ =>
+                ZIO.unit
+          yield response
   end NextVideo
 
   object MarkWatched:
@@ -76,7 +85,7 @@ object VideoRoutes:
               occurredAt = Instant.now)
             result <- flow
               .execute(cmd)
-              .map((step: NextStep) => VideoWatchedResponse(step.phase.toString))
+              .map((step: NextStep) => VideoWatchedResponse(Phase.toDbString(step.phase)))
               .catchAllCause: cause =>
                 val error =
                   cause.failureOrCause match

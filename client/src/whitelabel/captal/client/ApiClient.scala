@@ -9,6 +9,7 @@ import scala.scalajs.js
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.core.survey.question.AnswerValue
 import whitelabel.captal.endpoints.{
+  AdvertiserSurveyResponse,
   AnswerRequest,
   ApiError,
   MarkVideoWatchedRequest,
@@ -88,4 +89,10 @@ object ApiClient:
       durationWatched: Int,
       completed: Boolean): Future[Either[ApiError, VideoWatchedResponse]] =
     postJson("/api/video/watched", MarkVideoWatchedRequest(durationWatched, completed))
+
+  def getNextAdvertiserSurvey(): Future[Either[ApiError, AdvertiserSurveyResponse]] =
+    get("/api/survey/advertiser/next")
+
+  def answerAdvertiser(answer: AnswerValue): Future[Either[ApiError, AdvertiserSurveyResponse]] =
+    postJson("/api/survey/advertiser", AnswerRequest(answer))
 end ApiClient

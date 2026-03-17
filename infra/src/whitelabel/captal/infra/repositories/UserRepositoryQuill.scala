@@ -2,6 +2,7 @@ package whitelabel.captal.infra.repositories
 
 import io.getquill.*
 import whitelabel.captal.core.infrastructure.UserRepository
+import whitelabel.captal.core.survey.AdvertiserId
 import whitelabel.captal.core.user
 import whitelabel.captal.core.user.{State, User}
 import whitelabel.captal.infra.schema.QuillSqlite
@@ -51,6 +52,43 @@ object UserRepositoryQuill:
                   User[State.AnsweringQuestion](id, State.AnsweringQuestion(surveyIdOpt.get, questionIdOpt.get))
                 })
                 .orDie
+            case None =>
+              ZIO.none
+
+      def findWatchingVideo(): Task[Option[User[State.WatchingVideo]]] = ctx
+        .getOrFail
+        .flatMap: sessionData =>
+          sessionData.userId match
+            case Some(userId) =>
+              sessionData.currentVideoId match
+                case Some(videoId) =>
+                  run(findWithEmailByIdQuery(lift(userId)))
+                    .map(_.headOption.map(u =>
+                      User[State.WatchingVideo](u.id, State.WatchingVideo(videoId))))
+                    .orDie
+                case None =>
+                  ZIO.none
+            case None =>
+              ZIO.none
+
+      def findAnsweringVideoSurvey(): Task[Option[User[State.AnsweringVideoSurvey]]] = ctx
+        .getOrFail
+        .flatMap: sessionData =>
+          sessionData.userId match
+            case Some(userId) =>
+              (sessionData.currentQuestion, sessionData.currentAdvertiserId) match
+                case (Some(question), Some(advertiserId)) =>
+                  run(findWithEmailByIdQuery(lift(userId)))
+                    .map(_.headOption.map(u =>
+                      User[State.AnsweringVideoSurvey](
+                        u.id,
+                        State.AnsweringVideoSurvey(
+                          advertiserId,
+                          question.surveyId,
+                          question.questionId))))
+                    .orDie
+                case _ =>
+                  ZIO.none
             case None =>
               ZIO.none
 

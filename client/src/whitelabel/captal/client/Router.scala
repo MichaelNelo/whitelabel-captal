@@ -2,15 +2,22 @@ package whitelabel.captal.client
 
 import com.raquo.laminar.api.L.*
 import com.raquo.waypoint.*
-import whitelabel.captal.client.views.{AdvertiserVideoView, IdentificationQuestionView, ReadyView, WelcomeView}
+import whitelabel.captal.client.views.{
+  AdvertiserVideoSurveyView,
+  AdvertiserVideoView,
+  IdentificationQuestionView,
+  ReadyView,
+  WelcomeView
+}
 import whitelabel.captal.core.application.Phase
 
 // Pages for the router
 sealed trait Page
-case object WelcomePage                extends Page
-case object IdentificationQuestionPage extends Page
-case object AdvertiserVideoPage        extends Page
-case object ReadyPage                  extends Page
+case object WelcomePage                   extends Page
+case object IdentificationQuestionPage    extends Page
+case object AdvertiserVideoPage           extends Page
+case object AdvertiserVideoSurveyPage     extends Page
+case object ReadyPage                     extends Page
 
 object Router:
   // Route patterns
@@ -26,13 +33,22 @@ object Router:
     AdvertiserVideoPage,
     root / "video" / endOfSegments)
 
+  private val advertiserVideoSurveyRoute: Route[AdvertiserVideoSurveyPage.type, Unit] = Route.static(
+    AdvertiserVideoSurveyPage,
+    root / "survey" / endOfSegments)
+
   private val readyRoute: Route[ReadyPage.type, Unit] = Route.static(
     ReadyPage,
     root / "ready" / endOfSegments)
 
   private object router
       extends com.raquo.waypoint.Router[Page](
-        routes = List(welcomeRoute, questionRoute, advertiserVideoRoute, readyRoute),
+        routes = List(
+          welcomeRoute,
+          questionRoute,
+          advertiserVideoRoute,
+          advertiserVideoSurveyRoute,
+          readyRoute),
         getPageTitle = {
           case WelcomePage =>
             "WiFi Gratis"
@@ -40,6 +56,8 @@ object Router:
             "Pregunta"
           case AdvertiserVideoPage =>
             "Video"
+          case AdvertiserVideoSurveyPage =>
+            "Encuesta"
           case ReadyPage =>
             "Listo"
         },
@@ -50,6 +68,8 @@ object Router:
             "question"
           case AdvertiserVideoPage =>
             "video"
+          case AdvertiserVideoSurveyPage =>
+            "survey"
           case ReadyPage =>
             "ready"
         },
@@ -60,6 +80,8 @@ object Router:
             IdentificationQuestionPage
           case "video" =>
             AdvertiserVideoPage
+          case "survey" =>
+            AdvertiserVideoSurveyPage
           case "ready" =>
             ReadyPage
           case _ =>
@@ -84,9 +106,9 @@ object Router:
       case Phase.AdvertiserVideo =>
         AdvertiserVideoPage
       case Phase.AdvertiserVideoSurvey =>
-        AdvertiserVideoPage // Survey after video, redirect to video for now
+        AdvertiserVideoSurveyPage
       case Phase.AdvertiserQuestion =>
-        AdvertiserVideoPage // For now, redirect to video
+        AdvertiserVideoSurveyPage
       case Phase.Ready =>
         ReadyPage
 
@@ -96,5 +118,6 @@ object Router:
       .collectStatic(WelcomePage)(WelcomeView.render)
       .collectStatic(IdentificationQuestionPage)(IdentificationQuestionView.render)
       .collectStatic(AdvertiserVideoPage)(AdvertiserVideoView.render)
+      .collectStatic(AdvertiserVideoSurveyPage)(AdvertiserVideoSurveyView.render)
       .collectStatic(ReadyPage)(ReadyView.render)
 end Router

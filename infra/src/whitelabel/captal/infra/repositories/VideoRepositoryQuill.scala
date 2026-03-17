@@ -51,20 +51,13 @@ object VideoRepositoryQuill:
           sessionData <- ctx.getOrFail
           locale = sessionData.locale
           ad <- findNextAd(userId, locale)
-          result <- ad match
-            case Some(v) =>
-              ZIO.some(v)
-            case None =>
-              findNextPromo(lastPromoVideoId, locale)
-        yield result
+        yield ad
 
       private def findNextAd(userId: Option[user.Id], locale: String): Task[Option[VideoToWatch]] =
         // Weighted random: ORDER BY -LOG(ABS(RANDOM()) + 0.0001) / combined_weight
-        // combined_weight = (adv.priority / sum_adv) * (vid.priority / sum_vid_of_adv)
-        // NOTE: This query uses raw SQL because Quill DSL doesn't support LOG(ABS(RANDOM()))
+        // Only show video if advertiser has unanswered survey questions for this user
         val queryResult = userId match
           case Some(uid) =>
-            // Filtrar videos ya vistos por el usuario dentro del cooldown
             run(sql"""
               SELECT v.id, v.advertiser_id, v.video_type, v.video_url, v.duration_seconds,
                      v.min_watch_seconds, v.show_countdown, v.no_repeat_seconds, v.is_active,
@@ -74,12 +67,10 @@ object VideoRepositoryQuill:
               WHERE v.is_active = 1
                 AND a.is_active = 1
                 AND v.video_type = 'publicidad'
-                AND NOT EXISTS (
-                  SELECT 1 FROM video_views vv
-                  WHERE vv.video_id = v.id
-                    AND vv.user_id = ${lift(uid.asString)}
-                    AND v.no_repeat_seconds IS NOT NULL
-                    AND vv.viewed_at > datetime('now', '-' || v.no_repeat_seconds || ' seconds')
+                AND EXISTS (
+                  SELECT 1 FROM surveys s JOIN questions q ON s.id = q.survey_id
+                  WHERE s.video_id = v.id AND s.is_active = 1 AND s.category = 'advertiser'
+                  AND NOT EXISTS (SELECT 1 FROM answers ans WHERE ans.question_id = q.id AND ans.user_id = ${lift(uid.asString)})
                 )
               ORDER BY -LOG(ABS(RANDOM()) + 0.0001) / (
                 (CAST(a.priority AS REAL) / NULLIF((SELECT SUM(priority) FROM advertisers WHERE is_active = 1), 0)) *
@@ -88,7 +79,7 @@ object VideoRepositoryQuill:
               LIMIT 1
             """.as[Query[AdvertiserVideoRow]])
           case None =>
-            // Usuario anónimo: cualquier video de publicidad activo
+            // Anonymous user: any active ad video
             run(sql"""
               SELECT v.id, v.advertiser_id, v.video_type, v.video_url, v.duration_seconds,
                      v.min_watch_seconds, v.show_countdown, v.no_repeat_seconds, v.is_active,
