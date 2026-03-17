@@ -2,7 +2,6 @@ package whitelabel.captal.infra.repositories
 
 import io.getquill.*
 import whitelabel.captal.core.infrastructure.UserRepository
-import whitelabel.captal.core.survey.AdvertiserId
 import whitelabel.captal.core.user
 import whitelabel.captal.core.user.{State, User}
 import whitelabel.captal.infra.schema.QuillSqlite

@@ -1,8 +1,9 @@
 package whitelabel.captal.client
 
-import org.scalajs.dom
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Future
+
+import org.scalajs.dom
 
 object Runtime:
   /** Run a Future, ignoring the result. Errors are logged to console. */

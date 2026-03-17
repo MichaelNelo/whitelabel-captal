@@ -1,13 +1,15 @@
 package whitelabel.captal.client
 
-import io.circe.{Decoder, Encoder, parser}
-import io.circe.syntax.*
-import org.scalajs.dom
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Future
 import scala.scalajs.js
+
+import io.circe.syntax.*
+import io.circe.{Decoder, Encoder, parser}
+import org.scalajs.dom
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.core.survey.question.AnswerValue
+import whitelabel.captal.endpoints.i18n.given
 import whitelabel.captal.endpoints.{
   AdvertiserSurveyResponse,
   AnswerRequest,
@@ -19,7 +21,6 @@ import whitelabel.captal.endpoints.{
   VideoResponse,
   VideoWatchedResponse
 }
-import whitelabel.captal.endpoints.i18n.given
 
 object ApiClient:
   private def fetchApi[A: Decoder](

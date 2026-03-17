@@ -1,12 +1,12 @@
 package whitelabel.captal.client.views
 
+import scala.concurrent.ExecutionContext.Implicits.global
+
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.i18n.I18nClient
 import whitelabel.captal.client.{ApiClient, AppState, Router, Runtime}
 import whitelabel.captal.core.Op
 import whitelabel.captal.core.application.commands.NextAdvertiserSurvey
-import whitelabel.captal.core.application.Phase
-import whitelabel.captal.core.survey.Error as SurveyError
 import whitelabel.captal.core.survey.question.{
   AnswerValue,
   QuestionOption,
@@ -15,7 +15,6 @@ import whitelabel.captal.core.survey.question.{
   ops as questionOps
 }
 import whitelabel.captal.endpoints.AdvertiserSurveyResponse
-import scala.concurrent.ExecutionContext.Implicits.global
 
 object AdvertiserVideoSurveyView:
   private val answerValue: Var[Option[AnswerValue]] = Var(None)
