@@ -88,6 +88,8 @@ object HandlerTests extends TestSuite:
     new UserRepository[Id]:
       def findWithEmail() = withEmailUser
       def findAnswering() = answeringUser
+      def findWatchingVideo() = None
+      def findAnsweringVideoSurvey() = None
 
   given Parallel[Id] = Parallel.identity[Id]
 
