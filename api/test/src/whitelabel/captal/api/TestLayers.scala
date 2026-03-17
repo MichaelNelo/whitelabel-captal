@@ -23,7 +23,7 @@ object TestLayers:
     nextPhaseAfterIdentificationQuestion)
 
   // Phase after video for tests
-  private val nextPhaseAfterVideo: Phase = Phase.Ready
+  private val nextPhaseAfterVideo: Phase = Phase.AdvertiserVideoSurvey
   private val testConfig = ConfigFactory.load("test.conf")
 
   private val quillLayer = Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)
@@ -46,7 +46,8 @@ object TestLayers:
   private val eventHandlerLayer
       : ZLayer[QuillSqlite & SessionContext, Nothing, EventHandler[Task, Event]] = ZLayer
     .fromFunction: (quill: QuillSqlite, ctx: SessionContext) =>
-      val dbHandler = AnswerPersistenceHandler(ctx)
+      val dbHandler = EventLogHandler(ctx)
+        .andThen(AnswerPersistenceHandler(ctx))
         .andThen(UserPersistenceHandler(ctx))
         .andThen(SessionPhaseHandler(ctx, nextPhaseAfterIdentificationQuestion, nextPhaseAfterVideo))
         .andThen(SessionSurveyHandler(ctx))
@@ -112,7 +113,36 @@ object TestLayers:
         videoRepo: VideoRepository[Task],
         userRepo: UserRepository[Task],
         eventHandler: EventHandler[Task, Event]) =>
-      Flow(ProvideNextVideoHandler(videoRepo, userRepo, nextPhaseAfterVideo), eventHandler)
+      // When no video is available, go to Ready (not AdvertiserVideoSurvey)
+      Flow(ProvideNextVideoHandler(videoRepo, userRepo, Phase.Ready), eventHandler)
+
+  private val nextAdvertiserSurveyFlowLayer: ZLayer[
+    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[
+      Task,
+      ProvideNextAdvertiserSurveyCommand,
+      ProvideNextAdvertiserSurveyHandler.Response]
+  ] = ZLayer.fromFunction:
+    (
+        surveyRepo: SurveyRepository[Task],
+        userRepo: UserRepository[Task],
+        eventHandler: EventHandler[Task, Event]) =>
+      Flow(
+        ProvideNextAdvertiserSurveyHandler(surveyRepo, userRepo, Phase.Ready),
+        eventHandler)
+
+  private val answerAdvertiserFlowLayer: ZLayer[
+    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[Task, AnswerAdvertiserCommand, NextStep]] = ZLayer.fromFunction:
+    (
+        surveyRepo: SurveyRepository[Task],
+        userRepo: UserRepository[Task],
+        eventHandler: EventHandler[Task, Event]) =>
+      Flow(
+        AnswerAdvertiserHandler(surveyRepo, userRepo, NextStep(Phase.AdvertiserVideoSurvey)),
+        eventHandler)
 
   private val markVideoWatchedFlowLayer: ZLayer[
     VideoRepository[Task] & SessionContext & EventHandler[Task, Event],
@@ -141,7 +171,8 @@ object TestLayers:
     SessionContext & SessionService & LocaleService & SurveyRoutes.AnswerEmailFlowType &
       SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
       SurveyRoutes.NextSurveyFlowType & VideoRoutes.NextVideoFlowType &
-      VideoRoutes.MarkVideoWatchedFlowType & QuillSqlite
+      VideoRoutes.MarkVideoWatchedFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
+      AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & QuillSqlite
 
   val testEnv: ZLayer[Any, Throwable, TestEnv] = ZLayer.make[TestEnv](
     SessionContext.make,
@@ -158,6 +189,8 @@ object TestLayers:
     answerLocationFlowLayer,
     nextSurveyFlowLayer,
     nextVideoFlowLayer,
-    markVideoWatchedFlowLayer
+    markVideoWatchedFlowLayer,
+    nextAdvertiserSurveyFlowLayer,
+    answerAdvertiserFlowLayer
   )
 end TestLayers

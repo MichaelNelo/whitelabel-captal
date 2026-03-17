@@ -78,6 +78,7 @@ object TestFixtures:
         id = surveyId,
         category = "profiling",
         advertiserId = None,
+        videoId = None,
         isActive = 1,
         createdAt = now)
       val questionsWithText = List(
@@ -125,6 +126,7 @@ object TestFixtures:
         id = surveyId,
         category = category,
         advertiserId = None,
+        videoId = None,
         isActive = 1,
         createdAt = now)
       val questionRow = QuestionRow(
@@ -298,6 +300,7 @@ object TestFixtures:
       val conn = quill.ds.getConnection
       try
         val stmt = conn.createStatement()
+        stmt.execute("DELETE FROM event_log")
         stmt.execute("DELETE FROM video_views")
         stmt.execute("DELETE FROM user_survey_progress")
         stmt.execute("DELETE FROM answers")
@@ -362,6 +365,7 @@ object TestFixtures:
         id = surveyId,
         category = category,
         advertiserId = None,
+        videoId = None,
         isActive = 0, // Inactive!
         createdAt = now)
       val questionRow = QuestionRow(
@@ -394,6 +398,7 @@ object TestFixtures:
         id = surveyId,
         category = category,
         advertiserId = Some(advId),
+        videoId = None,
         isActive = 1,
         createdAt = now)
       val questionsWithText = (1 to 3).map: order =>
@@ -578,4 +583,142 @@ object TestFixtures:
         stmt.close()
       finally
         conn.close()
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Advertiser Video + Survey Fixtures
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  final case class AdvertiserVideoSurveyFixture(
+      advertiserId: String,
+      videoId: video.Id,
+      videoUrl: String,
+      durationSeconds: Int,
+      surveyId: survey.Id,
+      questionIds: List[survey.question.Id],
+      optionIds: List[List[survey.question.OptionId]])
+
+  def seedAdvertiserWithVideoAndSurvey(
+      advertiserName: String = "Test Advertiser",
+      videoUrl: String = "https://cdn.example.com/ad.mp4",
+      videoTitle: String = "Test Ad",
+      durationSeconds: Int = 15,
+      questionCount: Int = 2): ZIO[QuillSqlite, Throwable, AdvertiserVideoSurveyFixture] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      val now = java.time.Instant.now.toString
+      val advertiserId = UUID.randomUUID.toString
+      val videoId = video.Id.generate
+      val surveyId = survey.Id.generate
+
+      val advertiserRow = AdvertiserRow(
+        id = advertiserId,
+        name = advertiserName,
+        priority = 10,
+        isActive = 1,
+        createdAt = now,
+        updatedAt = now)
+
+      val videoRow = AdvertiserVideoRow(
+        id = videoId,
+        advertiserId = Some(advertiserId),
+        videoType = "publicidad",
+        videoUrl = videoUrl,
+        durationSeconds = durationSeconds,
+        minWatchSeconds = 8,
+        showCountdown = 1,
+        noRepeatSeconds = None,
+        isActive = 1,
+        priority = 10,
+        createdAt = now,
+        updatedAt = now)
+
+      val titleRow = LocalizedTextRow(
+        id = UUID.randomUUID.toString,
+        entityId = videoId.asString,
+        locale = "en",
+        value = videoTitle,
+        category = "backend",
+        createdAt = now,
+        updatedAt = now)
+
+      val surveyRow = SurveyRow(
+        id = surveyId,
+        category = "advertiser",
+        advertiserId = Some(advertiserId),
+        videoId = Some(videoId.asString),
+        isActive = 1,
+        createdAt = now)
+
+      val questionsData = (1 to questionCount).map: order =>
+        val questionId = survey.question.Id.generate
+        val opt1Id = survey.question.OptionId.generate
+        val opt2Id = survey.question.OptionId.generate
+        val questionRow = QuestionRow(
+          id = questionId,
+          surveyId = surveyId,
+          questionType = "radio",
+          pointsAwarded = 10,
+          displayOrder = order,
+          hierarchyLevel = None,
+          isRequired = 1,
+          createdAt = now)
+        val textRow = LocalizedTextRow(
+          id = UUID.randomUUID.toString,
+          entityId = questionId.asString,
+          locale = "en",
+          value = s"$advertiserName Question $order",
+          category = "backend",
+          createdAt = now,
+          updatedAt = now)
+        val opt1Row = QuestionOptionRow(
+          id = opt1Id,
+          questionId = questionId,
+          displayOrder = 1,
+          parentOptionId = None)
+        val opt1TextRow = LocalizedTextRow(
+          id = UUID.randomUUID.toString,
+          entityId = opt1Id.asString,
+          locale = "en",
+          value = s"Option A",
+          category = "backend",
+          createdAt = now,
+          updatedAt = now)
+        val opt2Row = QuestionOptionRow(
+          id = opt2Id,
+          questionId = questionId,
+          displayOrder = 2,
+          parentOptionId = None)
+        val opt2TextRow = LocalizedTextRow(
+          id = UUID.randomUUID.toString,
+          entityId = opt2Id.asString,
+          locale = "en",
+          value = s"Option B",
+          category = "backend",
+          createdAt = now,
+          updatedAt = now)
+        (questionRow, textRow, opt1Row, opt1TextRow, opt2Row, opt2TextRow, List(opt1Id, opt2Id))
+      .toList
+
+      for
+        _ <- run(query[AdvertiserRow].insertValue(lift(advertiserRow)))
+        _ <- run(query[AdvertiserVideoRow].insertValue(lift(videoRow)))
+        _ <- run(query[LocalizedTextRow].insertValue(lift(titleRow)))
+        _ <- run(query[SurveyRow].insertValue(lift(surveyRow)))
+        _ <-
+          ZIO.foreach(questionsData):
+            (qRow, tRow, opt1Row, opt1TextRow, opt2Row, opt2TextRow, _) =>
+              run(query[QuestionRow].insertValue(lift(qRow))) *>
+                run(query[LocalizedTextRow].insertValue(lift(tRow))) *>
+                run(query[QuestionOptionRow].insertValue(lift(opt1Row))) *>
+                run(query[LocalizedTextRow].insertValue(lift(opt1TextRow))) *>
+                run(query[QuestionOptionRow].insertValue(lift(opt2Row))) *>
+                run(query[LocalizedTextRow].insertValue(lift(opt2TextRow)))
+      yield AdvertiserVideoSurveyFixture(
+        advertiserId,
+        videoId,
+        videoUrl,
+        durationSeconds,
+        surveyId,
+        questionsData.map(_._1.id),
+        questionsData.map(_._7))
 end TestFixtures

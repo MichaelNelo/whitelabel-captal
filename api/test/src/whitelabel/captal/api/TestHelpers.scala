@@ -7,11 +7,13 @@ import sttp.monad.MonadError
 import sttp.tapir.server.ServerEndpoint
 import sttp.tapir.server.stub.TapirStubInterpreter
 import sttp.tapir.ztapir.ZServerEndpoint
+import whitelabel.captal.core.application.commands.NextAdvertiserSurvey.given
 import whitelabel.captal.core.application.commands.NextIdentificationSurvey.given
-import whitelabel.captal.core.application.commands.{NextIdentificationSurvey, NextVideo}
+import whitelabel.captal.core.application.commands.{NextAdvertiserSurvey, NextIdentificationSurvey, NextVideo}
+import whitelabel.captal.endpoints.AdvertiserSurveyResponse.given
 import whitelabel.captal.endpoints.VideoResponse.given
 import whitelabel.captal.endpoints.VideoWatchedResponse.given
-import whitelabel.captal.endpoints.{VideoResponse, VideoWatchedResponse}
+import whitelabel.captal.endpoints.{AdvertiserSurveyResponse, VideoResponse, VideoWatchedResponse}
 import zio.*
 
 object TestHelpers:
@@ -50,8 +52,10 @@ object TestHelpers:
       val surveyEndpoints = SurveyRoutes.routes.map(e => provideEnvToEndpoint(e, env))
       val localeEndpoints = LocaleRoutes.routes.map(e => provideEnvToEndpoint(e, env))
       val videoEndpoints = VideoRoutes.routes.map(e => provideEnvToEndpoint(e, env))
+      val advertiserSurveyEndpoints = AdvertiserSurveyRoutes.routes.map(e => provideEnvToEndpoint(e, env))
       TapirStubInterpreter(SttpBackendStub[Task, Any](taskMonadError))
-        .whenServerEndpointsRunLogic(surveyEndpoints ++ localeEndpoints ++ videoEndpoints)
+        .whenServerEndpointsRunLogic(
+          surveyEndpoints ++ localeEndpoints ++ videoEndpoints ++ advertiserSurveyEndpoints)
         .backend()
 
   def extractSessionCookie(response: Response[String]): Option[String] = response
@@ -152,4 +156,32 @@ object TestHelpers:
 
   def parseVideoWatchedResponse(body: String): Option[VideoWatchedResponse] =
     decode[VideoWatchedResponse](body).toOption
+
+  // Advertiser survey helpers
+  def getNextAdvertiserSurvey(backend: SttpBackend[Task, Any], sessionCookie: String) = basicRequest
+    .get(uri"http://test/api/survey/advertiser/next")
+    .cookie("session_id", sessionCookie)
+    .response(asStringAlways)
+    .send(backend)
+
+  def postAdvertiserAnswer(
+      backend: SttpBackend[Task, Any],
+      sessionCookie: String,
+      optionId: String) = basicRequest
+    .post(uri"http://test/api/survey/advertiser")
+    .cookie("session_id", sessionCookie)
+    .body(s"""{"answer":{"type":"single","value":"$optionId"}}""")
+    .contentType("application/json")
+    .response(asStringAlways)
+    .send(backend)
+
+  def parseNextAdvertiserSurvey(body: String): Option[NextAdvertiserSurvey] =
+    decode[AdvertiserSurveyResponse](body).toOption.flatMap:
+      case AdvertiserSurveyResponse.Survey(data) => Some(data)
+      case AdvertiserSurveyResponse.Step(_)      => None
+
+  def parseAdvertiserSurveyStep(body: String): Boolean =
+    decode[AdvertiserSurveyResponse](body).toOption.exists:
+      case AdvertiserSurveyResponse.Step(_) => true
+      case _                               => false
 end TestHelpers

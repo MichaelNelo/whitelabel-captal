@@ -17,7 +17,8 @@ object E2ETests extends ZIOSpecDefault:
       ValidationSuite.suite,
       PhaseValidationSuite.suite,
       SessionIsolationSuite.suite,
-      VideoSuite.suite
+      VideoSuite.suite,
+      AdvertiserVideoSurveySuite.suite
     ) @@ TestAspect.sequential @@ TestAspect.before(clearAndSeedNoise.orDie)
   ).provideShared(TestLayers.testEnv, ZLayer.fromZIO(TestFixtures.migrate.unit))
 end E2ETests
