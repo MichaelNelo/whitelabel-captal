@@ -7,7 +7,6 @@ import sttp.monad.MonadError
 import sttp.tapir.server.ServerEndpoint
 import sttp.tapir.server.stub.TapirStubInterpreter
 import sttp.tapir.ztapir.ZServerEndpoint
-import whitelabel.captal.core.application.commands.NextAdvertiserSurvey.given
 import whitelabel.captal.core.application.commands.NextIdentificationSurvey.given
 import whitelabel.captal.core.application.commands.{NextAdvertiserSurvey, NextIdentificationSurvey, NextVideo}
 import whitelabel.captal.endpoints.AdvertiserSurveyResponse.given

@@ -6,11 +6,8 @@ import sttp.tapir.json.circe.*
 import sttp.tapir.ztapir.*
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Flow, NextStep, Phase}
-import whitelabel.captal.core.infrastructure.{SessionData, SurveyRepository}
-import whitelabel.captal.core.survey.question.FullyQualifiedQuestionId
 import whitelabel.captal.endpoints.AdvertiserSurveyResponse.given
 import whitelabel.captal.endpoints.AnswerRequest.given
-import whitelabel.captal.endpoints.schemas.given
 import whitelabel.captal.endpoints.{AdvertiserSurveyResponse, AnswerRequest, ApiError}
 import whitelabel.captal.infra.session.{SessionContext, SessionService}
 import zio.*

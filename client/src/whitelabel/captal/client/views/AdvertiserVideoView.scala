@@ -1,5 +1,7 @@
 package whitelabel.captal.client.views
 
+import scala.concurrent.ExecutionContext.Implicits.global
+
 import com.raquo.laminar.api.L.*
 import org.scalajs.dom
 import org.scalajs.dom.html.{Div, Video}
@@ -9,7 +11,6 @@ import whitelabel.captal.client.{ApiClient, AppState, Router, Runtime}
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.application.commands.NextVideo
 import whitelabel.captal.endpoints.VideoResponse
-import scala.concurrent.ExecutionContext.Implicits.global
 
 object AdvertiserVideoView:
   // Max wait time for video preload (in milliseconds)

@@ -1,9 +1,10 @@
 package whitelabel.captal.client.i18n
 
+import scala.concurrent.ExecutionContext.Implicits.global
+
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.{ApiClient, Runtime}
 import whitelabel.captal.core.i18n.I18n
-import scala.concurrent.ExecutionContext.Implicits.global
 
 object I18nClient:
   // Default empty I18n for initial state

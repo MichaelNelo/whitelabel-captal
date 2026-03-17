@@ -7,6 +7,7 @@ import sttp.tapir.ztapir.{RichZServerEndpoint, ZServerEndpoint}
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Event, EventHandler, Flow, NextStep, Phase}
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository, VideoRepository}
+import whitelabel.captal.infra.RqliteDataSource
 import whitelabel.captal.infra.eventhandlers.{
   AnswerPersistenceHandler,
   DbEventHandler,
@@ -18,7 +19,6 @@ import whitelabel.captal.infra.eventhandlers.{
   TransactionalEventHandler,
   UserPersistenceHandler
 }
-import whitelabel.captal.infra.RqliteDataSource
 import whitelabel.captal.infra.repositories.{SurveyRepositoryQuill, UserRepositoryQuill, VideoRepositoryQuill}
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.services.LocaleService

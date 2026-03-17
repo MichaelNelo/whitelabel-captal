@@ -1,10 +1,11 @@
 package whitelabel.captal.client.views
 
+import scala.concurrent.ExecutionContext.Implicits.global
+
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.i18n.I18nClient
 import whitelabel.captal.client.{ApiClient, AppState, BuildInfo, Router, Runtime}
 import whitelabel.captal.core.application.Phase
-import scala.concurrent.ExecutionContext.Implicits.global
 
 object ReadyView:
   private val isResetting: Var[Boolean] = Var(false)
