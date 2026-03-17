@@ -1,5 +1,7 @@
 package whitelabel.captal.client.views
 
+import scala.concurrent.ExecutionContext.Implicits.global
+
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.i18n.I18nClient
 import whitelabel.captal.client.{ApiClient, AppState, Router, Runtime}
@@ -15,7 +17,6 @@ import whitelabel.captal.core.survey.question.{
   ops as questionOps
 }
 import whitelabel.captal.endpoints.SurveyResponse
-import scala.concurrent.ExecutionContext.Implicits.global
 
 object IdentificationQuestionView:
   private val answerValue: Var[Option[AnswerValue]] = Var(None)

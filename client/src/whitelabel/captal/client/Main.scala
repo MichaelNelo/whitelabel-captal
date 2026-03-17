@@ -1,8 +1,9 @@
 package whitelabel.captal.client
 
+import scala.concurrent.ExecutionContext.Implicits.global
+
 import com.raquo.laminar.api.L.*
 import org.scalajs.dom
-import scala.concurrent.ExecutionContext.Implicits.global
 
 @main
 def main(): Unit =
