@@ -4,7 +4,7 @@ import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import io.circe.{Decoder as CirceDecoder, Encoder as CirceEncoder}
 import sttp.tapir.Schema
-import whitelabel.captal.core.application.commands.{NextIdentificationSurvey, NextVideo}
+import whitelabel.captal.core.application.commands.{NextAdvertiserSurvey, NextIdentificationSurvey, NextVideo}
 import whitelabel.captal.core.application.{IdentificationSurveyType, NextStep, Phase}
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.core.survey
@@ -72,9 +72,13 @@ object schemas:
   // AnswerValue
   given Schema[AnswerValue] = Schema.anyObject
 
-  // NextIdentificationSurvey, NextVideo and NextStep
+  // AdvertiserId
+  given Schema[survey.AdvertiserId] = Schema.string
+
+  // NextIdentificationSurvey, NextVideo, NextAdvertiserSurvey and NextStep
   given Schema[NextIdentificationSurvey] = Schema.derived
   given Schema[NextVideo] = Schema.derived
+  given Schema[NextAdvertiserSurvey] = Schema.derived
   given Schema[NextStep] = Schema.derived
   given Schema[SurveyResponse] = Schema.anyObject
 end schemas

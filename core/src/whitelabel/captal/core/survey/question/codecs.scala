@@ -28,6 +28,13 @@ object codecs:
     .decodeString
     .emap(s => OptionId.fromString(s).toRight(s"Invalid option id: $s"))
 
+  given advertiserIdEncoder: Encoder[survey.AdvertiserId] = Encoder
+    .encodeString
+    .contramap(_.asString)
+  given advertiserIdDecoder: Decoder[survey.AdvertiserId] = Decoder
+    .decodeString
+    .emap(s => survey.AdvertiserId.fromString(s).toRight(s"Invalid advertiser id: $s"))
+
   // ─────────────────────────────────────────────────────────────────────────────
   // Selection Rules
   // ─────────────────────────────────────────────────────────────────────────────

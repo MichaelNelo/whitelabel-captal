@@ -20,12 +20,14 @@ final case class SessionRow(
     currentQuestionId: Option[survey.question.Id],
     currentVideoId: Option[video.Id],
     lastPromoVideoId: Option[video.Id],
+    currentAdvertiserId: Option[String],
     createdAt: String)
 
 final case class SurveyRow(
     id: survey.Id,
     category: String,
     advertiserId: Option[String],
+    videoId: Option[String],
     isActive: Int,
     createdAt: String)
 
@@ -126,3 +128,12 @@ final case class DeviceUserRow(
     userId: user.Id,
     firstSeenAt: String,
     lastSeenAt: String)
+
+final case class EventLogRow(
+    id: String,
+    eventType: String,
+    eventData: String,
+    sessionId: String,
+    userId: Option[String],
+    occurredAt: String,
+    createdAt: String)

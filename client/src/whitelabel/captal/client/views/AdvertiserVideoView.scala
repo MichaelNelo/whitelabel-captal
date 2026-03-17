@@ -319,8 +319,9 @@ object AdvertiserVideoView:
     AppState.setNavigating(true)
     Runtime.run:
       ApiClient.markVideoWatched(duration, completed).map:
-        case Right(_) =>
-          Router.syncWithPhase(Phase.Ready)
+        case Right(resp) =>
+          val nextPhase = Phase.fromDbString(resp.nextPhase)
+          Router.syncWithPhase(nextPhase)
           AppState.setNavigating(false)
         case Left(_) =>
           AppState.setNavigating(false)

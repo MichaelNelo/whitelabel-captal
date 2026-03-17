@@ -33,6 +33,7 @@ object SessionPhaseHandler:
         val hasIdentificationAnswer = events.exists(isIdentificationAnswer)
         val hasIdentificationCompleted = events.exists(isIdentificationCompleted)
         val hasVideoVisualized = events.exists(isVideoVisualized)
+        val hasVideoSurveyAssigned = events.exists(isVideoSurveyAssigned)
 
         for
           sessionData <- ctx.getOrFail
@@ -47,6 +48,11 @@ object SessionPhaseHandler:
                 SessionService.updatePhaseQuery(
                   lift(sessionData.sessionId),
                   lift(nextPhaseAfterIdentificationQuestion))).orDie
+            else if hasVideoSurveyAssigned then
+              run(
+                SessionService.updatePhaseQuery(
+                  lift(sessionData.sessionId),
+                  lift(Phase.AdvertiserVideoSurvey))).orDie
             else if hasVideoVisualized then
               run(
                 SessionService.updatePhaseQuery(
@@ -79,6 +85,13 @@ object SessionPhaseHandler:
   private def isVideoVisualized(event: Event): Boolean =
     event match
       case Event.Video(_: VideoEvent.VideoVisualized) =>
+        true
+      case _ =>
+        false
+
+  private def isVideoSurveyAssigned(event: Event): Boolean =
+    event match
+      case Event.User(_: UserEvent.VideoSurveyAssigned) =>
         true
       case _ =>
         false

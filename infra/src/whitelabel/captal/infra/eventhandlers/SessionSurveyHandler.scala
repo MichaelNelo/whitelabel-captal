@@ -36,6 +36,8 @@ object SessionSurveyHandler:
         Some(nextQuestion)
       case Event.User(UserEvent.NewUserArrived(_, Some(nextQuestion), _)) =>
         Some(nextQuestion)
+      case Event.User(UserEvent.VideoSurveyAssigned(_, _, nextQuestion, _)) =>
+        Some(nextQuestion)
       case _ =>
         None
 end SessionSurveyHandler
