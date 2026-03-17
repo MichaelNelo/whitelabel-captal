@@ -3,6 +3,7 @@ package whitelabel.captal.infra.session
 import io.getquill.*
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.infrastructure.SessionData
+import whitelabel.captal.core.survey.AdvertiserId
 import whitelabel.captal.core.survey.question.FullyQualifiedQuestionId
 import whitelabel.captal.core.{survey, user, video}
 import whitelabel.captal.infra.schema.QuillSqlite
@@ -62,6 +63,17 @@ object SessionService:
         .filter(_.id == sessionIdParam)
         .update(_.lastPromoVideoId -> Some(videoIdParam))
 
+  inline def updateCurrentAdvertiserQuery = quote:
+    (sessionIdParam: user.SessionId, advertiserIdParam: String) =>
+      query[SessionRow]
+        .filter(_.id == sessionIdParam)
+        .update(_.currentAdvertiserId -> Some(advertiserIdParam))
+
+  inline def clearCurrentAdvertiserQuery = quote: (sessionIdParam: user.SessionId) =>
+    query[SessionRow]
+      .filter(_.id == sessionIdParam)
+      .update(_.currentAdvertiserId -> None)
+
   def apply(quill: QuillSqlite): SessionService =
     new SessionService:
       import quill.*
@@ -99,6 +111,7 @@ object SessionService:
           currentQuestionId = None,
           currentVideoId = None,
           lastPromoVideoId = None,
+          currentAdvertiserId = None,
           createdAt = now)
 
         val insertSession = run(
@@ -112,6 +125,7 @@ object SessionService:
             _.currentQuestionId -> lift(sessionRow.currentQuestionId),
             _.currentVideoId   -> lift(sessionRow.currentVideoId),
             _.lastPromoVideoId -> lift(sessionRow.lastPromoVideoId),
+            _.currentAdvertiserId -> lift(sessionRow.currentAdvertiserId),
             _.createdAt        -> lift(sessionRow.createdAt)))
 
         (upsertDevice *> insertSession).orDie *>
@@ -150,7 +164,8 @@ object SessionService:
       row.phase,
       currentQuestion,
       row.currentVideoId,
-      row.lastPromoVideoId)
+      row.lastPromoVideoId,
+      row.currentAdvertiserId.flatMap(AdvertiserId.fromString))
 
   val layer: ZLayer[QuillSqlite, Nothing, SessionService] = ZLayer.fromFunction(apply)
 end SessionService

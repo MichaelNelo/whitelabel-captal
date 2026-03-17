@@ -10,6 +10,7 @@ import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository, 
 import whitelabel.captal.infra.eventhandlers.{
   AnswerPersistenceHandler,
   DbEventHandler,
+  EventLogHandler,
   SessionPhaseHandler,
   SessionSurveyHandler,
   SessionVideoHandler,
@@ -55,14 +56,14 @@ object Main extends ZIOAppDefault:
     nextPhaseAfterIdentificationQuestion)
 
   // Phase after advertiser video:
-  // - Prod: Phase.AdvertiserVideoSurvey (when video surveys are implemented)
-  // - Dev: Phase.Ready (skip video surveys for now)
-  private val nextPhaseAfterVideo: Phase = Phase.Ready
+  // After watching a video, transition to AdvertiserVideoSurvey to answer advertiser questions
+  private val nextPhaseAfterVideo: Phase = Phase.AdvertiserVideoSurvey
   type FullEnv =
     SessionContext & SessionService & LocaleService & SurveyRoutes.AnswerEmailFlowType &
       SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
       SurveyRoutes.NextSurveyFlowType & VideoRoutes.NextVideoFlowType &
-      VideoRoutes.MarkVideoWatchedFlowType
+      VideoRoutes.MarkVideoWatchedFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
+      AdvertiserSurveyRoutes.AnswerAdvertiserFlowType
 
   private val healthEndpoints: List[ZServerEndpoint[FullEnv, Any]] = HealthRoutes
     .routes
@@ -80,12 +81,16 @@ object Main extends ZIOAppDefault:
     .routes
     .map(_.widen[FullEnv])
 
+  private val advertiserSurveyEndpoints: List[ZServerEndpoint[FullEnv, Any]] = AdvertiserSurveyRoutes
+    .routes
+    .map(_.widen[FullEnv])
+
   private val devOnlyEndpoints: List[ZServerEndpoint[FullEnv, Any]] = LocaleRoutes
     .devRoutes
     .map(_.widen[FullEnv])
 
   private def endpoints(devEndpoints: Boolean): List[ZServerEndpoint[FullEnv, Any]] =
-    val base = healthEndpoints ++ surveyEndpoints ++ localeEndpoints ++ videoEndpoints
+    val base = healthEndpoints ++ surveyEndpoints ++ localeEndpoints ++ videoEndpoints ++ advertiserSurveyEndpoints
     if devEndpoints then
       base ++ devOnlyEndpoints
     else
@@ -99,9 +104,6 @@ object Main extends ZIOAppDefault:
     // Serve assets
     Method.GET / "assets" / "styles.css" ->
       zio.http.Handler.fromFile(java.io.File("client/assets/styles.css")),
-    Method.GET / "assets" / "brand-icon.svg" ->
-      zio.http.Handler.fromFile(java.io.File("client/assets/brand-icon.svg")),
-    // Legacy path for brand icon (keep for compatibility)
     Method.GET / "brand-icon.svg" ->
       zio.http.Handler.fromFile(java.io.File("client/assets/brand-icon.svg")),
     // Serve compiled JS (fastLinkJS for local dev, fullLinkJS for Docker)
@@ -135,6 +137,7 @@ object Main extends ZIOAppDefault:
       Method.GET / ""         -> serveIndex,
       Method.GET / "question" -> serveIndex,
       Method.GET / "video"    -> serveIndex,
+      Method.GET / "survey"   -> serveIndex,
       Method.GET / "ready"    -> serveIndex)
 
   private def routes(devMode: Boolean, devEndpoints: Boolean): Routes[FullEnv, Response] =
@@ -173,7 +176,8 @@ object Main extends ZIOAppDefault:
   private val eventHandlerLayer
       : ZLayer[QuillSqlite & SessionContext, Nothing, EventHandler[Task, Event]] = ZLayer
     .fromFunction: (quill: QuillSqlite, ctx: SessionContext) =>
-      val dbHandler = AnswerPersistenceHandler(ctx)
+      val dbHandler = EventLogHandler(ctx)
+        .andThen(AnswerPersistenceHandler(ctx))
         .andThen(UserPersistenceHandler(ctx))
         .andThen(SessionPhaseHandler(ctx, nextPhaseAfterIdentificationQuestion, nextPhaseAfterVideo))
         .andThen(SessionSurveyHandler(ctx))
@@ -239,7 +243,36 @@ object Main extends ZIOAppDefault:
         videoRepo: VideoRepository[Task],
         userRepo: UserRepository[Task],
         eventHandler: EventHandler[Task, Event]) =>
-      Flow(ProvideNextVideoHandler(videoRepo, userRepo, nextPhaseAfterVideo), eventHandler)
+      // When no video is available, go to Ready (not AdvertiserVideoSurvey)
+      Flow(ProvideNextVideoHandler(videoRepo, userRepo, Phase.Ready), eventHandler)
+
+  private val nextAdvertiserSurveyFlowLayer: ZLayer[
+    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[
+      Task,
+      ProvideNextAdvertiserSurveyCommand,
+      ProvideNextAdvertiserSurveyHandler.Response]
+  ] = ZLayer.fromFunction:
+    (
+        surveyRepo: SurveyRepository[Task],
+        userRepo: UserRepository[Task],
+        eventHandler: EventHandler[Task, Event]) =>
+      Flow(
+        ProvideNextAdvertiserSurveyHandler(surveyRepo, userRepo, Phase.Ready),
+        eventHandler)
+
+  private val answerAdvertiserFlowLayer: ZLayer[
+    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[Task, AnswerAdvertiserCommand, NextStep]] = ZLayer.fromFunction:
+    (
+        surveyRepo: SurveyRepository[Task],
+        userRepo: UserRepository[Task],
+        eventHandler: EventHandler[Task, Event]) =>
+      Flow(
+        AnswerAdvertiserHandler(surveyRepo, userRepo, NextStep(Phase.AdvertiserVideoSurvey)),
+        eventHandler)
 
   // Custom Flow for MarkVideoWatched that accesses SessionContext at request time
   private val markVideoWatchedFlowLayer: ZLayer[
@@ -278,7 +311,9 @@ object Main extends ZIOAppDefault:
     answerLocationFlowLayer,
     nextSurveyFlowLayer,
     nextVideoFlowLayer,
-    markVideoWatchedFlowLayer
+    markVideoWatchedFlowLayer,
+    nextAdvertiserSurveyFlowLayer,
+    answerAdvertiserFlowLayer
   )
 
   private def logRoutes: ZIO[ServerSettings, Nothing, Unit] =

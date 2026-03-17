@@ -20,3 +20,8 @@ enum Event:
       advertiserId: Option[AdvertiserId],
       videoType: video.VideoType,
       occurredAt: Instant)
+  case VideoSurveyAssigned(
+      userId: Id,
+      advertiserId: AdvertiserId,
+      nextQuestion: FullyQualifiedQuestionId,
+      occurredAt: Instant)

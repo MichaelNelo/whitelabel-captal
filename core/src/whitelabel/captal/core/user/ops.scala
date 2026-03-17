@@ -62,6 +62,38 @@ object ops:
       Op.emit(event, newUser)
   end extension
 
+  extension (user: User[State.WatchingVideo])
+    def assignVideoSurvey(
+        advertiserId: AdvertiserId,
+        nextQuestion: Option[FullyQualifiedQuestionId],
+        terminalPhase: Phase,
+        now: Instant): UserOp[User[State.AnsweringVideoSurvey] | NextStep] =
+      nextQuestion match
+        case Some(question) =>
+          val event = Event.VideoSurveyAssigned(user.id, advertiserId, question, now)
+          val newUser = user.copy[State.AnsweringVideoSurvey](
+            state = State.AnsweringVideoSurvey(advertiserId, question.surveyId, question.questionId))
+          Op.emit(event, newUser)
+        case None =>
+          Op.pure(NextStep(terminalPhase))
+  end extension
+
+  extension (user: User[State.AnsweringVideoSurvey])
+    def answerAdvertiserSurvey(
+        survey: Survey[SurveyState.WithAdvertiserQuestion],
+        value: AnswerValue,
+        now: Instant): Op[SurveyEvent, SurveyError, QuestionAnswer] = surveyOps.answerAdvertiser(
+      user.asAnswering,
+      survey,
+      value,
+      now)
+
+  extension (user: User[State.AnsweringVideoSurvey])
+    private def asAnswering: User[State.AnsweringQuestion] =
+      User[State.AnsweringQuestion](
+        user.id,
+        State.AnsweringQuestion(user.state.surveyId, user.state.questionId))
+
   extension (user: User[State.AnsweringQuestion])
 
     def answerProfiling(

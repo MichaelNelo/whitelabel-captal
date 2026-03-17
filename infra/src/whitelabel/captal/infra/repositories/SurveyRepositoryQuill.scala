@@ -4,12 +4,12 @@ import io.circe
 import io.circe.parser.decode
 import io.getquill.*
 import whitelabel.captal.core.application.IdentificationSurveyType
-import whitelabel.captal.core.application.commands.NextIdentificationSurvey
+import whitelabel.captal.core.application.commands.{NextAdvertiserSurvey, NextIdentificationSurvey}
 import whitelabel.captal.core.infrastructure.SurveyRepository
 import whitelabel.captal.core.survey.question.*
 import whitelabel.captal.core.survey.question.codecs.given
 import whitelabel.captal.core.survey.{State, Survey}
-import whitelabel.captal.core.{survey, user}
+import whitelabel.captal.core.{survey, user, video}
 import whitelabel.captal.infra.*
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.core.given
@@ -211,6 +211,55 @@ object SurveyRepositoryQuill:
               yield Survey(surveyId, State.WithAdvertiserQuestion(advertiserId, question))
             result
         ).orDie
+
+      def findNextAdvertiserSurvey(
+          videoId: video.Id): Task[Option[NextAdvertiserSurvey]] = ctx
+        .get
+        .flatMap:
+          case Some(sessionData) =>
+            sessionData.userId match
+              case Some(userId) =>
+                val videoIdStr = videoId.asString
+                run(sql"""
+                  SELECT s.id AS survey_id, q.id AS question_id, s.category
+                  FROM surveys s
+                  JOIN questions q ON s.id = q.survey_id
+                  WHERE s.is_active = 1
+                    AND s.category = 'advertiser'
+                    AND s.video_id = ${lift(videoIdStr)}
+                    AND NOT EXISTS (
+                      SELECT 1 FROM answers a
+                      WHERE a.question_id = q.id AND a.user_id = ${lift(userId.asString)}
+                    )
+                  ORDER BY q.display_order ASC
+                  LIMIT 1
+                """.as[Query[NextIdentificationSurveyRow]])
+                  .flatMap(_.headOption.fold(ZIO.none)(fetchAdvertiserQuestionDetails))
+                  .orDie
+              case None =>
+                ZIO.none
+          case None =>
+            ZIO.none
+
+      private def fetchAdvertiserQuestionDetails(
+          row: NextIdentificationSurveyRow): Task[Option[NextAdvertiserSurvey]] =
+        for
+          sessionData <- ctx.getOrFail
+          questionIdStr = row.questionId.asString
+          rows <- run(
+            questionByIdQuery(
+              lift(row.surveyId),
+              lift(row.questionId),
+              lift(questionIdStr),
+              lift(questionIdStr + "_desc"),
+              lift(questionIdStr + "_placeholder"),
+              lift(sessionData.locale)))
+        yield
+          for
+            first        <- rows.headOption
+            question     <- buildQuestionToAnswer(first.question, rows, sessionData.locale)
+            advertiserId <- first.survey.advertiserId.flatMap(survey.AdvertiserId.fromString)
+          yield NextAdvertiserSurvey(row.surveyId, advertiserId, question)
 
       def findNextIdentificationSurvey(): Task[Option[NextIdentificationSurvey]] = ctx
         .get
