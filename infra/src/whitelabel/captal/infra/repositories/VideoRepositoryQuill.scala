@@ -9,7 +9,7 @@ import whitelabel.captal.core.{user, video}
 import whitelabel.captal.infra.*
 import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.schema.{QuillSqlite, strGt}
+import whitelabel.captal.infra.schema.{QuillSqlite, castAsReal, castAsRealOpt, nullif, sqliteAbs, sqliteLog, sqliteRandom, strGt}
 import whitelabel.captal.infra.session.SessionContext
 import zio.*
 
@@ -34,6 +34,64 @@ object VideoRepositoryQuill:
       .sortBy(v => (v.priority, v.createdAt))(Ord.asc)
       .take(1)
 
+  // Weighted random ad selection — anonymous user (no EXISTS filter)
+  inline def nextAdQueryAnonymous = quote: (locationIdParam: Option[String]) =>
+    val advertiserPrioritySum = query[AdvertiserRow].filter(_.isActive == 1).map(_.priority).sum
+    query[AdvertiserVideoRow]
+      .join(query[AdvertiserRow])
+      .on((v, a) => v.advertiserId.contains(a.id) && a.isActive == 1)
+      .filter((v, _) =>
+        v.isActive == 1 && v.videoType == "publicidad" &&
+          locationIdParam.forall(lid => v.locationId.contains(lid)))
+      .sortBy((v, a) =>
+        -sqliteLog(sqliteAbs(sqliteRandom) + 0.0001) / (
+          (castAsReal(a.priority) / nullif(castAsRealOpt(advertiserPrioritySum), 0.0)) *
+            (castAsReal(v.priority) / nullif(
+              castAsRealOpt(
+                query[AdvertiserVideoRow]
+                  .filter(av => av.advertiserId == v.advertiserId && av.isActive == 1)
+                  .map(_.priority)
+                  .sum),
+              0.0))
+        )
+      )(using Ord.asc)
+      .take(1)
+      .map((v, _) => v)
+
+  // Weighted random ad selection — authenticated user (with EXISTS for unanswered surveys)
+  inline def nextAdQueryAuthenticated = quote:
+    (userIdParam: user.Id, locationIdParam: Option[String]) =>
+      val answeredByUser = query[AnswerRow].filter(_.userId == userIdParam).map(_.questionId)
+      val advertiserPrioritySum = query[AdvertiserRow].filter(_.isActive == 1).map(_.priority).sum
+      query[AdvertiserVideoRow]
+        .join(query[AdvertiserRow])
+        .on((v, a) => v.advertiserId.contains(a.id) && a.isActive == 1)
+        .filter((v, _) =>
+          v.isActive == 1 && v.videoType == "publicidad" &&
+            locationIdParam.forall(lid => v.locationId.contains(lid)) &&
+            query[SurveyRow]
+              .filter(s =>
+                s.videoId
+                  .exists(_ == sql"${v.id}".as[String]) && s.isActive == 1 && s.category == "advertiser")
+              .flatMap(s =>
+                query[QuestionRow].filter(q => q.surveyId == s.id && !answeredByUser.contains(q.id)))
+              .nonEmpty
+        )
+        .sortBy((v, a) =>
+          -sqliteLog(sqliteAbs(sqliteRandom) + 0.0001) / (
+            (castAsReal(a.priority) / nullif(castAsRealOpt(advertiserPrioritySum), 0.0)) *
+              (castAsReal(v.priority) / nullif(
+                castAsRealOpt(
+                  query[AdvertiserVideoRow]
+                    .filter(av => av.advertiserId == v.advertiserId && av.isActive == 1)
+                    .map(_.priority)
+                    .sum),
+                0.0))
+          )
+        )(using Ord.asc)
+        .take(1)
+        .map((v, _) => v)
+
   def apply(quill: QuillSqlite, ctx: SessionContext): VideoRepository[Task] =
     new VideoRepository[Task]:
       import quill.*
@@ -54,54 +112,19 @@ object VideoRepositoryQuill:
         yield ad
 
       private def findNextAd(userId: Option[user.Id], locale: String): Task[Option[VideoToWatch]] =
-        // Weighted random: ORDER BY -LOG(ABS(RANDOM()) + 0.0001) / combined_weight
-        // Only show video if advertiser has unanswered survey questions for this user
-        val queryResult = userId match
-          case Some(uid) =>
-            run(sql"""
-              SELECT v.id, v.advertiser_id, v.video_type, v.video_url, v.duration_seconds,
-                     v.min_watch_seconds, v.show_countdown, v.no_repeat_seconds, v.is_active,
-                     v.priority, v.created_at, v.updated_at
-              FROM advertiser_videos v
-              JOIN advertisers a ON v.advertiser_id = a.id
-              WHERE v.is_active = 1
-                AND a.is_active = 1
-                AND v.video_type = 'publicidad'
-                AND EXISTS (
-                  SELECT 1 FROM surveys s JOIN questions q ON s.id = q.survey_id
-                  WHERE s.video_id = v.id AND s.is_active = 1 AND s.category = 'advertiser'
-                  AND NOT EXISTS (SELECT 1 FROM answers ans WHERE ans.question_id = q.id AND ans.user_id = ${lift(uid.asString)})
-                )
-              ORDER BY -LOG(ABS(RANDOM()) + 0.0001) / (
-                (CAST(a.priority AS REAL) / NULLIF((SELECT SUM(priority) FROM advertisers WHERE is_active = 1), 0)) *
-                (CAST(v.priority AS REAL) / NULLIF((SELECT SUM(priority) FROM advertiser_videos WHERE advertiser_id = v.advertiser_id AND is_active = 1), 0))
-              )
-              LIMIT 1
-            """.as[Query[AdvertiserVideoRow]])
-          case None =>
-            // Anonymous user: any active ad video
-            run(sql"""
-              SELECT v.id, v.advertiser_id, v.video_type, v.video_url, v.duration_seconds,
-                     v.min_watch_seconds, v.show_countdown, v.no_repeat_seconds, v.is_active,
-                     v.priority, v.created_at, v.updated_at
-              FROM advertiser_videos v
-              JOIN advertisers a ON v.advertiser_id = a.id
-              WHERE v.is_active = 1
-                AND a.is_active = 1
-                AND v.video_type = 'publicidad'
-              ORDER BY -LOG(ABS(RANDOM()) + 0.0001) / (
-                (CAST(a.priority AS REAL) / NULLIF((SELECT SUM(priority) FROM advertisers WHERE is_active = 1), 0)) *
-                (CAST(v.priority AS REAL) / NULLIF((SELECT SUM(priority) FROM advertiser_videos WHERE advertiser_id = v.advertiser_id AND is_active = 1), 0))
-              )
-              LIMIT 1
-            """.as[Query[AdvertiserVideoRow]])
-
-        queryResult.flatMap:
-          case Nil => ZIO.none
-          case rows =>
-            val videoRow = rows.head
-            fetchLocalizedTexts(videoRow, locale).map(Some(_))
-        .orDie
+        for
+          sessionData <- ctx.getOrFail
+          locationId = sessionData.locationId
+          queryResult <- userId match
+            case Some(uid) =>
+              run(nextAdQueryAuthenticated(lift(uid), lift(locationId)))
+            case None =>
+              run(nextAdQueryAnonymous(lift(locationId)))
+          result <- queryResult match
+            case Nil => ZIO.none
+            case rows =>
+              fetchLocalizedTexts(rows.head, locale).map(Some(_))
+        yield result
 
       private def findNextPromo(
           lastPromoVideoId: Option[video.Id],

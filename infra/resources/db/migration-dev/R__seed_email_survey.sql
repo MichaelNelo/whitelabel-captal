@@ -3,13 +3,10 @@
 --   survey:   d0020000-0000-4000-8000-000000000001
 --   question: d0030000-0000-4000-8000-000000000001
 
-DELETE FROM question_rules WHERE question_id = 'd0030000-0000-4000-8000-000000000001';
-DELETE FROM questions WHERE survey_id = 'd0020000-0000-4000-8000-000000000001';
-DELETE FROM surveys WHERE id = 'd0020000-0000-4000-8000-000000000001';
-DELETE FROM localized_texts WHERE entity_id IN (
-    'd0030000-0000-4000-8000-000000000001',
-    'd0030000-0000-4000-8000-000000000001_placeholder'
-);
+DELETE FROM question_rules;
+DELETE FROM questions WHERE survey_id IN (SELECT id FROM surveys WHERE category = 'email');
+DELETE FROM localized_texts WHERE category = 'backend' AND entity_id NOT LIKE 'd004%' AND entity_id NOT LIKE 'd007%';
+DELETE FROM surveys WHERE category = 'email';
 
 INSERT INTO surveys (id, category, advertiser_id, video_id, is_active, created_at) VALUES
 ('d0020000-0000-4000-8000-000000000001', 'email', NULL, NULL, 1, '2024-01-01T00:00:00Z');

@@ -21,6 +21,7 @@ final case class SessionRow(
     currentVideoId: Option[video.Id],
     lastPromoVideoId: Option[video.Id],
     currentAdvertiserId: Option[String],
+    locationId: Option[String],
     createdAt: String)
 
 final case class SurveyRow(
@@ -28,6 +29,7 @@ final case class SurveyRow(
     category: String,
     advertiserId: Option[String],
     videoId: Option[String],
+    locationId: Option[String],
     isActive: Int,
     createdAt: String)
 
@@ -102,6 +104,7 @@ final case class AdvertiserVideoRow(
     minWatchSeconds: Int,
     showCountdown: Int,
     noRepeatSeconds: Option[Int],
+    locationId: Option[String],
     isActive: Int,
     priority: Int,
     createdAt: String,
@@ -128,6 +131,20 @@ final case class DeviceUserRow(
     userId: user.Id,
     firstSeenAt: String,
     lastSeenAt: String)
+
+final case class LocationRow(
+    id: String,
+    slug: String,
+    name: String,
+    isActive: Int,
+    createdAt: String,
+    updatedAt: String)
+
+final case class ProvisionManifestRow(
+    entityKey: String,
+    locationId: Option[String],
+    contentHash: String,
+    provisionedAt: String)
 
 final case class EventLogRow(
     id: String,

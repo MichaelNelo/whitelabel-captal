@@ -8,6 +8,8 @@ import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Event, EventHandler, Flow, NextStep, Phase}
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository, VideoRepository}
 import whitelabel.captal.infra.RqliteDataSource
+import whitelabel.captal.infra.provision.ProvisionService
+import whitelabel.captal.infra.services.LocationService
 import whitelabel.captal.infra.eventhandlers.{
   AnswerPersistenceHandler,
   DbEventHandler,
@@ -59,7 +61,8 @@ object Main extends ZIOAppDefault:
   // After watching a video, transition to AdvertiserVideoSurvey to answer advertiser questions
   private val nextPhaseAfterVideo: Phase = Phase.AdvertiserVideoSurvey
   type FullEnv =
-    SessionContext & SessionService & LocaleService & SurveyRoutes.AnswerEmailFlowType &
+    SessionContext & SessionService & LocaleService & QuillSqlite &
+      SurveyRoutes.AnswerEmailFlowType &
       SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
       SurveyRoutes.NextSurveyFlowType & VideoRoutes.NextVideoFlowType &
       VideoRoutes.MarkVideoWatchedFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
@@ -146,7 +149,12 @@ object Main extends ZIOAppDefault:
       else apiRoutes(devEndpoints)
     baseRoutes @@ loggingMiddleware
 
-  private case class ServerSettings(config: Server.Config, devMode: Boolean, devEndpoints: Boolean)
+  private case class ServerSettings(
+      config: Server.Config,
+      devMode: Boolean,
+      devEndpoints: Boolean,
+      locationSlug: Option[String],
+      provisionDir: Option[String])
 
   private val serverSettingsLayer: ZLayer[Any, Throwable, ServerSettings] = ZLayer.fromZIO:
     ZIO.attempt:
@@ -157,13 +165,31 @@ object Main extends ZIOAppDefault:
         .binding(c.getString("server.host"), c.getInt("server.port"))
       val devMode = c.getBoolean("server.dev-mode")
       val devEndpoints = c.getBoolean("server.dev-endpoints")
-      ServerSettings(config, devMode, devEndpoints)
+      val locationSlug = Option(c.getString("location.slug")).filter(_.nonEmpty)
+      val provisionDir = Option(c.getString("provision.dir")).filter(_.nonEmpty)
+      ServerSettings(config, devMode, devEndpoints, locationSlug, provisionDir)
 
   private val quillLayer = Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)
 
   private val dataSourceLayer = RqliteDataSource.layer
 
-  private val sessionServiceLayer = SessionService.layer
+  private val locationServiceLayer = LocationService.layer
+
+  /** Resolve location and create a SessionService layer with the resolved locationId. */
+  private def sessionServiceLayerWithLocation(
+      settings: ServerSettings): ZLayer[QuillSqlite & LocationService, Throwable, SessionService] =
+    ZLayer.fromZIO:
+      for
+        quill <- ZIO.service[QuillSqlite]
+        locationId <- settings.locationSlug match
+          case None => ZIO.succeed(None)
+          case Some(slug) =>
+            LocationService
+              .resolveSlug(slug)
+              .tapError(e => ZIO.logError(s"Configuration error: ${e.getMessage}"))
+              .tap(id => ZIO.logInfo(s"Resolved location slug '$slug' -> $id"))
+              .map(Some(_))
+      yield SessionService.apply(quill, locationId)
 
   private val localeServiceLayer = LocaleService.layer
 
@@ -296,11 +322,13 @@ object Main extends ZIOAppDefault:
             _ <- eventHandler.handle(events)
           yield value
 
-  private val appLayers: ZLayer[Any, Throwable, FullEnv] = ZLayer.make[FullEnv](
+  private def appLayers(settings: ServerSettings): ZLayer[Any, Throwable, FullEnv] = ZLayer.make[
+    FullEnv](
     SessionContext.make,
     dataSourceLayer,
     quillLayer,
-    sessionServiceLayer,
+    locationServiceLayer,
+    sessionServiceLayerWithLocation(settings),
     localeServiceLayer,
     surveyRepoLayer,
     userRepoLayer,
@@ -332,8 +360,27 @@ object Main extends ZIOAppDefault:
   private val serverConfigFromSettings: ZLayer[ServerSettings, Nothing, Server.Config] = ZLayer
     .fromFunction((s: ServerSettings) => s.config)
 
+  /** Run provisioning if PROVISION_DIR is set. */
+  private def runProvisioning: ZIO[ServerSettings & QuillSqlite, Throwable, Unit] =
+    for
+      settings <- ZIO.service[ServerSettings]
+      _ <- (settings.provisionDir, settings.locationSlug) match
+        case (Some(dir), Some(slug)) =>
+          ZIO.serviceWithZIO[QuillSqlite](quill => ProvisionService.run(quill, dir, slug))
+        case (Some(_), None) =>
+          ZIO.fail(new RuntimeException("PROVISION_DIR set but LOCATION_SLUG is missing"))
+        case _ =>
+          ZIO.logInfo("No PROVISION_DIR configured, skipping provisioning")
+    yield ()
+
   override val run: ZIO[Any, Throwable, Nothing] = ZIO
     .serviceWithZIO[ServerSettings]: settings =>
-      logRoutes *> Server.serve(routes(settings.devMode, settings.devEndpoints))
-    .provide(serverSettingsLayer, serverConfigFromSettings, Server.live, appLayers)
+      runProvisioning *>
+        logRoutes *>
+        Server.serve(routes(settings.devMode, settings.devEndpoints))
+    .provideSome[ServerSettings](
+      serverConfigFromSettings,
+      Server.live,
+      ZLayer.fromFunction((s: ServerSettings) => appLayers(s)).flatten)
+    .provide(serverSettingsLayer)
 end Main
