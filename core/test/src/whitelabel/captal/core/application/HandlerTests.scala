@@ -9,7 +9,7 @@ import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository}
 import whitelabel.captal.core.survey.question.*
 import whitelabel.captal.core.survey.{AdvertiserId, State as SurveyState, Survey}
 import whitelabel.captal.core.user.{State as UserState, User}
-import whitelabel.captal.core.{Op, survey, user}
+import whitelabel.captal.core.{Op, survey, user, video}
 
 // Test fixture for NextStep
 private val testNextStep = NextStep(Phase.Ready)
@@ -80,6 +80,7 @@ object HandlerTests extends TestSuite:
       def findWithAdvertiserQuestion(id: survey.Id, qId: survey.question.Id) = advertiserSurvey
         .filter(s => s.id == id && s.state.question.id == qId)
       def findNextIdentificationSurvey() = None
+      def findNextAdvertiserSurvey(videoId: video.Id) = None
 
   // Mock UserRepository
   private def mockUserRepo(
