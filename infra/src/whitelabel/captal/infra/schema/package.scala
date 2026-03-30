@@ -22,6 +22,12 @@ package object schema:
   inline def nullif(inline x: Double, inline y: Double): Quoted[Double] =
     sql"NULLIF($x, $y)".as[Double]
 
+  inline def castAsReal(inline x: Int): Quoted[Double] =
+    sql"CAST(($x) AS REAL)".as[Double]
+
+  inline def castAsRealOpt(inline x: Option[Int]): Quoted[Double] =
+    sql"CAST(($x) AS REAL)".as[Double]
+
   inline def datetimeMinusSeconds(inline seconds: Int): Quoted[String] =
     sql"datetime('now', '-' || $seconds || ' seconds')".as[String]
 
@@ -46,5 +52,8 @@ package object schema:
   inline given SchemaMeta[AdvertiserRow] = schemaMeta[AdvertiserRow]("advertisers")
   inline given SchemaMeta[AdvertiserVideoRow] = schemaMeta[AdvertiserVideoRow]("advertiser_videos")
   inline given SchemaMeta[VideoViewRow] = schemaMeta[VideoViewRow]("video_views")
+  inline given SchemaMeta[LocationRow] = schemaMeta[LocationRow]("locations")
+  inline given SchemaMeta[ProvisionManifestRow] = schemaMeta[ProvisionManifestRow](
+    "provision_manifest")
   inline given SchemaMeta[EventLogRow] = schemaMeta[EventLogRow]("event_log")
 end schema
