@@ -74,7 +74,7 @@ object SessionService:
       .filter(_.id == sessionIdParam)
       .update(_.currentAdvertiserId -> None)
 
-  def apply(quill: QuillSqlite): SessionService =
+  def apply(quill: QuillSqlite, locationId: Option[String] = None): SessionService =
     new SessionService:
       import quill.*
 
@@ -112,6 +112,7 @@ object SessionService:
           currentVideoId = None,
           lastPromoVideoId = None,
           currentAdvertiserId = None,
+          locationId = locationId,
           createdAt = now)
 
         val insertSession = run(
@@ -126,10 +127,20 @@ object SessionService:
             _.currentVideoId   -> lift(sessionRow.currentVideoId),
             _.lastPromoVideoId -> lift(sessionRow.lastPromoVideoId),
             _.currentAdvertiserId -> lift(sessionRow.currentAdvertiserId),
+            _.locationId       -> lift(sessionRow.locationId),
             _.createdAt        -> lift(sessionRow.createdAt)))
 
         (upsertDevice *> insertSession).orDie *>
-          ZIO.succeed(SessionData(sessionId, None, locale, phase, None, None, None))
+          ZIO.succeed(
+            SessionData(
+              sessionId,
+              None,
+              locale,
+              phase,
+              None,
+              None,
+              None,
+              locationId = locationId))
       end create
 
       def setCurrentQuestion(
@@ -165,7 +176,12 @@ object SessionService:
       currentQuestion,
       row.currentVideoId,
       row.lastPromoVideoId,
-      row.currentAdvertiserId.flatMap(AdvertiserId.fromString))
+      row.currentAdvertiserId.flatMap(AdvertiserId.fromString),
+      row.locationId)
 
-  val layer: ZLayer[QuillSqlite, Nothing, SessionService] = ZLayer.fromFunction(apply)
+  val layer: ZLayer[QuillSqlite, Nothing, SessionService] = ZLayer.fromFunction(apply(_, None))
+
+  def layerWithLocation(
+      locationId: Option[String]): ZLayer[QuillSqlite, Nothing, SessionService] = ZLayer
+    .fromFunction(apply(_, locationId))
 end SessionService

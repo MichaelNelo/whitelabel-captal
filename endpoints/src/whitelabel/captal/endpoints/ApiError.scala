@@ -50,6 +50,9 @@ enum ApiError:
   case VideoNotFound(videoId: String)
   case NoVideoAvailable
 
+  // Location errors
+  case LocationNotFound(slug: String)
+
   // Internal
   case InternalError(message: String)
 end ApiError
@@ -235,6 +238,8 @@ object ApiError:
           ("video_not_found", Json.obj("videoId" -> videoId.asJson))
         case NoVideoAvailable =>
           ("no_video_available", Json.obj())
+        case LocationNotFound(slug) =>
+          ("location_not_found", Json.obj("slug" -> slug.asJson))
         case InternalError(message) =>
           ("internal_error", Json.obj("message" -> message.asJson))
     Json.obj("error" -> errorType.asJson, "data" -> data)
@@ -262,6 +267,8 @@ object ApiError:
             Right(UserNotIdentified)
           case "invalid_email_format" =>
             data.downField("value").as[String].map(InvalidEmailFormat(_))
+          case "location_not_found" =>
+            data.downField("slug").as[String].map(LocationNotFound(_))
           case "internal_error" =>
             data.downField("message").as[String].map(InternalError(_))
           case other =>
