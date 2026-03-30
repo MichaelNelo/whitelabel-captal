@@ -79,6 +79,7 @@ object TestFixtures:
         category = "profiling",
         advertiserId = None,
         videoId = None,
+        locationId = None,
         isActive = 1,
         createdAt = now)
       val questionsWithText = List(
@@ -127,6 +128,7 @@ object TestFixtures:
         category = category,
         advertiserId = None,
         videoId = None,
+        locationId = None,
         isActive = 1,
         createdAt = now)
       val questionRow = QuestionRow(
@@ -313,6 +315,8 @@ object TestFixtures:
         stmt.execute("DELETE FROM advertiser_videos")
         stmt.execute("DELETE FROM advertisers")
         stmt.execute("DELETE FROM users")
+        stmt.execute("DELETE FROM locations")
+        stmt.execute("DELETE FROM provision_manifest")
         stmt.close()
       finally
         conn.close()
@@ -366,6 +370,7 @@ object TestFixtures:
         category = category,
         advertiserId = None,
         videoId = None,
+        locationId = None,
         isActive = 0, // Inactive!
         createdAt = now)
       val questionRow = QuestionRow(
@@ -399,6 +404,7 @@ object TestFixtures:
         category = category,
         advertiserId = Some(advId),
         videoId = None,
+        locationId = None,
         isActive = 1,
         createdAt = now)
       val questionsWithText = (1 to 3).map: order =>
@@ -498,6 +504,7 @@ object TestFixtures:
       minWatchSeconds = 8,
       showCountdown = 1,
       noRepeatSeconds = None,
+      locationId = None,
       isActive = 1,
       priority = 10,
       createdAt = now,
@@ -538,6 +545,7 @@ object TestFixtures:
         minWatchSeconds = 5,
         showCountdown = 0,
         noRepeatSeconds = None,
+        locationId = None,
         isActive = 1,
         priority = priority,
         createdAt = now,
@@ -627,6 +635,7 @@ object TestFixtures:
         minWatchSeconds = 8,
         showCountdown = 1,
         noRepeatSeconds = None,
+        locationId = None,
         isActive = 1,
         priority = 10,
         createdAt = now,
@@ -646,6 +655,7 @@ object TestFixtures:
         category = "advertiser",
         advertiserId = Some(advertiserId),
         videoId = Some(videoId.asString),
+        locationId = None,
         isActive = 1,
         createdAt = now)
 
