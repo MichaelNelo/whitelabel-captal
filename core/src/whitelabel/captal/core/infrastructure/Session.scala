@@ -12,4 +12,5 @@ final case class SessionData(
     currentQuestion: Option[FullyQualifiedQuestionId],
     currentVideoId: Option[video.Id],
     lastPromoVideoId: Option[video.Id],
-    currentAdvertiserId: Option[AdvertiserId] = None)
+    currentAdvertiserId: Option[AdvertiserId] = None,
+    locationId: Option[String] = None)

@@ -43,12 +43,12 @@ INSERT INTO advertisers (id, name, priority, is_active, created_at, updated_at) 
 -- Videos
 -- ─────────────────────────────────────────────────────────────────────────────
 
-INSERT INTO advertiser_videos (id, advertiser_id, video_type, video_url, duration_seconds, min_watch_seconds, show_countdown, no_repeat_seconds, is_active, priority, created_at, updated_at) VALUES
-('d0070000-0000-4000-8000-000000000001', 'd0060000-0000-4000-8000-000000000001', 'publicidad', 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4', 15, 5, 1, 3600, 1, 10, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
-('d0070000-0000-4000-8000-000000000002', 'd0060000-0000-4000-8000-000000000001', 'publicidad', 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4', 15, 5, 1, 3600, 1, 9, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
-('d0070000-0000-4000-8000-000000000003', 'd0060000-0000-4000-8000-000000000002', 'publicidad', 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4', 15, 5, 1, 3600, 1, 8, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
-('d0070000-0000-4000-8000-000000000004', 'd0060000-0000-4000-8000-000000000002', 'publicidad', 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4', 15, 5, 1, 3600, 1, 7, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
-('d0070000-0000-4000-8000-000000000005', NULL, 'propaganda', 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerMeltdowns.mp4', 15, 3, 0, NULL, 1, 1, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
+INSERT INTO advertiser_videos (id, advertiser_id, video_type, video_url, duration_seconds, min_watch_seconds, show_countdown, no_repeat_seconds, location_id, is_active, priority, created_at, updated_at) VALUES
+('d0070000-0000-4000-8000-000000000001', 'd0060000-0000-4000-8000-000000000001', 'publicidad', 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4', 15, 5, 1, 3600, 'd0080000-0000-4000-8000-000000000001', 1, 10, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0070000-0000-4000-8000-000000000002', 'd0060000-0000-4000-8000-000000000001', 'publicidad', 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4', 15, 5, 1, 3600, 'd0080000-0000-4000-8000-000000000001', 1, 9, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0070000-0000-4000-8000-000000000003', 'd0060000-0000-4000-8000-000000000002', 'publicidad', 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4', 15, 5, 1, 3600, 'd0080000-0000-4000-8000-000000000001', 1, 8, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0070000-0000-4000-8000-000000000004', 'd0060000-0000-4000-8000-000000000002', 'publicidad', 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4', 15, 5, 1, 3600, 'd0080000-0000-4000-8000-000000000001', 1, 7, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0070000-0000-4000-8000-000000000005', NULL, 'propaganda', 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerMeltdowns.mp4', 15, 3, 0, NULL, 'd0080000-0000-4000-8000-000000000001', 1, 1, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
 
 -- Video texts (title + description, es + en)
 INSERT INTO localized_texts (id, entity_id, locale, value, category, created_at, updated_at) VALUES
@@ -83,8 +83,8 @@ INSERT INTO localized_texts (id, entity_id, locale, value, category, created_at,
 -- ─────────────────────────────────────────────────────────────────────────────
 
 -- Survey for Video 1 (Chromecast - Blazes): 2 questions
-INSERT INTO surveys (id, category, advertiser_id, video_id, is_active, created_at) VALUES
-('d0020000-0000-4000-8000-000000000010', 'advertiser', 'd0060000-0000-4000-8000-000000000001', 'd0070000-0000-4000-8000-000000000001', 1, '2024-01-01T00:00:00Z');
+INSERT INTO surveys (id, category, advertiser_id, video_id, location_id, is_active, created_at) VALUES
+('d0020000-0000-4000-8000-000000000010', 'advertiser', 'd0060000-0000-4000-8000-000000000001', 'd0070000-0000-4000-8000-000000000001', 'd0080000-0000-4000-8000-000000000001', 1, '2024-01-01T00:00:00Z');
 
 INSERT INTO questions (id, survey_id, question_type, points_awarded, display_order, hierarchy_level, is_required, created_at) VALUES
 ('d0030000-0000-4000-8000-000000000030', 'd0020000-0000-4000-8000-000000000010', 'radio', 10, 1, NULL, 1, '2024-01-01T00:00:00Z'),
@@ -99,16 +99,23 @@ INSERT INTO question_options (id, question_id, display_order, parent_option_id) 
 
 INSERT INTO localized_texts (id, entity_id, locale, value, category, created_at, updated_at) VALUES
 ('d0010000-0000-4000-8000-000000000501', 'd0030000-0000-4000-8000-000000000030', 'es', '¿Qué tan interesado estás en Chromecast?', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000540', 'd0030000-0000-4000-8000-000000000030', 'en', 'How interested are you in Chromecast?', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
 ('d0010000-0000-4000-8000-000000000502', 'd0040000-0000-4000-8000-000000000201', 'es', 'Muy interesado', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000541', 'd0040000-0000-4000-8000-000000000201', 'en', 'Very interested', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
 ('d0010000-0000-4000-8000-000000000503', 'd0040000-0000-4000-8000-000000000202', 'es', 'Algo interesado', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000542', 'd0040000-0000-4000-8000-000000000202', 'en', 'Somewhat interested', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
 ('d0010000-0000-4000-8000-000000000504', 'd0040000-0000-4000-8000-000000000203', 'es', 'Poco interesado', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000543', 'd0040000-0000-4000-8000-000000000203', 'en', 'Not very interested', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
 ('d0010000-0000-4000-8000-000000000505', 'd0030000-0000-4000-8000-000000000031', 'es', '¿Tienes un smart TV?', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000544', 'd0030000-0000-4000-8000-000000000031', 'en', 'Do you have a smart TV?', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
 ('d0010000-0000-4000-8000-000000000506', 'd0040000-0000-4000-8000-000000000204', 'es', 'Sí', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
-('d0010000-0000-4000-8000-000000000507', 'd0040000-0000-4000-8000-000000000205', 'es', 'No', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
+('d0010000-0000-4000-8000-000000000545', 'd0040000-0000-4000-8000-000000000204', 'en', 'Yes', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000507', 'd0040000-0000-4000-8000-000000000205', 'es', 'No', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000546', 'd0040000-0000-4000-8000-000000000205', 'en', 'No', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
 
 -- Survey for Video 2 (Chromecast - Escapes): 1 question
-INSERT INTO surveys (id, category, advertiser_id, video_id, is_active, created_at) VALUES
-('d0020000-0000-4000-8000-000000000011', 'advertiser', 'd0060000-0000-4000-8000-000000000001', 'd0070000-0000-4000-8000-000000000002', 1, '2024-01-01T00:00:00Z');
+INSERT INTO surveys (id, category, advertiser_id, video_id, location_id, is_active, created_at) VALUES
+('d0020000-0000-4000-8000-000000000011', 'advertiser', 'd0060000-0000-4000-8000-000000000001', 'd0070000-0000-4000-8000-000000000002', 'd0080000-0000-4000-8000-000000000001', 1, '2024-01-01T00:00:00Z');
 
 INSERT INTO questions (id, survey_id, question_type, points_awarded, display_order, hierarchy_level, is_required, created_at) VALUES
 ('d0030000-0000-4000-8000-000000000032', 'd0020000-0000-4000-8000-000000000011', 'radio', 10, 1, NULL, 1, '2024-01-01T00:00:00Z');
@@ -121,14 +128,19 @@ INSERT INTO question_options (id, question_id, display_order, parent_option_id) 
 
 INSERT INTO localized_texts (id, entity_id, locale, value, category, created_at, updated_at) VALUES
 ('d0010000-0000-4000-8000-000000000510', 'd0030000-0000-4000-8000-000000000032', 'es', '¿Qué dispositivo usas para ver streaming?', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000550', 'd0030000-0000-4000-8000-000000000032', 'en', 'What device do you use for streaming?', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
 ('d0010000-0000-4000-8000-000000000511', 'd0040000-0000-4000-8000-000000000206', 'es', 'TV', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000551', 'd0040000-0000-4000-8000-000000000206', 'en', 'TV', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
 ('d0010000-0000-4000-8000-000000000512', 'd0040000-0000-4000-8000-000000000207', 'es', 'Celular', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000552', 'd0040000-0000-4000-8000-000000000207', 'en', 'Phone', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
 ('d0010000-0000-4000-8000-000000000513', 'd0040000-0000-4000-8000-000000000208', 'es', 'Tablet', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
-('d0010000-0000-4000-8000-000000000514', 'd0040000-0000-4000-8000-000000000209', 'es', 'Computadora', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
+('d0010000-0000-4000-8000-000000000553', 'd0040000-0000-4000-8000-000000000208', 'en', 'Tablet', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000514', 'd0040000-0000-4000-8000-000000000209', 'es', 'Computadora', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000554', 'd0040000-0000-4000-8000-000000000209', 'en', 'Computer', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
 
 -- Survey for Video 3 (Google Play - Fun): 2 questions
-INSERT INTO surveys (id, category, advertiser_id, video_id, is_active, created_at) VALUES
-('d0020000-0000-4000-8000-000000000012', 'advertiser', 'd0060000-0000-4000-8000-000000000002', 'd0070000-0000-4000-8000-000000000003', 1, '2024-01-01T00:00:00Z');
+INSERT INTO surveys (id, category, advertiser_id, video_id, location_id, is_active, created_at) VALUES
+('d0020000-0000-4000-8000-000000000012', 'advertiser', 'd0060000-0000-4000-8000-000000000002', 'd0070000-0000-4000-8000-000000000003', 'd0080000-0000-4000-8000-000000000001', 1, '2024-01-01T00:00:00Z');
 
 INSERT INTO questions (id, survey_id, question_type, points_awarded, display_order, hierarchy_level, is_required, created_at) VALUES
 ('d0030000-0000-4000-8000-000000000033', 'd0020000-0000-4000-8000-000000000012', 'radio', 10, 1, NULL, 1, '2024-01-01T00:00:00Z'),
@@ -143,16 +155,23 @@ INSERT INTO question_options (id, question_id, display_order, parent_option_id) 
 
 INSERT INTO localized_texts (id, entity_id, locale, value, category, created_at, updated_at) VALUES
 ('d0010000-0000-4000-8000-000000000520', 'd0030000-0000-4000-8000-000000000033', 'es', '¿Cuántas apps descargas al mes?', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000560', 'd0030000-0000-4000-8000-000000000033', 'en', 'How many apps do you download per month?', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
 ('d0010000-0000-4000-8000-000000000521', 'd0040000-0000-4000-8000-000000000210', 'es', '0-2', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000561', 'd0040000-0000-4000-8000-000000000210', 'en', '0-2', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
 ('d0010000-0000-4000-8000-000000000522', 'd0040000-0000-4000-8000-000000000211', 'es', '3-5', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000562', 'd0040000-0000-4000-8000-000000000211', 'en', '3-5', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
 ('d0010000-0000-4000-8000-000000000523', 'd0040000-0000-4000-8000-000000000212', 'es', 'Más de 5', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000563', 'd0040000-0000-4000-8000-000000000212', 'en', 'More than 5', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
 ('d0010000-0000-4000-8000-000000000524', 'd0030000-0000-4000-8000-000000000034', 'es', '¿Usas Google Play?', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000564', 'd0030000-0000-4000-8000-000000000034', 'en', 'Do you use Google Play?', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
 ('d0010000-0000-4000-8000-000000000525', 'd0040000-0000-4000-8000-000000000213', 'es', 'Sí', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
-('d0010000-0000-4000-8000-000000000526', 'd0040000-0000-4000-8000-000000000214', 'es', 'No', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
+('d0010000-0000-4000-8000-000000000565', 'd0040000-0000-4000-8000-000000000213', 'en', 'Yes', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000526', 'd0040000-0000-4000-8000-000000000214', 'es', 'No', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000566', 'd0040000-0000-4000-8000-000000000214', 'en', 'No', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
 
 -- Survey for Video 4 (Google Play - Joyrides): 1 question
-INSERT INTO surveys (id, category, advertiser_id, video_id, is_active, created_at) VALUES
-('d0020000-0000-4000-8000-000000000013', 'advertiser', 'd0060000-0000-4000-8000-000000000002', 'd0070000-0000-4000-8000-000000000004', 1, '2024-01-01T00:00:00Z');
+INSERT INTO surveys (id, category, advertiser_id, video_id, location_id, is_active, created_at) VALUES
+('d0020000-0000-4000-8000-000000000013', 'advertiser', 'd0060000-0000-4000-8000-000000000002', 'd0070000-0000-4000-8000-000000000004', 'd0080000-0000-4000-8000-000000000001', 1, '2024-01-01T00:00:00Z');
 
 INSERT INTO questions (id, survey_id, question_type, points_awarded, display_order, hierarchy_level, is_required, created_at) VALUES
 ('d0030000-0000-4000-8000-000000000035', 'd0020000-0000-4000-8000-000000000013', 'radio', 10, 1, NULL, 1, '2024-01-01T00:00:00Z');
@@ -165,7 +184,12 @@ INSERT INTO question_options (id, question_id, display_order, parent_option_id) 
 
 INSERT INTO localized_texts (id, entity_id, locale, value, category, created_at, updated_at) VALUES
 ('d0010000-0000-4000-8000-000000000530', 'd0030000-0000-4000-8000-000000000035', 'es', '¿Qué tipo de apps prefieres?', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000570', 'd0030000-0000-4000-8000-000000000035', 'en', 'What type of apps do you prefer?', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
 ('d0010000-0000-4000-8000-000000000531', 'd0040000-0000-4000-8000-000000000215', 'es', 'Juegos', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000571', 'd0040000-0000-4000-8000-000000000215', 'en', 'Games', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
 ('d0010000-0000-4000-8000-000000000532', 'd0040000-0000-4000-8000-000000000216', 'es', 'Productividad', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000572', 'd0040000-0000-4000-8000-000000000216', 'en', 'Productivity', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
 ('d0010000-0000-4000-8000-000000000533', 'd0040000-0000-4000-8000-000000000217', 'es', 'Redes sociales', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
-('d0010000-0000-4000-8000-000000000534', 'd0040000-0000-4000-8000-000000000218', 'es', 'Educación', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
+('d0010000-0000-4000-8000-000000000573', 'd0040000-0000-4000-8000-000000000217', 'en', 'Social media', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000534', 'd0040000-0000-4000-8000-000000000218', 'es', 'Educación', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+('d0010000-0000-4000-8000-000000000574', 'd0040000-0000-4000-8000-000000000218', 'en', 'Education', 'backend', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');

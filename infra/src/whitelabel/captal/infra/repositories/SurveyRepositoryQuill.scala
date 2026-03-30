@@ -133,6 +133,17 @@ object SurveyRepositoryQuill:
       .map((surveyRow, questionRow) =>
         NextIdentificationSurveyRow(surveyRow.id, questionRow.id, surveyRow.category))
 
+  inline def nextAdvertiserSurveyQuery = quote:
+    (videoIdParam: String, userIdParam: user.Id) =>
+      val answeredByUser = query[AnswerRow].filter(_.userId == userIdParam).map(_.questionId)
+      query[SurveyRow]
+        .filter(s => s.isActive == 1 && s.category == "advertiser" && s.videoId.contains(videoIdParam))
+        .join(query[QuestionRow])
+        .on((s, q) => s.id == q.surveyId)
+        .filter((_, q) => !answeredByUser.contains(q.id))
+        .sortBy((_, q) => q.displayOrder)(using Ord.asc)
+        .map((s, q) => NextIdentificationSurveyRow(s.id, q.id, s.category))
+
   def apply(quill: QuillSqlite, ctx: SessionContext): SurveyRepository[Task] =
     new SurveyRepository[Task]:
       import quill.*
@@ -220,20 +231,7 @@ object SurveyRepositoryQuill:
             sessionData.userId match
               case Some(userId) =>
                 val videoIdStr = videoId.asString
-                run(sql"""
-                  SELECT s.id AS survey_id, q.id AS question_id, s.category
-                  FROM surveys s
-                  JOIN questions q ON s.id = q.survey_id
-                  WHERE s.is_active = 1
-                    AND s.category = 'advertiser'
-                    AND s.video_id = ${lift(videoIdStr)}
-                    AND NOT EXISTS (
-                      SELECT 1 FROM answers a
-                      WHERE a.question_id = q.id AND a.user_id = ${lift(userId.asString)}
-                    )
-                  ORDER BY q.display_order ASC
-                  LIMIT 1
-                """.as[Query[NextIdentificationSurveyRow]])
+                run(nextAdvertiserSurveyQuery(lift(videoIdStr), lift(userId)).take(1))
                   .flatMap(_.headOption.fold(ZIO.none)(fetchAdvertiserQuestionDetails))
                   .orDie
               case None =>
