@@ -1,0 +1,8 @@
+url: "https://cdn.example.com/promo-welcome.mp4"
+duration: 10
+minWatch: 3
+showCountdown: false
+priority: 1
+title:
+  es: "Bienvenido a Captal"
+  en: "Welcome to Captal"

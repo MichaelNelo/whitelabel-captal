@@ -8,17 +8,20 @@ object E2ETests extends ZIOSpecDefault:
   private val clearAndSeedNoise = TestFixtures.clearAllData *> TestFixtures.seedNoiseData
 
   def spec: Spec[Any, Throwable] = (
-    suite("Identification Survey Flow")(
-      LocaleSessionSuite.suite,
-      SessionManagementSuite.suite,
-      EmailSurveySuite.suite,
-      SurveyProgressionSuite.suite,
-      MultiQuestionSurveySuite.suite,
-      ValidationSuite.suite,
-      PhaseValidationSuite.suite,
-      SessionIsolationSuite.suite,
-      VideoSuite.suite,
-      AdvertiserVideoSurveySuite.suite
-    ) @@ TestAspect.sequential @@ TestAspect.before(clearAndSeedNoise.orDie)
+    suite("E2E")(
+      suite("Identification Survey Flow")(
+        LocaleSessionSuite.suite,
+        SessionManagementSuite.suite,
+        EmailSurveySuite.suite,
+        SurveyProgressionSuite.suite,
+        MultiQuestionSurveySuite.suite,
+        ValidationSuite.suite,
+        PhaseValidationSuite.suite,
+        SessionIsolationSuite.suite,
+        VideoSuite.suite,
+        AdvertiserVideoSurveySuite.suite
+      ) @@ TestAspect.before(clearAndSeedNoise.orDie),
+      ProvisioningSuite.suite
+    ) @@ TestAspect.sequential
   ).provideShared(TestLayers.testEnv, ZLayer.fromZIO(TestFixtures.migrate.unit))
 end E2ETests
