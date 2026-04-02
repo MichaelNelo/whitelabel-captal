@@ -1,0 +1,15 @@
+# name: "TODO"
+questions:
+  - type: radio
+    points: 10
+    required: true
+    text:
+      es: "TODO"
+      en: "TODO"
+    options:
+      - text:
+          es: "TODO"
+          en: "TODO"
+      - text:
+          es: "TODO"
+          en: "TODO"

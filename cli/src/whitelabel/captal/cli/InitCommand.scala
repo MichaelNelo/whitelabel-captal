@@ -6,29 +6,27 @@ import zio.*
 
 import whitelabel.captal.cli.templates.{Catalog, TemplateWriter}
 
-/** Creates the provisioning directory structure with template files. */
+/** Creates the location provisioning directory with template files. */
 object InitCommand:
 
-  private val BaseDir = Paths.get("/etc/captal")
+  private val LocationsDir = Paths.get("/etc/captal/locations")
 
   def run(slug: String): Task[Unit] =
+    val baseDir = LocationsDir.resolve(slug)
     for
-      _ <- Console.printLine(s"Creating project at $BaseDir/ ...")
-      _ <- createDirectories
-      _ <- TemplateWriter.writeAllIfAbsent(BaseDir, Catalog.initTemplates(slug))
+      _ <- Console.printLine(s"Creating location at $baseDir/ ...")
+      _ <- createDirectories(baseDir)
+      _ <- TemplateWriter.writeAllIfAbsent(baseDir, Catalog.initTemplates(slug))
       _ <- Console.printLine:
         s"""  location.yaml
            |  i18n/es.yaml
            |  i18n/en.yaml
-           |  surveys/email.yaml
-           |  surveys/profiling.yaml
-           |  surveys/location.yaml
-           |  advertisers/   (empty)
-           |  promo/         (empty)
+           |  videos/       (empty — add video directories)
+           |  promo/        (empty)
            |  assets/styles.css
            |  assets/brand-icon.svg
            |Done. Edit the files and run 'captal push $slug'""".stripMargin
     yield ()
 
-  private val createDirectories: Task[Unit] = ZIO.attempt:
-    List("advertisers", "promo").foreach(d => Files.createDirectories(BaseDir.resolve(d)))
+  private def createDirectories(baseDir: java.nio.file.Path): Task[Unit] = ZIO.attempt:
+    List("videos", "promo").foreach(d => Files.createDirectories(baseDir.resolve(d)))

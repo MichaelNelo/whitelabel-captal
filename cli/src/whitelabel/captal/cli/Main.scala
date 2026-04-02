@@ -20,6 +20,14 @@ object Main extends ZIOAppDefault:
 
   private def dispatch(args: List[String]): ZIO[Any, Any, Unit] =
     val program = args match
+      case "shared" :: "init" :: _ =>
+        SharedInitCommand.run
+
+      case "shared" :: "push" :: _ =>
+        SharedPushCommand
+          .run
+          .provide(CaptalConfig.layer, AwsLayers.ecs)
+
       case "init" :: slug :: _ =>
         validateSlug(slug).flatMap(InitCommand.run)
 
@@ -27,22 +35,24 @@ object Main extends ZIOAppDefault:
         validateSlug(slug).flatMap: s =>
           PushCommand
             .run(s)
-            .provide(PushConfig.layer, AwsLayers.s3, AwsLayers.ecr, AwsLayers.ecs, AwsLayers.elbv2)
+            .provide(CaptalConfig.layer, AwsLayers.s3, AwsLayers.ecs, AwsLayers.elbv2)
 
       case "video" :: slug :: "--promo" :: videoPath :: _ =>
         validateSlug(slug).flatMap: s =>
-          VideoCommand.runPromo(s, videoPath).provide(AwsLayers.s3)
+          VideoCommand.runPromo(s, videoPath).provide(CaptalConfig.layer, AwsLayers.s3)
 
       case "video" :: slug :: advertiserSlug :: videoPath :: _ =>
         (validateSlug(slug) <&> validateSlug(advertiserSlug)).flatMap: (s, a) =>
-          VideoCommand.run(s, a, videoPath).provide(AwsLayers.s3)
+          VideoCommand.run(s, a, videoPath).provide(CaptalConfig.layer, AwsLayers.s3)
 
       case _ =>
         Console.printLine:
           """captal - Whitelabel provisioning CLI
             |
             |Usage:
-            |  captal init <slug>              Create a new location project at /etc/captal/
+            |  captal shared init              Create shared resources (surveys + advertisers)
+            |  captal shared push              Deploy shared resources to AWS
+            |  captal init <slug>              Create a new location at /etc/captal/locations/<slug>
             |  captal push <slug>              Deploy location to AWS (S3 + ECR + ECS + ALB)
             |  captal video <slug> <adv> <file>  Upload video to S3 and create YAML placeholder
             |  captal video <slug> --promo <file> Upload promo video to S3 and create YAML""".stripMargin
