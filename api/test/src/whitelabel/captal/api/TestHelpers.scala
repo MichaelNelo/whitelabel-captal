@@ -69,9 +69,17 @@ object TestHelpers:
           else
             None
 
+  // Default captive portal headers for tests
+  private val defaultPortalHeaders = Map(
+    "X-Client-Mac"  -> "AA:BB:CC:DD:EE:FF",
+    "X-Ap-Mac"      -> "11:22:33:44:55:66",
+    "X-Redirect-Url" -> "http://google.com",
+    "X-Ssid"        -> "TestNetwork")
+
   def getStatus(backend: SttpBackend[Task, Any], sessionCookie: Option[String] = None) =
-    val request = basicRequest.get(uri"http://test/api/status").response(asStringAlways)
-    val withCookie = sessionCookie.fold(request)(c => request.cookie("session_id", c))
+    val base = basicRequest.get(uri"http://test/api/status").response(asStringAlways)
+    val withHeaders = defaultPortalHeaders.foldLeft(base) { case (req, (k, v)) => req.header(k, v) }
+    val withCookie = sessionCookie.fold(withHeaders)(c => withHeaders.cookie("session_id", c))
     withCookie.send(backend)
 
   /** Create a new session via /api/status and return the session cookie */
