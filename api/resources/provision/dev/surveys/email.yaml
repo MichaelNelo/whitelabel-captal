@@ -1,0 +1,15 @@
+category: email
+questions:
+  - type: input
+    points: 10
+    required: true
+    text:
+      es: "¿Cuál es tu correo electrónico?"
+      en: "What is your email address?"
+    placeholder:
+      es: "correo@ejemplo.com"
+      en: "email@example.com"
+    rules:
+      - type: email
+      - type: max_length
+        value: 100

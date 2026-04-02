@@ -1,0 +1,82 @@
+category: location
+questions:
+  - type: dropdown
+    points: 10
+    required: true
+    hierarchyLevel: state
+    text:
+      es: "¿En qué estado vives?"
+      en: "What state do you live in?"
+    options:
+      - text:
+          es: "Amazonas"
+          en: "Amazonas"
+      - text:
+          es: "Anzoátegui"
+          en: "Anzoátegui"
+      - text:
+          es: "Apure"
+          en: "Apure"
+      - text:
+          es: "Aragua"
+          en: "Aragua"
+      - text:
+          es: "Barinas"
+          en: "Barinas"
+      - text:
+          es: "Bolívar"
+          en: "Bolívar"
+      - text:
+          es: "Carabobo"
+          en: "Carabobo"
+      - text:
+          es: "Cojedes"
+          en: "Cojedes"
+      - text:
+          es: "Delta Amacuro"
+          en: "Delta Amacuro"
+      - text:
+          es: "Distrito Capital"
+          en: "Distrito Capital"
+      - text:
+          es: "Falcón"
+          en: "Falcón"
+      - text:
+          es: "Guárico"
+          en: "Guárico"
+      - text:
+          es: "Lara"
+          en: "Lara"
+      - text:
+          es: "Mérida"
+          en: "Mérida"
+      - text:
+          es: "Miranda"
+          en: "Miranda"
+      - text:
+          es: "Monagas"
+          en: "Monagas"
+      - text:
+          es: "Nueva Esparta"
+          en: "Nueva Esparta"
+      - text:
+          es: "Portuguesa"
+          en: "Portuguesa"
+      - text:
+          es: "Sucre"
+          en: "Sucre"
+      - text:
+          es: "Táchira"
+          en: "Táchira"
+      - text:
+          es: "Trujillo"
+          en: "Trujillo"
+      - text:
+          es: "Vargas"
+          en: "Vargas"
+      - text:
+          es: "Yaracuy"
+          en: "Yaracuy"
+      - text:
+          es: "Zulia"
+          en: "Zulia"

@@ -7,13 +7,29 @@ import whitelabel.captal.core.infrastructure.SessionData
 import whitelabel.captal.core.user
 import whitelabel.captal.endpoints.ApiError.given
 import whitelabel.captal.endpoints.{ApiError, SurveyEndpoints}
-import whitelabel.captal.infra.session.{SessionContext, SessionService}
+import whitelabel.captal.infra.session.{CaptivePortalParams, SessionContext, SessionService}
 import zio.*
 
 object SessionEndpoint:
   enum OnMissing:
     case Fail
-    case Create(userAgent: String, locale: String)
+    case Create(
+        userAgent: String,
+        locale: String,
+        portalParams: Option[CaptivePortalParams] = None)
+
+  private def createSession(
+      userAgent: String,
+      locale: String,
+      portalParams: Option[CaptivePortalParams]
+  ): ZIO[SessionService, ApiError, SessionData] =
+    portalParams match
+      case Some(params) =>
+        ZIO
+          .serviceWithZIO[SessionService](_.create(userAgent, locale, Phase.Welcome, params))
+          .mapError(ApiError.fromThrowable)
+      case None =>
+        ZIO.fail(ApiError.SessionMissing)
 
   def resolveSession(
       cookie: Option[String],
@@ -23,10 +39,8 @@ object SessionEndpoint:
         onMissing match
           case OnMissing.Fail =>
             ZIO.fail(ApiError.SessionMissing)
-          case OnMissing.Create(userAgent, locale) =>
-            ZIO
-              .serviceWithZIO[SessionService](_.create(userAgent, locale, Phase.Welcome))
-              .mapError(ApiError.fromThrowable)
+          case OnMissing.Create(userAgent, locale, portalParams) =>
+            createSession(userAgent, locale, portalParams)
       case Some(value) =>
         user.SessionId.fromString(value) match
           case None =>
@@ -42,10 +56,8 @@ object SessionEndpoint:
                   onMissing match
                     case OnMissing.Fail =>
                       ZIO.fail(ApiError.SessionExpired)
-                    case OnMissing.Create(userAgent, locale) =>
-                      ZIO
-                        .serviceWithZIO[SessionService](_.create(userAgent, locale, Phase.Welcome))
-                        .mapError(ApiError.fromThrowable)
+                    case OnMissing.Create(userAgent, locale, portalParams) =>
+                      createSession(userAgent, locale, portalParams)
 
   // Secured endpoint with optional phase validation
   def secured(

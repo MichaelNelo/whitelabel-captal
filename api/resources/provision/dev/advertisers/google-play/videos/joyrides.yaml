@@ -1,0 +1,33 @@
+url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4"
+duration: 15
+minWatch: 5
+showCountdown: true
+noRepeatSeconds: 3600
+priority: 7
+title:
+  es: "Google Play - Tu próxima aventura"
+  en: "Google Play - Your next adventure"
+description:
+  es: "Descarga las mejores apps del momento"
+  en: "Download the best apps of the moment"
+survey:
+  questions:
+    - type: radio
+      points: 10
+      required: true
+      text:
+        es: "¿Qué tipo de apps prefieres?"
+        en: "What type of apps do you prefer?"
+      options:
+        - text:
+            es: "Juegos"
+            en: "Games"
+        - text:
+            es: "Productividad"
+            en: "Productivity"
+        - text:
+            es: "Redes sociales"
+            en: "Social media"
+        - text:
+            es: "Educación"
+            en: "Education"
