@@ -1,0 +1,12 @@
+advertiser: acme
+url: "https://cdn.example.com/acme-intro-v2.mp4"
+duration: 20
+minWatch: 5
+showCountdown: true
+priority: 10
+title:
+  es: "Acme - Introduccion"
+  en: "Acme - Introduction"
+description:
+  es: "Conoce Acme Corp"
+  en: "Meet Acme Corp"
