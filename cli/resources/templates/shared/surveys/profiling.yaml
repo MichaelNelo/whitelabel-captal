@@ -1,0 +1,21 @@
+category: profiling
+questions:
+  - type: radio
+    points: 10
+    required: true
+    text:
+      es: "¿Cuál es tu rango de edad?"
+      en: "What is your age range?"
+    options:
+      - text:
+          es: "18-25"
+          en: "18-25"
+      - text:
+          es: "26-35"
+          en: "26-35"
+      - text:
+          es: "36-50"
+          en: "36-50"
+      - text:
+          es: "50+"
+          en: "50+"

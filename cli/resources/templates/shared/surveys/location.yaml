@@ -1,0 +1,16 @@
+category: location
+questions:
+  - type: dropdown
+    points: 10
+    required: true
+    hierarchyLevel: state
+    text:
+      es: "¿En qué estado te encuentras?"
+      en: "What state are you in?"
+    options:
+      - text:
+          es: "Distrito Capital"
+          en: "Capital District"
+      - text:
+          es: "Miranda"
+          en: "Miranda"

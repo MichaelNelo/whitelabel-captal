@@ -1,0 +1,12 @@
+advertiser: "{{advertiser}}"
+url: "{{url}}"
+duration: 15
+minWatch: 5
+showCountdown: true
+priority: 10
+title:
+  es: "TODO"
+  en: "TODO"
+# description:
+#   es: "TODO"
+#   en: "TODO"

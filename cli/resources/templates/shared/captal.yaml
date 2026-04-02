@@ -1,0 +1,35 @@
+aws:
+  region: us-east-1
+  # accessKeyId: AKIA...         # optional, falls back to env/AWS profile
+  # secretAccessKey: ...         # optional
+  # sessionToken: ...            # optional, for temporary credentials
+
+image: "{{image}}"
+
+s3:
+  bucket: "{{s3_bucket}}"
+
+ecs:
+  cluster: "{{ecs_cluster}}"
+  cpu: "256"
+  memory: "512"
+  desiredCount: 1
+  subnets:
+    - "{{subnet}}"
+  securityGroups:
+    - "{{security_group}}"
+  executionRoleArn: "{{execution_role_arn}}"
+  # taskRoleArn: ""              # optional
+
+alb:
+  listenerArn: "{{alb_listener_arn}}"
+  vpcId: "{{vpc_id}}"
+  domain: captal.app
+  healthCheckPath: /health
+
+database:
+  url: "{{db_url}}"
+
+server:
+  devMode: false
+  devEndpoints: false

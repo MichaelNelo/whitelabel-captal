@@ -1,0 +1,5 @@
+/* Custom branding styles for this location */
+:root {
+  --brand-primary: #2563eb;
+  --brand-secondary: #1e40af;
+}
