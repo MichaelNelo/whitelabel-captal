@@ -1,0 +1,18 @@
+name: "Apps por mes"
+questions:
+  - type: radio
+    points: 10
+    required: true
+    text:
+      es: "¿Cuántas apps descargas al mes?"
+      en: "How many apps do you download per month?"
+    options:
+      - text:
+          es: "0-2"
+          en: "0-2"
+      - text:
+          es: "3-5"
+          en: "3-5"
+      - text:
+          es: "Más de 5"
+          en: "More than 5"

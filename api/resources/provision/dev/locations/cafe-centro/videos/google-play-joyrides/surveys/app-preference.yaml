@@ -1,0 +1,21 @@
+name: "Preferencia de apps"
+questions:
+  - type: radio
+    points: 10
+    required: true
+    text:
+      es: "¿Qué tipo de apps prefieres?"
+      en: "What type of apps do you prefer?"
+    options:
+      - text:
+          es: "Juegos"
+          en: "Games"
+      - text:
+          es: "Productividad"
+          en: "Productivity"
+      - text:
+          es: "Redes sociales"
+          en: "Social media"
+      - text:
+          es: "Educación"
+          en: "Education"
