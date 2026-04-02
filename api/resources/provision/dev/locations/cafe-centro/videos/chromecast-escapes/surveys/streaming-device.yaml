@@ -1,0 +1,21 @@
+name: "Dispositivo de streaming"
+questions:
+  - type: radio
+    points: 10
+    required: true
+    text:
+      es: "¿Qué dispositivo usas para ver streaming?"
+      en: "What device do you use for streaming?"
+    options:
+      - text:
+          es: "TV"
+          en: "TV"
+      - text:
+          es: "Celular"
+          en: "Phone"
+      - text:
+          es: "Tablet"
+          en: "Tablet"
+      - text:
+          es: "Computadora"
+          en: "Computer"
