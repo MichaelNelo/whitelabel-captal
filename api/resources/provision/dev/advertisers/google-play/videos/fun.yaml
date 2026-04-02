@@ -1,0 +1,43 @@
+url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4"
+duration: 15
+minWatch: 5
+showCountdown: true
+noRepeatSeconds: 3600
+priority: 8
+title:
+  es: "Google Play - Diversión sin límites"
+  en: "Google Play - Unlimited fun"
+description:
+  es: "Millones de apps, juegos y más"
+  en: "Millions of apps, games and more"
+survey:
+  questions:
+    - type: radio
+      points: 10
+      required: true
+      text:
+        es: "¿Cuántas apps descargas al mes?"
+        en: "How many apps do you download per month?"
+      options:
+        - text:
+            es: "0-2"
+            en: "0-2"
+        - text:
+            es: "3-5"
+            en: "3-5"
+        - text:
+            es: "Más de 5"
+            en: "More than 5"
+    - type: radio
+      points: 10
+      required: true
+      text:
+        es: "¿Usas Google Play?"
+        en: "Do you use Google Play?"
+      options:
+        - text:
+            es: "Sí"
+            en: "Yes"
+        - text:
+            es: "No"
+            en: "No"

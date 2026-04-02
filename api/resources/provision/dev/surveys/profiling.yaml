@@ -1,0 +1,50 @@
+category: profiling
+questions:
+  - type: input
+    points: 10
+    required: true
+    text:
+      es: "¿Cuál es tu nombre?"
+      en: "What is your name?"
+    placeholder:
+      es: "Tu nombre completo"
+      en: "Your full name"
+    rules:
+      - type: max_length
+        value: 100
+  - type: radio
+    points: 10
+    required: true
+    text:
+      es: "¿Cuál es tu sexo?"
+      en: "What is your gender?"
+    options:
+      - text:
+          es: "Masculino"
+          en: "Male"
+      - text:
+          es: "Femenino"
+          en: "Female"
+      - text:
+          es: "Otro"
+          en: "Other"
+  - type: date
+    points: 10
+    required: true
+    text:
+      es: "¿Cuál es tu fecha de nacimiento?"
+      en: "What is your date of birth?"
+  - type: input
+    points: 10
+    required: true
+    text:
+      es: "¿Cuál es tu número de teléfono?"
+      en: "What is your phone number?"
+    placeholder:
+      es: "+58 412 1234567"
+      en: "+1 555 1234567"
+    rules:
+      - type: pattern
+        value: "^[0-9+\\-\\s]+$"
+      - type: max_length
+        value: 20
