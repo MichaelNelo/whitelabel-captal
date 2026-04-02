@@ -8,7 +8,7 @@ import io.circe.generic.semiauto.*
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Location metadata — slug comes from LOCATION_SLUG env var */
-final case class LocationYaml(name: String, ap_mac: Option[String] = None)
+final case class LocationYaml(name: String, ap_mac: Option[String] = None, desiredCount: Option[Int] = None)
 object LocationYaml:
   given Decoder[LocationYaml] = deriveDecoder
 
