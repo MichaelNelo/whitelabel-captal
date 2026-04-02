@@ -22,7 +22,11 @@ final case class SessionRow(
     lastPromoVideoId: Option[video.Id],
     currentAdvertiserId: Option[String],
     locationId: Option[String],
-    createdAt: String)
+    createdAt: String,
+    clientMac: String,
+    apMac: String,
+    redirectUrl: String,
+    ssid: String)
 
 final case class SurveyRow(
     id: survey.Id,
@@ -31,7 +35,8 @@ final case class SurveyRow(
     videoId: Option[String],
     locationId: Option[String],
     isActive: Int,
-    createdAt: String)
+    createdAt: String,
+    name: Option[String] = None)
 
 final case class QuestionRow(
     id: survey.question.Id,
@@ -85,7 +90,8 @@ final case class LocalizedTextRow(
     value: String,
     category: String,
     createdAt: String,
-    updatedAt: String)
+    updatedAt: String,
+    locationId: Option[String] = None)
 
 final case class AdvertiserRow(
     id: String,
@@ -138,7 +144,8 @@ final case class LocationRow(
     name: String,
     isActive: Int,
     createdAt: String,
-    updatedAt: String)
+    updatedAt: String,
+    apMac: Option[String])
 
 final case class ProvisionManifestRow(
     entityKey: String,

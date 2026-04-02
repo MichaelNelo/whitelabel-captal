@@ -44,14 +44,28 @@ object App:
       img(src := "/brand-icon.svg", cls := "brand-icon", alt := "Loading"))
   )
 
+  /** Extract captive portal params from the UniFi redirect URL. */
+  private def parseCaptivePortalHeaders(): Map[String, String] =
+    val params = new dom.URLSearchParams(dom.window.location.search)
+    List(
+      "id"   -> "X-Client-Mac",
+      "ap"   -> "X-Ap-Mac",
+      "url"  -> "X-Redirect-Url",
+      "ssid" -> "X-Ssid"
+    ).flatMap: (urlParam, headerName) =>
+      Option(params.get(urlParam)).filter(_.nonEmpty).map(headerName -> _)
+    .toMap
+
   /** Check the server-side phase and redirect if the current URL doesn't match. This ensures users
     * entering via direct URLs (e.g., /question, /final) are redirected to the correct phase.
     */
-  def syncPhaseOnLoad(): Unit = Runtime.run:
-    ApiClient.getStatus().map:
-      case Right(status) =>
-        i18n.I18nClient.setLocale(status.locale)
-        Router.syncWithPhase(status.phase)
-      case Left(_) =>
-        ()
+  def syncPhaseOnLoad(): Unit =
+    val headers = parseCaptivePortalHeaders()
+    Runtime.run:
+      ApiClient.getStatus(headers).map:
+        case Right(status) =>
+          i18n.I18nClient.setLocale(status.locale)
+          Router.syncWithPhase(status.phase)
+        case Left(_) =>
+          ()
 end App
