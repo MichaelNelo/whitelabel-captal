@@ -8,7 +8,7 @@ import io.circe.generic.semiauto.*
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Location metadata — slug comes from LOCATION_SLUG env var */
-final case class LocationYaml(name: String)
+final case class LocationYaml(name: String, ap_mac: Option[String] = None)
 object LocationYaml:
   given Decoder[LocationYaml] = deriveDecoder
 
@@ -49,13 +49,16 @@ final case class AdvertiserYaml(name: String, priority: Int = 10)
 object AdvertiserYaml:
   given Decoder[AdvertiserYaml] = deriveDecoder
 
-/** Inline survey attached to a video */
-final case class VideoSurveyYaml(questions: List[QuestionYaml])
+/** Survey attached to a video (separate YAML file) */
+final case class VideoSurveyYaml(
+    name: Option[String] = None,
+    questions: List[QuestionYaml])
 object VideoSurveyYaml:
   given Decoder[VideoSurveyYaml] = deriveDecoder
 
-/** Advertiser video with optional survey */
+/** Advertiser video metadata (video.yaml) */
 final case class VideoYaml(
+    advertiser: String,
     url: String,
     duration: Int,
     minWatch: Int = 5,
@@ -63,8 +66,7 @@ final case class VideoYaml(
     noRepeatSeconds: Option[Int] = None,
     priority: Int = 10,
     title: Map[String, String],
-    description: Option[Map[String, String]] = None,
-    survey: Option[VideoSurveyYaml] = None)
+    description: Option[Map[String, String]] = None)
 object VideoYaml:
   given Decoder[VideoYaml] = deriveDecoder
 
