@@ -59,7 +59,7 @@ object Catalog:
   // ─── Templates ──────────────────────────────────────────────────────────────
 
   def location(slug: String): Template =
-    Template("location.yaml", lines("name" := slug))
+    Template("location.yaml", lines("name" := slug, commented("ap_mac" := "AA:BB:CC:DD:EE:FF")))
 
   object i18n:
     val es: Template = Template(

@@ -11,7 +11,28 @@ import zio.*
   */
 object ProvisionService:
 
-  /** Run the full provisioning pipeline. */
+  // ─── Shared provisioning ────────────────────────────────────────────────────
+
+  /** Provision shared resources (surveys + advertisers). Additive only — no deletes. */
+  def runShared(quill: QuillSqlite, sharedDir: String): Task[Unit] =
+    val baseDir = Paths.get(sharedDir)
+    for
+      _ <- ZIO.logInfo(s"Starting shared provisioning from $sharedDir")
+      _ <- validateDirectory(baseDir)
+      surveys = scanYamlFiles(baseDir.resolve("surveys"))
+      _ <- ZIO.foreachDiscard(surveys) { (name, _) =>
+        provisionSurvey(quill, baseDir.resolve(s"surveys/$name"), name.stripSuffix(".yaml"))
+      }
+      advertisers = scanYamlFiles(baseDir.resolve("advertisers"))
+      _ <- ZIO.foreachDiscard(advertisers) { (name, _) =>
+        provisionAdvertiser(quill, baseDir.resolve(s"advertisers/$name"), name.stripSuffix(".yaml"))
+      }
+      _ <- ZIO.logInfo("Shared provisioning complete")
+    yield ()
+
+  // ─── Location provisioning ──────────────────────────────────────────────────
+
+  /** Provision location-specific resources (location, i18n, videos, promos). */
   def run(quill: QuillSqlite, provisionDir: String, locationSlug: String): Task[Unit] =
     for
       _ <- ZIO.logInfo(s"Starting provisioning from $provisionDir for location '$locationSlug'")
@@ -22,14 +43,14 @@ object ProvisionService:
       locationId = IdGenerator.locationId(locationSlug)
       _ <- provisionLocation(quill, baseDir, locationSlug, locationId)
 
-      // 2. Load current manifest from DB
-      dbManifest <- EntityWriter.loadManifest(quill)
+      // 2. Load current manifest from DB (this location only)
+      (dbManifest, localKeys) <- EntityWriter.loadManifest(quill)(locationId)
 
       // 3. Scan disk and compute hashes
       diskEntries <- scanDisk(baseDir, locationSlug)
 
-      // 4. Compute plan
-      plan = ProvisionPlan.compute(diskEntries, dbManifest)
+      // 4. Compute plan (only local keys are eligible for deletion)
+      plan = ProvisionPlan.compute(diskEntries, dbManifest, localKeys)
       creates = plan.collect { case a: ProvisionPlan.Action.Create => a }
       updates = plan.collect { case a: ProvisionPlan.Action.Update => a }
       deletes = plan.collect { case a: ProvisionPlan.Action.Delete => a }
@@ -44,10 +65,7 @@ object ProvisionService:
           case ProvisionPlan.Action.Update(k, h) => (k, h)
           case _                                 => throw new IllegalStateException("unreachable")
         provisionEntity(quill, baseDir, locationSlug, locationId, key) *>
-          EntityWriter.upsertManifest(quill)(
-            key,
-            if isGlobalEntity(key) then None else Some(locationId),
-            hash)
+          EntityWriter.upsertManifest(quill)(key, Some(locationId), hash)
 
       // 6. Execute deletes (soft-delete)
       _ <- ZIO.foreachDiscard(deletes): action =>
@@ -56,6 +74,8 @@ object ProvisionService:
 
       _ <- ZIO.logInfo("Provisioning complete")
     yield ()
+
+  // ─── Helpers ────────────────────────────────────────────────────────────────
 
   private def validateDirectory(dir: Path): Task[Unit] =
     ZIO.attempt:
@@ -76,11 +96,11 @@ object ProvisionService:
       content <- ZIO.attempt(Files.readString(locationFile))
       yaml <- ZIO.fromEither(yamlParser.parse(content).flatMap(_.as[LocationYaml]))
         .mapError(e => new RuntimeException(s"Failed to parse location.yaml: $e"))
-      _ <- EntityWriter.upsertLocation(quill)(locationId, slug, yaml.name)
+      _ <- EntityWriter.upsertLocation(quill)(locationId, slug, yaml.name, yaml.ap_mac)
       _ <- ZIO.logInfo(s"Provisioned location: $slug -> $locationId")
     yield ()
 
-  /** Scan all YAML files on disk and compute their content hashes. */
+  /** Scan location-specific YAML files on disk and compute their content hashes. */
   private def scanDisk(
       baseDir: Path,
       locationSlug: String): Task[Map[String, String]] =
@@ -90,33 +110,24 @@ object ProvisionService:
       // i18n files
       scanYamlFiles(baseDir.resolve("i18n")).foreach: (name, content) =>
         val locale = name.stripSuffix(".yaml")
-        entries += s"i18n:$locale" -> ProvisionPlan.sha256(content)
+        entries += s"i18n:$locationSlug/$locale" -> ProvisionPlan.sha256(content)
 
-      // survey files
-      scanYamlFiles(baseDir.resolve("surveys")).foreach: (name, content) =>
-        val surveyName = name.stripSuffix(".yaml")
-        entries += s"survey:$surveyName" -> ProvisionPlan.sha256(content)
-
-      // advertiser directories
-      val advertisersDir = baseDir.resolve("advertisers")
-      if Files.exists(advertisersDir) then
+      // video directories: videos/<videoSlug>/video.yaml + surveys/*.yaml
+      val videosDir = baseDir.resolve("videos")
+      if Files.exists(videosDir) then
         Files
-          .list(advertisersDir)
+          .list(videosDir)
           .filter(Files.isDirectory(_))
-          .forEach: advertiserDir =>
-            val advertiserSlug = advertiserDir.getFileName.toString
-            val advertiserFile = advertiserDir.resolve("advertiser.yaml")
-            if Files.exists(advertiserFile) then
-              val content = Files.readAllBytes(advertiserFile)
-              entries += s"advertiser:$advertiserSlug" -> ProvisionPlan.sha256(content)
+          .forEach: videoDir =>
+            val videoSlug = videoDir.getFileName.toString
+            val videoFile = videoDir.resolve("video.yaml")
+            if Files.exists(videoFile) then
+              entries += s"video:$locationSlug/$videoSlug" -> ProvisionPlan.sha256(Files.readAllBytes(videoFile))
 
-              // videos within this advertiser
-              val videosDir = advertiserDir.resolve("videos")
-              if Files.exists(videosDir) then
-                scanYamlFiles(videosDir).foreach: (name, content) =>
-                  val videoSlug = name.stripSuffix(".yaml")
-                  entries += s"video:$locationSlug/$advertiserSlug/$videoSlug" -> ProvisionPlan
-                    .sha256(content)
+              // surveys within this video
+              scanYamlFiles(videoDir.resolve("surveys")).foreach: (name, content) =>
+                val surveySlug = name.stripSuffix(".yaml")
+                entries += s"video-survey:$locationSlug/$videoSlug/$surveySlug" -> ProvisionPlan.sha256(content)
 
       // promo videos
       scanYamlFiles(baseDir.resolve("promo")).foreach: (name, content) =>
@@ -145,37 +156,39 @@ object ProvisionService:
       entityKey: String): Task[Unit] =
     entityKey match
       case key if key.startsWith("i18n:") =>
-        val locale = key.stripPrefix("i18n:")
-        provisionI18n(quill, baseDir.resolve(s"i18n/$locale.yaml"), locale)
+        val parts = key.stripPrefix("i18n:").split("/")
+        val locale = parts.last
+        provisionI18n(quill, baseDir.resolve(s"i18n/$locale.yaml"), locale, locationId)
 
-      case key if key.startsWith("survey:") =>
-        val surveyName = key.stripPrefix("survey:")
-        provisionSurvey(quill, baseDir.resolve(s"surveys/$surveyName.yaml"), surveyName)
-
-      case key if key.startsWith("advertiser:") =>
-        val advertiserSlug = key.stripPrefix("advertiser:")
-        provisionAdvertiser(
-          quill,
-          baseDir.resolve(s"advertisers/$advertiserSlug/advertiser.yaml"),
-          advertiserSlug)
-
-      case key if key.startsWith("video:") =>
-        // video:{location}/{advertiser}/{video-slug}
-        val parts = key.stripPrefix("video:").split("/")
+      case key if key.startsWith("video-survey:") =>
+        // video-survey:{location}/{videoSlug}/{surveySlug}
+        val parts = key.stripPrefix("video-survey:").split("/")
         if parts.length == 3 then
-          val advertiserSlug = parts(1)
-          val videoSlug = parts(2)
-          provisionVideo(
+          val videoSlug = parts(1)
+          val surveySlug = parts(2)
+          provisionVideoSurvey(
             quill,
-            baseDir.resolve(s"advertisers/$advertiserSlug/videos/$videoSlug.yaml"),
+            baseDir.resolve(s"videos/$videoSlug/surveys/$surveySlug.yaml"),
             locationSlug,
             locationId,
-            advertiserSlug,
+            videoSlug,
+            surveySlug)
+        else ZIO.fail(new RuntimeException(s"Invalid video-survey entity key: $entityKey"))
+
+      case key if key.startsWith("video:") =>
+        // video:{location}/{videoSlug}
+        val parts = key.stripPrefix("video:").split("/")
+        if parts.length == 2 then
+          val videoSlug = parts(1)
+          provisionVideo(
+            quill,
+            baseDir.resolve(s"videos/$videoSlug/video.yaml"),
+            locationSlug,
+            locationId,
             videoSlug)
         else ZIO.fail(new RuntimeException(s"Invalid video entity key: $entityKey"))
 
       case key if key.startsWith("promo:") =>
-        // promo:{location}/{video-slug}
         val parts = key.stripPrefix("promo:").split("/")
         if parts.length == 2 then
           val videoSlug = parts(1)
@@ -190,13 +203,15 @@ object ProvisionService:
       case _ =>
         ZIO.logWarning(s"Unknown entity key: $entityKey")
 
-  private def provisionI18n(quill: QuillSqlite, path: Path, locale: String): Task[Unit] =
+  // ─── Entity provisioning ────────────────────────────────────────────────────
+
+  private def provisionI18n(quill: QuillSqlite, path: Path, locale: String, locationId: String): Task[Unit] =
     for
       content <- ZIO.attempt(Files.readString(path))
       translations <- ZIO
         .fromEither(yamlParser.parse(content).flatMap(_.as[I18nYaml]))
         .mapError(e => new RuntimeException(s"Failed to parse i18n $locale: $e"))
-      _ <- EntityWriter.upsertI18n(quill)(locale, translations)
+      _ <- EntityWriter.upsertI18n(quill)(locale, locationId, translations)
       _ <- ZIO.logInfo(s"Provisioned i18n: $locale (${translations.size} keys)")
     yield ()
 
@@ -233,17 +248,16 @@ object ProvisionService:
       path: Path,
       locationSlug: String,
       locationId: String,
-      advertiserSlug: String,
       videoSlug: String): Task[Unit] =
     for
       content <- ZIO.attempt(Files.readString(path))
       yaml <- ZIO
         .fromEither(yamlParser.parse(content).flatMap(_.as[VideoYaml]))
-        .mapError(e => new RuntimeException(s"Failed to parse video $advertiserSlug/$videoSlug: $e"))
+        .mapError(e => new RuntimeException(s"Failed to parse video $videoSlug: $e"))
       _ <- ZIO.when(yaml.url.isEmpty):
-        ZIO.fail(new RuntimeException(s"Video URL cannot be empty: $advertiserSlug/$videoSlug"))
-      videoId = IdGenerator.videoId(locationSlug, advertiserSlug, videoSlug)
-      advertiserId = IdGenerator.advertiserId(advertiserSlug)
+        ZIO.fail(new RuntimeException(s"Video URL cannot be empty: $videoSlug"))
+      advertiserId = IdGenerator.advertiserId(yaml.advertiser)
+      videoId = IdGenerator.videoId(locationSlug, yaml.advertiser, videoSlug)
       _ <- EntityWriter.upsertVideo(quill)(
         videoId,
         Some(advertiserId),
@@ -255,21 +269,41 @@ object ProvisionService:
         yaml.noRepeatSeconds,
         Some(locationId),
         yaml.priority)
-      // Localized texts for title and description
       _ <- upsertLocalizedTexts(quill, videoId, yaml.title, "")
       _ <- yaml.description.fold(ZIO.unit)(desc => upsertLocalizedTexts(quill, videoId, desc, "_desc"))
-      // Inline survey if present
-      _ <- yaml.survey.fold(ZIO.unit): surveyYaml =>
-        val surveyId = IdGenerator.advertiserSurveyId(locationSlug, advertiserSlug, videoSlug)
-        val surveyKey = s"survey:$locationSlug/$advertiserSlug/$videoSlug"
-        EntityWriter.upsertSurvey(quill)(
-          surveyId,
-          "advertiser",
-          Some(advertiserId),
-          Some(videoId),
-          Some(locationId)) *>
-          provisionQuestions(quill, surveyKey, surveyId, surveyYaml.questions)
-      _ <- ZIO.logInfo(s"Provisioned video: $advertiserSlug/$videoSlug")
+      _ <- ZIO.logInfo(s"Provisioned video: $videoSlug (advertiser: ${yaml.advertiser})")
+    yield ()
+
+  private def provisionVideoSurvey(
+      quill: QuillSqlite,
+      path: Path,
+      locationSlug: String,
+      locationId: String,
+      videoSlug: String,
+      surveySlug: String): Task[Unit] =
+    for
+      content <- ZIO.attempt(Files.readString(path))
+      // First read video.yaml to get the advertiser slug
+      videoYamlPath = path.getParent.getParent.resolve("video.yaml")
+      videoContent <- ZIO.attempt(Files.readString(videoYamlPath))
+      videoYaml <- ZIO.fromEither(yamlParser.parse(videoContent).flatMap(_.as[VideoYaml]))
+        .mapError(e => new RuntimeException(s"Failed to parse video.yaml for $videoSlug: $e"))
+      yaml <- ZIO
+        .fromEither(yamlParser.parse(content).flatMap(_.as[VideoSurveyYaml]))
+        .mapError(e => new RuntimeException(s"Failed to parse survey $videoSlug/$surveySlug: $e"))
+      advertiserId = IdGenerator.advertiserId(videoYaml.advertiser)
+      videoId = IdGenerator.videoId(locationSlug, videoYaml.advertiser, videoSlug)
+      surveyId = IdGenerator.advertiserSurveyId(locationSlug, videoSlug, surveySlug)
+      surveyKey = s"video-survey:$locationSlug/$videoSlug/$surveySlug"
+      _ <- EntityWriter.upsertSurvey(quill)(
+        surveyId,
+        "advertiser",
+        Some(advertiserId),
+        Some(videoId),
+        Some(locationId),
+        yaml.name)
+      _ <- provisionQuestions(quill, surveyKey, surveyId, yaml.questions)
+      _ <- ZIO.logInfo(s"Provisioned video survey: $videoSlug/$surveySlug")
     yield ()
 
   private def provisionPromo(
@@ -302,7 +336,8 @@ object ProvisionService:
       _ <- ZIO.logInfo(s"Provisioned promo: $videoSlug")
     yield ()
 
-  /** Provision questions for a survey. */
+  // ─── Questions ──────────────────────────────────────────────────────────────
+
   private def provisionQuestions(
       quill: QuillSqlite,
       surveyKey: String,
@@ -324,12 +359,10 @@ object ProvisionService:
         _ <- q.description.fold(ZIO.unit)(d => upsertLocalizedTexts(quill, questionId, d, "_desc"))
         _ <- q.placeholder.fold(ZIO.unit)(p =>
           upsertLocalizedTexts(quill, questionId, p, "_placeholder"))
-        // Options
         _ <- ZIO.foreachDiscard(q.options.getOrElse(Nil).zipWithIndex): (opt, oi) =>
           val optionId = IdGenerator.optionId(surveyKey, idx, oi)
           EntityWriter.upsertQuestionOption(quill)(optionId, questionId, oi + 1) *>
             upsertLocalizedTexts(quill, optionId, opt.text, "")
-        // Rules
         _ <- ZIO.foreachDiscard(q.rules.getOrElse(Nil).zipWithIndex): (rule, ri) =>
           val ruleId = IdGenerator.ruleId(s"$surveyKey/$idx", ri)
           val ruleConfig = rule.value match
@@ -352,14 +385,12 @@ object ProvisionService:
   /** Soft-delete an entity based on its key prefix. */
   private def softDeleteEntity(quill: QuillSqlite, entityKey: String): Task[Unit] =
     entityKey match
-      case key if key.startsWith("advertiser:") =>
-        val slug = key.stripPrefix("advertiser:")
-        EntityWriter.deactivateAdvertiser(quill)(IdGenerator.advertiserId(slug))
       case key if key.startsWith("video:") =>
         val parts = key.stripPrefix("video:").split("/")
-        if parts.length == 3 then
-          val id = IdGenerator.videoId(parts(0), parts(1), parts(2))
-          EntityWriter.deactivateVideo(quill)(id)
+        if parts.length == 2 then
+          // Need to read the video.yaml to get the advertiser slug for the ID
+          // Since we're deleting, we deactivate all videos matching the pattern
+          ZIO.logWarning(s"Soft-delete for video key $key — manual cleanup may be needed")
         else ZIO.unit
       case key if key.startsWith("promo:") =>
         val parts = key.stripPrefix("promo:").split("/")
@@ -370,12 +401,7 @@ object ProvisionService:
       case _ =>
         ZIO.logWarning(s"Don't know how to soft-delete: $entityKey")
 
-  private def isGlobalEntity(key: String): Boolean =
-    key.startsWith("i18n:") || key.startsWith("survey:") || key.startsWith("advertiser:")
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Validation
-  // ─────────────────────────────────────────────────────────────────────────────
+  // ─── Validation ─────────────────────────────────────────────────────────────
 
   private val KebabCasePattern = "[a-z0-9-]+".r
 

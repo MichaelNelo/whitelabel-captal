@@ -12,9 +12,19 @@ import whitelabel.captal.infra.schema.given
 import whitelabel.captal.infra.{DeviceRow, SessionRow}
 import zio.*
 
+final case class CaptivePortalParams(
+    clientMac: String,
+    apMac: String,
+    redirectUrl: String,
+    ssid: String)
+
 trait SessionService:
   def findById(sessionId: user.SessionId): Task[Option[SessionData]]
-  def create(userAgent: String, locale: String, phase: Phase): Task[SessionData]
+  def create(
+      userAgent: String,
+      locale: String,
+      phase: Phase,
+      portalParams: CaptivePortalParams): Task[SessionData]
   def setPhase(sessionId: user.SessionId, phase: Phase): Task[Unit]
   def setLocale(sessionId: user.SessionId, locale: String): Task[Unit]
   def setCurrentQuestion(sessionId: user.SessionId, question: FullyQualifiedQuestionId): Task[Unit]
@@ -81,7 +91,11 @@ object SessionService:
       def findById(sessionId: user.SessionId): Task[Option[SessionData]] =
         run(findByIdQuery(lift(sessionId))).map(_.headOption.map(toSessionData)).orDie
 
-      def create(userAgent: String, locale: String, phase: Phase): Task[SessionData] =
+      def create(
+          userAgent: String,
+          locale: String,
+          phase: Phase,
+          portalParams: CaptivePortalParams): Task[SessionData] =
         val sessionId = user.SessionId.generate
         val deviceId = user.DeviceId.fromUserAgent(userAgent)
         val now = java.time.Instant.now.toString
@@ -113,7 +127,11 @@ object SessionService:
           lastPromoVideoId = None,
           currentAdvertiserId = None,
           locationId = locationId,
-          createdAt = now)
+          createdAt = now,
+          clientMac = portalParams.clientMac,
+          apMac = portalParams.apMac,
+          redirectUrl = portalParams.redirectUrl,
+          ssid = portalParams.ssid)
 
         val insertSession = run(
           query[SessionRow].insert(
@@ -128,7 +146,11 @@ object SessionService:
             _.lastPromoVideoId -> lift(sessionRow.lastPromoVideoId),
             _.currentAdvertiserId -> lift(sessionRow.currentAdvertiserId),
             _.locationId       -> lift(sessionRow.locationId),
-            _.createdAt        -> lift(sessionRow.createdAt)))
+            _.createdAt        -> lift(sessionRow.createdAt),
+            _.clientMac        -> lift(sessionRow.clientMac),
+            _.apMac            -> lift(sessionRow.apMac),
+            _.redirectUrl      -> lift(sessionRow.redirectUrl),
+            _.ssid             -> lift(sessionRow.ssid)))
 
         (upsertDevice *> insertSession).orDie *>
           ZIO.succeed(
@@ -140,7 +162,11 @@ object SessionService:
               None,
               None,
               None,
-              locationId = locationId))
+              locationId = locationId,
+              clientMac = portalParams.clientMac,
+              apMac = portalParams.apMac,
+              redirectUrl = portalParams.redirectUrl,
+              ssid = portalParams.ssid))
       end create
 
       def setCurrentQuestion(
@@ -177,7 +203,11 @@ object SessionService:
       row.currentVideoId,
       row.lastPromoVideoId,
       row.currentAdvertiserId.flatMap(AdvertiserId.fromString),
-      row.locationId)
+      row.locationId,
+      row.clientMac,
+      row.apMac,
+      row.redirectUrl,
+      row.ssid)
 
   val layer: ZLayer[QuillSqlite, Nothing, SessionService] = ZLayer.fromFunction(apply(_, None))
 

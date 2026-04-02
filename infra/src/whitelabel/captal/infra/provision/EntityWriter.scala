@@ -14,15 +14,17 @@ object EntityWriter:
   def upsertLocation(quill: QuillSqlite)(
       id: String,
       slug: String,
-      name: String): Task[Unit] =
+      name: String,
+      apMac: Option[String] = None): Task[Unit] =
     import quill.*
     val now = java.time.Instant.now.toString
-    val row = LocationRow(id, slug, name, 1, now, now)
+    val row = LocationRow(id, slug, name, 1, now, now, apMac)
     run(
       query[LocationRow]
         .insertValue(lift(row))
         .onConflictUpdate(_.id)(
           (t, e) => t.name -> e.name,
+          (t, e) => t.apMac -> e.apMac,
           (t, _) => t.isActive -> lift(1),
           (t, _) => t.updatedAt -> lift(now))).unit
 
@@ -86,7 +88,8 @@ object EntityWriter:
       category: String,
       advertiserId: Option[String],
       videoId: Option[String],
-      locationId: Option[String]): Task[Unit] =
+      locationId: Option[String],
+      name: Option[String] = None): Task[Unit] =
     import quill.*
     val now = java.time.Instant.now.toString
     val row = SurveyRow(
@@ -96,12 +99,14 @@ object EntityWriter:
       videoId,
       locationId,
       1,
-      now)
+      now,
+      name)
     run(
       query[SurveyRow]
         .insertValue(lift(row))
         .onConflictUpdate(_.id)(
-          (t, _) => t.isActive -> lift(1))).unit
+          (t, _) => t.isActive -> lift(1),
+          (t, e) => t.name -> e.name)).unit
 
   def upsertQuestion(quill: QuillSqlite)(
       id: String,
@@ -169,10 +174,11 @@ object EntityWriter:
       entityId: String,
       locale: String,
       value: String,
-      category: String = "backend"): Task[Unit] =
+      category: String = "backend",
+      locationId: Option[String] = None): Task[Unit] =
     import quill.*
     val now = java.time.Instant.now.toString
-    val row = LocalizedTextRow(id, entityId, locale, value, category, now, now)
+    val row = LocalizedTextRow(id, entityId, locale, value, category, now, now, locationId)
     run(
       query[LocalizedTextRow]
         .insertValue(lift(row))
@@ -228,13 +234,18 @@ object EntityWriter:
     import quill.*
     run(query[ProvisionManifestRow].filter(_.entityKey == lift(entityKey)).delete).unit
 
-  /** Load all manifest entries */
-  def loadManifest(quill: QuillSqlite): Task[Map[String, String]] =
+  /** Load manifest entries for a location and global entities, tagged by ownership. */
+  def loadManifest(quill: QuillSqlite)(locationId: String): Task[(Map[String, String], Set[String])] =
     import quill.*
-    run(query[ProvisionManifestRow]).map(_.map(r => r.entityKey -> r.contentHash).toMap)
+    run(query[ProvisionManifestRow].filter(r =>
+      r.locationId == lift(Option(locationId)) || r.locationId.isEmpty))
+      .map: rows =>
+        val all = rows.map(r => r.entityKey -> r.contentHash).toMap
+        val localKeys = rows.filter(_.locationId.contains(locationId)).map(_.entityKey).toSet
+        (all, localKeys)
 
-  /** Upsert i18n translations as localized_texts with category=frontend */
-  def upsertI18n(quill: QuillSqlite)(locale: String, translations: Map[String, String]): Task[Unit] =
+  /** Upsert i18n translations as localized_texts with category=frontend, scoped by location */
+  def upsertI18n(quill: QuillSqlite)(locale: String, locationId: String, translations: Map[String, String]): Task[Unit] =
     ZIO.foreachDiscard(translations.toList): (key, value) =>
-      val id = IdGenerator.localizedTextId(s"i18n.$key", locale)
-      upsertLocalizedText(quill)(id, s"i18n.$key", locale, value, "frontend")
+      val id = IdGenerator.localizedTextId(s"$locationId:$key", locale)
+      upsertLocalizedText(quill)(id, key, locale, value, "frontend", Some(locationId))

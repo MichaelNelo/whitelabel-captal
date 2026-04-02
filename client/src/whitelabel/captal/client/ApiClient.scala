@@ -26,13 +26,18 @@ object ApiClient:
   private def fetchApi[A: Decoder](
       method: String,
       path: String,
-      body: Option[io.circe.Json] = None
+      body: Option[io.circe.Json] = None,
+      extraHeaders: Map[String, String] = Map.empty
   ): Future[Either[ApiError, A]] =
     val options = js.Dynamic.literal(method = method)
+    val headers = js.Dynamic.literal()
     body.foreach { json =>
-      options.headers = js.Dynamic.literal("Content-Type" -> "application/json")
+      headers.updateDynamic("Content-Type")("application/json")
       options.body = json.noSpaces
     }
+    extraHeaders.foreach { (k, v) => headers.updateDynamic(k)(v) }
+    if js.Object.keys(headers.asInstanceOf[js.Object]).length > 0 then
+      options.headers = headers
     for
       response <- dom.fetch(path, options.asInstanceOf[dom.RequestInit]).toFuture
       text     <- response.text().toFuture
@@ -56,8 +61,10 @@ object ApiClient:
   private def putJson[B: Encoder, A: Decoder](path: String, body: B): Future[Either[ApiError, A]] =
     fetchApi("PUT", path, Some(body.asJson))
 
-  def getStatus(): Future[Either[ApiError, StatusResponse]] =
-    get("/api/status")
+  def getStatus(
+      extraHeaders: Map[String, String] = Map.empty
+  ): Future[Either[ApiError, StatusResponse]] =
+    fetchApi("GET", "/api/status", extraHeaders = extraHeaders)
 
   def getNextSurvey(): Future[Either[ApiError, SurveyResponse]] =
     get("/api/survey/next")

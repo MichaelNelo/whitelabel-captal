@@ -13,4 +13,8 @@ final case class SessionData(
     currentVideoId: Option[video.Id],
     lastPromoVideoId: Option[video.Id],
     currentAdvertiserId: Option[AdvertiserId] = None,
-    locationId: Option[String] = None)
+    locationId: Option[String] = None,
+    clientMac: String = "",
+    apMac: String = "",
+    redirectUrl: String = "",
+    ssid: String = "")
