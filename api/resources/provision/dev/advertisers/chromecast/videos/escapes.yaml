@@ -1,0 +1,33 @@
+url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4"
+duration: 15
+minWatch: 5
+showCountdown: true
+noRepeatSeconds: 3600
+priority: 9
+title:
+  es: "Chromecast - Escapa a nuevas aventuras"
+  en: "Chromecast - Escape to new adventures"
+description:
+  es: "Lleva el entretenimiento a donde quieras"
+  en: "Take entertainment wherever you go"
+survey:
+  questions:
+    - type: radio
+      points: 10
+      required: true
+      text:
+        es: "¿Qué dispositivo usas para ver streaming?"
+        en: "What device do you use for streaming?"
+      options:
+        - text:
+            es: "TV"
+            en: "TV"
+        - text:
+            es: "Celular"
+            en: "Phone"
+        - text:
+            es: "Tablet"
+            en: "Tablet"
+        - text:
+            es: "Computadora"
+            en: "Computer"

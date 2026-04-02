@@ -12,7 +12,7 @@ import whitelabel.captal.endpoints.StatusResponse.given
 import whitelabel.captal.endpoints.SurveyResponse.given
 import whitelabel.captal.endpoints.schemas.given
 import whitelabel.captal.endpoints.{AnswerRequest, ApiError, StatusResponse, SurveyEndpoints, SurveyResponse}
-import whitelabel.captal.infra.session.{SessionContext, SessionService}
+import whitelabel.captal.infra.session.{CaptivePortalParams, SessionContext, SessionService}
 import zio.*
 
 object SurveyRoutes:
@@ -174,17 +174,27 @@ object SurveyRoutes:
     private val defaultLocale = "es"
     private val defaultUserAgent = "unknown"
 
-    // Custom endpoint that extracts User-Agent before session resolution
+    // Custom endpoint that extracts User-Agent and captive portal headers before session resolution
     val route: ZServerEndpoint[Env, Any] = endpoint
       .securityIn(SurveyEndpoints.sessionCookie)
       .securityIn(header[Option[String]]("User-Agent"))
+      .securityIn(header[Option[String]]("X-Client-Mac"))
+      .securityIn(header[Option[String]]("X-Ap-Mac"))
+      .securityIn(header[Option[String]]("X-Redirect-Url"))
+      .securityIn(header[Option[String]]("X-Ssid"))
       .errorOut(jsonBody[ApiError])
-      .zServerSecurityLogic: (cookie, userAgentOpt) =>
+      .zServerSecurityLogic: (cookie, userAgentOpt, clientMac, apMac, redirectUrl, ssid) =>
         val userAgent = userAgentOpt.getOrElse(defaultUserAgent)
+        val portalParams = clientMac.map: mac =>
+          CaptivePortalParams(
+            mac,
+            apMac.getOrElse(""),
+            redirectUrl.getOrElse(""),
+            ssid.getOrElse(""))
         for
           session <- SessionEndpoint.resolveSession(
             cookie,
-            SessionEndpoint.OnMissing.Create(userAgent, defaultLocale))
+            SessionEndpoint.OnMissing.Create(userAgent, defaultLocale, portalParams))
           _ <- SessionContext.set(session)
         yield session
       .get
