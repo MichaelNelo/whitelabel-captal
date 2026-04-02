@@ -1,0 +1,15 @@
+name: "Interest in Acme"
+questions:
+  - type: radio
+    points: 10
+    required: true
+    text:
+      es: "Te interesa Acme?"
+      en: "Are you interested in Acme?"
+    options:
+      - text:
+          es: "Si"
+          en: "Yes"
+      - text:
+          es: "No"
+          en: "No"

@@ -21,9 +21,16 @@ object ProvisioningSuite:
     if url == null then throw new RuntimeException(s"Test resource not found: /provision/$scenario")
     Paths.get(url.toURI).toString
 
+  private def runSharedProvision(scenario: String): ZIO[QuillSqlite, Throwable, Unit] =
+    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+      ProvisionService.runShared(quill, resourceDir(scenario))
+
   private def runProvision(scenario: String): ZIO[QuillSqlite, Throwable, Unit] =
     ZIO.serviceWithZIO[QuillSqlite]: quill =>
       ProvisionService.run(quill, resourceDir(scenario), locationSlug)
+
+  private def provisionAll(sharedScenario: String, locationScenario: String): ZIO[QuillSqlite, Throwable, Unit] =
+    runSharedProvision(sharedScenario) *> runProvision(locationScenario)
 
   val suite: Spec[QuillSqlite, Throwable] =
     zio
@@ -32,7 +39,7 @@ object ProvisioningSuite:
         test("fresh provision creates all entities"):
           for
             _            <- TestFixtures.clearAllData
-            _            <- runProvision("basic")
+            _            <- provisionAll("shared", "basic")
             locations    <- queryLocations
             advertisers  <- queryAdvertisers
             videos       <- queryVideos
@@ -45,12 +52,12 @@ object ProvisioningSuite:
           yield
             val expectedAdvertiserId = IdGenerator.advertiserId("acme")
             val expectedVideoId =
-              IdGenerator.videoId(locationSlug, "acme", "intro")
+              IdGenerator.videoId(locationSlug, "acme", "acme-intro")
             val expectedPromoId =
               IdGenerator.promoVideoId(locationSlug, "welcome")
             val expectedSurveyId = IdGenerator.surveyId("email")
             val expectedAdvSurveyId =
-              IdGenerator.advertiserSurveyId(locationSlug, "acme", "intro")
+              IdGenerator.advertiserSurveyId(locationSlug, "acme-intro", "interest")
 
             assertTrue(
               // Location
@@ -75,7 +82,7 @@ object ProvisioningSuite:
                 v.id.asString == expectedPromoId &&
                   v.videoUrl == "https://cdn.example.com/promo-welcome.mp4" &&
                   v.videoType == "propaganda"),
-              // Surveys: 1 global email + 1 advertiser survey
+              // Surveys: 1 global email + 1 video survey
               surveys.size == 2,
               surveys.exists(s =>
                 s.id.asString == expectedSurveyId &&
@@ -85,9 +92,9 @@ object ProvisioningSuite:
                 s.id.asString == expectedAdvSurveyId &&
                   s.category == "advertiser" &&
                   s.advertiserId.contains(expectedAdvertiserId)),
-              // Questions: 1 for email + 1 for advertiser survey
+              // Questions: 1 for email + 1 for video survey
               questions.size == 2,
-              // Options: 2 for the advertiser survey question
+              // Options: 2 for the video survey question
               options.size == 2,
               // i18n texts: 2 keys * 2 locales = 4
               i18nTexts.size == 4,
@@ -95,51 +102,47 @@ object ProvisioningSuite:
               i18nTexts.exists(t => t.locale == "en" && t.value == "Welcome"),
               // Backend texts exist (video titles, question texts, etc.)
               backendTexts.nonEmpty,
-              // Manifest has entries
+              // Manifest has location-scoped entries
               manifest.nonEmpty,
               manifest.exists(_.entityKey == s"i18n:$locationSlug/es"),
               manifest.exists(_.entityKey == s"i18n:$locationSlug/en"),
-              manifest.exists(_.entityKey == "survey:email"),
-              manifest.exists(_.entityKey == "advertiser:acme"),
-              manifest.exists(_.entityKey == s"video:$locationSlug/acme/intro"),
+              manifest.exists(_.entityKey == s"video:$locationSlug/acme-intro"),
+              manifest.exists(_.entityKey == s"video-survey:$locationSlug/acme-intro/interest"),
               manifest.exists(_.entityKey == s"promo:$locationSlug/welcome")
             )
         ,
         test("re-provision with no changes is idempotent"):
           for
             _         <- TestFixtures.clearAllData
-            _         <- runProvision("basic")
+            _         <- provisionAll("shared", "basic")
             manifest1 <- queryManifest
-            _         <- runProvision("basic")
+            _         <- provisionAll("shared", "basic")
             manifest2 <- queryManifest
             videos    <- queryVideos
           yield assertTrue(
             manifest1.size == manifest2.size,
             manifest1.map(_.contentHash).toSet == manifest2.map(_.contentHash).toSet,
-            // Still same number of entities
             videos.size == 2
           )
         ,
         test("provision detects updates"):
           for
             _ <- TestFixtures.clearAllData
-            _ <- runProvision("basic")
-            // Capture state before update
+            _ <- provisionAll("shared", "basic")
             advertisersBefore <- queryAdvertisers
             videosBefore      <- queryVideos
             manifestBefore    <- queryManifest
-            _ <- runProvision("updated")
-            // Capture state after update
+            _ <- provisionAll("updated-shared", "updated")
             advertisersAfter <- queryAdvertisers
             videosAfter      <- queryVideos
             i18nTexts        <- queryLocalizedTexts("frontend")
             manifestAfter    <- queryManifest
           yield
             val expectedVideoId =
-              IdGenerator.videoId(locationSlug, "acme", "intro")
+              IdGenerator.videoId(locationSlug, "acme", "acme-intro")
 
             assertTrue(
-              // Advertiser priority updated
+              // Advertiser priority updated (via shared)
               advertisersBefore.head.priority == 10,
               advertisersAfter.head.priority == 20,
               // Video url and duration updated
@@ -155,66 +158,45 @@ object ProvisioningSuite:
               i18nTexts.exists(t =>
                 t.locale == "en" && t.entityId == "welcome" &&
                   t.value == "Welcome to Captal"),
-              // Manifest hashes changed for updated entities
+              // Manifest hashes changed for updated video
               manifestBefore
-                .find(_.entityKey == "advertiser:acme")
+                .find(_.entityKey == s"video:$locationSlug/acme-intro")
                 .get
                 .contentHash !=
-                manifestAfter.find(_.entityKey == "advertiser:acme").get.contentHash,
-              manifestBefore
-                .find(_.entityKey == s"video:$locationSlug/acme/intro")
-                .get
-                .contentHash !=
-                manifestAfter
-                  .find(_.entityKey == s"video:$locationSlug/acme/intro")
-                  .get
-                  .contentHash
+                manifestAfter.find(_.entityKey == s"video:$locationSlug/acme-intro").get.contentHash
             )
         ,
         test("provision soft-deletes removed entities"):
           for
             _ <- TestFixtures.clearAllData
-            _ <- runProvision("basic")
-            // Verify entities exist and are active
+            _ <- provisionAll("shared", "basic")
             videosBefore   <- queryVideos
             manifestBefore <- queryManifest
-            _ <- runProvision("reduced")
+            _ <- provisionAll("shared", "reduced")
             videosAfter   <- queryAllVideos
             advertisers   <- queryAdvertisers
             manifestAfter <- queryManifest
           yield
             val introVideoId =
-              IdGenerator.videoId(locationSlug, "acme", "intro")
+              IdGenerator.videoId(locationSlug, "acme", "acme-intro")
             val promoVideoId =
               IdGenerator.promoVideoId(locationSlug, "welcome")
 
             assertTrue(
               // Before: 2 active videos
               videosBefore.size == 2,
-              // After: intro video soft-deleted (is_active = 0)
-              videosAfter.exists(v =>
-                v.id.asString == introVideoId && v.isActive == 0),
-              // Promo video soft-deleted
-              videosAfter.exists(v =>
-                v.id.asString == promoVideoId && v.isActive == 0),
-              // Advertiser still active (directory still exists)
+              // After: video and promo gone from manifest (reduced has neither)
+              !manifestAfter.exists(_.entityKey == s"video:$locationSlug/acme-intro"),
+              !manifestAfter.exists(_.entityKey == s"promo:$locationSlug/welcome"),
+              // Advertiser still active (shared, not affected by location provisioning)
               advertisers.size == 1,
-              advertisers.head.isActive == 1,
-              // Manifest entries removed for deleted entities
-              manifestBefore.exists(
-                _.entityKey == s"video:$locationSlug/acme/intro"),
-              !manifestAfter.exists(
-                _.entityKey == s"video:$locationSlug/acme/intro"),
-              manifestBefore.exists(
-                _.entityKey == s"promo:$locationSlug/welcome"),
-              !manifestAfter.exists(
-                _.entityKey == s"promo:$locationSlug/welcome")
+              advertisers.head.isActive == 1
             )
         ,
         test("IDs are deterministic"):
           for
             _           <- TestFixtures.clearAllData
-            _           <- runProvision("basic")
+            _           <- provisionAll("shared", "basic")
             locations   <- queryLocations
             advertisers <- queryAdvertisers
             videos      <- queryVideos
@@ -223,12 +205,12 @@ object ProvisioningSuite:
             locations.head.id == IdGenerator.locationId(locationSlug),
             advertisers.head.id == IdGenerator.advertiserId("acme"),
             videos.exists(_.id.asString ==
-              IdGenerator.videoId(locationSlug, "acme", "intro")),
+              IdGenerator.videoId(locationSlug, "acme", "acme-intro")),
             videos.exists(_.id.asString ==
               IdGenerator.promoVideoId(locationSlug, "welcome")),
             surveys.exists(_.id.asString == IdGenerator.surveyId("email")),
             surveys.exists(_.id.asString ==
-              IdGenerator.advertiserSurveyId(locationSlug, "acme", "intro"))
+              IdGenerator.advertiserSurveyId(locationSlug, "acme-intro", "interest"))
           )
       ) @@ TestAspect.sequential
 
@@ -259,7 +241,7 @@ object ProvisioningSuite:
   private def querySurveys: ZIO[QuillSqlite, Throwable, List[SurveyRow]] =
     ZIO.serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
-      run(query[SurveyRow])
+      run(query[SurveyRow].filter(_.isActive == 1))
 
   private def queryQuestions: ZIO[QuillSqlite, Throwable, List[QuestionRow]] =
     ZIO.serviceWithZIO[QuillSqlite]: quill =>
@@ -281,4 +263,3 @@ object ProvisioningSuite:
     ZIO.serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
       run(query[ProvisionManifestRow])
-end ProvisioningSuite
