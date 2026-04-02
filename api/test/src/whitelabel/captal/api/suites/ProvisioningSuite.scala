@@ -97,8 +97,8 @@ object ProvisioningSuite:
               backendTexts.nonEmpty,
               // Manifest has entries
               manifest.nonEmpty,
-              manifest.exists(_.entityKey == "i18n:es"),
-              manifest.exists(_.entityKey == "i18n:en"),
+              manifest.exists(_.entityKey == s"i18n:$locationSlug/es"),
+              manifest.exists(_.entityKey == s"i18n:$locationSlug/en"),
               manifest.exists(_.entityKey == "survey:email"),
               manifest.exists(_.entityKey == "advertiser:acme"),
               manifest.exists(_.entityKey == s"video:$locationSlug/acme/intro"),
@@ -150,10 +150,10 @@ object ProvisioningSuite:
               videosAfter.find(_.id.asString == expectedVideoId).get.durationSeconds == 20,
               // i18n texts updated
               i18nTexts.exists(t =>
-                t.locale == "es" && t.entityId == "i18n.welcome" &&
+                t.locale == "es" && t.entityId == "welcome" &&
                   t.value == "Bienvenido a Captal"),
               i18nTexts.exists(t =>
-                t.locale == "en" && t.entityId == "i18n.welcome" &&
+                t.locale == "en" && t.entityId == "welcome" &&
                   t.value == "Welcome to Captal"),
               // Manifest hashes changed for updated entities
               manifestBefore
