@@ -1,0 +1,15 @@
+name: "Uso de Google Play"
+questions:
+  - type: radio
+    points: 10
+    required: true
+    text:
+      es: "¿Usas Google Play?"
+      en: "Do you use Google Play?"
+    options:
+      - text:
+          es: "Sí"
+          en: "Yes"
+      - text:
+          es: "No"
+          en: "No"

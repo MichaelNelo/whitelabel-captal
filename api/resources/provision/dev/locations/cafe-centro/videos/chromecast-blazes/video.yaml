@@ -1,0 +1,13 @@
+advertiser: chromecast
+url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
+duration: 15
+minWatch: 5
+showCountdown: true
+noRepeatSeconds: 3600
+priority: 10
+title:
+  es: "Chromecast - Enciende tu mundo"
+  en: "Chromecast - Light up your world"
+description:
+  es: "Descubre el poder de transmitir contenido a tu TV"
+  en: "Discover the power of streaming to your TV"

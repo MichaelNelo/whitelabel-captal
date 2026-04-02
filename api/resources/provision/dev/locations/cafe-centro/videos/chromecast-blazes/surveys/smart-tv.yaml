@@ -1,0 +1,15 @@
+name: "Smart TV"
+questions:
+  - type: radio
+    points: 10
+    required: true
+    text:
+      es: "¿Tienes un smart TV?"
+      en: "Do you have a smart TV?"
+    options:
+      - text:
+          es: "Sí"
+          en: "Yes"
+      - text:
+          es: "No"
+          en: "No"
