@@ -161,7 +161,8 @@ object infra extends BaseModule:
     mvn"com.github.geirolz::fly4s:1.0.8",
     mvn"dev.zio::zio-interop-cats:23.1.0.3",
     mvn"io.rqlite:rqlite-jdbc:9.1.2.1",
-    mvn"ch.qos.logback:logback-classic:1.5.6")
+    mvn"ch.qos.logback:logback-classic:1.5.6",
+    mvn"io.circe::circe-yaml:0.16.0")
 
   def migrate() = Task.Command:
     runMain("whitelabel.captal.infra.Migrate")()
@@ -178,6 +179,9 @@ object api extends BaseModule:
     mvn"com.softwaremill.sttp.tapir::tapir-json-circe:1.11.11",
     mvn"dev.zio::zio-interop-cats:23.1.0.3")
 
+  override def forkEnv: T[Map[String, String]] = Task:
+    Map("PROVISION_DIR" -> defaultProvisionDir, "LOCATION_SLUG" -> defaultLocationSlug) ++ super.forkEnv()
+
   // Render index.html from template for local development
   def copyIndex() = Task.Command:
     val root = moduleDir / os.up
@@ -190,10 +194,12 @@ object api extends BaseModule:
 
   private val rqliteDevPort = 4001
   private val rqliteDevContainerName = "rqlite-dev"
+  private val defaultProvisionDir = (moduleDir / "resources" / "provision" / "dev").toString
+  private val defaultLocationSlug = "dev"
 
   def rqliteSetup() = Task.Command:
     ensureRqlite(rqliteDevContainerName, rqliteDevPort)
-    
+
   def stopRqlite() = Task.Command:
     os.proc("docker", "rm", "-f", rqliteDevContainerName).call(check = false)
     println("rqlite test container stopped")
@@ -204,16 +210,27 @@ object api extends BaseModule:
     client.fastLinkJS()
     super.run(args)()
 
-  /** Full dev workflow: rqlite + migrations (with dev seeds) + client + server.
-    * Usage: ./mill api.dev
+  /** Full dev workflow: rqlite + migrations + client + server.
+    * Usage: ./mill api.dev                                     # defaults: provision/dev, slug=dev
+    *        ./mill api.dev --slug basic --dir path/to/provision # custom location
     */
-  def dev(args: Task[Args] = Task.Anon(Args())) = Task.Command:
+  def dev(slug: String = defaultLocationSlug, dir: String = defaultProvisionDir) = Task.Command:
     println("[dev] Step 1/3: Ensuring rqlite container...")
     rqliteSetup()()
     println("[dev] Step 2/3: Running migrations...")
     infra.migrate()()
-    println("[dev] Step 3/3: Preparing server...")
-    run()()
+    println(s"[dev] Step 3/3: Starting server (location=$slug, provision=$dir)...")
+    copyIndex()()
+    client.fastLinkJS()
+    val cp = runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
+    val mc = "whitelabel.captal.api.Main"
+    val env = forkEnv() ++ Map("PROVISION_DIR" -> dir, "LOCATION_SLUG" -> slug)
+    os.proc("java", forkArgs(), "-cp", cp, mc).call(
+      env = env,
+      stdin = os.Inherit,
+      stdout = os.Inherit,
+      stderr = os.Inherit
+    )
 
   object test extends ScalaTests with ScalafmtModule with ScalafixModule:
     def mvnDeps = Seq(
@@ -234,11 +251,11 @@ object api extends BaseModule:
       println("rqlite test container stopped")
 
   /** Build the dev Docker image.
-    * Usage: ./mill api.dockerBuildDev 0.1.0
+    * Usage: ./mill api.dockerBuildDev captal-dev 0.1.0
     */
-  def dockerBuildDev(version: String) = Task.Command:
+  def dockerBuildDev(name: String, version: String) = Task.Command:
     val root = moduleDir / os.up
-    val tag = s"captal-dev:$version"
+    val tag = s"$name:$version"
     println(s"[docker] Building $tag ...")
     val result = os.proc(
       "docker", "build",
@@ -250,6 +267,23 @@ object api extends BaseModule:
     if result.exitCode != 0 then
       sys.error(s"[docker] Build failed:\n${result.err.trim()}")
     println(s"[docker] Built $tag")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Client: JS only (Laminar app)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLI: JVM only (captal command-line tool)
+// ─────────────────────────────────────────────────────────────────────────────
+
+object cli extends BaseModule:
+  def moduleDeps = Seq(infra)
+  def mvnDeps = Seq(
+    mvn"software.amazon.awssdk:s3:2.29.51",
+    mvn"software.amazon.awssdk:ecs:2.29.51",
+    mvn"software.amazon.awssdk:elasticloadbalancingv2:2.29.51",
+    mvn"software.amazon.awssdk:ecr:2.29.51")
+  def mainClass = Some("whitelabel.captal.cli.Main")
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Client: JS only (Laminar app)
@@ -291,23 +325,27 @@ object client extends BaseJSModule:
       out.close()
       in.close()
 
+  def clientAssets: T[PathRef] = Task.Source(moduleDir / "assets")
+  def clientTemplate: T[PathRef] = Task.Source(moduleDir / "index.html.template")
+
   /** Build production bundle and gzip assets.
     * Usage: ./mill client.bundle
     * Output: out/client/bundle.dest/
     */
   def bundle = Task:
     val src = fullLinkJS().dest.path
-    val root = moduleDir / os.up
+    val assets = clientAssets().path
+    val template = clientTemplate().path
     val dest = Task.dest
 
     // Copy assets
     os.copy(src / "main.js", dest / "main.js")
-    os.copy(root / "client" / "assets" / "styles.css", dest / "styles.css")
-    os.copy(root / "client" / "assets" / "brand-icon.svg", dest / "brand-icon.svg")
+    os.copy(assets / "styles.css", dest / "styles.css")
+    os.copy(assets / "brand-icon.svg", dest / "brand-icon.svg")
 
     // Render index.html from template with production paths
     renderIndex(
-      root / "client" / "index.html.template",
+      template,
       dest / "index.html",
       jsPath = "/main.js.gz",
       cssPath = "/styles.css.gz"
