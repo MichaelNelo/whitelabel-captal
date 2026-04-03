@@ -1,5 +1,6 @@
-package whitelabel.captal.cli
+package whitelabel.captal.cli.commands
 
+import whitelabel.captal.cli.{CaptalConfig, CliError, Output}
 import software.amazon.awssdk.services.ecs.EcsClient
 import software.amazon.awssdk.services.ecs.model.{
   AssignPublicIp,
@@ -23,15 +24,15 @@ object SharedPushCommand:
 
   def run: ZIO[Env, CliError, Unit] =
     for
-      _ <- Console.printLine("Deploying shared resources...").orDie
+      _ <- Output.header("Deploying shared resources")
 
-      _ <- Console.printLine("[1/2] Registering ephemeral task definition...").orDie
+      _ <- Output.step(1, 2, "Registering ephemeral task definition...")
       taskDefArn <- registerTaskDefinition
 
-      _ <- Console.printLine("[2/2] Running shared provisioning task...").orDie
+      _ <- Output.step(2, 2, "Running shared provisioning task...")
       _ <- runEphemeralTask(taskDefArn)
 
-      _ <- Console.printLine("Shared provisioning complete").orDie
+      _ <- Output.success("Shared provisioning complete")
     yield ()
 
   private def registerTaskDefinition: ZIO[CaptalConfig & EcsClient, CliError, String] =
@@ -72,7 +73,7 @@ object SharedPushCommand:
             config.ecs.taskRoleArn.foreach(builder.taskRoleArn)
 
             ecs.registerTaskDefinition(builder.build()).taskDefinition().taskDefinitionArn()
-      _ <- Console.printLine(s"  Registered task definition: $arn").orDie
+      _ <- Output.detail(s"Registered task definition: $arn")
     yield arn
 
   private def runEphemeralTask(taskDefArn: String): ZIO[CaptalConfig & EcsClient, CliError, Unit] =
@@ -102,7 +103,7 @@ object SharedPushCommand:
             if resp.tasks().isEmpty then
               throw new RuntimeException(s"Failed to start task: ${resp.failures()}")
             resp.tasks().get(0).taskArn()
-      _ <- Console.printLine(s"  Started task: $taskArn").orDie
+      _ <- Output.detail(s"Started task: $taskArn")
       _ <- pollTaskCompletion(config.ecs.cluster, taskArn)
     yield ()
 
@@ -118,7 +119,7 @@ object SharedPushCommand:
                   .builder().cluster(cluster).tasks(taskArn).build())
             task = resp.tasks().get(0)
             status = task.lastStatus()
-            _ <- Console.printLine(s"  Task status: $status").orDie
+            _ <- Output.detail(s"Task status: $status")
             _ <-
               if status == "STOPPED" then
                 val exitCode = task.containers().get(0).exitCode()

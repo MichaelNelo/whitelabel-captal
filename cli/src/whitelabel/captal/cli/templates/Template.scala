@@ -29,7 +29,7 @@ object Templates:
 
   /** Load a single template, replacing `{{key}}` placeholders with values. */
   def load(resourcePath: String, vars: Map[String, String] = Map.empty): Template =
-    val raw = Source.fromResource(s"templates/$resourcePath")(scala.io.Codec.UTF8).mkString
+    val raw = Source.fromResource(s"templates/$resourcePath")(using scala.io.Codec.UTF8).mkString
     val resolved = vars.foldLeft(raw) { case (c, (k, v)) => c.replace(s"{{$k}}", v) }
     Template(resourcePath, resolved)
 
