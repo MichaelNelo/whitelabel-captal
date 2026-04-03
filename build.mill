@@ -180,7 +180,7 @@ object api extends BaseModule:
     mvn"dev.zio::zio-interop-cats:23.1.0.3")
 
   override def forkEnv: T[Map[String, String]] = Task:
-    Map("PROVISION_DIR" -> defaultProvisionDir, "LOCATION_SLUG" -> defaultLocationSlug) ++ super.forkEnv()
+    Map("PROVISION_DIR" -> defaultProvisionDir, "LOCATION_SLUG" -> defaultLocationSlug, "SHARED_DIR" -> defaultSharedDir) ++ super.forkEnv()
 
   // Render index.html from template for local development
   def copyIndex() = Task.Command:
@@ -194,8 +194,10 @@ object api extends BaseModule:
 
   private val rqliteDevPort = 4001
   private val rqliteDevContainerName = "rqlite-dev"
-  private val defaultProvisionDir = (moduleDir / "resources" / "provision" / "dev").toString
-  private val defaultLocationSlug = "dev"
+  private val devProvisionBase = moduleDir / "resources" / "provision" / "dev"
+  private val defaultProvisionDir = (devProvisionBase / "locations" / "cafe-centro").toString
+  private val defaultSharedDir = (devProvisionBase / "shared").toString
+  private val defaultLocationSlug = "cafe-centro"
 
   def rqliteSetup() = Task.Command:
     ensureRqlite(rqliteDevContainerName, rqliteDevPort)
@@ -211,20 +213,26 @@ object api extends BaseModule:
     super.run(args)()
 
   /** Full dev workflow: rqlite + migrations + client + server.
-    * Usage: ./mill api.dev                                     # defaults: provision/dev, slug=dev
-    *        ./mill api.dev --slug basic --dir path/to/provision # custom location
+    * Usage: ./mill api.dev
+    *        ./mill api.dev --slug basic --dir /path/to/location --shared-dir /path/to/shared
     */
-  def dev(slug: String = defaultLocationSlug, dir: String = defaultProvisionDir) = Task.Command:
+  def dev(
+      slug: String = defaultLocationSlug,
+      dir: String = defaultProvisionDir,
+      sharedDir: String = defaultSharedDir) = Task.Command:
     println("[dev] Step 1/3: Ensuring rqlite container...")
     rqliteSetup()()
     println("[dev] Step 2/3: Running migrations...")
     infra.migrate()()
-    println(s"[dev] Step 3/3: Starting server (location=$slug, provision=$dir)...")
+    println(s"[dev] Step 3/3: Starting server (location=$slug)...")
     copyIndex()()
     client.fastLinkJS()
     val cp = runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
     val mc = "whitelabel.captal.api.Main"
-    val env = forkEnv() ++ Map("PROVISION_DIR" -> dir, "LOCATION_SLUG" -> slug)
+    val env = forkEnv() ++ Map(
+      "PROVISION_DIR" -> dir,
+      "LOCATION_SLUG" -> slug,
+      "SHARED_DIR" -> sharedDir)
     os.proc("java", forkArgs(), "-cp", cp, mc).call(
       env = env,
       stdin = os.Inherit,
@@ -279,6 +287,7 @@ object api extends BaseModule:
 object cli extends BaseModule:
   def moduleDeps = Seq(infra)
   def mvnDeps = Seq(
+    mvn"dev.zio::zio-cli:0.8.0",
     mvn"software.amazon.awssdk:s3:2.29.51",
     mvn"software.amazon.awssdk:ecs:2.29.51",
     mvn"software.amazon.awssdk:elasticloadbalancingv2:2.29.51",

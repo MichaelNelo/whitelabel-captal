@@ -18,9 +18,8 @@
   # services.postgres.enable = true;
 
   # https://devenv.sh/scripts/
-  # scripts.hello.exec = ''
-  #   echo hello from $GREET
-  # '';
+  # The CLI assembly, built by `./mill cli.assembly`.
+  scripts.captal.exec = ''exec java -jar "$DEVENV_ROOT/out/cli/assembly.dest/out.jar" "$@"'';
 
   # https://devenv.sh/basics/
   # enterShell = ''
