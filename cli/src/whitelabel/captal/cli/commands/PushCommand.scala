@@ -1,10 +1,11 @@
-package whitelabel.captal.cli
+package whitelabel.captal.cli.commands
 
 import java.io.ByteArrayOutputStream
 import java.nio.file.{Files, Path, Paths}
 import java.util.zip.GZIPOutputStream
 
 import io.circe.yaml.parser as yamlParser
+import whitelabel.captal.cli.{CaptalConfig, CliError, Output}
 import software.amazon.awssdk.core.sync.RequestBody
 import software.amazon.awssdk.services.ecs.EcsClient
 import software.amazon.awssdk.services.ecs.model.{
@@ -45,7 +46,7 @@ import zio.*
 /** Deploys a location to AWS: S3 assets + ECS service + ALB rule. */
 object PushCommand:
 
-  private val LocationsDir = Paths.get("/etc/captal/locations")
+  private val LocationsDir = Paths.get(".")
 
   type Env = CaptalConfig & S3Client & EcsClient & ElasticLoadBalancingV2Client
 
@@ -56,19 +57,19 @@ object PushCommand:
       locationYaml <- readLocationYaml(locationDir)
       desiredCount = locationYaml.desiredCount.getOrElse(config.ecs.desiredCount)
 
-      _ <- Console.printLine(s"Deploying location '$slug' to AWS...").orDie
+      _ <- Output.header(s"Deploying location '$slug'")
 
-      _ <- Console.printLine("[1/3] Uploading assets to S3...").orDie
+      _ <- Output.step(1, 3, "Uploading assets to S3...")
       _ <- uploadAssets(slug)
 
-      _ <- Console.printLine("[2/3] Updating ECS service...").orDie
+      _ <- Output.step(2, 3, "Updating ECS service...")
       taskDefArn <- registerTaskDefinition(slug)
       _          <- createOrUpdateService(slug, taskDefArn, desiredCount)
 
-      _ <- Console.printLine("[3/3] Configuring ALB rule...").orDie
+      _ <- Output.step(3, 3, "Configuring ALB rule...")
       _ <- configureAlbRule(slug)
 
-      _ <- Console.printLine(s"Deployment complete for '$slug'").orDie
+      _ <- Output.success(s"Deployment complete for '$slug'")
     yield ()
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -96,7 +97,7 @@ object PushCommand:
       _      <- execProcess("./mill", "client.bundle")(CliError.BuildFailed("client bundle"))
       _      <- uploadBundleFiles(slug, config.s3.bucket)
       _      <- uploadCustomAssets(slug, config.s3.bucket)
-      _      <- Console.printLine(s"  Uploaded assets to s3://${config.s3.bucket}/$slug/").orDie
+      _      <- Output.detail(s"Uploaded assets to s3://${config.s3.bucket}/$slug/")
     yield ()
 
   private def uploadBundleFiles(slug: String, bucket: String): ZIO[S3Client, CliError, Unit] =
@@ -198,7 +199,7 @@ object PushCommand:
             config.ecs.taskRoleArn.foreach(builder.taskRoleArn)
 
             ecs.registerTaskDefinition(builder.build()).taskDefinition().taskDefinitionArn()
-      _ <- Console.printLine(s"  Registered task definition: $arn").orDie
+      _ <- Output.detail(s"Registered task definition: $arn")
     yield arn
 
   private def networkConfig(config: CaptalConfig): NetworkConfiguration =
@@ -241,7 +242,7 @@ object PushCommand:
                     .networkConfiguration(networkConfig(config))
                     .forceNewDeployment(true)
                     .build())
-          *> Console.printLine(s"  Updated service: $serviceName (replicas: $desiredCount)").orDie
+          *> Output.detail(s"Updated service: $serviceName (replicas: $desiredCount)")
         else
           aws("ECS createService"):
             ZIO.serviceWithZIO[EcsClient]: ecs =>
@@ -256,7 +257,7 @@ object PushCommand:
                     .launchType("FARGATE")
                     .networkConfiguration(networkConfig(config))
                     .build())
-          *> Console.printLine(s"  Created service: $serviceName (replicas: $desiredCount)").orDie
+          *> Output.detail(s"Created service: $serviceName (replicas: $desiredCount)")
     yield ()
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -329,7 +330,7 @@ object PushCommand:
                 .ruleArn(existingRule.get().ruleArn())
                 .actions(forwardAction)
                 .build())
-            println(s"  Updated ALB rule for $hostPattern -> captal-$slug")
+            java.lang.System.out.println(s"  Updated ALB rule for $hostPattern -> captal-$slug")
           else
             val usedPriorities = rules
               .rules().stream().map(_.priority()).filter(_ != "default")
@@ -349,7 +350,7 @@ object PushCommand:
                 .actions(forwardAction)
                 .priority(priority)
                 .build())
-            println(s"  Created ALB rule for $hostPattern -> captal-$slug")
+            java.lang.System.out.println(s"  Created ALB rule for $hostPattern -> captal-$slug")
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Helpers
