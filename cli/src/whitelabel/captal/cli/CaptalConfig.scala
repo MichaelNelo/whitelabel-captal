@@ -7,7 +7,7 @@ import io.circe.generic.semiauto.*
 import io.circe.yaml.parser as yamlParser
 import zio.*
 
-/** Central configuration for the CLI, read from /etc/captal/captal.yaml.
+/** Central configuration for the CLI, read from ./shared/captal.yaml.
   * AWS credentials are optional — if absent, the SDK default provider chain is used.
   */
 final case class CaptalConfig(
@@ -64,7 +64,7 @@ object CaptalConfig:
 
   given Decoder[CaptalConfig] = deriveDecoder
 
-  private val ConfigPath = Paths.get("/etc/captal/captal.yaml")
+  private val ConfigPath = Paths.get("shared/captal.yaml")
 
   val layer: ZLayer[Any, CliError, CaptalConfig] = ZLayer.fromZIO:
     ZIO

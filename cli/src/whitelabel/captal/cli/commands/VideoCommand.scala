@@ -1,4 +1,4 @@
-package whitelabel.captal.cli
+package whitelabel.captal.cli.commands
 
 import java.nio.file.{Files, Path, Paths}
 
@@ -6,12 +6,13 @@ import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.PutObjectRequest
 import zio.*
 
+import whitelabel.captal.cli.{CaptalConfig, CliError, Output}
 import whitelabel.captal.cli.templates.{Catalog, TemplateWriter}
 
 /** Uploads a video to S3 and creates a YAML placeholder in the provision directory. */
 object VideoCommand:
 
-  private def locationDir(slug: String) = Paths.get(s"/etc/captal/locations/$slug")
+  private def locationDir(slug: String) = Paths.get(slug)
 
   /** Upload an advertiser video. */
   def run(slug: String, advertiserSlug: String, videoPath: String): ZIO[CaptalConfig & S3Client, CliError, Unit] =
@@ -24,28 +25,25 @@ object VideoCommand:
       videoName = s"$advertiserSlug-$videoSlug"
       s3Key     = s"$slug/$fileName"
 
-      _ <- Console.printLine(s"Uploading $fileName to s3://$bucket/$s3Key ...").orDie
+      _ <- Output.info(s"Uploading $fileName to s3://$bucket/$s3Key")
       _ <- upload(bucket, s3Key, file)
       url = s"https://$bucket.s3.amazonaws.com/$s3Key"
 
       baseDir = locationDir(slug)
-      // Write video.yaml
       adTemplate = Catalog.videoTemplate(videoName, advertiserSlug, url)
       wrote <- TemplateWriter
         .writeIfAbsent(baseDir, adTemplate)
         .mapError(e => CliError.BuildFailed(s"write ${adTemplate.path}: $e"))
       yamlPath = baseDir.resolve(adTemplate.path)
-      _ <-
-        if wrote then Console.printLine(s"Created $yamlPath").orDie
-        else Console.printLine(s"  YAML already exists, skipping: $yamlPath").orDie
+      _ <- if wrote then Output.success(s"Created $yamlPath")
+           else Output.warn(s"Already exists, skipping: $yamlPath")
 
-      // Write survey template
       surveyTemplate = Catalog.videoSurveyTemplate(videoName, "survey")
       _ <- TemplateWriter
         .writeIfAbsent(baseDir, surveyTemplate)
         .mapError(e => CliError.BuildFailed(s"write survey: $e"))
 
-      _ <- Console.printLine(s"Edit video.yaml and surveys, then run 'captal push $slug'").orDie
+      _ <- Output.info(s"Edit video.yaml and surveys, then run 'captal push $slug'")
     yield ()
 
   /** Upload a promo video. */
@@ -58,7 +56,7 @@ object VideoCommand:
       videoSlug = fileName.replaceFirst("\\.[^.]+$", "")
       s3Key     = s"$slug/$fileName"
 
-      _ <- Console.printLine(s"Uploading $fileName to s3://$bucket/$s3Key ...").orDie
+      _ <- Output.info(s"Uploading $fileName to s3://$bucket/$s3Key")
       _ <- upload(bucket, s3Key, file)
       url = s"https://$bucket.s3.amazonaws.com/$s3Key"
 
@@ -68,10 +66,9 @@ object VideoCommand:
         .writeIfAbsent(baseDir, promoTemplate)
         .mapError(e => CliError.BuildFailed(s"write ${promoTemplate.path}: $e"))
       yamlPath = baseDir.resolve(promoTemplate.path)
-      _ <-
-        if wrote then Console.printLine(s"Created $yamlPath").orDie
-        else Console.printLine(s"  YAML already exists, skipping: $yamlPath").orDie
-      _ <- Console.printLine(s"Edit duration and title, then run 'captal push $slug'").orDie
+      _ <- if wrote then Output.success(s"Created $yamlPath")
+           else Output.warn(s"Already exists, skipping: $yamlPath")
+      _ <- Output.info(s"Edit duration and title, then run 'captal push $slug'")
     yield ()
 
   // ─────────────────────────────────────────────────────────────────────────────
