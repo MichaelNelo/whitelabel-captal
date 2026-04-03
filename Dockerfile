@@ -34,6 +34,9 @@ ARG SERVER_DEV_ENDPOINTS=false
 COPY --from=builder /app/out/api/assembly.dest/out.jar api.jar
 COPY --from=builder /app/out/infra/assembly.dest/out.jar infra.jar
 
+# Create provision directory (populated at deploy time via volume mount or COPY in derived image)
+RUN mkdir -p /etc/captal
+
 # Expose port
 EXPOSE 8080
 
@@ -43,6 +46,6 @@ ENV SERVER_DEV_ENDPOINTS=${SERVER_DEV_ENDPOINTS}
 ENV SERVER_HOST=0.0.0.0
 ENV SERVER_PORT=8080
 
-# Run migrations and start server
+# Run migrations and start server (provisioning happens at server startup)
 CMD java -cp infra.jar whitelabel.captal.infra.Migrate && \
     java -jar api.jar
