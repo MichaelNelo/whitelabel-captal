@@ -12,7 +12,7 @@ import whitelabel.captal.cli.templates.{Catalog, TemplateWriter}
 /** Uploads a video to S3 and creates a YAML placeholder in the provision directory. */
 object VideoCommand:
 
-  private def locationDir(slug: String) = Paths.get(slug)
+  private def locationDir(slug: String) = Paths.get("locations", slug)
 
   /** Upload an advertiser video. */
   def run(slug: String, advertiserSlug: String, videoPath: String): ZIO[CaptalConfig & S3Client, CliError, Unit] =
@@ -43,7 +43,7 @@ object VideoCommand:
         .writeIfAbsent(baseDir, surveyTemplate)
         .mapError(e => CliError.BuildFailed(s"write survey: $e"))
 
-      _ <- Output.info(s"Edit video.yaml and surveys, then run 'captal push $slug'")
+      _ <- Output.info(s"Edit video.yaml and surveys, then run 'captal locations push $slug'")
     yield ()
 
   /** Upload a promo video. */
@@ -68,7 +68,7 @@ object VideoCommand:
       yamlPath = baseDir.resolve(promoTemplate.path)
       _ <- if wrote then Output.success(s"Created $yamlPath")
            else Output.warn(s"Already exists, skipping: $yamlPath")
-      _ <- Output.info(s"Edit duration and title, then run 'captal push $slug'")
+      _ <- Output.info(s"Edit duration and title, then run 'captal locations push $slug'")
     yield ()
 
   // ─────────────────────────────────────────────────────────────────────────────
