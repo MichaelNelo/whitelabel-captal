@@ -1,13 +1,19 @@
+---
+name: add-survey
+description: Use this skill when adding identification surveys (email, profiling, location). Triggers on "add survey", "create survey", "new survey", "survey yaml".
+version: 1.0.0
+---
+
 # Add an identification survey
 
 ## Overview
-Identification surveys (email, profiling, location) are shared across all locations. They live in `/etc/captal/shared/surveys/`.
+Identification surveys (email, profiling, location) are shared across all locations. They live in `shared/surveys/`.
 
 ## Steps
 
-1. Create a new YAML file in `surveys/`:
+1. Create a new YAML file in `shared/surveys/`:
    ```
-   surveys/<category>.yaml
+   shared/surveys/<category>.yaml
    ```
 
 2. Define the survey with category and questions:
