@@ -1,23 +1,29 @@
+---
+name: deploy-location
+description: Use this skill when deploying a location to AWS. Triggers on "deploy location", "push location", "captal locations push", "provision location".
+version: 1.0.0
+---
+
 # Deploy a location
 
 ## Overview
 Deploying a location uploads assets to S3, creates/updates an ECS service, and configures ALB routing.
 
 ## Prerequisites
-- `/etc/captal/captal.yaml` configured
-- Location initialized: `/etc/captal/locations/<slug>/`
+- `shared/captal.yaml` configured
+- Location initialized: `locations/<slug>/`
 - Shared resources deployed: `captal shared push`
 
 ## Steps
 
 1. Review your location files:
-   - `location.yaml` — name, ap_mac, optional desiredCount
-   - `i18n/` — translations for each locale
-   - `videos/` — advertiser videos with optional surveys
-   - `promo/` — promotional videos
-   - `assets/` — custom CSS and branding
+   - `locations/<slug>/location.yaml` — name, ap_mac, optional desiredCount
+   - `locations/<slug>/i18n/` — translations for each locale
+   - `locations/<slug>/videos/` — advertiser videos with optional surveys
+   - `locations/<slug>/promo/` — promotional videos
+   - `locations/<slug>/assets/` — custom CSS and branding
 
-2. Deploy: `captal push <slug>`
+2. Deploy: `captal locations push <slug>`
 
 3. The CLI will:
    - Build and upload client assets to S3

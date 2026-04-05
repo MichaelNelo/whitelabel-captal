@@ -1,19 +1,25 @@
+---
+name: add-promo
+description: Use this skill when adding promotional videos (not tied to advertisers). Triggers on "add promo", "upload promo", "new promo", "promo video", "promotional video".
+version: 1.0.0
+---
+
 # Add a promo video
 
 ## Overview
-Promo videos are promotional content not tied to any advertiser. They live in `promo/` within the location directory.
+Promo videos are promotional content not tied to any advertiser. They live in `locations/<slug>/promo/`.
 
 ## Steps
 
 ### Option A: Using the CLI
 ```bash
-captal video <location-slug> --promo /path/to/video.mp4
+captal video add-promo <location-slug> /path/to/video.mp4
 ```
 
 ### Option B: Manually
-1. Create a YAML file in `promo/`:
+1. Create a YAML file in `locations/<slug>/promo/`:
    ```
-   promo/<video-slug>.yaml
+   locations/<slug>/promo/<video-slug>.yaml
    ```
 
 2. Define the promo:
@@ -31,7 +37,7 @@ captal video <location-slug> --promo /path/to/video.mp4
    #   en: "..."
    ```
 
-3. Deploy: `captal push <location-slug>`
+3. Deploy: `captal locations push <location-slug>`
 
 ## Notes
 - Promo videos have no advertiser and no surveys

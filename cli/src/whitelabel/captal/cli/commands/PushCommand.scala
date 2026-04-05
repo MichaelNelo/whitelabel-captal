@@ -46,7 +46,7 @@ import zio.*
 /** Deploys a location to AWS: S3 assets + ECS service + ALB rule. */
 object PushCommand:
 
-  private val LocationsDir = Paths.get(".")
+  private val LocationsDir = Paths.get("locations")
 
   type Env = CaptalConfig & S3Client & EcsClient & ElasticLoadBalancingV2Client
 
@@ -114,7 +114,7 @@ object PushCommand:
     }
 
   private def uploadCustomAssets(slug: String, bucket: String): ZIO[S3Client, CliError, Unit] =
-    val assetsDir = LocationsDir.resolve("assets")
+    val assetsDir = LocationsDir.resolve(slug).resolve("assets")
     ZIO.when(Files.exists(assetsDir)):
       val styles = assetsDir.resolve("styles.css")
       val icon = assetsDir.resolve("brand-icon.svg")
