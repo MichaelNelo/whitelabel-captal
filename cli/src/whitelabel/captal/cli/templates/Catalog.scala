@@ -19,6 +19,7 @@ object Catalog:
   // ─── skills templates (for captal init) ───────────────────────────────────
 
   private val skillsFiles = List(
+    "skills/configure-aws/SKILL.md",
     "skills/add-survey/SKILL.md",
     "skills/add-advertiser/SKILL.md",
     "skills/deploy-shared/SKILL.md",
