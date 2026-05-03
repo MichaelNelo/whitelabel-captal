@@ -14,20 +14,28 @@ object ReadyView:
     isResetting.set(true)
     AppState.setNavigating(true)
     Runtime.run:
-      ApiClient.resetPhase().map: result =>
-        result match
-          case Right(_) =>
-            Router.syncWithPhase(Phase.Welcome)
-          case Left(_) =>
-            ()
-        isResetting.set(false)
-        AppState.setNavigating(false)
+      ApiClient
+        .resetPhase()
+        .map: result =>
+          result match
+            case Right(_) =>
+              Router.syncWithPhase(Phase.Welcome)
+            case Left(_) =>
+              ()
+          isResetting.set(false)
+          AppState.setNavigating(false)
 
   def render: HtmlElement = Layout(
     content = div(
       cls := "ready-view",
-      h1(cls := "ready-title", styleAttr := "animation-delay: 1000ms", child.text <-- I18nClient.i18n.map(_.ready.title)),
-      p(cls := "ready-subtitle", styleAttr := "animation-delay: 1200ms", child.text <-- I18nClient.i18n.map(_.ready.subtitle))
+      h1(
+        cls       := "ready-title",
+        styleAttr := "animation-delay: 1000ms",
+        child.text <-- I18nClient.i18n.map(_.ready.title)),
+      p(
+        cls       := "ready-subtitle",
+        styleAttr := "animation-delay: 1200ms",
+        child.text <-- I18nClient.i18n.map(_.ready.subtitle))
     ),
     footer =
       if BuildInfo.isDevMode then
@@ -40,7 +48,11 @@ object ReadyView:
                 .signal
                 .combineWith(I18nClient.i18n.map(_.ready.resetButton))
                 .map: (resetting, resetText) =>
-                  if resetting then "..." else resetText,
+                  if resetting then
+                    "..."
+                  else
+                    resetText
+            ,
             onClick --> { _ =>
               resetPhase()
             }

@@ -79,12 +79,11 @@ object WelcomeView:
             detectBrowserLocale()
       _ = I18nClient.setLocale(locale)
       localesResult <- ApiClient.getLocales()
-    yield
-      localesResult match
-        case Right(locales) if locales.nonEmpty =>
-          availableLocales.set(locales)
-        case _ =>
-          ()
+    yield localesResult match
+      case Right(locales) if locales.nonEmpty =>
+        availableLocales.set(locales)
+      case _ =>
+        ()
 
   private def detectBrowserLocale(): String =
     import org.scalajs.dom

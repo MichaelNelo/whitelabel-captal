@@ -38,10 +38,12 @@ object I18nClient:
     load(code)
 
   def load(locale: String): Unit = Runtime.run:
-    ApiClient.getI18n(locale).map:
-      case Right(data) =>
-        i18nVar.set(data)
-        isLoadedVar.set(true)
-      case Left(_) =>
-        isLoadedVar.set(true)
+    ApiClient
+      .getI18n(locale)
+      .map:
+        case Right(data) =>
+          i18nVar.set(data)
+          isLoadedVar.set(true)
+        case Left(_) =>
+          isLoadedVar.set(true)
 end I18nClient
