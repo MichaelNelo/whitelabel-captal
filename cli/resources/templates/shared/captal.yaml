@@ -4,10 +4,17 @@ aws:
   # secretAccessKey: ...         # optional
   # sessionToken: ...            # optional, for temporary credentials
 
-image: "{{image}}"
+images:
+  # Base images pushed by the project release flow:
+  api: "{{api_image_uri}}"           # e.g. <account>.dkr.ecr.us-east-1.amazonaws.com/captal-api:v1.0.0
+  provision: "{{provision_image_uri}}"
+  # Repos for derived images built by the CLI (no tag, the CLI generates one per push):
+  shared: "{{shared_image_repo}}"     # e.g. <account>.dkr.ecr.us-east-1.amazonaws.com/captal-shared
+  locations: "{{locations_image_repo}}"
 
 s3:
   bucket: "{{s3_bucket}}"
+  bundlePrefix: "bundle/"
 
 ecs:
   cluster: "{{ecs_cluster}}"
@@ -26,6 +33,9 @@ alb:
   vpcId: "{{vpc_id}}"
   domain: captal.app
   healthCheckPath: /health
+
+cloudfront:
+  distributionId: "{{cloudfront_distribution_id}}"
 
 database:
   url: "{{db_url}}"
