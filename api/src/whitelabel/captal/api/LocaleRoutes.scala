@@ -35,8 +35,7 @@ object LocaleRoutes:
       .serverLogic: session =>
         (_, request) =>
           val locale = request.locale
-          for
-            updatedData <-
+          for updatedData <-
               if session.locale != locale then
                 ZIO
                   .serviceWithZIO[SessionService](_.setLocale(session.sessionId, locale))
