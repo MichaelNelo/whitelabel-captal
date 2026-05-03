@@ -10,30 +10,25 @@ package object schema:
   // SQLite Infix Functions for Quill DSL
   // ─────────────────────────────────────────────────────────────────────────────
 
-  inline def sqliteRandom: Quoted[Double] =
-    sql"RANDOM()".as[Double]
+  inline def sqliteRandom: Quoted[Double] = sql"RANDOM()".as[Double]
 
-  inline def sqliteAbs(inline x: Double): Quoted[Double] =
-    sql"ABS($x)".as[Double]
+  inline def sqliteAbs(inline x: Double): Quoted[Double] = sql"ABS($x)".as[Double]
 
-  inline def sqliteLog(inline x: Double): Quoted[Double] =
-    sql"LOG($x)".as[Double]
+  inline def sqliteLog(inline x: Double): Quoted[Double] = sql"LOG($x)".as[Double]
 
-  inline def nullif(inline x: Double, inline y: Double): Quoted[Double] =
-    sql"NULLIF($x, $y)".as[Double]
+  inline def nullif(inline x: Double, inline y: Double): Quoted[Double] = sql"NULLIF($x, $y)".as[
+    Double]
 
-  inline def castAsReal(inline x: Int): Quoted[Double] =
-    sql"CAST(($x) AS REAL)".as[Double]
+  inline def castAsReal(inline x: Int): Quoted[Double] = sql"CAST(($x) AS REAL)".as[Double]
 
-  inline def castAsRealOpt(inline x: Option[Int]): Quoted[Double] =
-    sql"CAST(($x) AS REAL)".as[Double]
+  inline def castAsRealOpt(inline x: Option[Int]): Quoted[Double] = sql"CAST(($x) AS REAL)".as[
+    Double]
 
   inline def datetimeMinusSeconds(inline seconds: Int): Quoted[String] =
     sql"datetime('now', '-' || $seconds || ' seconds')".as[String]
 
   // Comparación de strings para Quill (evita augmentString que Quill no puede parsear)
-  inline def strGt(inline a: String, inline b: String): Quoted[Boolean] =
-    sql"$a > $b".as[Boolean]
+  inline def strGt(inline a: String, inline b: String): Quoted[Boolean] = sql"$a > $b".as[Boolean]
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Schema Meta - Row types

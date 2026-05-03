@@ -37,7 +37,7 @@ object SessionPhaseHandler:
 
         for
           sessionData <- ctx.getOrFail
-          _ <-
+          _           <-
             if hasIdentificationCompleted then
               run(
                 SessionService.updatePhaseQuery(
@@ -61,6 +61,8 @@ object SessionPhaseHandler:
             else
               ZIO.unit
         yield ()
+        end for
+      end handle
 
   private def isIdentificationAnswer(event: Event): Boolean =
     event match
@@ -79,8 +81,10 @@ object SessionPhaseHandler:
 
   private def isIdentificationCompleted(event: Event): Boolean =
     event match
-      case Event.User(_: UserEvent.IdentificationCompleted) => true
-      case _                                                => false
+      case Event.User(_: UserEvent.IdentificationCompleted) =>
+        true
+      case _ =>
+        false
 
   private def isVideoVisualized(event: Event): Boolean =
     event match

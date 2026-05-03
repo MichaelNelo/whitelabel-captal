@@ -17,28 +17,41 @@ object ProvisionPlan:
     md.digest(content).map("%02x".format(_)).mkString
 
   /** Compute provisioning plan by comparing disk files to DB manifest entries.
-    * @param diskEntries entities found on disk with their content hashes
-    * @param dbManifest all manifest entries (this location + globals) with their content hashes
-    * @param localKeys keys owned by this location — only these are eligible for deletion
+    * @param diskEntries
+    *   entities found on disk with their content hashes
+    * @param dbManifest
+    *   all manifest entries (this location + globals) with their content hashes
+    * @param localKeys
+    *   keys owned by this location — only these are eligible for deletion
     */
   def compute(
       diskEntries: Map[String, String],
       dbManifest: Map[String, String],
       localKeys: Set[String] = Set.empty): List[Action] =
-    val creates = diskEntries.collect:
-      case (key, hash) if !dbManifest.contains(key) =>
-        Action.Create(key, hash)
-    .toList
+    val creates =
+      diskEntries
+        .collect:
+          case (key, hash) if !dbManifest.contains(key) =>
+            Action.Create(key, hash)
+        .toList
 
-    val updatesOrSkips = diskEntries.collect:
-      case (key, hash) if dbManifest.contains(key) =>
-        if dbManifest(key) != hash then Action.Update(key, hash)
-        else Action.Skip(key)
-    .toList
+    val updatesOrSkips =
+      diskEntries
+        .collect:
+          case (key, hash) if dbManifest.contains(key) =>
+            if dbManifest(key) != hash then
+              Action.Update(key, hash)
+            else
+              Action.Skip(key)
+        .toList
 
-    val deletes = localKeys.collect:
-      case key if !diskEntries.contains(key) =>
-        Action.Delete(key)
-    .toList
+    val deletes =
+      localKeys
+        .collect:
+          case key if !diskEntries.contains(key) =>
+            Action.Delete(key)
+        .toList
 
     creates ++ updatesOrSkips ++ deletes
+  end compute
+end ProvisionPlan

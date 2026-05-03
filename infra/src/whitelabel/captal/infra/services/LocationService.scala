@@ -29,13 +29,14 @@ object LocationService:
         run(findBySlugQuery(lift(slug))).map(_.headOption).orDie
 
   /** Resolve a slug to a location ID, failing with LocationNotFound if not found. */
-  def resolveSlug(slug: String): ZIO[LocationService, LocationNotFound, String] =
-    ZIO
-      .serviceWithZIO[LocationService](_.findBySlug(slug))
-      .orDie
-      .flatMap:
-        case Some(row) => ZIO.succeed(row.id)
-        case None      => ZIO.fail(LocationNotFound(slug))
+  def resolveSlug(slug: String): ZIO[LocationService, LocationNotFound, String] = ZIO
+    .serviceWithZIO[LocationService](_.findBySlug(slug))
+    .orDie
+    .flatMap:
+      case Some(row) =>
+        ZIO.succeed(row.id)
+      case None =>
+        ZIO.fail(LocationNotFound(slug))
 
   val layer: ZLayer[QuillSqlite, Nothing, LocationService] = ZLayer.fromFunction(apply)
 end LocationService

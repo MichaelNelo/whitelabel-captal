@@ -34,8 +34,8 @@ object DeviceId:
   def unsafe(s: String): DeviceId = UUID.fromString(s)
 
   /** Generate a UUIDv5 from a User-Agent string */
-  def fromUserAgent(userAgent: String): DeviceId =
-    UUID.nameUUIDFromBytes((Namespace.toString + userAgent).getBytes)
+  def fromUserAgent(userAgent: String): DeviceId = UUID.nameUUIDFromBytes(
+    (Namespace.toString + userAgent).getBytes)
 
   extension (id: DeviceId)
     def value: UUID = id

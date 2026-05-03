@@ -63,9 +63,7 @@ object SessionService:
         .update(_.currentVideoId -> Some(videoIdParam))
 
   inline def clearCurrentVideoQuery = quote: (sessionIdParam: user.SessionId) =>
-    query[SessionRow]
-      .filter(_.id == sessionIdParam)
-      .update(_.currentVideoId -> None)
+    query[SessionRow].filter(_.id == sessionIdParam).update(_.currentVideoId -> None)
 
   inline def updateLastPromoVideoQuery = quote:
     (sessionIdParam: user.SessionId, videoIdParam: video.Id) =>
@@ -80,9 +78,7 @@ object SessionService:
         .update(_.currentAdvertiserId -> Some(advertiserIdParam))
 
   inline def clearCurrentAdvertiserQuery = quote: (sessionIdParam: user.SessionId) =>
-    query[SessionRow]
-      .filter(_.id == sessionIdParam)
-      .update(_.currentAdvertiserId -> None)
+    query[SessionRow].filter(_.id == sessionIdParam).update(_.currentAdvertiserId -> None)
 
   def apply(quill: QuillSqlite, locationId: Option[String] = None): SessionService =
     new SessionService:
@@ -131,26 +127,28 @@ object SessionService:
           clientMac = portalParams.clientMac,
           apMac = portalParams.apMac,
           redirectUrl = portalParams.redirectUrl,
-          ssid = portalParams.ssid)
+          ssid = portalParams.ssid
+        )
 
         val insertSession = run(
           query[SessionRow].insert(
-            _.id               -> lift(sessionRow.id),
-            _.userId           -> lift(sessionRow.userId),
-            _.deviceId         -> lift(sessionRow.deviceId),
-            _.locale           -> lift(sessionRow.locale),
-            _.phase            -> lift(sessionRow.phase),
-            _.currentSurveyId  -> lift(sessionRow.currentSurveyId),
-            _.currentQuestionId -> lift(sessionRow.currentQuestionId),
-            _.currentVideoId   -> lift(sessionRow.currentVideoId),
-            _.lastPromoVideoId -> lift(sessionRow.lastPromoVideoId),
+            _.id                  -> lift(sessionRow.id),
+            _.userId              -> lift(sessionRow.userId),
+            _.deviceId            -> lift(sessionRow.deviceId),
+            _.locale              -> lift(sessionRow.locale),
+            _.phase               -> lift(sessionRow.phase),
+            _.currentSurveyId     -> lift(sessionRow.currentSurveyId),
+            _.currentQuestionId   -> lift(sessionRow.currentQuestionId),
+            _.currentVideoId      -> lift(sessionRow.currentVideoId),
+            _.lastPromoVideoId    -> lift(sessionRow.lastPromoVideoId),
             _.currentAdvertiserId -> lift(sessionRow.currentAdvertiserId),
-            _.locationId       -> lift(sessionRow.locationId),
-            _.createdAt        -> lift(sessionRow.createdAt),
-            _.clientMac        -> lift(sessionRow.clientMac),
-            _.apMac            -> lift(sessionRow.apMac),
-            _.redirectUrl      -> lift(sessionRow.redirectUrl),
-            _.ssid             -> lift(sessionRow.ssid)))
+            _.locationId          -> lift(sessionRow.locationId),
+            _.createdAt           -> lift(sessionRow.createdAt),
+            _.clientMac           -> lift(sessionRow.clientMac),
+            _.apMac               -> lift(sessionRow.apMac),
+            _.redirectUrl         -> lift(sessionRow.redirectUrl),
+            _.ssid                -> lift(sessionRow.ssid)
+          ))
 
         (upsertDevice *> insertSession).orDie *>
           ZIO.succeed(
@@ -166,7 +164,8 @@ object SessionService:
               clientMac = portalParams.clientMac,
               apMac = portalParams.apMac,
               redirectUrl = portalParams.redirectUrl,
-              ssid = portalParams.ssid))
+              ssid = portalParams.ssid
+            ))
       end create
 
       def setCurrentQuestion(
@@ -207,11 +206,12 @@ object SessionService:
       row.clientMac,
       row.apMac,
       row.redirectUrl,
-      row.ssid)
+      row.ssid
+    )
+  end toSessionData
 
   val layer: ZLayer[QuillSqlite, Nothing, SessionService] = ZLayer.fromFunction(apply(_, None))
 
-  def layerWithLocation(
-      locationId: Option[String]): ZLayer[QuillSqlite, Nothing, SessionService] = ZLayer
-    .fromFunction(apply(_, locationId))
+  def layerWithLocation(locationId: Option[String]): ZLayer[QuillSqlite, Nothing, SessionService] =
+    ZLayer.fromFunction(apply(_, locationId))
 end SessionService

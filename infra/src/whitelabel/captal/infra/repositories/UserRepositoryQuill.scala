@@ -22,10 +22,8 @@ object UserRepositoryQuill:
       for
         userRow <- query[UserRow].filter(_.id == userIdParam)
         session <- query[SessionRow]
-        if session.id == sessionIdParam &&
-          session.userId.contains(userIdParam) &&
-          session.currentSurveyId.isDefined &&
-          session.currentQuestionId.isDefined
+        if session.id == sessionIdParam && session.userId.contains(userIdParam) &&
+          session.currentSurveyId.isDefined && session.currentQuestionId.isDefined
       yield (userRow.id, session.currentSurveyId, session.currentQuestionId)
 
   def apply(quill: QuillSqlite, ctx: SessionContext): UserRepository[Task] =
@@ -47,9 +45,13 @@ object UserRepositoryQuill:
           sessionData.userId match
             case Some(userId) =>
               run(findAnsweringBySessionQuery(lift(userId), lift(sessionData.sessionId)))
-                .map(_.headOption.map { case (id, surveyIdOpt, questionIdOpt) =>
-                  User[State.AnsweringQuestion](id, State.AnsweringQuestion(surveyIdOpt.get, questionIdOpt.get))
-                })
+                .map(
+                  _.headOption
+                    .map { case (id, surveyIdOpt, questionIdOpt) =>
+                      User[State.AnsweringQuestion](
+                        id,
+                        State.AnsweringQuestion(surveyIdOpt.get, questionIdOpt.get))
+                    })
                 .orDie
             case None =>
               ZIO.none
@@ -62,8 +64,9 @@ object UserRepositoryQuill:
               sessionData.currentVideoId match
                 case Some(videoId) =>
                   run(findWithEmailByIdQuery(lift(userId)))
-                    .map(_.headOption.map(u =>
-                      User[State.WatchingVideo](u.id, State.WatchingVideo(videoId))))
+                    .map(
+                      _.headOption
+                        .map(u => User[State.WatchingVideo](u.id, State.WatchingVideo(videoId))))
                     .orDie
                 case None =>
                   ZIO.none
@@ -78,13 +81,15 @@ object UserRepositoryQuill:
               (sessionData.currentQuestion, sessionData.currentAdvertiserId) match
                 case (Some(question), Some(advertiserId)) =>
                   run(findWithEmailByIdQuery(lift(userId)))
-                    .map(_.headOption.map(u =>
-                      User[State.AnsweringVideoSurvey](
-                        u.id,
-                        State.AnsweringVideoSurvey(
-                          advertiserId,
-                          question.surveyId,
-                          question.questionId))))
+                    .map(
+                      _.headOption
+                        .map(u =>
+                          User[State.AnsweringVideoSurvey](
+                            u.id,
+                            State.AnsweringVideoSurvey(
+                              advertiserId,
+                              question.surveyId,
+                              question.questionId))))
                     .orDie
                 case _ =>
                   ZIO.none
