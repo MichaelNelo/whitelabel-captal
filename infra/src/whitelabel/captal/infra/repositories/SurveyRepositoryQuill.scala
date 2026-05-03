@@ -133,16 +133,16 @@ object SurveyRepositoryQuill:
       .map((surveyRow, questionRow) =>
         NextIdentificationSurveyRow(surveyRow.id, questionRow.id, surveyRow.category))
 
-  inline def nextAdvertiserSurveyQuery = quote:
-    (videoIdParam: String, userIdParam: user.Id) =>
-      val answeredByUser = query[AnswerRow].filter(_.userId == userIdParam).map(_.questionId)
-      query[SurveyRow]
-        .filter(s => s.isActive == 1 && s.category == "advertiser" && s.videoId.contains(videoIdParam))
-        .join(query[QuestionRow])
-        .on((s, q) => s.id == q.surveyId)
-        .filter((_, q) => !answeredByUser.contains(q.id))
-        .sortBy((_, q) => q.displayOrder)(using Ord.asc)
-        .map((s, q) => NextIdentificationSurveyRow(s.id, q.id, s.category))
+  inline def nextAdvertiserSurveyQuery = quote: (videoIdParam: String, userIdParam: user.Id) =>
+    val answeredByUser = query[AnswerRow].filter(_.userId == userIdParam).map(_.questionId)
+    query[SurveyRow]
+      .filter(s =>
+        s.isActive == 1 && s.category == "advertiser" && s.videoId.contains(videoIdParam))
+      .join(query[QuestionRow])
+      .on((s, q) => s.id == q.surveyId)
+      .filter((_, q) => !answeredByUser.contains(q.id))
+      .sortBy((_, q) => q.displayOrder)(using Ord.asc)
+      .map((s, q) => NextIdentificationSurveyRow(s.id, q.id, s.category))
 
   def apply(quill: QuillSqlite, ctx: SessionContext): SurveyRepository[Task] =
     new SurveyRepository[Task]:
@@ -223,8 +223,7 @@ object SurveyRepositoryQuill:
             result
         ).orDie
 
-      def findNextAdvertiserSurvey(
-          videoId: video.Id): Task[Option[NextAdvertiserSurvey]] = ctx
+      def findNextAdvertiserSurvey(videoId: video.Id): Task[Option[NextAdvertiserSurvey]] = ctx
         .get
         .flatMap:
           case Some(sessionData) =>

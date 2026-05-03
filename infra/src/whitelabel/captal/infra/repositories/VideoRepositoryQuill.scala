@@ -9,7 +9,16 @@ import whitelabel.captal.core.{user, video}
 import whitelabel.captal.infra.*
 import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.schema.{QuillSqlite, castAsReal, castAsRealOpt, nullif, sqliteAbs, sqliteLog, sqliteRandom, strGt}
+import whitelabel.captal.infra.schema.{
+  QuillSqlite,
+  castAsReal,
+  castAsRealOpt,
+  nullif,
+  sqliteAbs,
+  sqliteLog,
+  sqliteRandom,
+  strGt
+}
 import whitelabel.captal.infra.session.SessionContext
 import zio.*
 
@@ -45,16 +54,17 @@ object VideoRepositoryQuill:
           locationIdParam.forall(lid => v.locationId.contains(lid)))
       .sortBy((v, a) =>
         -sqliteLog(sqliteAbs(sqliteRandom) + 0.0001) / (
-          (castAsReal(a.priority) / nullif(castAsRealOpt(advertiserPrioritySum), 0.0)) *
-            (castAsReal(v.priority) / nullif(
-              castAsRealOpt(
-                query[AdvertiserVideoRow]
-                  .filter(av => av.advertiserId == v.advertiserId && av.isActive == 1)
-                  .map(_.priority)
-                  .sum),
-              0.0))
-        )
-      )(using Ord.asc)
+          (castAsReal(a.priority) / nullif(castAsRealOpt(advertiserPrioritySum), 0.0)) * (
+            castAsReal(v.priority) /
+              nullif(
+                castAsRealOpt(
+                  query[AdvertiserVideoRow]
+                    .filter(av => av.advertiserId == v.advertiserId && av.isActive == 1)
+                    .map(_.priority)
+                    .sum),
+                0.0)
+          )
+        ))(using Ord.asc)
       .take(1)
       .map((v, _) => v)
 
@@ -71,24 +81,25 @@ object VideoRepositoryQuill:
             locationIdParam.forall(lid => v.locationId.contains(lid)) &&
             query[SurveyRow]
               .filter(s =>
-                s.videoId
-                  .exists(_ == sql"${v.id}".as[String]) && s.isActive == 1 && s.category == "advertiser")
+                s.videoId.exists(_ == sql"${v.id}".as[String]) && s.isActive == 1 &&
+                  s.category == "advertiser")
               .flatMap(s =>
-                query[QuestionRow].filter(q => q.surveyId == s.id && !answeredByUser.contains(q.id)))
-              .nonEmpty
-        )
+                query[QuestionRow].filter(q =>
+                  q.surveyId == s.id && !answeredByUser.contains(q.id)))
+              .nonEmpty)
         .sortBy((v, a) =>
           -sqliteLog(sqliteAbs(sqliteRandom) + 0.0001) / (
-            (castAsReal(a.priority) / nullif(castAsRealOpt(advertiserPrioritySum), 0.0)) *
-              (castAsReal(v.priority) / nullif(
-                castAsRealOpt(
-                  query[AdvertiserVideoRow]
-                    .filter(av => av.advertiserId == v.advertiserId && av.isActive == 1)
-                    .map(_.priority)
-                    .sum),
-                0.0))
-          )
-        )(using Ord.asc)
+            (castAsReal(a.priority) / nullif(castAsRealOpt(advertiserPrioritySum), 0.0)) * (
+              castAsReal(v.priority) /
+                nullif(
+                  castAsRealOpt(
+                    query[AdvertiserVideoRow]
+                      .filter(av => av.advertiserId == v.advertiserId && av.isActive == 1)
+                      .map(_.priority)
+                      .sum),
+                  0.0)
+            )
+          ))(using Ord.asc)
         .take(1)
         .map((v, _) => v)
 
@@ -97,10 +108,9 @@ object VideoRepositoryQuill:
       import quill.*
 
       def findById(id: video.Id): Task[Option[AdvertiserVideo]] =
-        run(
-          query[AdvertiserVideoRow]
-            .filter(_.id == lift(id))
-        ).map(_.headOption.map(toAdvertiserVideo)).orDie
+        run(query[AdvertiserVideoRow].filter(_.id == lift(id)))
+          .map(_.headOption.map(toAdvertiserVideo))
+          .orDie
 
       def findNextForUser(
           userId: Option[user.Id],
@@ -115,15 +125,18 @@ object VideoRepositoryQuill:
         for
           sessionData <- ctx.getOrFail
           locationId = sessionData.locationId
-          queryResult <- userId match
-            case Some(uid) =>
-              run(nextAdQueryAuthenticated(lift(uid), lift(locationId)))
-            case None =>
-              run(nextAdQueryAnonymous(lift(locationId)))
-          result <- queryResult match
-            case Nil => ZIO.none
-            case rows =>
-              fetchLocalizedTexts(rows.head, locale).map(Some(_))
+          queryResult <-
+            userId match
+              case Some(uid) =>
+                run(nextAdQueryAuthenticated(lift(uid), lift(locationId)))
+              case None =>
+                run(nextAdQueryAnonymous(lift(locationId)))
+          result <-
+            queryResult match
+              case Nil =>
+                ZIO.none
+              case rows =>
+                fetchLocalizedTexts(rows.head, locale).map(Some(_))
         yield result
 
       private def findNextPromo(
@@ -139,32 +152,38 @@ object VideoRepositoryQuill:
                 case None =>
                   run(firstPromoQuery)
               .flatMap: result =>
-                if result.isEmpty then run(firstPromoQuery) else ZIO.succeed(result)
+                if result.isEmpty then
+                  run(firstPromoQuery)
+                else
+                  ZIO.succeed(result)
               .flatMap: finalResult =>
                 finalResult.headOption match
-                  case Some(row) => fetchLocalizedTexts(row, locale).map(Some(_))
-                  case None      => ZIO.none
+                  case Some(row) =>
+                    fetchLocalizedTexts(row, locale).map(Some(_))
+                  case None =>
+                    ZIO.none
               .orDie
 
           case None =>
             run(firstPromoQuery)
               .flatMap:
-                case Nil => ZIO.none
+                case Nil =>
+                  ZIO.none
                 case rows =>
                   fetchLocalizedTexts(rows.head, locale).map(Some(_))
               .orDie
 
       // Helper method con parámetros simples para que Quill pueda parsear lift()
-      private def findNextPromoAfter(priority: Int, createdAt: String): Task[List[AdvertiserVideoRow]] =
-        run(
-          query[AdvertiserVideoRow]
-            .filter(v => v.isActive == 1 && v.videoType == "propaganda")
-            .filter(v =>
-              v.priority > lift(priority) ||
-                (v.priority == lift(priority) && strGt(v.createdAt, lift(createdAt))))
-            .sortBy(v => (v.priority, v.createdAt))(using Ord.asc)
-            .take(1)
-        )
+      private def findNextPromoAfter(
+          priority: Int,
+          createdAt: String): Task[List[AdvertiserVideoRow]] = run(
+        query[AdvertiserVideoRow]
+          .filter(v => v.isActive == 1 && v.videoType == "propaganda")
+          .filter(v =>
+            v.priority > lift(priority) ||
+              (v.priority == lift(priority) && strGt(v.createdAt, lift(createdAt))))
+          .sortBy(v => (v.priority, v.createdAt))(using Ord.asc)
+          .take(1))
 
       // Fetch localized texts for a video (title and description)
       private def fetchLocalizedTexts(
@@ -175,44 +194,40 @@ object VideoRepositoryQuill:
           titleTexts <- run(
             query[LocalizedTextRow]
               .filter(lt => lt.entityId == lift(videoIdStr))
-              .filter(lt => lt.locale == lift(locale) || lt.locale == "en")
-          )
+              .filter(lt => lt.locale == lift(locale) || lt.locale == "en"))
           descTexts <- run(
             query[LocalizedTextRow]
               .filter(lt => lt.entityId == lift(videoIdStr + "_desc"))
-              .filter(lt => lt.locale == lift(locale) || lt.locale == "en")
-          )
+              .filter(lt => lt.locale == lift(locale) || lt.locale == "en"))
         yield toVideoToWatch(
           videoRow,
           selectPreferredText(titleTexts, locale),
           selectPreferredText(descTexts, locale))
 
-  private def toAdvertiserVideo(row: AdvertiserVideoRow): AdvertiserVideo =
-    AdvertiserVideo(
-      id = row.id,
-      advertiserId = row.advertiserId.flatMap(AdvertiserId.fromString),
-      videoType = VideoType.fromDbString(row.videoType),
-      videoUrl = row.videoUrl,
-      durationSeconds = row.durationSeconds,
-      minWatchSeconds = row.minWatchSeconds,
-      showCountdown = row.showCountdown == 1,
-      noRepeatSeconds = row.noRepeatSeconds,
-      priority = row.priority
-    )
+  private def toAdvertiserVideo(row: AdvertiserVideoRow): AdvertiserVideo = AdvertiserVideo(
+    id = row.id,
+    advertiserId = row.advertiserId.flatMap(AdvertiserId.fromString),
+    videoType = VideoType.fromDbString(row.videoType),
+    videoUrl = row.videoUrl,
+    durationSeconds = row.durationSeconds,
+    minWatchSeconds = row.minWatchSeconds,
+    showCountdown = row.showCountdown == 1,
+    noRepeatSeconds = row.noRepeatSeconds,
+    priority = row.priority
+  )
 
   private def toVideoToWatch(
       row: AdvertiserVideoRow,
       title: Option[LocalizedText],
-      description: Option[LocalizedText]): VideoToWatch =
-    VideoToWatch(
-      id = row.id,
-      advertiserId = row.advertiserId.flatMap(AdvertiserId.fromString),
-      videoType = VideoType.fromDbString(row.videoType),
-      videoUrl = row.videoUrl,
-      durationSeconds = row.durationSeconds,
-      title = title,
-      description = description
-    )
+      description: Option[LocalizedText]): VideoToWatch = VideoToWatch(
+    id = row.id,
+    advertiserId = row.advertiserId.flatMap(AdvertiserId.fromString),
+    videoType = VideoType.fromDbString(row.videoType),
+    videoUrl = row.videoUrl,
+    durationSeconds = row.durationSeconds,
+    title = title,
+    description = description
+  )
 
   val layer: ZLayer[QuillSqlite & SessionContext, Nothing, VideoRepository[Task]] = ZLayer
     .fromFunction(apply)

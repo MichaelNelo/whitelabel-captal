@@ -105,7 +105,9 @@ object LocaleServiceQuill:
         val locId = locationId
         run(
           query[LocalizedTextRow].filter(r =>
-            r.locale == lift(locale) && r.category == lift("frontend") && r.locationId == lift(locId)))
+            r.locale == lift(locale) && r.category == lift("frontend") &&
+              r.locationId == lift(locId)))
           .map(rows => rows.map(r => (r.entityId, r.value)).toMap)
           .map(LocaleService.buildI18n)
           .orDie
+end LocaleServiceQuill

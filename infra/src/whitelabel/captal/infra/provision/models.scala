@@ -8,7 +8,10 @@ import io.circe.generic.semiauto.*
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Location metadata — slug comes from LOCATION_SLUG env var */
-final case class LocationYaml(name: String, ap_mac: Option[String] = None, desiredCount: Option[Int] = None)
+final case class LocationYaml(
+    name: String,
+    ap_mac: Option[String] = None,
+    desiredCount: Option[Int] = None)
 object LocationYaml:
   given Decoder[LocationYaml] = deriveDecoder
 
@@ -50,9 +53,7 @@ object AdvertiserYaml:
   given Decoder[AdvertiserYaml] = deriveDecoder
 
 /** Survey attached to a video (separate YAML file) */
-final case class VideoSurveyYaml(
-    name: Option[String] = None,
-    questions: List[QuestionYaml])
+final case class VideoSurveyYaml(name: Option[String] = None, questions: List[QuestionYaml])
 object VideoSurveyYaml:
   given Decoder[VideoSurveyYaml] = deriveDecoder
 

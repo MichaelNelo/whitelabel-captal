@@ -8,7 +8,14 @@ import whitelabel.captal.core.survey.question.{
   FullyQualifiedQuestionId,
   QuestionAnswer
 }
-import whitelabel.captal.core.survey.{AdvertiserId, Error as SurveyError, Event as SurveyEvent, State as SurveyState, Survey, ops as surveyOps}
+import whitelabel.captal.core.survey.{
+  AdvertiserId,
+  Error as SurveyError,
+  Event as SurveyEvent,
+  State as SurveyState,
+  Survey,
+  ops as surveyOps
+}
 import whitelabel.captal.core.{Op, survey, video}
 
 object ops:
@@ -71,8 +78,10 @@ object ops:
       nextQuestion match
         case Some(question) =>
           val event = Event.VideoSurveyAssigned(user.id, advertiserId, question, now)
-          val newUser = user.copy[State.AnsweringVideoSurvey](
-            state = State.AnsweringVideoSurvey(advertiserId, question.surveyId, question.questionId))
+          val newUser = user.copy[State.AnsweringVideoSurvey](state = State.AnsweringVideoSurvey(
+            advertiserId,
+            question.surveyId,
+            question.questionId))
           Op.emit(event, newUser)
         case None =>
           Op.pure(NextStep(terminalPhase))
@@ -89,10 +98,9 @@ object ops:
       now)
 
   extension (user: User[State.AnsweringVideoSurvey])
-    private def asAnswering: User[State.AnsweringQuestion] =
-      User[State.AnsweringQuestion](
-        user.id,
-        State.AnsweringQuestion(user.state.surveyId, user.state.questionId))
+    private def asAnswering: User[State.AnsweringQuestion] = User[State.AnsweringQuestion](
+      user.id,
+      State.AnsweringQuestion(user.state.surveyId, user.state.questionId))
 
   extension (user: User[State.AnsweringQuestion])
 

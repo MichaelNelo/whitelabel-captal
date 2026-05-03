@@ -10,18 +10,30 @@ import zio.interop.catz.*
 
 object Migrate extends ZIOAppDefault:
 
-  private val writePrefix =
-    Set("INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP", "REPLACE", "PRAGMA")
+  private val writePrefix = Set(
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "CREATE",
+    "ALTER",
+    "DROP",
+    "REPLACE",
+    "PRAGMA")
 
   /** Check if SQL starts with a write keyword (skipping leading comments). */
   private def isWriteStatement(sql: String): Boolean =
     val trimmed = sql.stripLeading()
     val withoutComments =
-      if trimmed.startsWith("--") then trimmed.dropWhile(_ != '\n').stripLeading()
+      if trimmed.startsWith("--") then
+        trimmed.dropWhile(_ != '\n').stripLeading()
       else if trimmed.startsWith("/*") then
         val end = trimmed.indexOf("*/")
-        if end >= 0 then trimmed.drop(end + 2).stripLeading() else trimmed
-      else trimmed
+        if end >= 0 then
+          trimmed.drop(end + 2).stripLeading()
+        else
+          trimmed
+      else
+        trimmed
     val upper = withoutComments.toUpperCase
     writePrefix.exists(p => upper.startsWith(p))
 
@@ -41,7 +53,14 @@ object Migrate extends ZIOAppDefault:
             conn.getClass.getClassLoader,
             Array(classOf[java.sql.Connection]),
             (_, method, args) =>
-              val result = method.invoke(conn, (if args == null then Array.empty[Object] else args)*)
+              val result = method.invoke(
+                conn,
+                (
+                  if args == null then
+                    Array.empty[Object]
+                  else
+                    args
+                )*)
               if method.getName == "createStatement" then
                 val stmt = result.asInstanceOf[java.sql.Statement]
                 java
@@ -52,17 +71,28 @@ object Migrate extends ZIOAppDefault:
                     stmt.getClass.getClassLoader,
                     stmt.getClass.getInterfaces,
                     (_, m, a) =>
-                      if m.getName == "execute" && a != null && a.length >= 1 && a(0)
-                          .isInstanceOf[String] && isWriteStatement(a(0).asInstanceOf[String])
+                      if m.getName == "execute" && a != null && a.length >= 1 &&
+                        a(0).isInstanceOf[String] && isWriteStatement(a(0).asInstanceOf[String])
                       then
                         stmt.executeUpdate(a(0).asInstanceOf[String])
                         java.lang.Boolean.FALSE
-                      else m.invoke(stmt, (if a == null then Array.empty[Object] else a)*)
+                      else
+                        m.invoke(
+                          stmt,
+                          (
+                            if a == null then
+                              Array.empty[Object]
+                            else
+                              a
+                          )*)
                   )
                   .asInstanceOf[java.sql.Statement]
-              else result
+              else
+                result
+              end if
           )
           .asInstanceOf[java.sql.Connection]
+      end getConnection
       def getConnection(u: String, p: String): java.sql.Connection = getConnection()
       def getLogWriter(): java.io.PrintWriter = ds.getLogWriter()
       def setLogWriter(out: java.io.PrintWriter): Unit = ds.setLogWriter(out)
@@ -74,14 +104,18 @@ object Migrate extends ZIOAppDefault:
 
   private def fly4sConfig(devSeed: Boolean) =
     val locations =
-      if devSeed then List(Location("db/migration"), Location("db/migration-dev"))
-      else List(Location("db/migration"))
-    Fly4sConfig.default.copy(
-      locations = locations,
-      group = false,
-      mixed = true,
-      baselineOnMigrate = true,
-      baselineVersion = MigrationVersion("0"))
+      if devSeed then
+        List(Location("db/migration"), Location("db/migration-dev"))
+      else
+        List(Location("db/migration"))
+    Fly4sConfig
+      .default
+      .copy(
+        locations = locations,
+        group = false,
+        mixed = true,
+        baselineOnMigrate = true,
+        baselineVersion = MigrationVersion("0"))
 
   override val run: ZIO[Any, Throwable, Unit] = ZIO
     .attempt:
@@ -97,7 +131,13 @@ object Migrate extends ZIOAppDefault:
         .use: fly4s =>
           for
             _ <- ZIO.logInfo(
-              s"Running database migrations...${if devSeed then " (with dev seeds)" else ""}")
+              s"Running database migrations...${
+                  if devSeed then
+                    " (with dev seeds)"
+                  else
+                    ""
+                }")
             result <- fly4s.migrate
             _      <- ZIO.logInfo(s"Migrations complete: ${result.migrationsExecuted} executed")
           yield ()
+end Migrate
