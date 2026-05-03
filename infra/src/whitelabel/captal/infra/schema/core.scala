@@ -69,5 +69,6 @@ package object core:
   @targetName("videoTypeToString")
   inline given MappedEncoding[video.VideoType, String] = MappedEncoding(video.VideoType.toDbString)
   @targetName("stringToVideoType")
-  inline given MappedEncoding[String, video.VideoType] = MappedEncoding(video.VideoType.fromDbString)
+  inline given MappedEncoding[String, video.VideoType] = MappedEncoding(
+    video.VideoType.fromDbString)
 end core

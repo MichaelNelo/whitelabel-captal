@@ -24,48 +24,59 @@ object SessionVideoHandler:
           sessionData <- ctx.getOrFail
           // Handle VideoAssigned events
           videoAssignments = events.flatMap(extractVideoAssignment)
-          _ <- ZIO.foreachDiscard(videoAssignments): (videoId, advertiserIdOpt) =>
-            run(SessionService.updateCurrentVideoQuery(lift(sessionData.sessionId), lift(videoId)))
-              .orDie *>
-              (advertiserIdOpt match
-                case Some(advId) =>
-                  run(
-                    SessionService.updateCurrentAdvertiserQuery(
-                      lift(sessionData.sessionId),
-                      lift(advId))).orDie.unit
-                case None =>
-                  ZIO.unit)
+          _ <-
+            ZIO.foreachDiscard(videoAssignments): (videoId, advertiserIdOpt) =>
+              run(
+                SessionService.updateCurrentVideoQuery(lift(sessionData.sessionId), lift(videoId)))
+                .orDie *> (
+                advertiserIdOpt match
+                  case Some(advId) =>
+                    run(
+                      SessionService.updateCurrentAdvertiserQuery(
+                        lift(sessionData.sessionId),
+                        lift(advId))).orDie.unit
+                  case None =>
+                    ZIO.unit
+              )
 
           // Handle VideoVisualized events
           videoVisualizations = events.flatMap(extractVideoVisualization)
-          _ <- ZIO.foreachDiscard(videoVisualizations): viz =>
-            val now = java.time.Instant.now.toString
-            val viewRow = VideoViewRow(
-              id = UUID.randomUUID.toString,
-              sessionId = viz.sessionId,
-              userId = viz.userId,
-              videoId = viz.videoId,
-              durationWatchedSeconds = viz.durationWatched,
-              completed = if viz.completed then 1 else 0,
-              viewedAt = viz.occurredAt.toString,
-              createdAt = now
-            )
-            for
-              // Insert video view
-              _ <- run(query[VideoViewRow].insertValue(lift(viewRow))).orDie
-              // Don't clear currentVideoId — it's needed during AdvertiserVideoSurvey phase
-              // It will be overwritten when a new video is assigned
-              // Update last propaganda video if applicable
-              _ <-
-                if viz.videoType == VideoType.Promo then
-                  run(
-                    SessionService.updateLastPromoVideoQuery(
-                      lift(sessionData.sessionId),
-                      lift(viz.videoId))).orDie
-                else
-                  ZIO.unit
-            yield ()
+          _ <-
+            ZIO.foreachDiscard(videoVisualizations): viz =>
+              val now = java.time.Instant.now.toString
+              val viewRow = VideoViewRow(
+                id = UUID.randomUUID.toString,
+                sessionId = viz.sessionId,
+                userId = viz.userId,
+                videoId = viz.videoId,
+                durationWatchedSeconds = viz.durationWatched,
+                completed =
+                  if viz.completed then
+                    1
+                  else
+                    0
+                ,
+                viewedAt = viz.occurredAt.toString,
+                createdAt = now
+              )
+              for
+                // Insert video view
+                _ <- run(query[VideoViewRow].insertValue(lift(viewRow))).orDie
+                // Don't clear currentVideoId — it's needed during AdvertiserVideoSurvey phase
+                // It will be overwritten when a new video is assigned
+                // Update last propaganda video if applicable
+                _ <-
+                  if viz.videoType == VideoType.Promo then
+                    run(
+                      SessionService.updateLastPromoVideoQuery(
+                        lift(sessionData.sessionId),
+                        lift(viz.videoId))).orDie
+                  else
+                    ZIO.unit
+              yield ()
         yield ()
+        end for
+      end handle
 
   private case class VideoVisualizationData(
       sessionId: whitelabel.captal.core.user.SessionId,
@@ -86,15 +97,16 @@ object SessionVideoHandler:
 
   private def extractVideoVisualization(event: Event): Option[VideoVisualizationData] =
     event match
-      case Event.Video(VideoEvent.VideoVisualized(
-            sessionId,
-            userId,
-            videoId,
-            _,
-            videoType,
-            durationWatched,
-            completed,
-            occurredAt)) =>
+      case Event.Video(
+            VideoEvent.VideoVisualized(
+              sessionId,
+              userId,
+              videoId,
+              _,
+              videoType,
+              durationWatched,
+              completed,
+              occurredAt)) =>
         Some(
           VideoVisualizationData(
             sessionId,

@@ -4,8 +4,8 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.UUID
 
-/** Deterministic UUID v5 generation for provisioning.
-  * Uses a fixed namespace UUID and generates reproducible IDs from entity keys.
+/** Deterministic UUID v5 generation for provisioning. Uses a fixed namespace UUID and generates
+  * reproducible IDs from entity keys.
   */
 object IdGenerator:
   // Captal namespace UUID for deterministic ID generation
@@ -37,36 +37,35 @@ object IdGenerator:
   def surveyId(category: String): String = uuid5(s"survey:$category")
 
   /** Generate ID for a location-scoped video */
-  def videoId(locationSlug: String, advertiserSlug: String, videoSlug: String): String =
-    uuid5(s"video:$locationSlug/$advertiserSlug/$videoSlug")
+  def videoId(locationSlug: String, advertiserSlug: String, videoSlug: String): String = uuid5(
+    s"video:$locationSlug/$advertiserSlug/$videoSlug")
 
   /** Generate ID for a promo video */
-  def promoVideoId(locationSlug: String, videoSlug: String): String =
-    uuid5(s"video:$locationSlug/promo/$videoSlug")
+  def promoVideoId(locationSlug: String, videoSlug: String): String = uuid5(
+    s"video:$locationSlug/promo/$videoSlug")
 
   /** Generate ID for an advertiser survey (scoped to video) */
-  def advertiserSurveyId(
-      locationSlug: String,
-      advertiserSlug: String,
-      videoSlug: String): String =
+  def advertiserSurveyId(locationSlug: String, advertiserSlug: String, videoSlug: String): String =
     uuid5(s"survey:$locationSlug/$advertiserSlug/$videoSlug")
 
   /** Generate ID for a question within a survey */
-  def questionId(surveyKey: String, index: Int): String =
-    uuid5(s"question:$surveyKey/$index")
+  def questionId(surveyKey: String, index: Int): String = uuid5(s"question:$surveyKey/$index")
 
   /** Generate ID for a question option */
-  def optionId(surveyKey: String, questionIndex: Int, optionIndex: Int): String =
-    uuid5(s"option:$surveyKey/$questionIndex/$optionIndex")
+  def optionId(surveyKey: String, questionIndex: Int, optionIndex: Int): String = uuid5(
+    s"option:$surveyKey/$questionIndex/$optionIndex")
 
   /** Generate ID for a localized text entry */
   def localizedTextId(entityId: String, locale: String, suffix: String = ""): String =
-    val key = if suffix.isEmpty then s"lt:$entityId:$locale" else s"lt:$entityId:$suffix:$locale"
+    val key =
+      if suffix.isEmpty then
+        s"lt:$entityId:$locale"
+      else
+        s"lt:$entityId:$suffix:$locale"
     uuid5(key)
 
   /** Generate ID for a question rule */
-  def ruleId(questionKey: String, ruleIndex: Int): String =
-    uuid5(s"rule:$questionKey/$ruleIndex")
+  def ruleId(questionKey: String, ruleIndex: Int): String = uuid5(s"rule:$questionKey/$ruleIndex")
 
   private def toBytes(uuid: UUID): Array[Byte] =
     val bb = java.nio.ByteBuffer.allocate(16)
@@ -76,5 +75,7 @@ object IdGenerator:
 
   private def bytesToLong(bytes: Array[Byte], offset: Int): Long =
     var result = 0L
-    for i <- 0 until 8 do result = (result << 8) | (bytes(offset + i) & 0xff)
+    for i <- 0 until 8 do
+      result = (result << 8) | (bytes(offset + i) & 0xff)
     result
+end IdGenerator

@@ -26,12 +26,11 @@ object NextVideo:
   given Encoder[NextVideo] = Encoder.AsObject.derived
   given Decoder[NextVideo] = Decoder.derived
 
-  def fromVideoToWatch(v: VideoToWatch): NextVideo =
-    NextVideo(
-      v.videoUrl,
-      v.durationSeconds,
-      v.title.map(_.value),
-      v.description.map(_.value))
+  def fromVideoToWatch(v: VideoToWatch): NextVideo = NextVideo(
+    v.videoUrl,
+    v.durationSeconds,
+    v.title.map(_.value),
+    v.description.map(_.value))
 
 object ProvideNextVideoHandler:
   type Response = NextVideo | NextStep
@@ -46,12 +45,16 @@ object ProvideNextVideoHandler:
       def handle(cmd: ProvideNextVideoCommand.type) =
         for
           userOpt  <- userRepo.findWithEmail()
-          videoOpt <- videoRepo.findNextForUser(userOpt.map(_.id), None) // TODO: get lastPromoVideoId from session
-          result   <- handleVideoResult(userOpt, videoOpt)
+          videoOpt <- videoRepo.findNextForUser(
+            userOpt.map(_.id),
+            None
+          ) // TODO: get lastPromoVideoId from session
+          result <- handleVideoResult(userOpt, videoOpt)
         yield result
 
       private def handleVideoResult(
-          userOpt: Option[whitelabel.captal.core.user.User[whitelabel.captal.core.user.State.WithEmail]],
+          userOpt: Option[
+            whitelabel.captal.core.user.User[whitelabel.captal.core.user.State.WithEmail]],
           videoOpt: Option[VideoToWatch]) =
         userOpt match
           case Some(user) =>
@@ -67,8 +70,7 @@ object ProvideNextVideoHandler:
                       Instant.now)
                     .convertEvent
                     .convertError
-                    .as(NextVideo.fromVideoToWatch(videoToWatch): Response)
-                )
+                    .as(NextVideo.fromVideoToWatch(videoToWatch): Response))
               case None =>
                 // No video available, go to terminal phase
                 Monad[F].pure(CoreOp.pure(NextStep(terminalPhase): Response))

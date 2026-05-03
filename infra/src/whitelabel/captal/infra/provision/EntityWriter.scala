@@ -23,15 +23,12 @@ object EntityWriter:
       query[LocationRow]
         .insertValue(lift(row))
         .onConflictUpdate(_.id)(
-          (t, e) => t.name -> e.name,
-          (t, e) => t.apMac -> e.apMac,
-          (t, _) => t.isActive -> lift(1),
+          (t, e) => t.name      -> e.name,
+          (t, e) => t.apMac     -> e.apMac,
+          (t, _) => t.isActive  -> lift(1),
           (t, _) => t.updatedAt -> lift(now))).unit
 
-  def upsertAdvertiser(quill: QuillSqlite)(
-      id: String,
-      name: String,
-      priority: Int): Task[Unit] =
+  def upsertAdvertiser(quill: QuillSqlite)(id: String, name: String, priority: Int): Task[Unit] =
     import quill.*
     val now = java.time.Instant.now.toString
     val row = AdvertiserRow(id, name, priority, 1, now, now)
@@ -39,9 +36,9 @@ object EntityWriter:
       query[AdvertiserRow]
         .insertValue(lift(row))
         .onConflictUpdate(_.id)(
-          (t, e) => t.name -> e.name,
-          (t, e) => t.priority -> e.priority,
-          (t, _) => t.isActive -> lift(1),
+          (t, e) => t.name      -> e.name,
+          (t, e) => t.priority  -> e.priority,
+          (t, _) => t.isActive  -> lift(1),
           (t, _) => t.updatedAt -> lift(now))).unit
 
   def upsertVideo(quill: QuillSqlite)(
@@ -70,18 +67,21 @@ object EntityWriter:
       1,
       priority,
       now,
-      now)
+      now
+    )
     run(
       query[AdvertiserVideoRow]
         .insertValue(lift(row))
         .onConflictUpdate(_.id)(
-          (t, e) => t.videoUrl -> e.videoUrl,
+          (t, e) => t.videoUrl        -> e.videoUrl,
           (t, e) => t.durationSeconds -> e.durationSeconds,
           (t, e) => t.minWatchSeconds -> e.minWatchSeconds,
-          (t, e) => t.showCountdown -> e.showCountdown,
-          (t, e) => t.priority -> e.priority,
-          (t, _) => t.isActive -> lift(1),
-          (t, _) => t.updatedAt -> lift(now))).unit
+          (t, e) => t.showCountdown   -> e.showCountdown,
+          (t, e) => t.priority        -> e.priority,
+          (t, _) => t.isActive        -> lift(1),
+          (t, _) => t.updatedAt       -> lift(now)
+        )).unit
+  end upsertVideo
 
   def upsertSurvey(quill: QuillSqlite)(
       id: String,
@@ -104,9 +104,8 @@ object EntityWriter:
     run(
       query[SurveyRow]
         .insertValue(lift(row))
-        .onConflictUpdate(_.id)(
-          (t, _) => t.isActive -> lift(1),
-          (t, e) => t.name -> e.name)).unit
+        .onConflictUpdate(_.id)((t, _) => t.isActive -> lift(1), (t, e) => t.name -> e.name)).unit
+  end upsertSurvey
 
   def upsertQuestion(quill: QuillSqlite)(
       id: String,
@@ -126,19 +125,19 @@ object EntityWriter:
       displayOrder,
       hierarchyLevel,
       isRequired,
-      now)
+      now
+    )
     run(
       query[QuestionRow]
         .insertValue(lift(row))
         .onConflictUpdate(_.id)(
-          (t, e) => t.questionType -> e.questionType,
+          (t, e) => t.questionType  -> e.questionType,
           (t, e) => t.pointsAwarded -> e.pointsAwarded,
-          (t, e) => t.displayOrder -> e.displayOrder)).unit
+          (t, e) => t.displayOrder  -> e.displayOrder)).unit
+  end upsertQuestion
 
-  def upsertQuestionOption(quill: QuillSqlite)(
-      id: String,
-      questionId: String,
-      displayOrder: Int): Task[Unit] =
+  def upsertQuestionOption(
+      quill: QuillSqlite)(id: String, questionId: String, displayOrder: Int): Task[Unit] =
     import quill.*
     val row = QuestionOptionRow(
       whitelabel.captal.core.survey.question.OptionId.unsafe(id),
@@ -148,8 +147,7 @@ object EntityWriter:
     run(
       query[QuestionOptionRow]
         .insertValue(lift(row))
-        .onConflictUpdate(_.id)(
-          (t, e) => t.displayOrder -> e.displayOrder)).unit
+        .onConflictUpdate(_.id)((t, e) => t.displayOrder -> e.displayOrder)).unit
 
   def upsertQuestionRule(quill: QuillSqlite)(
       id: String,
@@ -166,7 +164,7 @@ object EntityWriter:
       query[QuestionRuleRow]
         .insertValue(lift(row))
         .onConflictUpdate(_.id)(
-          (t, e) => t.ruleType -> e.ruleType,
+          (t, e) => t.ruleType   -> e.ruleType,
           (t, e) => t.ruleConfig -> e.ruleConfig)).unit
 
   def upsertLocalizedText(quill: QuillSqlite)(
@@ -182,9 +180,8 @@ object EntityWriter:
     run(
       query[LocalizedTextRow]
         .insertValue(lift(row))
-        .onConflictUpdate(_.id)(
-          (t, e) => t.value -> e.value,
-          (t, _) => t.updatedAt -> lift(now))).unit
+        .onConflictUpdate(_.id)((t, e) => t.value -> e.value, (t, _) => t.updatedAt -> lift(now)))
+      .unit
 
   /** Soft-delete a video by setting is_active = 0 */
   def deactivateVideo(quill: QuillSqlite)(id: String): Task[Unit] =
@@ -200,10 +197,7 @@ object EntityWriter:
   def deactivateSurvey(quill: QuillSqlite)(id: String): Task[Unit] =
     import quill.*
     val surveyId = whitelabel.captal.core.survey.Id.unsafe(id)
-    run(
-      query[SurveyRow]
-        .filter(_.id == lift(surveyId))
-        .update(_.isActive -> 0)).unit
+    run(query[SurveyRow].filter(_.id == lift(surveyId)).update(_.isActive -> 0)).unit
 
   /** Soft-delete an advertiser by setting is_active = 0 */
   def deactivateAdvertiser(quill: QuillSqlite)(id: String): Task[Unit] =
@@ -226,7 +220,7 @@ object EntityWriter:
       query[ProvisionManifestRow]
         .insertValue(lift(row))
         .onConflictUpdate(_.entityKey)(
-          (t, e) => t.contentHash -> e.contentHash,
+          (t, e) => t.contentHash   -> e.contentHash,
           (t, _) => t.provisionedAt -> lift(now))).unit
 
   /** Remove a provision manifest entry */
@@ -235,17 +229,22 @@ object EntityWriter:
     run(query[ProvisionManifestRow].filter(_.entityKey == lift(entityKey)).delete).unit
 
   /** Load manifest entries for a location and global entities, tagged by ownership. */
-  def loadManifest(quill: QuillSqlite)(locationId: String): Task[(Map[String, String], Set[String])] =
+  def loadManifest(quill: QuillSqlite)(
+      locationId: String): Task[(Map[String, String], Set[String])] =
     import quill.*
-    run(query[ProvisionManifestRow].filter(r =>
-      r.locationId == lift(Option(locationId)) || r.locationId.isEmpty))
-      .map: rows =>
-        val all = rows.map(r => r.entityKey -> r.contentHash).toMap
-        val localKeys = rows.filter(_.locationId.contains(locationId)).map(_.entityKey).toSet
-        (all, localKeys)
+    run(
+      query[ProvisionManifestRow].filter(r =>
+        r.locationId == lift(Option(locationId)) || r.locationId.isEmpty)).map: rows =>
+      val all = rows.map(r => r.entityKey -> r.contentHash).toMap
+      val localKeys = rows.filter(_.locationId.contains(locationId)).map(_.entityKey).toSet
+      (all, localKeys)
 
   /** Upsert i18n translations as localized_texts with category=frontend, scoped by location */
-  def upsertI18n(quill: QuillSqlite)(locale: String, locationId: String, translations: Map[String, String]): Task[Unit] =
+  def upsertI18n(quill: QuillSqlite)(
+      locale: String,
+      locationId: String,
+      translations: Map[String, String]): Task[Unit] =
     ZIO.foreachDiscard(translations.toList): (key, value) =>
       val id = IdGenerator.localizedTextId(s"$locationId:$key", locale)
       upsertLocalizedText(quill)(id, key, locale, value, "frontend", Some(locationId))
+end EntityWriter

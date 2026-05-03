@@ -39,28 +39,31 @@ object MarkVideoWatchedHandler:
       def handle(cmd: MarkVideoWatchedCommand) =
         session.currentVideoId match
           case Some(videoId) =>
-            videoRepo.findById(videoId).map:
-              case Some(video) =>
-                val event = VideoEvent.VideoVisualized(
-                  sessionId = session.sessionId,
-                  userId = session.userId,
-                  videoId = videoId,
-                  advertiserId = video.advertiserId,
-                  videoType = video.videoType,
-                  durationWatched = cmd.durationWatched,
-                  completed = cmd.completed,
-                  occurredAt = cmd.occurredAt
-                )
-                CoreOp
-                  .emit[videoPkg.Event, videoPkg.Error](event)
-                  .convertEvent
-                  .convertError
-                  .as(NextStep(nextPhase))
-              case None =>
-                CoreOp
-                  .fail[videoPkg.Event, videoPkg.Error, NextStep](VideoError.VideoNotFound(videoId))
-                  .convertEvent
-                  .convertError
+            videoRepo
+              .findById(videoId)
+              .map:
+                case Some(video) =>
+                  val event = VideoEvent.VideoVisualized(
+                    sessionId = session.sessionId,
+                    userId = session.userId,
+                    videoId = videoId,
+                    advertiserId = video.advertiserId,
+                    videoType = video.videoType,
+                    durationWatched = cmd.durationWatched,
+                    completed = cmd.completed,
+                    occurredAt = cmd.occurredAt
+                  )
+                  CoreOp
+                    .emit[videoPkg.Event, videoPkg.Error](event)
+                    .convertEvent
+                    .convertError
+                    .as(NextStep(nextPhase))
+                case None =>
+                  CoreOp
+                    .fail[videoPkg.Event, videoPkg.Error, NextStep](
+                      VideoError.VideoNotFound(videoId))
+                    .convertEvent
+                    .convertError
           case None =>
             Monad[F].pure(
               CoreOp

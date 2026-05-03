@@ -42,17 +42,14 @@ object VideoResponse:
   given Schema[VideoResponse] = Schema.anyObject
 end VideoResponse
 
-final case class MarkVideoWatchedRequest(
-    durationWatched: Int,
-    completed: Boolean)
+final case class MarkVideoWatchedRequest(durationWatched: Int, completed: Boolean)
 
 object MarkVideoWatchedRequest:
   given CirceEncoder[MarkVideoWatchedRequest] = deriveEncoder
   given CirceDecoder[MarkVideoWatchedRequest] = deriveDecoder
   given Schema[MarkVideoWatchedRequest] = Schema.derived
 
-final case class VideoWatchedResponse(
-    nextPhase: String)
+final case class VideoWatchedResponse(nextPhase: String)
 
 object VideoWatchedResponse:
   given CirceEncoder[VideoWatchedResponse] = deriveEncoder
@@ -63,24 +60,25 @@ object VideoEndpoints:
   import SurveyEndpoints.sessionCookie
 
   // GET /api/video/next - Get next video to watch
-  val nextVideo: PublicEndpoint[Option[String], ApiError, VideoResponse, Any] =
-    endpoint
-      .get
-      .in("api" / "video" / "next")
-      .in(sessionCookie)
-      .out(jsonBody[VideoResponse])
-      .errorOut(jsonBody[ApiError])
-      .description("Get the next video to watch for the session")
+  val nextVideo: PublicEndpoint[Option[String], ApiError, VideoResponse, Any] = endpoint
+    .get
+    .in("api" / "video" / "next")
+    .in(sessionCookie)
+    .out(jsonBody[VideoResponse])
+    .errorOut(jsonBody[ApiError])
+    .description("Get the next video to watch for the session")
 
   // POST /api/video/watched - Mark video as watched
-  val markWatched
-      : PublicEndpoint[(Option[String], MarkVideoWatchedRequest), ApiError, VideoWatchedResponse, Any] =
-    endpoint
-      .post
-      .in("api" / "video" / "watched")
-      .in(sessionCookie)
-      .in(jsonBody[MarkVideoWatchedRequest])
-      .out(jsonBody[VideoWatchedResponse])
-      .errorOut(jsonBody[ApiError])
-      .description("Mark video as watched and get next phase")
+  val markWatched: PublicEndpoint[
+    (Option[String], MarkVideoWatchedRequest),
+    ApiError,
+    VideoWatchedResponse,
+    Any] = endpoint
+    .post
+    .in("api" / "video" / "watched")
+    .in(sessionCookie)
+    .in(jsonBody[MarkVideoWatchedRequest])
+    .out(jsonBody[VideoWatchedResponse])
+    .errorOut(jsonBody[ApiError])
+    .description("Mark video as watched and get next phase")
 end VideoEndpoints

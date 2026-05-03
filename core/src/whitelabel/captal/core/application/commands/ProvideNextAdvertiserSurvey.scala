@@ -40,23 +40,22 @@ object ProvideNextAdvertiserSurveyHandler:
         for
           nextOpt <- surveyRepo.findNextAdvertiserSurvey(cmd.videoId)
           userOpt <- userRepo.findWithEmail()
-        yield
-          (userOpt, nextOpt) match
-            case (Some(user), Some(next)) =>
-              val question = FullyQualifiedQuestionId(next.surveyId, next.question.id)
-              val event = UserEvent.VideoSurveyAssigned(
-                user.id,
-                next.advertiserId,
-                question,
-                Instant.now)
-              CoreOp
-                .emit[whitelabel.captal.core.user.Event, whitelabel.captal.core.user.Error](event)
-                .convertEvent
-                .convertError
-                .as(next: Response)
-            case (_, None) =>
-              // No more questions for this advertiser
-              CoreOp.pure(NextStep(terminalPhase): Response)
-            case (None, _) =>
-              CoreOp.pure(NextStep(terminalPhase): Response)
+        yield (userOpt, nextOpt) match
+          case (Some(user), Some(next)) =>
+            val question = FullyQualifiedQuestionId(next.surveyId, next.question.id)
+            val event = UserEvent.VideoSurveyAssigned(
+              user.id,
+              next.advertiserId,
+              question,
+              Instant.now)
+            CoreOp
+              .emit[whitelabel.captal.core.user.Event, whitelabel.captal.core.user.Error](event)
+              .convertEvent
+              .convertError
+              .as(next: Response)
+          case (_, None) =>
+            // No more questions for this advertiser
+            CoreOp.pure(NextStep(terminalPhase): Response)
+          case (None, _) =>
+            CoreOp.pure(NextStep(terminalPhase): Response)
 end ProvideNextAdvertiserSurveyHandler

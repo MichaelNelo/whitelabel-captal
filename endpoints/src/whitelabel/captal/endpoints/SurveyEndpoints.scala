@@ -60,16 +60,14 @@ object SurveyEndpoints:
     .errorOut(jsonBody[ApiError])
     .description("Get the next identification survey for the user")
 
-  val status: PublicEndpoint[
-    Option[String],
-    ApiError,
-    (Option[sttp.model.headers.CookieValueWithMeta], StatusResponse),
-    Any] = endpoint
-    .get
-    .in("api" / "status")
-    .in(sessionCookie)
-    .out(setCookieOpt(sessionCookieName).and(jsonBody[StatusResponse]))
-    .errorOut(jsonBody[ApiError])
-    .description("Get the current phase/status - creates session if needed")
+  val status: PublicEndpoint[Option[
+    String], ApiError, (Option[sttp.model.headers.CookieValueWithMeta], StatusResponse), Any] =
+    endpoint
+      .get
+      .in("api" / "status")
+      .in(sessionCookie)
+      .out(setCookieOpt(sessionCookieName).and(jsonBody[StatusResponse]))
+      .errorOut(jsonBody[ApiError])
+      .description("Get the current phase/status - creates session if needed")
 
 end SurveyEndpoints
