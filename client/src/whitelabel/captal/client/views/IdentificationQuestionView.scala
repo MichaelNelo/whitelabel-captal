@@ -83,27 +83,31 @@ object IdentificationQuestionView:
     div(cls := "questions-list", questionCard(survey)))
 
   private def checkPhaseAndLoad(): Unit = Runtime.run:
-    ApiClient.getStatus().map:
-      case Right(status) if status.phase == Phase.Welcome =>
-        Router.syncWithPhase(Phase.Welcome)
-      case Right(status) =>
-        AppState.getCurrentSurvey match
-          case None =>
-            loadQuestion()
-          case Some(_) =>
-            ()
-      case Left(_) =>
-        Router.syncWithPhase(Phase.Welcome)
+    ApiClient
+      .getStatus()
+      .map:
+        case Right(status) if status.phase == Phase.Welcome =>
+          Router.syncWithPhase(Phase.Welcome)
+        case Right(status) =>
+          AppState.getCurrentSurvey match
+            case None =>
+              loadQuestion()
+            case Some(_) =>
+              ()
+        case Left(_) =>
+          Router.syncWithPhase(Phase.Welcome)
 
   private def loadQuestion(): Unit = Runtime.run:
-    ApiClient.getNextSurvey().map:
-      case Right(SurveyResponse.Survey(survey)) =>
-        AppState.setCurrentSurvey(survey)
-      case Right(SurveyResponse.Step(nextStep)) =>
-        AppState.setPhase(nextStep.phase)
-        Router.syncWithPhase(nextStep.phase)
-      case Left(_) =>
-        ()
+    ApiClient
+      .getNextSurvey()
+      .map:
+        case Right(SurveyResponse.Survey(survey)) =>
+          AppState.setCurrentSurvey(survey)
+        case Right(SurveyResponse.Step(nextStep)) =>
+          AppState.setPhase(nextStep.phase)
+          Router.syncWithPhase(nextStep.phase)
+        case Left(_) =>
+          ()
 
   private def questionCard(survey: NextIdentificationSurvey): HtmlElement =
     val cardStateSignal = isTouched

@@ -13,11 +13,11 @@ import whitelabel.captal.core.application.Phase
 
 // Pages for the router
 sealed trait Page
-case object WelcomePage                   extends Page
-case object IdentificationQuestionPage    extends Page
-case object AdvertiserVideoPage           extends Page
-case object AdvertiserVideoSurveyPage     extends Page
-case object ReadyPage                     extends Page
+case object WelcomePage                extends Page
+case object IdentificationQuestionPage extends Page
+case object AdvertiserVideoPage        extends Page
+case object AdvertiserVideoSurveyPage  extends Page
+case object ReadyPage                  extends Page
 
 object Router:
   // Route patterns
@@ -33,9 +33,8 @@ object Router:
     AdvertiserVideoPage,
     root / "video" / endOfSegments)
 
-  private val advertiserVideoSurveyRoute: Route[AdvertiserVideoSurveyPage.type, Unit] = Route.static(
-    AdvertiserVideoSurveyPage,
-    root / "survey" / endOfSegments)
+  private val advertiserVideoSurveyRoute: Route[AdvertiserVideoSurveyPage.type, Unit] = Route
+    .static(AdvertiserVideoSurveyPage, root / "survey" / endOfSegments)
 
   private val readyRoute: Route[ReadyPage.type, Unit] = Route.static(
     ReadyPage,

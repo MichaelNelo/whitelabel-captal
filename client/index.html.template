@@ -6,12 +6,13 @@
   <meta name="theme-color" content="#6366f1">
   <title>WiFi Gratis</title>
   <link rel="stylesheet" href="{{CSS_PATH}}">
+  <link rel="stylesheet" href="./custom-styles.css.gz" onerror="this.remove()">
 </head>
 <body>
   <!-- Initial loader - outside #app, removed by JS -->
   <div class="initial-loader">
     <div class="loader-icon brand-pulse">
-      <img src="/brand-icon.svg" class="brand-icon" alt="Loading">
+      <img src="./brand-icon.svg" class="brand-icon" alt="Loading">
     </div>
   </div>
   <div id="app"></div>

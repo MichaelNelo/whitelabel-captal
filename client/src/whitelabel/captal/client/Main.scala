@@ -33,28 +33,29 @@ end main
 object App:
   val app: HtmlElement = div(
     cls := "app-root",
-    child <-- AppState.isNavigating.combineWith(Router.splitter.signal).map:
-      case (true, _)     => navigationLoader
-      case (false, view) => view
-  )
+    child <--
+      AppState
+        .isNavigating
+        .combineWith(Router.splitter.signal)
+        .map:
+          case (true, _) =>
+            navigationLoader
+          case (false, view) =>
+            view)
 
   private def navigationLoader: HtmlElement = div(
     cls := "nav-loader",
-    div(cls := "loader-icon brand-pulse",
-      img(src := "/brand-icon.svg", cls := "brand-icon", alt := "Loading"))
-  )
+    div(
+      cls := "loader-icon brand-pulse",
+      img(src := "/brand-icon.svg", cls := "brand-icon", alt := "Loading")))
 
   /** Extract captive portal params from the UniFi redirect URL. */
   private def parseCaptivePortalHeaders(): Map[String, String] =
     val params = new dom.URLSearchParams(dom.window.location.search)
-    List(
-      "id"   -> "X-Client-Mac",
-      "ap"   -> "X-Ap-Mac",
-      "url"  -> "X-Redirect-Url",
-      "ssid" -> "X-Ssid"
-    ).flatMap: (urlParam, headerName) =>
-      Option(params.get(urlParam)).filter(_.nonEmpty).map(headerName -> _)
-    .toMap
+    List("id" -> "X-Client-Mac", "ap" -> "X-Ap-Mac", "url" -> "X-Redirect-Url", "ssid" -> "X-Ssid")
+      .flatMap: (urlParam, headerName) =>
+        Option(params.get(urlParam)).filter(_.nonEmpty).map(headerName -> _)
+      .toMap
 
   /** Check the server-side phase and redirect if the current URL doesn't match. This ensures users
     * entering via direct URLs (e.g., /question, /final) are redirected to the correct phase.
@@ -62,10 +63,12 @@ object App:
   def syncPhaseOnLoad(): Unit =
     val headers = parseCaptivePortalHeaders()
     Runtime.run:
-      ApiClient.getStatus(headers).map:
-        case Right(status) =>
-          i18n.I18nClient.setLocale(status.locale)
-          Router.syncWithPhase(status.phase)
-        case Left(_) =>
-          ()
+      ApiClient
+        .getStatus(headers)
+        .map:
+          case Right(status) =>
+            i18n.I18nClient.setLocale(status.locale)
+            Router.syncWithPhase(status.phase)
+          case Left(_) =>
+            ()
 end App

@@ -81,14 +81,16 @@ object AdvertiserVideoSurveyView:
     div(cls := "questions-list", questionCard(survey)))
 
   private def loadQuestion(): Unit = Runtime.run:
-    ApiClient.getNextAdvertiserSurvey().map:
-      case Right(AdvertiserSurveyResponse.Survey(survey)) =>
-        AppState.setCurrentAdvertiserSurvey(survey)
-      case Right(AdvertiserSurveyResponse.Step(nextStep)) =>
-        AppState.setPhase(nextStep.phase)
-        Router.syncWithPhase(nextStep.phase)
-      case Left(_) =>
-        ()
+    ApiClient
+      .getNextAdvertiserSurvey()
+      .map:
+        case Right(AdvertiserSurveyResponse.Survey(survey)) =>
+          AppState.setCurrentAdvertiserSurvey(survey)
+        case Right(AdvertiserSurveyResponse.Step(nextStep)) =>
+          AppState.setPhase(nextStep.phase)
+          Router.syncWithPhase(nextStep.phase)
+        case Left(_) =>
+          ()
 
   private def questionCard(survey: NextAdvertiserSurvey): HtmlElement =
     val cardStateSignal = isTouched
@@ -156,25 +158,24 @@ object AdvertiserVideoSurveyView:
       case QuestionType.Date(rules) =>
         renderDate(survey)
 
-  private def renderInput(rules: List[TextRule], survey: NextAdvertiserSurvey): HtmlElement =
-    input(
-      cls := "text-input",
-      typ := "text",
-      placeholder := survey.question.placeholder.map(_.value).getOrElse(""),
-      controlled(
-        value <-- textInput.signal,
-        onInput.mapToValue --> { v =>
-          textInput.set(v)
-          if v.nonEmpty then
-            answerValue.set(Some(AnswerValue.Text(v)))
-          else
-            answerValue.set(None)
-        }
-      ),
-      onBlur --> { _ =>
-        validateAnswer(survey)
+  private def renderInput(rules: List[TextRule], survey: NextAdvertiserSurvey): HtmlElement = input(
+    cls         := "text-input",
+    typ         := "text",
+    placeholder := survey.question.placeholder.map(_.value).getOrElse(""),
+    controlled(
+      value <-- textInput.signal,
+      onInput.mapToValue --> { v =>
+        textInput.set(v)
+        if v.nonEmpty then
+          answerValue.set(Some(AnswerValue.Text(v)))
+        else
+          answerValue.set(None)
       }
-    )
+    ),
+    onBlur --> { _ =>
+      validateAnswer(survey)
+    }
+  )
 
   private def renderRadio(
       options: List[QuestionOption],
@@ -233,8 +234,10 @@ object AdvertiserVideoSurveyView:
               onChange.mapToChecked --> { checked =>
                 val current = selectedIds.now()
                 val updated =
-                  if checked then current + opt.id.asString
-                  else current - opt.id.asString
+                  if checked then
+                    current + opt.id.asString
+                  else
+                    current - opt.id.asString
                 selectedIds.set(updated)
                 if updated.nonEmpty then
                   val optionIds =
@@ -248,6 +251,7 @@ object AdvertiserVideoSurveyView:
             span(cls := "checkbox-label", opt.text.value)
           )
     )
+  end renderCheckbox
 
   private def renderNumeric(survey: NextAdvertiserSurvey): HtmlElement = input(
     cls := "numeric-input",
@@ -257,10 +261,15 @@ object AdvertiserVideoSurveyView:
         try
           val num = BigDecimal(v)
           answerValue.set(Some(AnswerValue.Numeric(num)))
-        catch case _: Exception => answerValue.set(None)
-      else answerValue.set(None)
+        catch
+          case _: Exception =>
+            answerValue.set(None)
+      else
+        answerValue.set(None)
     },
-    onBlur --> { _ => validateAnswer(survey) }
+    onBlur --> { _ =>
+      validateAnswer(survey)
+    }
   )
 
   private def renderDate(survey: NextAdvertiserSurvey): HtmlElement = input(
@@ -271,10 +280,15 @@ object AdvertiserVideoSurveyView:
         try
           val date = java.time.LocalDate.parse(v)
           answerValue.set(Some(AnswerValue.DateValue(date)))
-        catch case _: Exception => answerValue.set(None)
-      else answerValue.set(None)
+        catch
+          case _: Exception =>
+            answerValue.set(None)
+      else
+        answerValue.set(None)
     },
-    onBlur --> { _ => validateAnswer(survey) }
+    onBlur --> { _ =>
+      validateAnswer(survey)
+    }
   )
 
   private def submitAnswer(survey: NextAdvertiserSurvey): Unit = answerValue
@@ -284,26 +298,28 @@ object AdvertiserVideoSurveyView:
       serverError.set(None)
 
       Runtime.run:
-        ApiClient.answerAdvertiser(answer).map:
-          case Right(AdvertiserSurveyResponse.Survey(nextSurvey)) =>
-            isSubmitting.set(false)
-            answerValue.set(None)
-            textInput.set("")
-            validationError.set(None)
-            isTouched.set(false)
-            AppState.setCurrentAdvertiserSurvey(nextSurvey)
-          case Right(AdvertiserSurveyResponse.Step(nextStep)) =>
-            AppState.setNavigating(true)
-            isSubmitting.set(false)
-            answerValue.set(None)
-            textInput.set("")
-            validationError.set(None)
-            isTouched.set(false)
-            AppState.clearCurrentAdvertiserSurvey()
-            AppState.setPhase(nextStep.phase)
-            Router.syncWithPhase(nextStep.phase)
-            AppState.setNavigating(false)
-          case Left(error) =>
-            isSubmitting.set(false)
-            serverError.set(Some(I18nClient.current.error.generic))
+        ApiClient
+          .answerAdvertiser(answer)
+          .map:
+            case Right(AdvertiserSurveyResponse.Survey(nextSurvey)) =>
+              isSubmitting.set(false)
+              answerValue.set(None)
+              textInput.set("")
+              validationError.set(None)
+              isTouched.set(false)
+              AppState.setCurrentAdvertiserSurvey(nextSurvey)
+            case Right(AdvertiserSurveyResponse.Step(nextStep)) =>
+              AppState.setNavigating(true)
+              isSubmitting.set(false)
+              answerValue.set(None)
+              textInput.set("")
+              validationError.set(None)
+              isTouched.set(false)
+              AppState.clearCurrentAdvertiserSurvey()
+              AppState.setPhase(nextStep.phase)
+              Router.syncWithPhase(nextStep.phase)
+              AppState.setNavigating(false)
+            case Left(error) =>
+              isSubmitting.set(false)
+              serverError.set(Some(I18nClient.current.error.generic))
 end AdvertiserVideoSurveyView

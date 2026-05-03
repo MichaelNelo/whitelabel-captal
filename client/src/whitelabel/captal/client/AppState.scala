@@ -27,12 +27,13 @@ object AppState:
 
   // Current advertiser survey
   private val currentAdvertiserSurveyVar: Var[Option[NextAdvertiserSurvey]] = Var(None)
-  val currentAdvertiserSurvey: Signal[Option[NextAdvertiserSurvey]] = currentAdvertiserSurveyVar.signal
+  val currentAdvertiserSurvey: Signal[Option[NextAdvertiserSurvey]] =
+    currentAdvertiserSurveyVar.signal
 
   def getCurrentAdvertiserSurvey: Option[NextAdvertiserSurvey] = currentAdvertiserSurveyVar.now()
 
-  def setCurrentAdvertiserSurvey(survey: NextAdvertiserSurvey): Unit =
-    currentAdvertiserSurveyVar.set(Some(survey))
+  def setCurrentAdvertiserSurvey(survey: NextAdvertiserSurvey): Unit = currentAdvertiserSurveyVar
+    .set(Some(survey))
 
   def clearCurrentAdvertiserSurvey(): Unit = currentAdvertiserSurveyVar.set(None)
 
