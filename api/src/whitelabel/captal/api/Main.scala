@@ -3,6 +3,7 @@ package whitelabel.captal.api
 import com.typesafe.config.ConfigFactory
 import io.getquill.jdbczio.Quill
 import sttp.tapir.server.ziohttp.ZioHttpInterpreter
+import sttp.tapir.stringToPath
 import sttp.tapir.ztapir.{RichZServerEndpoint, ZServerEndpoint}
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Event, EventHandler, Flow, NextStep, Phase}
@@ -21,7 +22,11 @@ import whitelabel.captal.infra.eventhandlers.{
   TransactionalEventHandler,
   UserPersistenceHandler
 }
-import whitelabel.captal.infra.repositories.{SurveyRepositoryQuill, UserRepositoryQuill, VideoRepositoryQuill}
+import whitelabel.captal.infra.repositories.{
+  SurveyRepositoryQuill,
+  UserRepositoryQuill,
+  VideoRepositoryQuill
+}
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.session.{SessionContext, SessionService}
 import zio.*
@@ -49,12 +54,14 @@ object Main extends ZIOAppDefault:
         devEndpoints = c.getBoolean("server.dev-endpoints"),
         locationSlug = Option(c.getString("location.slug")).filter(_.nonEmpty),
         provisionDir = Option(c.getString("provision.dir")).filter(_.nonEmpty),
-        sharedDir = Option(c.getString("shared.dir")).filter(_.nonEmpty))
+        sharedDir = Option(c.getString("shared.dir")).filter(_.nonEmpty)
+      )
 
   // ─── Phase transitions ────────────────────────────────────────────────────────
 
   private val nextPhaseAfterIdentificationQuestion: Phase = Phase.AdvertiserVideo
-  private val nextStepAfterIdentificationQuestion: NextStep = NextStep(nextPhaseAfterIdentificationQuestion)
+  private val nextStepAfterIdentificationQuestion: NextStep = NextStep(
+    nextPhaseAfterIdentificationQuestion)
   private val nextPhaseAfterVideo: Phase = Phase.AdvertiserVideoSurvey
 
   // ─── Location-aware layers ────────────────────────────────────────────────────
@@ -62,7 +69,8 @@ object Main extends ZIOAppDefault:
   private def resolveLocationId: ZIO[ServerSettings & LocationService, Throwable, Option[String]] =
     ZIO.serviceWithZIO[ServerSettings]: settings =>
       settings.locationSlug match
-        case None => ZIO.succeed(None)
+        case None =>
+          ZIO.succeed(None)
         case Some(slug) =>
           LocationService
             .resolveSlug(slug)
@@ -70,15 +78,17 @@ object Main extends ZIOAppDefault:
             .tap(id => ZIO.logInfo(s"Resolved location slug '$slug' -> $id"))
             .map(Some(_))
 
-  private val sessionServiceLayer: ZLayer[QuillSqlite & LocationService & ServerSettings, Throwable, SessionService] =
-    ZLayer.fromZIO:
+  private val sessionServiceLayer
+      : ZLayer[QuillSqlite & LocationService & ServerSettings, Throwable, SessionService] = ZLayer
+    .fromZIO:
       for
         quill      <- ZIO.service[QuillSqlite]
         locationId <- resolveLocationId
       yield SessionService(quill, locationId)
 
-  private val localeServiceLayer: ZLayer[QuillSqlite & LocationService & ServerSettings, Throwable, LocaleService] =
-    ZLayer.fromZIO:
+  private val localeServiceLayer
+      : ZLayer[QuillSqlite & LocationService & ServerSettings, Throwable, LocaleService] = ZLayer
+    .fromZIO:
       for
         quill      <- ZIO.service[QuillSqlite]
         locationId <- resolveLocationId
@@ -86,67 +96,110 @@ object Main extends ZIOAppDefault:
 
   // ─── Event handling & flows ───────────────────────────────────────────────────
 
-  private val eventHandlerLayer: ZLayer[QuillSqlite & SessionContext, Nothing, EventHandler[Task, Event]] =
-    ZLayer.fromFunction: (quill: QuillSqlite, ctx: SessionContext) =>
+  private val eventHandlerLayer
+      : ZLayer[QuillSqlite & SessionContext, Nothing, EventHandler[Task, Event]] = ZLayer
+    .fromFunction: (quill: QuillSqlite, ctx: SessionContext) =>
       val dbHandler = EventLogHandler(ctx)
         .andThen(AnswerPersistenceHandler(ctx))
         .andThen(UserPersistenceHandler(ctx))
-        .andThen(SessionPhaseHandler(ctx, nextPhaseAfterIdentificationQuestion, nextPhaseAfterVideo))
+        .andThen(
+          SessionPhaseHandler(ctx, nextPhaseAfterIdentificationQuestion, nextPhaseAfterVideo))
         .andThen(SessionSurveyHandler(ctx))
         .andThen(SessionVideoHandler(ctx))
         .andThen(SurveyProgressHandler())
       TransactionalEventHandler(dbHandler, quill)
 
-  private val answerEmailFlowLayer: ZLayer[
-    SurveyRepository[Task] & EventHandler[Task, Event], Nothing,
-    Flow.Aux[Task, AnswerEmailCommand, NextStep]] = ZLayer.fromFunction:
-    (surveyRepo: SurveyRepository[Task], eventHandler: EventHandler[Task, Event]) =>
-      Flow(AnswerEmailHandler(surveyRepo, nextStepAfterIdentificationQuestion), eventHandler)
+  private val answerEmailFlowLayer: ZLayer[SurveyRepository[
+    Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, AnswerEmailCommand, NextStep]] =
+    ZLayer.fromFunction:
+      (surveyRepo: SurveyRepository[Task], eventHandler: EventHandler[Task, Event]) =>
+        Flow(AnswerEmailHandler(surveyRepo, nextStepAfterIdentificationQuestion), eventHandler)
 
   private val answerProfilingFlowLayer: ZLayer[
-    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event], Nothing,
+    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
+    Nothing,
     Flow.Aux[Task, AnswerProfilingCommand, NextStep]] = ZLayer.fromFunction:
-    (surveyRepo: SurveyRepository[Task], userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
-      Flow(AnswerProfilingHandler(surveyRepo, userRepo, nextStepAfterIdentificationQuestion), eventHandler)
+    (
+        surveyRepo: SurveyRepository[Task],
+        userRepo: UserRepository[Task],
+        eventHandler: EventHandler[Task, Event]) =>
+      Flow(
+        AnswerProfilingHandler(surveyRepo, userRepo, nextStepAfterIdentificationQuestion),
+        eventHandler)
 
   private val answerLocationFlowLayer: ZLayer[
-    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event], Nothing,
+    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
+    Nothing,
     Flow.Aux[Task, AnswerLocationCommand, NextStep]] = ZLayer.fromFunction:
-    (surveyRepo: SurveyRepository[Task], userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
-      Flow(AnswerLocationHandler(surveyRepo, userRepo, nextStepAfterIdentificationQuestion), eventHandler)
+    (
+        surveyRepo: SurveyRepository[Task],
+        userRepo: UserRepository[Task],
+        eventHandler: EventHandler[Task, Event]) =>
+      Flow(
+        AnswerLocationHandler(surveyRepo, userRepo, nextStepAfterIdentificationQuestion),
+        eventHandler)
 
   private val nextSurveyFlowLayer: ZLayer[
-    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event], Nothing,
-    Flow.Aux[Task, ProvideNextIdentificationSurveyCommand.type, ProvideNextIdentificationSurveyHandler.Response]
+    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[
+      Task,
+      ProvideNextIdentificationSurveyCommand.type,
+      ProvideNextIdentificationSurveyHandler.Response]
   ] = ZLayer.fromFunction:
-    (surveyRepo: SurveyRepository[Task], userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
-      Flow(ProvideNextIdentificationSurveyHandler(surveyRepo, userRepo, nextPhaseAfterIdentificationQuestion), eventHandler)
+    (
+        surveyRepo: SurveyRepository[Task],
+        userRepo: UserRepository[Task],
+        eventHandler: EventHandler[Task, Event]) =>
+      Flow(
+        ProvideNextIdentificationSurveyHandler(
+          surveyRepo,
+          userRepo,
+          nextPhaseAfterIdentificationQuestion),
+        eventHandler)
 
   private val nextVideoFlowLayer: ZLayer[
-    VideoRepository[Task] & UserRepository[Task] & EventHandler[Task, Event], Nothing,
+    VideoRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
+    Nothing,
     Flow.Aux[Task, ProvideNextVideoCommand.type, ProvideNextVideoHandler.Response]
   ] = ZLayer.fromFunction:
-    (videoRepo: VideoRepository[Task], userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
+    (
+        videoRepo: VideoRepository[Task],
+        userRepo: UserRepository[Task],
+        eventHandler: EventHandler[Task, Event]) =>
       Flow(ProvideNextVideoHandler(videoRepo, userRepo, Phase.Ready), eventHandler)
 
   private val nextAdvertiserSurveyFlowLayer: ZLayer[
-    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event], Nothing,
+    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
+    Nothing,
     Flow.Aux[Task, ProvideNextAdvertiserSurveyCommand, ProvideNextAdvertiserSurveyHandler.Response]
   ] = ZLayer.fromFunction:
-    (surveyRepo: SurveyRepository[Task], userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
+    (
+        surveyRepo: SurveyRepository[Task],
+        userRepo: UserRepository[Task],
+        eventHandler: EventHandler[Task, Event]) =>
       Flow(ProvideNextAdvertiserSurveyHandler(surveyRepo, userRepo, Phase.Ready), eventHandler)
 
   private val answerAdvertiserFlowLayer: ZLayer[
-    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event], Nothing,
+    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
+    Nothing,
     Flow.Aux[Task, AnswerAdvertiserCommand, NextStep]] = ZLayer.fromFunction:
-    (surveyRepo: SurveyRepository[Task], userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
-      Flow(AnswerAdvertiserHandler(surveyRepo, userRepo, NextStep(Phase.AdvertiserVideoSurvey)), eventHandler)
+    (
+        surveyRepo: SurveyRepository[Task],
+        userRepo: UserRepository[Task],
+        eventHandler: EventHandler[Task, Event]) =>
+      Flow(
+        AnswerAdvertiserHandler(surveyRepo, userRepo, NextStep(Phase.AdvertiserVideoSurvey)),
+        eventHandler)
 
   private val markVideoWatchedFlowLayer: ZLayer[
-    VideoRepository[Task] & SessionContext & EventHandler[Task, Event], Nothing,
-    Flow.Aux[Task, MarkVideoWatchedCommand, NextStep]
-  ] = ZLayer.fromFunction:
-    (videoRepo: VideoRepository[Task], ctx: SessionContext, eventHandler: EventHandler[Task, Event]) =>
+    VideoRepository[Task] & SessionContext & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[Task, MarkVideoWatchedCommand, NextStep]] = ZLayer.fromFunction:
+    (
+        videoRepo: VideoRepository[Task],
+        ctx: SessionContext,
+        eventHandler: EventHandler[Task, Event]) =>
       import zio.interop.catz.given
       new Flow[Task, MarkVideoWatchedCommand]:
         type Result = NextStep
@@ -155,7 +208,7 @@ object Main extends ZIOAppDefault:
             session <- ctx.getOrFail
             handler = MarkVideoWatchedHandler.withSession(videoRepo, session, nextPhaseAfterVideo)
             opResult <- handler.handle(command)
-            result <- ZIO.fromEither(
+            result   <- ZIO.fromEither(
               whitelabel.captal.core.Op.run(opResult).left.map(Flow.HandlerError(_)))
             (events, value) = result
             _ <- eventHandler.handle(events)
@@ -165,36 +218,52 @@ object Main extends ZIOAppDefault:
 
   type FullEnv =
     SessionContext & SessionService & LocaleService & QuillSqlite &
-      SurveyRoutes.AnswerEmailFlowType &
-      SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
-      SurveyRoutes.NextSurveyFlowType & VideoRoutes.NextVideoFlowType &
-      VideoRoutes.MarkVideoWatchedFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
+      SurveyRoutes.AnswerEmailFlowType & SurveyRoutes.AnswerProfilingFlowType &
+      SurveyRoutes.AnswerLocationFlowType & SurveyRoutes.NextSurveyFlowType &
+      VideoRoutes.NextVideoFlowType & VideoRoutes.MarkVideoWatchedFlowType &
+      AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType
 
-  private def endpoints(devEndpoints: Boolean): List[ZServerEndpoint[FullEnv, Any]] =
+  private def endpoints(
+      devEndpoints: Boolean,
+      locationSlug: Option[String]): List[ZServerEndpoint[FullEnv, Any]] =
     val base =
-      HealthRoutes.routes.map(_.widen[FullEnv]) ++
-      SurveyRoutes.routes.map(_.widen[FullEnv]) ++
-      LocaleRoutes.routes.map(_.widen[FullEnv]) ++
-      VideoRoutes.routes.map(_.widen[FullEnv]) ++
-      AdvertiserSurveyRoutes.routes.map(_.widen[FullEnv])
-    if devEndpoints then base ++ LocaleRoutes.devRoutes.map(_.widen[FullEnv]) else base
+      HealthRoutes.routes.map(_.widen[FullEnv]) ++ SurveyRoutes.routes.map(_.widen[FullEnv]) ++
+        LocaleRoutes.routes.map(_.widen[FullEnv]) ++ VideoRoutes.routes.map(_.widen[FullEnv]) ++
+        AdvertiserSurveyRoutes.routes.map(_.widen[FullEnv])
+    val withDev =
+      if devEndpoints then
+        base ++ LocaleRoutes.devRoutes.map(_.widen[FullEnv])
+      else
+        base
+    locationSlug match
+      case Some(slug) => withDev.map(_.prependSecurityIn(slug))
+      case None       => withDev
 
-  private def apiRoutes(devEndpoints: Boolean) = ZioHttpInterpreter().toHttp(endpoints(devEndpoints))
+  private def apiRoutes(devEndpoints: Boolean, locationSlug: Option[String]) =
+    ZioHttpInterpreter().toHttp(endpoints(devEndpoints, locationSlug))
 
-  private def loggingMiddleware[R]: Middleware[R] = new Middleware[R]:
-    def apply[Env1 <: R, Err](routes: Routes[Env1, Err]): Routes[Env1, Err] =
-      routes.transform[Env1]: handler =>
-        zio.http.Handler.fromFunctionZIO[Request]: request =>
-          val startTime = java.lang.System.currentTimeMillis()
-          handler
-            .runZIO(request)
-            .tap: response =>
-              val duration = java.lang.System.currentTimeMillis() - startTime
-              ZIO.logInfo(s"${request.method} ${request.url.path} -> ${response.status.code} (${duration}ms)")
-            .tapError: error =>
-              val duration = java.lang.System.currentTimeMillis() - startTime
-              ZIO.logError(s"${request.method} ${request.url.path} -> ERROR (${duration}ms): $error")
+  private def loggingMiddleware[R]: Middleware[R] =
+    new Middleware[R]:
+      def apply[Env1 <: R, Err](routes: Routes[Env1, Err]): Routes[Env1, Err] = routes.transform[
+        Env1]: handler =>
+        zio
+          .http
+          .Handler
+          .fromFunctionZIO[Request]: request =>
+            val startTime = java.lang.System.currentTimeMillis()
+            handler
+              .runZIO(request)
+              .tap: response =>
+                val duration = java.lang.System.currentTimeMillis() - startTime
+                ZIO.logInfo(
+                  s"${request.method} ${request.url.path} -> ${response
+                      .status
+                      .code} (${duration}ms)")
+              .tapError: error =>
+                val duration = java.lang.System.currentTimeMillis() - startTime
+                ZIO.logError(
+                  s"${request.method} ${request.url.path} -> ERROR (${duration}ms): $error")
 
   private def devStaticRoutes: Routes[Any, Response] = Routes(
     Method.GET / "assets" / "styles.css" ->
@@ -212,50 +281,62 @@ object Main extends ZIOAppDefault:
   ).handleError(e => Response.internalServerError(e.getMessage))
 
   private def spaCatchAllRoutes: Routes[Any, Response] =
-    val serveIndex = zio.http.Handler.fromFunctionZIO[Request]: _ =>
-      ZIO
-        .attemptBlocking(java.nio.file.Files.readAllBytes(java.io.File("client/index.html").toPath))
-        .map(bytes => Response(body = Body.fromArray(bytes), headers = Headers(Header.ContentType(MediaType.text.html))))
-        .orElse(ZIO.succeed(Response.notFound))
+    val serveIndex = zio
+      .http
+      .Handler
+      .fromFunctionZIO[Request]: _ =>
+        ZIO
+          .attemptBlocking(
+            java.nio.file.Files.readAllBytes(java.io.File("client/index.html").toPath))
+          .map(bytes =>
+            Response(
+              body = Body.fromArray(bytes),
+              headers = Headers(Header.ContentType(MediaType.text.html))))
+          .orElse(ZIO.succeed(Response.notFound))
     Routes(
       Method.GET / ""         -> serveIndex,
       Method.GET / "question" -> serveIndex,
       Method.GET / "video"    -> serveIndex,
       Method.GET / "survey"   -> serveIndex,
-      Method.GET / "ready"    -> serveIndex)
+      Method.GET / "ready"    -> serveIndex
+    )
+  end spaCatchAllRoutes
 
-  private def routes(devMode: Boolean, devEndpoints: Boolean): Routes[FullEnv, Response] =
+  private def routes(
+      devMode: Boolean,
+      devEndpoints: Boolean,
+      locationSlug: Option[String]): Routes[FullEnv, Response] =
+    val api = apiRoutes(devEndpoints, locationSlug)
     val baseRoutes =
-      if devMode then devStaticRoutes ++ apiRoutes(devEndpoints) ++ spaCatchAllRoutes
-      else apiRoutes(devEndpoints)
+      if devMode then
+        devStaticRoutes ++ api ++ spaCatchAllRoutes
+      else
+        api
     baseRoutes @@ loggingMiddleware
 
   // ─── App layer composition ────────────────────────────────────────────────────
 
-  /** LocationService layer that runs provisioning first, ensuring the location
-    * exists in the DB before any slug resolution.
+  /** LocationService layer that runs location provisioning first, ensuring the location exists in
+    * the DB before any slug resolution. Shared provisioning (surveys + advertisers) is handled
+    * exclusively by the ephemeral task launched from `captal shared push`.
     */
-  private val locationServiceWithProvisioning: ZLayer[ServerSettings & QuillSqlite, Throwable, LocationService] =
-    ZLayer.fromZIO:
-      for
-        settings <- ZIO.service[ServerSettings]
-        quill    <- ZIO.service[QuillSqlite]
-        // 1. Shared provisioning (surveys + advertisers)
-        _ <- settings.sharedDir match
-          case Some(dir) => ProvisionService.runShared(quill, dir)
-          case None      => ZIO.logInfo("No SHARED_DIR configured, skipping shared provisioning")
-        // 2. Location provisioning (location, i18n, videos, promos)
-        _ <- (settings.provisionDir, settings.locationSlug) match
+  private val locationServiceWithProvisioning
+      : ZLayer[ServerSettings & QuillSqlite, Throwable, LocationService] = ZLayer.fromZIO:
+    for
+      settings <- ZIO.service[ServerSettings]
+      quill    <- ZIO.service[QuillSqlite]
+      _ <-
+        (settings.provisionDir, settings.locationSlug) match
           case (Some(dir), Some(slug)) =>
             ProvisionService.run(quill, dir, slug)
           case (Some(_), None) =>
             ZIO.fail(new RuntimeException("PROVISION_DIR set but LOCATION_SLUG is missing"))
           case _ =>
             ZIO.logInfo("No PROVISION_DIR configured, skipping provisioning")
-      yield LocationService(quill)
+    yield LocationService(quill)
 
-  private val appLayers: ZLayer[ServerSettings, Throwable, FullEnv & Server.Config] =
-    ZLayer.makeSome[ServerSettings, FullEnv & Server.Config](
+  private val appLayers: ZLayer[ServerSettings, Throwable, FullEnv & Server.Config] = ZLayer
+    .makeSome[ServerSettings, FullEnv & Server.Config](
       SessionContext.make,
       RqliteDataSource.layer,
       Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase),
@@ -279,15 +360,18 @@ object Main extends ZIOAppDefault:
 
   // ─── Startup ──────────────────────────────────────────────────────────────────
 
-  override val run: ZIO[Any, Throwable, Nothing] =
-    ZIO
-      .serviceWithZIO[ServerSettings]: settings =>
-        val routeInfos = endpoints(settings.devEndpoints).map: e =>
-          s"  ${e.endpoint.method.map(_.method).getOrElse("*")} ${e.endpoint.showPathTemplate()}"
-        ZIO.logInfo(s"Server starting on ${settings.config.address.getHostString}:${settings.config.address.getPort}") *>
-          ZIO.logInfo(s"Dev mode: ${settings.devMode}, Dev endpoints: ${settings.devEndpoints}") *>
-          ZIO.logInfo(s"Mounted routes:\n${routeInfos.mkString("\n")}") *>
-          Server.serve(routes(settings.devMode, settings.devEndpoints))
-      .provide(serverSettingsLayer, Server.live, appLayers)
+  override val run: ZIO[Any, Throwable, Nothing] = ZIO
+    .serviceWithZIO[ServerSettings]: settings =>
+      val routeInfos = endpoints(settings.devEndpoints, settings.locationSlug).map: e =>
+        s"  ${e.endpoint.method.map(_.method).getOrElse("*")} ${e.endpoint.showPathTemplate()}"
+      ZIO.logInfo(
+        s"Server starting on ${settings.config.address.getHostString}:${settings
+            .config
+            .address
+            .getPort}") *>
+        ZIO.logInfo(s"Dev mode: ${settings.devMode}, Dev endpoints: ${settings.devEndpoints}") *>
+        ZIO.logInfo(s"Mounted routes:\n${routeInfos.mkString("\n")}") *>
+        Server.serve(routes(settings.devMode, settings.devEndpoints, settings.locationSlug))
+    .provide(serverSettingsLayer, Server.live, appLayers)
 
 end Main

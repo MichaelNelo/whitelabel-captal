@@ -9,7 +9,12 @@ import whitelabel.captal.core.application.{Flow, NextStep, Phase}
 import whitelabel.captal.endpoints.MarkVideoWatchedRequest.given
 import whitelabel.captal.endpoints.VideoResponse.given
 import whitelabel.captal.endpoints.VideoWatchedResponse.given
-import whitelabel.captal.endpoints.{ApiError, MarkVideoWatchedRequest, VideoResponse, VideoWatchedResponse}
+import whitelabel.captal.endpoints.{
+  ApiError,
+  MarkVideoWatchedRequest,
+  VideoResponse,
+  VideoWatchedResponse
+}
 import whitelabel.captal.infra.session.{SessionContext, SessionService}
 import zio.*
 
@@ -53,14 +58,14 @@ object VideoRoutes:
                       new Exception(s"Defect: ${c.prettyPrint}")
                 toApiError(error).flatMap(ZIO.fail(_))
             // Update phase when no video is available
-            _ <- response match
-              case VideoResponse.Step(step) =>
-                ZIO
-                  .serviceWithZIO[SessionService](
-                    _.setPhase(session.sessionId, step.phase))
-                  .mapError(ApiError.fromThrowable)
-              case _ =>
-                ZIO.unit
+            _ <-
+              response match
+                case VideoResponse.Step(step) =>
+                  ZIO
+                    .serviceWithZIO[SessionService](_.setPhase(session.sessionId, step.phase))
+                    .mapError(ApiError.fromThrowable)
+                case _ =>
+                  ZIO.unit
           yield response
   end NextVideo
 
@@ -101,6 +106,5 @@ object VideoRoutes:
 
   def routes: List[ZServerEndpoint[FullEnv, Any]] = List(
     NextVideo.route.widen[FullEnv],
-    MarkWatched.route.widen[FullEnv]
-  )
+    MarkWatched.route.widen[FullEnv])
 end VideoRoutes

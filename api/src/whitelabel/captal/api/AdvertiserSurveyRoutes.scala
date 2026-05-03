@@ -53,18 +53,20 @@ object AdvertiserSurveyRoutes:
                   .catchAllCause: cause =>
                     val error =
                       cause.failureOrCause match
-                        case Left(e)  => e
-                        case Right(c) => new Exception(s"Defect: ${c.prettyPrint}")
+                        case Left(e) =>
+                          e
+                        case Right(c) =>
+                          new Exception(s"Defect: ${c.prettyPrint}")
                     toApiError(error).flatMap(ZIO.fail(_))
                 // Update phase when transitioning away from AdvertiserVideoSurvey
-                _ <- response match
-                  case AdvertiserSurveyResponse.Step(step) =>
-                    ZIO
-                      .serviceWithZIO[SessionService](
-                        _.setPhase(session.sessionId, step.phase))
-                      .mapError(ApiError.fromThrowable)
-                  case _ =>
-                    ZIO.unit
+                _ <-
+                  response match
+                    case AdvertiserSurveyResponse.Step(step) =>
+                      ZIO
+                        .serviceWithZIO[SessionService](_.setPhase(session.sessionId, step.phase))
+                        .mapError(ApiError.fromThrowable)
+                    case _ =>
+                      ZIO.unit
               yield response
   end NextAdvertiserSurvey
 
@@ -93,13 +95,14 @@ object AdvertiserSurveyRoutes:
                   .catchAllCause: cause =>
                     val error =
                       cause.failureOrCause match
-                        case Left(e)  => e
-                        case Right(c) => new Exception(s"Defect: ${c.prettyPrint}")
+                        case Left(e) =>
+                          e
+                        case Right(c) =>
+                          new Exception(s"Defect: ${c.prettyPrint}")
                     toApiError(error).flatMap(ZIO.fail(_))
                 // One question per video — go to Ready after answering
                 _ <- ZIO
-                  .serviceWithZIO[SessionService](
-                    _.setPhase(session.sessionId, Phase.Ready))
+                  .serviceWithZIO[SessionService](_.setPhase(session.sessionId, Phase.Ready))
                   .mapError(ApiError.fromThrowable)
               yield AdvertiserSurveyResponse.Step(NextStep(Phase.Ready))
   end AnswerAdvertiser
@@ -109,6 +112,5 @@ object AdvertiserSurveyRoutes:
 
   def routes: List[ZServerEndpoint[FullEnv, Any]] = List(
     NextAdvertiserSurvey.route.widen[FullEnv],
-    AnswerAdvertiser.route.widen[FullEnv]
-  )
+    AnswerAdvertiser.route.widen[FullEnv])
 end AdvertiserSurveyRoutes
