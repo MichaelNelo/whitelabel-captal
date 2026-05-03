@@ -17,23 +17,25 @@ El proyecto utiliza arquitectura **Event Sourcing** y esta implementado en **Sca
 ### Completado ✅
 - **Backend**: API REST completa con Tapir + ZIO
 - **Event Sourcing**: Handlers de eventos transaccionales
-- **Base de datos**: SQLite con Quill, migraciones con Flyway
-- **Cliente web**: Laminar + Scala.js con routing (Waypoint)
-- **i18n**: Sistema de traducciones (ES/EN) cargadas desde BD
+- **Base de datos**: Rqlite con Quill (sustituye a SQLite local), migraciones con Flyway (V1–V13)
+- **Multi-tenancy**: Aislamiento por `location_id` en sesiones, i18n, surveys, advertisers, videos
+- **Provisioning system**: Sync declarativo de YAML a BD con manifest hashing, soft-delete e idempotencia
+- **CLI (`captal`)**: Inicializa proyecto, gestiona locations, sube videos/promos, deploya a AWS
+- **Cliente web**: Laminar + Scala.js con routing (Waypoint), HTTP via `dom.fetch`
+- **i18n**: Sistema de traducciones (ES/EN) cargadas desde BD por location
 - **Cross-compilation**: Core y endpoints compartidos entre JVM y JS
 - **Validacion client-side**: Usa logica del core via `Op.run`
-- **Tests E2E API**: 34 tests pasando (session, surveys, validation, phase validation)
+- **Fase de video publicitario** (AdvertiserVideo) + tests E2E
+- **Fase de encuesta de anunciante** (AdvertiserQuestion)
+- **Loading screen** en todas las transiciones de vista
 - **Phase validation**: Endpoints protegidos por fase con Tapir partial server endpoints
-- **Docker**: Multi-stage Dockerfile para desarrollo (`dev.Dockerfile`)
+- **Docker**: `Dockerfile.api` y `Dockerfile.provision` (imagenes base) + Mill commands para bundle del cliente
+- **Guix manifest**: Empaqueta el assembly del CLI (`manifest.scm`)
 - **BuildInfo**: Variables de entorno en build time para cliente (ENVIRONMENT)
-
-### En Progreso 🚧
-- **IdentificationQuestionView**: Diseño visual necesita iteracion (ver TODOs)
+- **Skills portables**: 8 skills en `.agents/skills/<name>/SKILL.md` (compatible Claude Code + OpenCode)
 
 ### Pendiente 📋
-- Fase de video publicitario (AdvertiserVideo)
-- Fase de encuesta de anunciante (AdvertiserQuestion)
-- Fase Ready (acceso WiFi)
+- Fase Ready completa (acceso WiFi tras encuesta)
 - Integracion con controlador de hotspot
 
 ---
@@ -78,101 +80,130 @@ Usuario escanea QR / accede al hotspot
 | Mill | Build tool |
 | ZIO | Runtime, efectos, layers |
 | Quill | Acceso a base de datos (con MappedEncoding) |
+| Rqlite | Base de datos distribuida (driver JDBC) |
 | Tapir | Definicion de endpoints HTTP |
 | Cats | Typeclasses (Monad, Parallel) |
+| Laminar + Waypoint | UI reactiva + routing en cliente |
+| zio-cli | CLI `captal` para provisioning y deploy |
+| AWS SDK v2 | S3 + ECS + ELBv2 desde el CLI |
 
 ### Estructura de Modulos
 
 ```
 whitelabel-captal/
-├── build.mill                    # Configuracion Mill (genera BuildInfo para cliente)
-├── .mill-version                 # Version de Mill (1.1.2)
+├── build.mill                    # Mill build (cross-compile, BuildInfo, rqlite container)
+├── .mill-version                 # Version de Mill
 ├── mill                          # Mill launcher (tracked en repo)
-├── dev.Dockerfile                # Multi-stage build para desarrollo
+├── Dockerfile.api                # Base image captal-api (API server)
+├── Dockerfile.provision          # Base image captal-provision (task efimera)
+├── manifest.scm                  # Guix manifest (incluye assembly del CLI)
 ├── .dockerignore                 # Exclusiones para Docker build
 ├── AGENTS.md                     # Este archivo
-├── core/                         # Dominio y logica de negocio
-│   ├── src/
-│   │   └── whitelabel/captal/core/
-│   │       ├── Op.scala          # Tipo Op[E, Er, A] para operaciones
-│   │       ├── application/      # Handlers, eventos, fases
-│   │       │   ├── commands/     # Comandos y handlers
-│   │       │   ├── Error.scala   # Errores de aplicacion
-│   │       │   ├── Event.scala   # Eventos de aplicacion
-│   │       │   ├── EventHandler.scala  # Trait para event handlers
-│   │       │   ├── Flow.scala    # Ejecutor de comandos
-│   │       │   └── phase.scala   # Enum de fases del usuario
-│   │       ├── infrastructure/   # Traits de repositorios y SessionData
-│   │       ├── survey/           # Agregado Survey
-│   │       └── user/             # Agregado User
-│   └── test/
-├── infra/                        # Implementaciones con Quill
-│   ├── src/
-│   │   └── whitelabel/captal/infra/
-│   │       ├── schema.scala             # MappedEncoding para tipos de dominio
-│   │       ├── rows.scala               # Row types (usan tipos de dominio)
-│   │       ├── DbEventHandler.scala     # Trait para handlers transaccionales
-│   │       ├── TransactionalEventHandler.scala  # Wrapper transaccional
-│   │       ├── SessionContext.scala     # FiberRef para sesion
-│   │       ├── SessionService.scala     # Servicio de sesiones
-│   │       ├── SurveyService.scala      # Queries de progreso de surveys
-│   │       ├── SurveyRepositoryQuill.scala
-│   │       ├── UserRepositoryQuill.scala
-│   │       └── eventhandlers/           # Event handlers
-│   │           ├── AnswerPersistenceHandler.scala
-│   │           ├── UserPersistenceHandler.scala
-│   │           ├── SessionPhaseHandler.scala
-│   │           ├── SessionSurveyHandler.scala
-│   │           └── SurveyProgressHandler.scala
-│   └── test/
-│       └── whitelabel/captal/infra/
-│           ├── E2ETests.scala           # Tests E2E con Tapir stub
-│           ├── TestFixtures.scala       # Fixtures de BD
-│           └── TestLayers.scala         # Layers para tests
+├── core/                         # Dominio y logica de negocio (cross-compiled JVM/JS)
+│   └── src/whitelabel/captal/core/
+│       ├── Op.scala              # Tipo Op[E, Er, A] para operaciones
+│       ├── application/          # Handlers, eventos, fases, NextStep
+│       ├── infrastructure/       # Traits de repositorios y SessionData
+│       ├── survey/               # Agregado Survey (con AdvertiserQuestion)
+│       └── user/                 # Agregado User
+├── infra/                        # Implementaciones Quill + Rqlite
+│   └── src/whitelabel/captal/infra/
+│       ├── schema/                  # MappedEncoding y SchemaMeta
+│       ├── rows.scala               # Row types con tipos de dominio
+│       ├── RqliteDataSource.scala   # DataSource para Rqlite
+│       ├── Migrate.scala            # Runner de migraciones Flyway
+│       ├── SharedProvision.scala    # Entry point para provisioning shared
+│       ├── eventhandlers/           # Handlers transaccionales
+│       ├── repositories/            # Implementaciones Quill de repos
+│       ├── services/                # LocaleService, LocationService, SurveyService
+│       ├── session/                 # SessionContext, SessionService
+│       └── provision/               # Sistema de provisioning declarativo
+│           ├── ProvisionService.scala   # Sync YAML → BD (shared y por location)
+│           ├── ProvisionPlan.scala      # Diff disk vs DB → Create/Update/Delete/Skip
+│           ├── EntityWriter.scala       # Upserts y manifest tracking
+│           ├── IdGenerator.scala        # Ids deterministicos a partir de slugs
+│           └── models.scala             # Tipos del provisioning
 ├── api/                          # Capa HTTP con Tapir
-│   ├── src/
-│   │   └── whitelabel/captal/api/
-│   │       ├── Main.scala              # Entry point, composicion de layers
-│   │       ├── SessionEndpoint.scala   # Partial server endpoints (session + phase validation)
-│   │       ├── SurveyRoutes.scala      # Implementacion de rutas survey
-│   │       └── LocaleRoutes.scala      # Rutas de i18n/locale + dev routes
+│   ├── resources/
+│   │   ├── application.conf
+│   │   └── provision/dev/        # Provisioning de desarrollo (shared/ + locations/)
+│   ├── src/whitelabel/captal/api/
+│   │   ├── Main.scala                  # Entry point, layers, ServerSettings
+│   │   ├── SessionEndpoint.scala       # Partial server endpoints (session + phase)
+│   │   ├── SurveyRoutes.scala          # Rutas de identification surveys
+│   │   ├── AdvertiserSurveyRoutes.scala # Rutas de encuesta del anunciante
+│   │   ├── VideoRoutes.scala           # Rutas de video publicitario
+│   │   ├── LocaleRoutes.scala          # i18n + dev reset
+│   │   ├── HealthRoutes.scala          # /health para ALB
+│   │   └── LocaleDetector.scala        # Detecta locale desde Accept-Language
 │   └── test/
-│       └── whitelabel/captal/api/
-│           └── suites/                 # Test suites E2E
+│       ├── resources/provision/        # Fixtures: basic, reduced, updated, updated-shared
+│       └── src/whitelabel/captal/api/
+│           ├── E2ETests.scala
+│           ├── TestFixtures.scala  TestLayers.scala  TestHelpers.scala
+│           └── suites/
+│               ├── LocaleSessionSuite.scala
 │               ├── SessionManagementSuite.scala
+│               ├── SessionIsolationSuite.scala       # Aislamiento multi-location
 │               ├── EmailSurveySuite.scala
 │               ├── SurveyProgressionSuite.scala
 │               ├── MultiQuestionSurveySuite.scala
 │               ├── ValidationSuite.scala
-│               └── PhaseValidationSuite.scala
-├── endpoints/                    # Definiciones de endpoints (cross-compiled)
-│   └── src/
-│       └── whitelabel/captal/endpoints/
-│           ├── SurveyEndpoints.scala   # Endpoints de surveys
-│           ├── LocaleEndpoints.scala   # Endpoints de i18n
-│           └── schemas.scala           # Schemas compartidos (JSON codecs)
+│               ├── PhaseValidationSuite.scala
+│               ├── VideoSuite.scala                  # Fase AdvertiserVideo
+│               ├── AdvertiserVideoSurveySuite.scala  # Fase AdvertiserQuestion
+│               └── ProvisioningSuite.scala           # ProvisionService E2E
+├── endpoints/                    # Endpoints Tapir (cross-compiled JVM/JS)
+│   └── src/whitelabel/captal/endpoints/
+│       ├── SurveyEndpoints.scala
+│       ├── AdvertiserSurveyEndpoints.scala
+│       ├── VideoEndpoints.scala
+│       ├── LocaleEndpoints.scala
+│       ├── ApiError.scala  AnswerRequest.scala  StatusResponse.scala
+│       ├── SetLocaleRequest.scala
+│       └── schemas.scala
 ├── client/                       # Cliente Laminar (Scala.js)
-│   ├── index.html                # HTML con CSS variables para theming
-│   ├── assets/
-│   │   └── styles.css            # CSS extraido (variables, animaciones)
-│   ├── STYLING.md                # Documentacion de variables CSS
-│   └── src/
-│       └── whitelabel/captal/client/
-│           ├── Main.scala              # Entry point, monta app en DOM
-│           ├── Router.scala            # Routing con Waypoint
-│           ├── AppState.scala          # Estado global (Var)
-│           ├── ApiClient.scala         # Llamadas HTTP con sttp
-│           ├── Runtime.scala           # Runtime ZIO para Scala.js
-│           ├── BuildInfo.scala         # [GENERADO] Variables de build (ENVIRONMENT)
-│           ├── i18n/
-│           │   └── I18nClient.scala    # Servicio de i18n client-side
-│           └── views/
-│               ├── Layout.scala                # Layout compartido con loading state
-│               ├── WelcomeView.scala           # Pantalla de bienvenida
-│               ├── IdentificationQuestionView.scala  # Preguntas de identificacion
-│               └── ReadyView.scala             # Pantalla final (con reset en dev)
+│   ├── index.html.template       # Template renderizado por Mill (JS_PATH/CSS_PATH)
+│   ├── assets/styles.css         # CSS extraido
+│   ├── STYLING.md
+│   └── src/whitelabel/captal/client/
+│       ├── Main.scala            # Entry point + syncPhaseOnLoad
+│       ├── Router.scala          # Routing con Waypoint
+│       ├── AppState.scala        # Estado global (Var)
+│       ├── ApiClient.scala       # Llamadas HTTP con dom.fetch (sin sttp)
+│       ├── Runtime.scala         # Runtime ZIO para Scala.js
+│       ├── BuildInfo.scala       # [GENERADO] ENVIRONMENT, isDevMode
+│       ├── i18n/I18nClient.scala
+│       └── views/
+│           ├── Layout.scala                       # Layout con loading state
+│           ├── WelcomeView.scala
+│           ├── IdentificationQuestionView.scala
+│           ├── VideoView.scala                    # Reproductor del video publicitario
+│           ├── AdvertiserSurveyView.scala         # Encuesta tras video
+│           └── ReadyView.scala
+├── cli/                          # CLI `captal` (zio-cli)
+│   ├── resources/templates/      # Templates copiados por `captal init`/`locations add`
+│   │   ├── shared/               # captal.yaml, surveys/, advertisers/
+│   │   ├── location/             # i18n, location.yaml, assets
+│   │   ├── video/                # promo.yaml, video.yaml, surveys
+│   │   └── skills/               # 8 skills (configure-aws, add-survey, etc.)
+│   └── src/whitelabel/captal/cli/
+│       ├── Main.scala            # zio-cli command tree
+│       ├── CaptalConfig.scala    # Config leida desde shared/captal.yaml
+│       ├── AwsLayers.scala       # Layers ZIO con clientes AWS
+│       ├── CliError.scala
+│       ├── Output.scala          # Helpers de impresion (colores)
+│       ├── commands/
+│       │   ├── InitCommand.scala            # `captal init [--claude]`
+│       │   ├── SharedPushCommand.scala      # `captal shared push`
+│       │   ├── LocationsAddCommand.scala    # `captal locations add <slug>`
+│       │   ├── PushCommand.scala            # `captal locations push <slug>`
+│       │   └── VideoCommand.scala           # `captal video add` y `add-promo`
+│       └── templates/
+│           ├── Catalog.scala     # Lista de templates
+│           └── Template.scala    # Modelo de template
 └── docs/
-    └── EVENT_SOURCING_SUMMARY.md # Detalle del modelo ES
+    └── EVENT_SOURCING_SUMMARY.md
 ```
 
 ---
@@ -397,23 +428,19 @@ object SurveyRepositoryQuill:
 ```scala
 // core/application/phase.scala
 enum Phase:
-  case IdentificationQuestion  // Respondiendo preguntas de identificacion
+  case Welcome                 // Pantalla de bienvenida (locale selection)
+  case IdentificationQuestion  // Respondiendo preguntas de identificacion (email/profiling/location)
   case AdvertiserVideo         // Viendo video publicitario
-  case AdvertiserQuestion      // Respondiendo encuesta del anunciante
+  case AdvertiserVideoSurvey   // Encuesta atada al video que se acaba de ver
+  case AdvertiserQuestion      // Encuesta general del anunciante
   case Ready                   // Listo para acceder a WiFi
+```
 
-object Phase:
-  def toDbString(phase: Phase): String = phase match
-    case IdentificationQuestion => "identification_question"
-    case AdvertiserVideo => "advertiser_video"
-    case AdvertiserQuestion => "advertiser_question"
-    case Ready => "ready"
+### IdentificationSurveyType
 
-  def fromDbString(s: String): Phase = s match
-    case "identification_question" => IdentificationQuestion
-    case "advertiser_video" => AdvertiserVideo
-    case "advertiser_question" => AdvertiserQuestion
-    case "ready" => Ready
+```scala
+enum IdentificationSurveyType:
+  case Email, Profiling, Location
 ```
 
 ### Agregado Survey
@@ -504,7 +531,7 @@ Todos corren en una sola transaccion via `TransactionalEventHandler`.
 
 ## API Endpoints
 
-### Survey Endpoints
+### Identification Survey Endpoints
 
 | Endpoint | Metodo | Path | Request | Response |
 |----------|--------|------|---------|----------|
@@ -514,6 +541,15 @@ Todos corren en una sola transaccion via `TransactionalEventHandler`.
 | Answer Profiling | POST | `/api/survey/profiling` | `AnswerValue` | `QuestionAnswer` |
 | Answer Location | POST | `/api/survey/location` | `AnswerValue` | `QuestionAnswer` |
 
+### Video / Advertiser Endpoints
+
+| Endpoint | Metodo | Path | Request | Response |
+|----------|--------|------|---------|----------|
+| Get Next Video | GET | `/api/video/next` | - | `VideoMetadata` |
+| Mark Watched | POST | `/api/video/watched` | - | `StatusResponse` |
+| Get Advertiser Survey | GET | `/api/advertiser-survey/next` | - | `Option[QuestionToAnswer]` |
+| Answer Advertiser Survey | POST | `/api/advertiser-survey/answer` | `AnswerValue` | `QuestionAnswer` |
+
 ### Locale/i18n Endpoints
 
 | Endpoint | Metodo | Path | Request | Response |
@@ -522,27 +558,107 @@ Todos corren en una sola transaccion via `TransactionalEventHandler`.
 | Get I18n | GET | `/api/i18n/{locale}` | - | `I18n` |
 | Set Locale | PUT | `/api/session/locale` | `SetLocaleRequest` | `StatusResponse` + Set-Cookie |
 
-### Dev-Only Endpoints (solo cuando `server.dev-mode=true`)
+### Health & Dev Endpoints
 
-| Endpoint | Metodo | Path | Request | Response |
-|----------|--------|------|---------|----------|
-| Reset Phase | POST | `/api/dev/reset-phase` | - | `StatusResponse` |
+| Endpoint | Metodo | Path | Notas |
+|----------|--------|------|-------|
+| Health | GET | `/health` | Para ALB health check |
+| Reset Phase | POST | `/api/dev/reset-phase` | Solo si `server.dev-endpoints=true` |
 
-Todos los endpoints usan autenticacion por cookie (`session_id`). La cookie se crea automaticamente en la primera request.
+Todos los endpoints usan autenticacion por cookie (`session_id`). La cookie se crea automaticamente en la primera request. La sesion ademas se asocia a un `location_id` (por subdominio o resolucion del ALB).
 
 ### Phase Validation
 
-Los endpoints de survey validan la fase del usuario:
+Los endpoints validan la fase del usuario via partial server endpoints (`SessionEndpoint.withPhase`):
 
 | Endpoint | Fases Permitidas |
 |----------|------------------|
 | `GET /api/status` | Cualquiera |
 | `GET /api/survey/next` | Welcome, IdentificationQuestion |
-| `POST /api/survey/email` | IdentificationQuestion |
-| `POST /api/survey/profiling` | IdentificationQuestion |
-| `POST /api/survey/location` | IdentificationQuestion |
+| `POST /api/survey/{email,profiling,location}` | IdentificationQuestion |
+| `GET /api/video/next` | AdvertiserVideo |
+| `POST /api/video/watched` | AdvertiserVideo |
+| `GET /api/advertiser-survey/next` | AdvertiserVideoSurvey, AdvertiserQuestion |
+| `POST /api/advertiser-survey/answer` | AdvertiserVideoSurvey, AdvertiserQuestion |
 
 Si la fase no coincide, retorna `ApiError.WrongPhase(current, expected)`.
+
+---
+
+## Provisioning System
+
+El sistema de provisioning sincroniza configuracion declarativa (YAML) con la base de datos al arranque del servidor. Es **idempotente** y soporta **soft-delete** mediante un manifest hashed.
+
+### Estructura Esperada
+
+```
+provision/<env>/
+├── shared/                      # Recursos globales (compartidos entre locations)
+│   ├── surveys/                 # email.yaml, profiling.yaml, location.yaml
+│   └── advertisers/             # <slug>.yaml
+└── locations/<slug>/            # Por location
+    ├── location.yaml
+    ├── i18n/{en,es}.yaml
+    ├── promo/<slug>.yaml        # Videos promocionales (sin advertiser)
+    └── videos/<slug>/
+        ├── video.yaml           # Referencia a advertiser + slug
+        └── surveys/<slug>.yaml  # Encuestas atadas a este video
+```
+
+### Flujo de Provisioning
+
+`ProvisionService.runShared` y `ProvisionService.run`:
+
+1. Escanea YAMLs en disco, calcula hash de cada entidad
+2. Lee manifest actual de la BD (filtrado por location)
+3. Compara → genera `Action.Create | Update | Delete | Skip`
+4. Ejecuta upserts (creates+updates) y soft-deletes en transaccion
+5. Actualiza el manifest con los nuevos hashes
+
+**Nota**: El shared provisioning es **aditivo** (no borra). El por-location SI puede borrar, pero solo entidades cuyo `location_id` coincide.
+
+---
+
+## CLI (`captal`)
+
+CLI implementado con zio-cli en el modulo `cli/`. Permite inicializar proyectos, agregar locations, subir videos a S3, y deployar a AWS (ECS + S3 + ALB).
+
+### Comandos
+
+```bash
+captal init [--claude]                          # Crea shared/, locations/, .agents/skills/
+                                                # --claude tambien crea symlink .claude/skills
+captal shared push                              # Deploy de recursos shared via ECS task
+captal locations add <slug>                     # Crea locations/<slug>/ desde template
+captal locations push <slug>                    # Deploy de location (S3 + ECS + ALB rule)
+captal video add <slug> <advertiser> <file>     # Sube video a S3 + crea video.yaml
+captal video add-promo <slug> <file>            # Sube promo a S3 + crea promo.yaml
+```
+
+### Configuracion
+
+`shared/captal.yaml` define AWS region, ECR image, bucket S3, cluster ECS, subnets/SGs, ALB listener, database URL. La skill `configure-aws` guia su llenado con comandos `aws` CLI. Si no se incluyen credenciales explicitas, el SDK usa la cadena default.
+
+### Bug conocido de zio-cli
+
+`captal --help` no lista todos los subcomandos (Issue zio-cli #448). Workaround: usar `CliConfig.default.copy(finalCheckBuiltIn = false)` en `Main.scala`. Ejecutar `captal` sin args muestra todos los comandos correctamente.
+
+---
+
+## Skills (Cross-agent)
+
+Las skills viven en `.agents/skills/<name>/SKILL.md` con frontmatter YAML (`name`, `description`, `version`). Esta ubicacion es reconocida por **Claude Code** y **OpenCode**. Con `captal init --claude` se crea ademas el symlink `.claude/skills → ../.agents/skills`.
+
+| Skill | Proposito |
+|-------|-----------|
+| `configure-aws` | Llenar `captal.yaml` con comandos AWS CLI |
+| `add-survey` | Agregar surveys a `shared/surveys/` |
+| `add-advertiser` | Agregar advertisers a `shared/advertisers/` |
+| `deploy-shared` | Ejecutar `captal shared push` |
+| `add-video` | Subir video con `captal video add` |
+| `add-promo` | Subir promo con `captal video add-promo` |
+| `edit-i18n` | Editar `i18n/{en,es}.yaml` por location |
+| `deploy-location` | Ejecutar `captal locations push` |
 
 ---
 
@@ -551,41 +667,47 @@ Si la fase no coincide, retorna `ApiError.WrongPhase(current, expected)`.
 ### E2E Tests con Tapir Stub
 
 ```scala
-// infra/test/E2ETests.scala
+// api/test/.../E2ETests.scala
 object E2ETests extends ZIOSpecDefault:
-  def spec: Spec[Any, Throwable] =
-    (suite("Identification Survey Flow")(
-      sessionManagementSuite,
-      emailSurveySuite,
-      surveyProgressionSuite,
-      multiQuestionSurveySuite,
-      validationSuite
-    ) @@ TestAspect.sequential @@ TestAspect.after(TestFixtures.clearAllData.orDie))
-      .provideShared(TestLayers.testEnv, ZLayer.fromZIO(TestFixtures.migrate.unit))
+  private val clearAndSeedNoise = TestFixtures.clearAllData *> TestFixtures.seedNoiseData
+  def spec = (
+    suite("E2E")(
+      suite("Identification Survey Flow")(
+        LocaleSessionSuite.suite,
+        SessionManagementSuite.suite,
+        EmailSurveySuite.suite,
+        SurveyProgressionSuite.suite,
+        MultiQuestionSurveySuite.suite,
+        ValidationSuite.suite,
+        PhaseValidationSuite.suite,
+        SessionIsolationSuite.suite,
+        VideoSuite.suite,
+        AdvertiserVideoSurveySuite.suite
+      ) @@ TestAspect.before(clearAndSeedNoise.orDie),
+      ProvisioningSuite.suite
+    ) @@ TestAspect.sequential
+  ).provideShared(TestLayers.testEnv, ZLayer.fromZIO(TestFixtures.migrate.unit))
 ```
 
-### Escenarios Validados
+### Suites Disponibles
 
-1. **Session Management**:
-   - Nuevo visitante recibe sesion en fase de identificacion
-   - Visitante recurrente mantiene su fase
-   - Sesion perdida con usuario existente vincula al usuario existente (no crea duplicado)
+| Suite | Cubre |
+|-------|-------|
+| `LocaleSessionSuite` | Deteccion de locale, set-locale, cookie de sesion |
+| `SessionManagementSuite` | Sesion nueva, recurrente, perdida con usuario existente |
+| `SessionIsolationSuite` | Aislamiento entre locations (multi-tenancy) |
+| `EmailSurveySuite` | Email crea usuario, transicion de fase, validacion |
+| `SurveyProgressionSuite` | Email → Profiling → Location → siguiente fase |
+| `MultiQuestionSurveySuite` | Multiples preguntas dentro de un mismo survey |
+| `ValidationSuite` | Reglas de validacion (vacio, formato) |
+| `PhaseValidationSuite` | Endpoints rechazan requests en fase incorrecta |
+| `VideoSuite` | Fase AdvertiserVideo (next, watched) |
+| `AdvertiserVideoSurveySuite` | Encuestas atadas al video y al advertiser |
+| `ProvisioningSuite` | `ProvisionService` aplica YAMLs a BD (basic, reduced, updated) |
 
-2. **Email Survey**:
-   - Usuario anonimo recibe encuesta de email como primer paso
-   - Email valido crea usuario y transiciona a fase de video
-   - Email invalido es rechazado con error de validacion
+### Rqlite en Tests
 
-3. **Survey Progression**:
-   - Usuario con email completado recibe encuesta de profiling
-   - Usuario con email y profiling completados recibe encuesta de location
-   - Usuario con todas las encuestas completadas no recibe mas encuestas
-
-4. **Multi-Question Survey**:
-   - Despues de responder primera pregunta, se ofrece siguiente pregunta del mismo survey
-
-5. **Validation Rules**:
-   - Email vacio es rechazado como campo requerido
+`build.mill` arranca un contenedor Docker de `rqlite/rqlite:8.36.2` antes de los tests (`ensureRqlite`). El driver JDBC apunta a `jdbc:rqlite:http://localhost:<port>`.
 
 ---
 
@@ -665,260 +787,147 @@ inline given MappedEncoding[String, user.Id] = MappedEncoding(user.Id.unsafe)
 # Compilar todo
 ./mill __.compile
 
-# Ejecutar tests
+# Tests (arrancan container de rqlite automaticamente)
 ./mill __.test
-
-# Solo core
 ./mill core.test
+./mill api.test                 # Incluye E2E + ProvisioningSuite
+./mill infra.test
+./mill cli.test
 
-# Solo API (incluye E2E)
-./mill api.test
-
-# Formatear codigo
+# Formatear / scalafix
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources
+./mill __.fix
 
 # Build assembly JARs
-./mill api.assembly      # -> out/api/assembly.dest/out.jar
-./mill infra.assembly    # -> out/infra/assembly.dest/out.jar
+./mill api.assembly             # -> out/api/assembly.dest/out.jar
+./mill cli.assembly             # CLI ejecutable (consumido por manifest.scm)
 
-# Compilar cliente
-./mill client.fastLinkJS                    # Production
-ENVIRONMENT=dev ./mill client.fastLinkJS    # Dev mode
+# Cliente (Mill renderiza index.html con paths del JS/CSS)
+./mill client.bundle            # Production
+ENVIRONMENT=dev ./mill client.bundle
 
-# Docker
-docker build -f dev.Dockerfile -t captal-dev .
-docker run -p 8080:8080 -v $(pwd)/captal-dev.db:/app/captal-dev.db captal-dev
+# Docker - imagenes base
+./mill api.dockerBuild   <ecr-uri>/captal-api v1.0.0
+./mill infra.dockerBuild <ecr-uri>/captal-provision v1.0.0
 
-# Migraciones y seed
-./mill infra.migrate
-./mill infra.seed
+# CLI
+./mill cli.run -- init --claude
+./mill cli.run -- locations add cafe-centro
+./mill cli.run -- video add cafe-centro chromecast ./blazes.mp4
 ```
 
 ---
 
-## TODOs
+## TODOs Pendientes
 
-### 1. ~~[BUG] Botones no visibles en Welcome e Identification~~ ✅ CORREGIDO
+### Pruebas E2E en UI usando Playwright
+Implementar tests E2E del cliente web (Welcome → IdentificationQuestion → Video → AdvertiserSurvey → Ready) usando Playwright MCP.
 
-**Problema:** Los selectores CSS usaban `.welcome-text-content.visible` y `.question-text-content.visible` pero el Layout unificado usa `.view-content.visible`.
-
-**Solucion aplicada:** Actualizado `styles.css`:
-- `.app-layout:has(.welcome-text-content.visible)` → `.app-layout:has(.view-content.visible)`
-- `.app-layout:has(.question-text-content.visible)` → `.app-layout:has(.view-content.visible)`
-
-### 2. ~~Diseño de IdentificationQuestionView~~ ✅ COMPLETADO
-
-Vista de preguntas de identificación implementada:
-- Estilo visual consistente con WelcomeView (texto sobre gradiente, elementos glass)
-- Stack vertical de preguntas
-- Validación client-side usando `core.Op.run(questionOps.validate(...))`
-- Mensajes de error i18n completos
-- Layout unificado con loading state
-
-### 3. ~~Investigar QueryMeta para Eliminar Row Types~~ ❌ NO VIABLE
-
-Se investigó `QueryMeta` de Quill pero no fue posible eliminar los Row types:
-- ProtoQuill requiere tipos concretos en compile-time
-- Los estados tipados (`Survey[State]`, `User[State]`) no son compatibles con el modelo de Quill
-- Los Row types intermedios son necesarios para el mapeo DB ↔ dominio
-
-### 4. Pruebas E2E en UI usando Playwright
-
-**Descripcion:**
-Implementar tests E2E para validar el flujo de usuario en el cliente web usando Playwright MCP.
-
-**Tareas:**
-- Configurar Playwright para el proyecto
-- Escribir tests para el flujo Welcome -> Question -> Video -> Ready
-- Validar estados visuales (loading, loaded, error)
-- Integrar con CI
-
-### 5. ~~Redirigir /* al cliente + endpoints estaticos solo en dev~~ ✅ COMPLETADO
-
-**Implementacion:**
-- `server.dev-mode` en `application.conf` (default: true, override con `SERVER_DEV_MODE=false`)
-- En dev mode: sirve assets (css, js, svg) y catch-all SPA (`/*` -> `index.html`)
-- En prod mode: solo API endpoints (`/api/*`)
-- Cliente (`Main.scala`): `syncPhaseOnLoad()` chequea fase y redirige al montar la app
-
-### 6. ~~Validaciones agresivas de fase en cada endpoint~~ ✅ COMPLETADO
-
-**Implementacion:**
-- `SessionEndpoint.secured`: Partial server endpoint que resuelve sesion
-- `SessionEndpoint.withPhase(phases*)`: Partial server endpoint que valida fase
-- Todos los endpoints de survey usan el patron de partial server endpoints
-- `ApiError.WrongPhase(current, expected)`: Error cuando fase no coincide
-- 15 tests E2E en `PhaseValidationSuite` validan todas las combinaciones
-
-**Endpoints protegidos:**
-- `POST /api/survey/email` - solo `IdentificationQuestion`
-- `POST /api/survey/profiling` - solo `IdentificationQuestion`
-- `POST /api/survey/location` - solo `IdentificationQuestion`
-- `GET /api/survey/next` - `Welcome` o `IdentificationQuestion`
-- `GET /api/status` - cualquier fase (usa `secured` sin validacion de fase)
-
-### 7. ~~Cross-Compilar Core para Scala.js~~ ✅ COMPLETADO
-
-Core y endpoints estan cross-compilados. Ver `build.mill`.
-
-### 8. ~~Cliente Laminar~~ ✅ COMPLETADO
-
-Cliente implementado con:
-- Laminar para UI reactiva
-- Waypoint para routing
-- sttp con Fetch backend para HTTP
-- I18n client-side cargando traducciones del servidor
-
-### 9. ~~Compartir Definiciones de Endpoints~~ ✅ COMPLETADO
-
-Modulo `endpoints` es cross-compiled y usado por:
-- `api` (JVM): Genera rutas del servidor
-- `client` (JS): Genera llamadas HTTP tipadas via sttp
-
-### 10. ~~Compartir Logica del Core con Cliente~~ ✅ COMPLETADO
-
-El cliente usa logica del core para:
-- Validaciones (`Op.run(questionOps.validate(...))`)
-- Tipos de dominio (`AnswerValue`, `QuestionType`, etc.)
-- Errores consistentes entre cliente y servidor
+### Fase Ready completa
+- Integracion con controlador de hotspot para liberar acceso WiFi
+- Timer de sesion (max 5 min)
+- Reconexion: re-evaluar surveys pendientes
 
 ---
 
-## Docker (Desarrollo)
+## Docker e imagenes base
 
-### dev.Dockerfile
+El proyecto produce **dos imagenes base** que se pushean a ECR:
 
-Multi-stage build para desarrollo:
+- `captal-api` (`Dockerfile.api`): JVM + `api.jar` assembly. Base del ECS service per-location. Incluye clases de `infra` (Migrate) por el assembly.
+- `captal-provision` (`Dockerfile.provision`): JVM + `infra.jar` assembly. Base de la task efimera de `shared push`. Mas pequena (no incluye `api/`).
 
-```dockerfile
-# Stage 1: Build - compila API, infra y cliente
-FROM eclipse-temurin:21-jdk AS builder
-COPY mill build.mill .mill-version ./
-COPY core/ endpoints/ infra/ api/ client/ ./
-RUN ENVIRONMENT=dev ./mill api.assembly && \
-    ./mill infra.assembly && \
-    ENVIRONMENT=dev ./mill client.fastLinkJS
+Ambas imagenes tienen `/etc/captal/` vacio. El CLI `captal` construye **imagenes derivadas** (FROM base + COPY provision yamls) durante `shared push` y `locations push`.
 
-# Stage 2: Runtime - solo JRE + JARs
-FROM eclipse-temurin:21-jre-noble
-COPY --from=builder /app/out/api/assembly.dest/out.jar api.jar
-COPY --from=builder /app/out/infra/assembly.dest/out.jar infra.jar
-COPY --from=builder /app/out/client/fastLinkJS.dest/ out/client/fastLinkJS.dest/
-CMD java -cp infra.jar whitelabel.captal.infra.Migrate && \
-    java -cp infra.jar whitelabel.captal.infra.Seed && \
-    java -jar api.jar
-```
+### Release flow del proyecto
 
-**Uso:**
 ```bash
-docker build -f dev.Dockerfile -t captal-dev .
-docker run -p 8080:8080 -v $(pwd)/captal-dev.db:/app/captal-dev.db captal-dev
+# 1. Login a ECR
+aws ecr get-login-password --region us-east-1 | \
+  docker login --username AWS --password-stdin <account>.dkr.ecr.us-east-1.amazonaws.com
+
+# 2. Build + push imagen API base
+./mill api.dockerBuild <account>.dkr.ecr.us-east-1.amazonaws.com/captal-api v1.0.0
+./mill api.dockerPush  <account>.dkr.ecr.us-east-1.amazonaws.com/captal-api v1.0.0
+
+# 3. Build + push imagen Provision base
+./mill infra.dockerBuild <account>.dkr.ecr.us-east-1.amazonaws.com/captal-provision v1.0.0
+./mill infra.dockerPush  <account>.dkr.ecr.us-east-1.amazonaws.com/captal-provision v1.0.0
+
+# 4. Bundle del cliente a S3
+./mill client.bundle
+aws s3 sync out/client/bundle.dest/ s3://<bucket>/bundle/
+
+# 5. Actualizar `images.api` y `images.provision` en shared/captal.yaml de cada workspace operativo
 ```
+
+Para desarrollo local, sigue funcionando `./mill api.dockerBuildDev` (con `SERVER_DEV_ENDPOINTS=true`).
 
 ---
 
 ## BuildInfo (Cliente)
 
-El cliente usa `BuildInfo` generado en build time para features condicionales:
+`build.mill` genera `BuildInfo.scala` con la variable de entorno `ENVIRONMENT`. En production, `BuildInfo.isDevMode = false` activa dead-code elimination del codigo dev (botones reset, etc.).
 
-```scala
-// build.mill - generatedSources en client
-def generatedSources: T[Seq[PathRef]] = Task:
-  val env = Task.env.getOrElse("ENVIRONMENT", "production")
-  val isDevMode = env == "dev"
-  val dest = Task.dest / "BuildInfo.scala"
-  os.write(dest, s"""
-    package whitelabel.captal.client
-    object BuildInfo:
-      val environment: String = "$env"
-      val isDevMode: Boolean = $isDevMode
-  """)
-  Seq(PathRef(Task.dest))
-```
-
-**Uso:**
 ```bash
-# Dev mode (incluye boton reset, etc.)
-ENVIRONMENT=dev ./mill client.fastLinkJS
-
-# Production (features dev eliminadas por dead code elimination)
-./mill client.fastLinkJS
+ENVIRONMENT=dev ./mill client.bundle    # incluye features dev
+./mill client.bundle                    # production
 ```
 
 ---
 
-## Cambios Recientes (Session Actual)
+## Cambios Mayores Desde el Ultimo Update de AGENTS.md (commit 3a1f761)
 
-### CSS Extraido a Archivo Externo
-- **Antes**: CSS inline en `client/index.html` (~970 lineas)
-- **Ahora**: CSS en `client/assets/styles.css`
-- `Main.scala` sirve el CSS en `/assets/styles.css`
+> Resumen para alguien que no leyo el repo en un tiempo. Los detalles tecnicos viven en las secciones de arriba.
 
-### Ruta /video renombrada a /final
-- `Router.scala`: ruta `/video` -> `/final`
-- Serializacion: `"video"` -> `"final"`
-- Page title: `"Video"` -> `"Final"`
+### Multi-tenancy a nivel de location
+- Migracion `V12__add_location_id_to_localized_texts.sql` y campos `location_id` en surveys, advertisers, sessions
+- `LocationService`, `LocaleDetector` resuelven la location desde la request
+- `SessionIsolationSuite` valida que datos de una location no se filtren a otra
 
-### Layout Unificado con Loading State
-- `Layout.scala` ahora acepta `isLoading: Signal[Boolean]`
-- Nuevas clases CSS unificadas:
-  - `.layout-view.loading-state` / `.layout-view.loaded-state`
-  - `.view-icon` (antes `.welcome-icon`, `.question-icon`)
-  - `.view-content.hidden` / `.view-content.visible`
-- WelcomeView, IdentificationQuestionView y ReadyView usan el nuevo Layout
-- Brand icon centralizado en Layout (ya no se repite en cada view)
+### Switch SQLite → Rqlite
+- `RqliteDataSource` reemplaza al driver SQLite local
+- `build.mill` arranca un container `rqlite/rqlite` para tests via `ensureRqlite`
+- Eliminado `sqlite-jdbc`
 
-### SPA Routing y Dev Mode
-- `api/resources/application.conf`: Agregado `server.dev-mode`
-- `api/src/.../Main.scala`:
-  - `ServerSettings` case class con config y devMode
-  - `devStaticRoutes`: assets solo en dev mode
-  - `spaCatchAllRoutes`: catch-all `/*` -> `index.html` para SPA routing
-  - `routes(devMode)`: compone rutas segun modo
-- `client/src/.../Main.scala`:
-  - `syncPhaseOnLoad()`: chequea fase del servidor y redirige al montar
+### Sistema de Provisioning Declarativo
+- `infra/provision/`: `ProvisionService`, `ProvisionPlan`, `EntityWriter`, `IdGenerator`
+- Reemplazo del seeding manual por migraciones repetibles + sync de YAML
+- Manifest hashed con soft-delete e idempotencia
+- Estructura split: `shared/` (global) + `locations/<slug>/` (per-tenant)
 
-### Archivos Modificados (Session Anterior)
-- `client/index.html` - Solo estructura, sin CSS inline
-- `client/assets/styles.css` - CSS extraido + nuevas clases unificadas
-- `client/src/.../views/Layout.scala` - Acepta isLoading, maneja brand icon
-- `client/src/.../views/WelcomeView.scala` - Usa Layout con isLoading
-- `client/src/.../views/IdentificationQuestionView.scala` - Usa Layout con isLoading
-- `client/src/.../views/ReadyView.scala` - Usa Layout
-- `client/src/.../Router.scala` - Ruta /final en lugar de /video
-- `api/src/.../Main.scala` - Sirve styles.css
+### Nuevas Fases y Endpoints
+- `Phase.AdvertiserVideo`, `AdvertiserVideoSurvey`, `AdvertiserQuestion`, `Welcome`
+- `VideoRoutes`, `AdvertiserSurveyRoutes`, `HealthRoutes`
+- `VideoEndpoints`, `AdvertiserSurveyEndpoints` cross-compilados
+- Suites E2E nuevas: `VideoSuite`, `AdvertiserVideoSurveySuite`, `LocaleSessionSuite`, `SessionIsolationSuite`, `ProvisioningSuite`
 
-### Phase Validation con Tapir Partial Server Endpoints
-- `SessionEndpoint.scala`: `secured` y `withPhase(phases*)` para validacion
-- `SurveyRoutes.scala`: Todos los endpoints usan partial server endpoints
-- `ApiError.scala`: Agregado `WrongPhase(current, expected)`
-- `PhaseValidationSuite.scala`: 15 tests E2E para validacion de fases
+### CLI `captal` (modulo nuevo)
+- zio-cli con: `init [--claude]`, `shared push`, `locations add/push`, `video add`, `video add-promo`
+- Templates en `cli/resources/templates/{shared,location,video,skills}`
+- Workaround del bug de `--help` (`finalCheckBuiltIn = false`)
+- Manifest Guix incluye el assembly del CLI
 
-### Dev Reset Endpoint
-- `LocaleEndpoints.resetPhase`: `POST /api/dev/reset-phase` (solo dev mode)
-- `LocaleRoutes.devRoutes`: Lista de rutas solo para dev
-- `Main.scala`: Monta `devRoutes` solo cuando `server.dev-mode=true`
-- `ReadyView.scala`: Boton "Reset (Dev)" que llama al endpoint (solo en dev)
+### Skills Cross-agent
+- 8 skills en `.agents/skills/<name>/SKILL.md`
+- `--claude` en `init` crea symlink `.claude/skills → ../.agents/skills`
+- Compatible con Claude Code y OpenCode
 
-### BuildInfo para Cliente
-- `build.mill`: `generatedSources` genera `BuildInfo.scala` con `ENVIRONMENT`
-- `ReadyView.scala`: Usa `BuildInfo.isDevMode` en lugar de detectar hostname
-- Dead code elimination: En production, codigo dev no se incluye en el JS
+### Cliente
+- `dom.fetch` reemplaza al cliente sttp
+- Loading screen en todas las transiciones de vista
+- Vistas nuevas: `VideoView`, `AdvertiserSurveyView`
+- `index.html` ahora se renderiza desde un template con `{{JS_PATH}}` y `{{CSS_PATH}}`
 
-### Docker Multi-Stage
-- `dev.Dockerfile`: Build con Mill, runtime con JRE + JARs
-- `.mill-version`: Version de Mill (1.1.2)
-- `.dockerignore`: Exclusiones para build mas rapido
-- Usa `api.assembly` e `infra.assembly` para JARs ejecutables
-
-### Core Tests Actualizados
-- `HandlerTests.scala`: Handlers ahora requieren `nextStep: NextStep`
-- Assertions actualizadas para validar `NextStep` en lugar de `answer`
-- 48 tests pasando (8 Handler + 21 ValidationSuccess + 19 ValidationFailure)
+### Build / Deploy
+- `Dockerfile.api` y `Dockerfile.provision` produce dos imagenes base distintas (la API completa + una minima para tasks efimeras de provisioning)
+- `manifest.scm` para Guix (assembly del CLI como package)
+- `cli.assembly` y `api.assembly` son los artefactos primarios
 
 ---
 
 ## Documentacion Adicional
 
 - **docs/EVENT_SOURCING_SUMMARY.md**: Detalle completo del modelo de Event Sourcing
+- **client/STYLING.md**: Variables CSS y theming del cliente
 - **Imagenes del Board de Miro** (*.jpg): Diagramas visuales originales del diseno
