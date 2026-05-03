@@ -167,6 +167,34 @@ object infra extends BaseModule:
   def migrate() = Task.Command:
     runMain("whitelabel.captal.infra.Migrate")()
 
+  /** Build production base image captal-provision.
+    * Usage: ./mill infra.dockerBuild <ecr-repo-uri> <tag>
+    */
+  def dockerBuild(repoUri: String, tag: String) = Task.Command:
+    val root = moduleDir / os.up
+    val fullTag = s"$repoUri:$tag"
+    println(s"[docker] Building $fullTag ...")
+    val result = os.proc(
+      "docker", "build",
+      "-f", (root / "Dockerfile.provision").toString,
+      "-t", fullTag,
+      root.toString
+    ).call(check = false, stderr = os.Pipe)
+    if result.exitCode != 0 then
+      sys.error(s"[docker] Build failed:\n${result.err.trim()}")
+    println(s"[docker] Built $fullTag")
+
+  /** Push image to ECR. Operator must run `aws ecr get-login-password | docker login` first.
+    * Usage: ./mill infra.dockerPush <ecr-repo-uri> <tag>
+    */
+  def dockerPush(repoUri: String, tag: String) = Task.Command:
+    val fullTag = s"$repoUri:$tag"
+    println(s"[docker] Pushing $fullTag ...")
+    val result = os.proc("docker", "push", fullTag).call(check = false, stderr = os.Pipe)
+    if result.exitCode != 0 then
+      sys.error(s"[docker] Push failed:\n${result.err.trim()}")
+    println(s"[docker] Pushed $fullTag")
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // API: JVM only (server implementation)
@@ -258,7 +286,7 @@ object api extends BaseModule:
       os.proc("docker", "rm", "-f", rqliteContainerName).call(check = false)
       println("rqlite test container stopped")
 
-  /** Build the dev Docker image.
+  /** Build the dev Docker image (uses Dockerfile.api with SERVER_DEV_ENDPOINTS=true).
     * Usage: ./mill api.dockerBuildDev captal-dev 0.1.0
     */
   def dockerBuildDev(name: String, version: String) = Task.Command:
@@ -267,7 +295,7 @@ object api extends BaseModule:
     println(s"[docker] Building $tag ...")
     val result = os.proc(
       "docker", "build",
-      "-f", (root / "Dockerfile").toString,
+      "-f", (root / "Dockerfile.api").toString,
       "--build-arg", "SERVER_DEV_ENDPOINTS=true",
       "-t", tag,
       root.toString
@@ -275,6 +303,34 @@ object api extends BaseModule:
     if result.exitCode != 0 then
       sys.error(s"[docker] Build failed:\n${result.err.trim()}")
     println(s"[docker] Built $tag")
+
+  /** Build production base image captal-api.
+    * Usage: ./mill api.dockerBuild <ecr-repo-uri> <tag>
+    */
+  def dockerBuild(repoUri: String, tag: String) = Task.Command:
+    val root = moduleDir / os.up
+    val fullTag = s"$repoUri:$tag"
+    println(s"[docker] Building $fullTag ...")
+    val result = os.proc(
+      "docker", "build",
+      "-f", (root / "Dockerfile.api").toString,
+      "-t", fullTag,
+      root.toString
+    ).call(check = false, stderr = os.Pipe)
+    if result.exitCode != 0 then
+      sys.error(s"[docker] Build failed:\n${result.err.trim()}")
+    println(s"[docker] Built $fullTag")
+
+  /** Push image to ECR. Operator must run `aws ecr get-login-password | docker login` first.
+    * Usage: ./mill api.dockerPush <ecr-repo-uri> <tag>
+    */
+  def dockerPush(repoUri: String, tag: String) = Task.Command:
+    val fullTag = s"$repoUri:$tag"
+    println(s"[docker] Pushing $fullTag ...")
+    val result = os.proc("docker", "push", fullTag).call(check = false, stderr = os.Pipe)
+    if result.exitCode != 0 then
+      sys.error(s"[docker] Push failed:\n${result.err.trim()}")
+    println(s"[docker] Pushed $fullTag")
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Client: JS only (Laminar app)
@@ -291,7 +347,8 @@ object cli extends BaseModule:
     mvn"software.amazon.awssdk:s3:2.29.51",
     mvn"software.amazon.awssdk:ecs:2.29.51",
     mvn"software.amazon.awssdk:elasticloadbalancingv2:2.29.51",
-    mvn"software.amazon.awssdk:ecr:2.29.51")
+    mvn"software.amazon.awssdk:ecr:2.29.51",
+    mvn"software.amazon.awssdk:cloudfront:2.29.51")
   def mainClass = Some("whitelabel.captal.cli.Main")
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -352,12 +409,13 @@ object client extends BaseJSModule:
     os.copy(assets / "styles.css", dest / "styles.css")
     os.copy(assets / "brand-icon.svg", dest / "brand-icon.svg")
 
-    // Render index.html from template with production paths
+    // Render index.html from template with relative paths so the browser resolves them
+    // against the current directory (which lives at https://<host>/<slug>/ in prod).
     renderIndex(
       template,
       dest / "index.html",
-      jsPath = "/main.js.gz",
-      cssPath = "/styles.css.gz"
+      jsPath = "./main.js.gz",
+      cssPath = "./styles.css.gz"
     )
 
     // Gzip JS and CSS
