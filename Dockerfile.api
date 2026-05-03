@@ -1,0 +1,39 @@
+# Stage 1: Build
+FROM eclipse-temurin:21-jdk AS builder
+
+WORKDIR /app
+
+COPY mill build.mill .mill-version ./
+RUN chmod +x mill
+
+COPY core/ core/
+COPY endpoints/ endpoints/
+COPY infra/ infra/
+COPY api/ api/
+
+ARG SERVER_DEV_ENDPOINTS=false
+
+ENV JAVA_TOOL_OPTIONS="-Xss4m"
+
+RUN ./mill api.assembly
+
+# Stage 2: Runtime
+FROM eclipse-temurin:21-jre-noble
+
+WORKDIR /app
+
+ARG SERVER_DEV_ENDPOINTS=false
+
+COPY --from=builder /app/out/api/assembly.dest/out.jar api.jar
+
+RUN mkdir -p /etc/captal
+
+EXPOSE 8080
+
+ENV SERVER_DEV_MODE=false
+ENV SERVER_DEV_ENDPOINTS=${SERVER_DEV_ENDPOINTS}
+ENV SERVER_HOST=0.0.0.0
+ENV SERVER_PORT=8080
+
+CMD java -cp api.jar whitelabel.captal.infra.Migrate && \
+    java -jar api.jar
