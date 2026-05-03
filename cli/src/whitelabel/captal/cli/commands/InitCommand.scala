@@ -41,3 +41,4 @@ object InitCommand:
     Files.createDirectories(claudeDir)
     if !Files.exists(claudeSkills) then
       Files.createSymbolicLink(claudeSkills, target)
+end InitCommand
