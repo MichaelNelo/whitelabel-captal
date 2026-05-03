@@ -1,0 +1,24 @@
+# Stage 1: Build
+FROM eclipse-temurin:21-jdk AS builder
+
+WORKDIR /app
+
+COPY mill build.mill .mill-version ./
+RUN chmod +x mill
+
+COPY core/ core/
+COPY endpoints/ endpoints/
+COPY infra/ infra/
+
+ENV JAVA_TOOL_OPTIONS="-Xss4m"
+
+RUN ./mill infra.assembly
+
+# Stage 2: Runtime
+FROM eclipse-temurin:21-jre-noble
+
+WORKDIR /app
+
+COPY --from=builder /app/out/infra/assembly.dest/out.jar infra.jar
+
+RUN mkdir -p /etc/captal
