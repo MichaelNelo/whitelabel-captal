@@ -2,6 +2,7 @@ package whitelabel.captal.client
 
 import com.raquo.laminar.api.L.*
 import com.raquo.waypoint.*
+import org.scalajs.dom
 import whitelabel.captal.client.views.{
   AdvertiserVideoSurveyView,
   AdvertiserVideoView,
@@ -20,25 +21,43 @@ case object AdvertiserVideoSurveyPage  extends Page
 case object ReadyPage                  extends Page
 
 object Router:
+  /** Slug-aware base path. In production the SPA is served from `/<slug>/index.html`, so all
+    * routes need that prefix; in dev the SPA runs at `/`, no prefix.
+    */
+  private val basePath: String =
+    val firstSegment = dom
+      .window
+      .location
+      .pathname
+      .split("/")
+      .find(_.nonEmpty)
+    firstSegment match
+      case Some(slug) if slug != "api" => s"/$slug"
+      case _                           => ""
+
   // Route patterns
   private val welcomeRoute: Route[WelcomePage.type, Unit] = Route.static(
     WelcomePage,
-    root / endOfSegments)
+    root / endOfSegments,
+    basePath = basePath)
 
   private val questionRoute: Route[IdentificationQuestionPage.type, Unit] = Route.static(
     IdentificationQuestionPage,
-    root / "question" / endOfSegments)
+    root / "question" / endOfSegments,
+    basePath = basePath)
 
   private val advertiserVideoRoute: Route[AdvertiserVideoPage.type, Unit] = Route.static(
     AdvertiserVideoPage,
-    root / "video" / endOfSegments)
+    root / "video" / endOfSegments,
+    basePath = basePath)
 
   private val advertiserVideoSurveyRoute: Route[AdvertiserVideoSurveyPage.type, Unit] = Route
-    .static(AdvertiserVideoSurveyPage, root / "survey" / endOfSegments)
+    .static(AdvertiserVideoSurveyPage, root / "survey" / endOfSegments, basePath = basePath)
 
   private val readyRoute: Route[ReadyPage.type, Unit] = Route.static(
     ReadyPage,
-    root / "ready" / endOfSegments)
+    root / "ready" / endOfSegments,
+    basePath = basePath)
 
   private object router
       extends com.raquo.waypoint.Router[Page](
