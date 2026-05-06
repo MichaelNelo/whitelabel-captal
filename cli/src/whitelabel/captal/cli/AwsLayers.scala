@@ -7,6 +7,7 @@ import software.amazon.awssdk.auth.credentials.{
 }
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.cloudfront.CloudFrontClient
+import software.amazon.awssdk.services.cloudwatchlogs.CloudWatchLogsClient
 import software.amazon.awssdk.services.ecr.EcrClient
 import software.amazon.awssdk.services.ecs.EcsClient
 import software.amazon.awssdk.services.elasticloadbalancingv2.ElasticLoadBalancingV2Client
@@ -73,6 +74,16 @@ object AwsLayers:
       ZIO.acquireRelease(
         ZIO.attempt {
           val builder = CloudFrontClient.builder().region(region)
+          credentialsProvider(config.aws).foreach(builder.credentialsProvider)
+          builder.build()
+        })(c => ZIO.succeed(c.close()))
+
+  val cloudwatchLogs: ZLayer[CaptalConfig, Throwable, CloudWatchLogsClient] = ZLayer.scoped:
+    ZIO.serviceWithZIO[CaptalConfig]: config =>
+      val region = Region.of(config.aws.region)
+      ZIO.acquireRelease(
+        ZIO.attempt {
+          val builder = CloudWatchLogsClient.builder().region(region)
           credentialsProvider(config.aws).foreach(builder.credentialsProvider)
           builder.build()
         })(c => ZIO.succeed(c.close()))

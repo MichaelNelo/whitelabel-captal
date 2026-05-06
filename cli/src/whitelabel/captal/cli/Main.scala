@@ -103,7 +103,8 @@ object Main extends ZIOCliDefault:
                   AwsLayers.ecs,
                   AwsLayers.elbv2,
                   AwsLayers.ecr,
-                  AwsLayers.cloudfront)
+                  AwsLayers.cloudfront,
+                  AwsLayers.cloudwatchLogs)
 
             case CaptalCommand.VideoAdd(slug, advertiser, file) =>
               VideoCommand.run(slug, advertiser, file).provide(CaptalConfig.layer, AwsLayers.s3)

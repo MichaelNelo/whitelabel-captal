@@ -14,6 +14,11 @@ import software.amazon.awssdk.services.cloudfront.model.{
   InvalidationBatch,
   Paths as CfPaths
 }
+import software.amazon.awssdk.services.cloudwatchlogs.CloudWatchLogsClient
+import software.amazon.awssdk.services.cloudwatchlogs.model.{
+  CreateLogGroupRequest,
+  ResourceAlreadyExistsException
+}
 import software.amazon.awssdk.services.ecr.EcrClient
 import software.amazon.awssdk.services.ecs.EcsClient
 import software.amazon.awssdk.services.ecs.model.{
@@ -24,6 +29,7 @@ import software.amazon.awssdk.services.ecs.model.{
   CreateServiceRequest,
   DescribeServicesRequest,
   KeyValuePair,
+  LoadBalancer as EcsLoadBalancer,
   LogConfiguration,
   LogDriver,
   NetworkConfiguration,
@@ -64,7 +70,7 @@ object PushCommand:
 
   type Env =
     CaptalConfig & S3Client & EcsClient & ElasticLoadBalancingV2Client & EcrClient &
-      CloudFrontClient
+      CloudFrontClient & CloudWatchLogsClient
 
   def run(slug: String): ZIO[Env, CliError, Unit] =
     for
@@ -88,11 +94,13 @@ object PushCommand:
         dockerfileResource = "templates/dockerfiles/Dockerfile.locations")
 
       _          <- Output.step(3, 5, "Updating ECS service...")
+      _          <- ensureLogGroup(s"/ecs/captal-$slug")
+      tgArn      <- ensureTargetGroup(s"captal-$slug", slug, config)
       taskDefArn <- registerTaskDefinition(slug, imageUri)
-      _          <- createOrUpdateService(slug, taskDefArn, desiredCount)
+      _          <- createOrUpdateService(slug, taskDefArn, desiredCount, tgArn)
 
       _ <- Output.step(4, 5, "Configuring ALB rule...")
-      _ <- configureAlbRule(slug)
+      _ <- upsertAlbRule(slug, tgArn, config)
 
       _ <- Output.step(5, 5, "Invalidating CloudFront...")
       _ <- invalidateCdn(slug)
@@ -216,6 +224,20 @@ object PushCommand:
           s3.putObject(builder.build(), RequestBody.fromBytes(data))
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // CloudWatch Logs: ensure log group exists (idempotent)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  private def ensureLogGroup(name: String): ZIO[CloudWatchLogsClient, CliError, Unit] =
+    aws("CloudWatch Logs createLogGroup"):
+      ZIO.serviceWithZIO[CloudWatchLogsClient]: logs =>
+        ZIO
+          .attemptBlocking:
+            logs.createLogGroup(CreateLogGroupRequest.builder().logGroupName(name).build())
+            ()
+          .catchSome:
+            case _: ResourceAlreadyExistsException => ZIO.unit
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // ECS: Task definition and service
   // ─────────────────────────────────────────────────────────────────────────────
 
@@ -243,6 +265,7 @@ object PushCommand:
                     .value("/etc/captal/provision")
                     .build(),
                   KeyValuePair.builder().name("DB_URL").value(config.database.url).build(),
+                  KeyValuePair.builder().name("DB_DEV_SEED").value("false").build(),
                   KeyValuePair
                     .builder()
                     .name("SERVER_DEV_MODE")
@@ -301,7 +324,8 @@ object PushCommand:
   private def createOrUpdateService(
       slug: String,
       taskDefArn: String,
-      desiredCount: Int): ZIO[CaptalConfig & EcsClient, CliError, Unit] =
+      desiredCount: Int,
+      tgArn: String): ZIO[CaptalConfig & EcsClient, CliError, Unit] =
     for
       config <- ZIO.service[CaptalConfig]
       serviceName = s"captal-$slug"
@@ -316,6 +340,12 @@ object PushCommand:
                   .services(serviceName)
                   .build())
               resp.services().stream().filter(_.status() == "ACTIVE").count() > 0
+      lb = EcsLoadBalancer
+        .builder()
+        .targetGroupArn(tgArn)
+        .containerName("captal")
+        .containerPort(8080)
+        .build()
       _ <-
         if isActive then
           aws("ECS updateService"):
@@ -345,6 +375,9 @@ object PushCommand:
                     .desiredCount(desiredCount)
                     .launchType("FARGATE")
                     .networkConfiguration(networkConfig(config))
+                    .loadBalancers(lb)
+                    .healthCheckGracePeriodSeconds(180)
+                    .enableExecuteCommand(true)
                     .build())
           *> Output.detail(s"Created service: $serviceName (replicas: $desiredCount)")
     yield ()
@@ -352,15 +385,6 @@ object PushCommand:
   // ─────────────────────────────────────────────────────────────────────────────
   // ALB: Listener rule for routing
   // ─────────────────────────────────────────────────────────────────────────────
-
-  private def configureAlbRule(
-      slug: String): ZIO[CaptalConfig & ElasticLoadBalancingV2Client, CliError, Unit] =
-    for
-      config <- ZIO.service[CaptalConfig]
-      tgName = s"captal-$slug"
-      tgArn <- ensureTargetGroup(tgName, slug, config)
-      _     <- upsertAlbRule(slug, tgArn, config)
-    yield ()
 
   private def ensureTargetGroup(
       name: String,
@@ -449,6 +473,7 @@ object PushCommand:
                 .conditions(
                   RuleCondition
                     .builder()
+                    .field("path-pattern")
                     .pathPatternConfig(
                       PathPatternConditionConfig.builder().values(pathPattern).build())
                     .build())
