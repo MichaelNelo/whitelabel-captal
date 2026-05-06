@@ -33,10 +33,21 @@ El proyecto utiliza arquitectura **Event Sourcing** y esta implementado en **Sca
 - **Guix manifest**: Empaqueta el assembly del CLI (`manifest.scm`)
 - **BuildInfo**: Variables de entorno en build time para cliente (ENVIRONMENT)
 - **Skills portables**: 8 skills en `.agents/skills/<name>/SKILL.md` (compatible Claude Code + OpenCode)
+- **Despliegue producción vivo**: dev environment con CloudFront + ALB en coexistencia (production.captal.centauroads.com -> CloudFront, staging.* -> ALB Lambda CDN)
+- **Imagenes derivadas baked-in**: CLI construye y pushea imagenes con provision data via docker build local
+- **CloudFront SPA**: distribution con SPA fallback CloudFront Function + base href dinamico para soportar slug-aware paths
 
 ### Pendiente 📋
 - Fase Ready completa (acceso WiFi tras encuesta)
 - Integracion con controlador de hotspot
+- **rqlite EFS**: migrar storage efimero Fargate a EFS para evitar perdida de datos en redeploys
+- **JDBC resilience**: HikariCP test-on-borrow + reconexion auto cuando un nodo rqlite reinicia
+- **rqlite deployment min healthy %**: configurar para mantener quorum durante restarts escalonados
+- **CI release flow**: GH Action que automatice docker build/push de bases + bundle a S3
+- **`captal bundle promote`**: comando para sincronizar el bundle global a todas las locations + invalidar CDN
+- **`captal locations rm`**: command para limpiar service + TG + ALB rule + log group + ECR tags + S3 prefix de un location
+- **Cleanup ECR legacy**: borrar repo `captal-dev` (orfanado de TF) cuando ya no se use
+- **Mill task release.bundle**: integrar `client.bundle` + `aws s3 cp` con metadata correcta en un solo target
 
 ---
 
@@ -637,11 +648,40 @@ captal video add-promo <slug> <file>            # Sube promo a S3 + crea promo.y
 
 ### Configuracion
 
-`shared/captal.yaml` define AWS region, ECR image, bucket S3, cluster ECS, subnets/SGs, ALB listener, database URL. La skill `configure-aws` guia su llenado con comandos `aws` CLI. Si no se incluyen credenciales explicitas, el SDK usa la cadena default.
+`shared/captal.yaml` define AWS region, ECR images (4 repos), bucket S3 + bundlePrefix, cluster ECS, subnets/SGs, ALB listener, CloudFront distributionId, database URL. La skill `configure-aws` guia su llenado con comandos `aws` CLI. Si no se incluyen credenciales explicitas, el SDK usa la cadena default.
+
+### Flujo de despliegue (que hace cada comando bajo el capot)
+
+**`captal shared push`** (task efimera):
+1. Build imagen `captal-shared:<ts>` FROM `images.provision` + COPY `shared/` → `/etc/captal/shared/`
+2. Push a ECR
+3. Register task definition `captal-shared-provision` con esa imagen
+4. RunTask Fargate (one-shot)
+5. Container ejecuta `java -cp infra.jar SharedProvision` que aplica YAMLs de surveys + advertisers a la DB
+6. Poll hasta STOPPED, verificar exit code
+
+**`captal locations push <slug>`** (service de larga duracion):
+1. S3 copy server-side de `bundle/` → `<slug>/` (idempotente; preserva metadata Content-Encoding)
+2. Sube custom assets (`locations/<slug>/assets/*`) a `<slug>/` con gzip
+3. Build imagen `captal-locations:<slug>-<ts>` FROM `images.api` + COPY `locations/<slug>/` → `/etc/captal/provision/`
+4. Push a ECR
+5. Crea log group `/ecs/captal-<slug>` (idempotente, via SDK)
+6. Crea/asegura target group `captal-<slug>` con health check `/<slug>/api/health`
+7. Register task definition `captal-<slug>` con env vars `LOCATION_SLUG`, `PROVISION_DIR=/etc/captal/provision`, `DB_URL`, `DB_DEV_SEED=false`, etc. + `taskRoleArn` (requerido para ECS Exec)
+8. Create/Update service ECS `captal-<slug>` con `loadBalancers` block (TG attached) + `enableExecuteCommand=true` + healthCheckGracePeriodSeconds=180
+9. Upsert ALB rule path-pattern `/<slug>/api/*` → target group
+10. CloudFront `createInvalidation` para `/<slug>/*`
 
 ### Bug conocido de zio-cli
 
 `captal --help` no lista todos los subcomandos (Issue zio-cli #448). Workaround: usar `CliConfig.default.copy(finalCheckBuiltIn = false)` en `Main.scala`. Ejecutar `captal` sin args muestra todos los comandos correctamente.
+
+### Caveats operativos descubiertos en deploy
+
+- **rqlite + storage efimero Fargate**: cada redeploy de un nodo rqlite pierde su data local; el cluster recupera via Raft solo si manten quorum. Si 2/3 nodos reinician simultaneamente, datos pueden perderse. Mitigacion temporal: re-correr `shared push` + `locations push` para reinsertar. Solucion permanente pendiente: EFS mount para `/rqlite/file`.
+- **JDBC connection stale tras rqlite redeploy**: el driver rqlite-jdbc no hace fail-over; si el nodo al que apunta desaparece, las queries fallan con `SQLException: No result set returned`. Mitigacion: `aws ecs update-service --force-new-deployment` para conexiones frescas.
+- **Mill BuildInfo cache**: `client.generatedSources` no se invalida por cambio en env var `ENVIRONMENT`. Hay que `./mill clean client.generatedSources` antes de un bundle con env distinto. Sin esto, los flags de dev (`isDevMode`, boton reset) quedan stale en el bundle.
+- **Bundle metadata**: subir `.gz` files a S3 requiere `--content-encoding gzip` y `--content-type` correcto. `aws s3 sync` por si solo no lo setea; usar `aws s3 cp` por archivo (ver "Release flow" arriba).
 
 ---
 
@@ -659,6 +699,9 @@ Las skills viven en `.agents/skills/<name>/SKILL.md` con frontmatter YAML (`name
 | `add-promo` | Subir promo con `captal video add-promo` |
 | `edit-i18n` | Editar `i18n/{en,es}.yaml` por location |
 | `deploy-location` | Ejecutar `captal locations push` |
+| `add-location` | Onboarding end-to-end de una location nueva (compone init + i18n + assets + videos + push) |
+| `recover-data` | Recuperar el SPA cuando rqlite perdió datos: force-deploy + re-correr shared/locations push |
+| `troubleshoot-deployment` | Diagnosticar problemas comunes (target unhealthy, 500s, CloudFront cache, ECS DRAINING, etc.) |
 
 ---
 
@@ -854,9 +897,13 @@ aws ecr get-login-password --region us-east-1 | \
 ./mill infra.dockerBuild <account>.dkr.ecr.us-east-1.amazonaws.com/captal-provision v1.0.0
 ./mill infra.dockerPush  <account>.dkr.ecr.us-east-1.amazonaws.com/captal-provision v1.0.0
 
-# 4. Bundle del cliente a S3
+# 4. Bundle del cliente a S3 (con Content-Encoding: gzip para los .gz)
 ./mill client.bundle
-aws s3 sync out/client/bundle.dest/ s3://<bucket>/bundle/
+B=s3://<bucket>/bundle
+aws s3 cp out/client/bundle.dest/main.js.gz    $B/main.js.gz    --content-type application/javascript --content-encoding gzip
+aws s3 cp out/client/bundle.dest/styles.css.gz $B/styles.css.gz --content-type text/css --content-encoding gzip
+aws s3 cp out/client/bundle.dest/index.html    $B/index.html    --content-type "text/html; charset=utf-8"
+aws s3 cp out/client/bundle.dest/brand-icon.svg $B/brand-icon.svg --content-type "image/svg+xml"
 
 # 5. Actualizar `images.api` y `images.provision` en shared/captal.yaml de cada workspace operativo
 ```
@@ -923,6 +970,86 @@ ENVIRONMENT=dev ./mill client.bundle    # incluye features dev
 - `Dockerfile.api` y `Dockerfile.provision` produce dos imagenes base distintas (la API completa + una minima para tasks efimeras de provisioning)
 - `manifest.scm` para Guix (assembly del CLI como package)
 - `cli.assembly` y `api.assembly` son los artefactos primarios
+
+### Coexistencia CloudFront + Lambda CDN (deploy actual dev)
+- `production.captal.centauroads.com` → CloudFront → S3 (bundle por location) + ALB (`/<slug>/api/*`)
+- `staging.captal.centauroads.com` → ALB → Lambda CDN legacy + ECS legacy `captal-dev` (sin reglas `/api/*`, los endpoints van por las path-pattern rules creadas por la CLI)
+- Apex sin registro DNS (decision operativa)
+- Cert ACM regional para ALB + cert ACM en us-east-1 para CloudFront
+- 4 repos ECR: `captal-{api,provision,shared,locations}-dev`. Las dos primeras son bases (push manual via Mill); las otras dos las crea la CLI on each push.
+
+### CloudFront SPA fallback + slug routing
+- CloudFront Function en viewer-request:
+  - `/<slug>` (sin trailing slash) → 301 a `/<slug>/`
+  - `/<slug>/` o `/<slug>/<sub-path>` → rewrite a `/<slug>/index.html` (sin redirect)
+  - Files con extension pasan unchanged a S3
+- Bucket policy de assets permite `s3:GetObject` (objects) y `s3:ListBucket` (bucket) a CloudFront via OAC; sin ListBucket S3 devuelve 403 en lugar de 404 para keys ausentes (rompe el `<link onerror>` para custom-styles opcional).
+- `index.html.template` injecta `<base href="/<slug>/">` via inline `<script>` antes de `<link>`/`<script>` siguientes, para que paths relativos resuelvan bajo `/<slug>/` aunque la URL bar sea `/<slug>/<spa-route>` (waypoint usa pushState para SPA routes).
+
+### Bundle release flow
+```bash
+# Imagenes base (cuando hay release nuevo del proyecto)
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <ecr-host>
+./mill api.dockerBuild   --repoUri <ecr>/captal-api-dev      --tag vX.Y.Z
+./mill api.dockerPush    --repoUri <ecr>/captal-api-dev      --tag vX.Y.Z
+./mill infra.dockerBuild --repoUri <ecr>/captal-provision-dev --tag vX.Y.Z
+./mill infra.dockerPush  --repoUri <ecr>/captal-provision-dev --tag vX.Y.Z
+
+# Bundle del cliente con metadata correcta (gzip + content-type)
+ENVIRONMENT=dev ./mill client.bundle   # o sin ENVIRONMENT=dev para production
+B=s3://<bucket>/bundle
+aws s3 cp out/client/bundle.dest/main.js.gz    $B/main.js.gz    --content-type application/javascript --content-encoding gzip
+aws s3 cp out/client/bundle.dest/styles.css.gz $B/styles.css.gz --content-type text/css                --content-encoding gzip
+aws s3 cp out/client/bundle.dest/index.html    $B/index.html    --content-type "text/html; charset=utf-8"
+aws s3 cp out/client/bundle.dest/brand-icon.svg $B/brand-icon.svg --content-type "image/svg+xml"
+
+# Si cambiaste ENVIRONMENT desde el ultimo build:
+./mill clean client.generatedSources    # invalida BuildInfo cache antes de bundle
+
+# CLI release (jar + wrappers cross-platform)
+./mill cli.publishS3 --bucket captal-cli-releases --version 1.0.0
+# Sube a s3://captal-cli-releases/v1.0.0/{captal.jar, captal, captal.bat}
+# y a s3://captal-cli-releases/latest/ con los mismos archivos
+```
+
+### CLI distribution (operator install)
+
+`./mill cli.releaseAssets` produce 3 archivos en `out/cli/releaseAssets.dest/`:
+- `captal.jar` — assembly ejecutable
+- `captal` — bash wrapper (Linux/macOS) — `chmod +x` ya seteado
+- `captal.bat` — batch wrapper (Windows)
+
+`./mill cli.publishS3 --bucket <b> --version <v>` los sube a `s3://<b>/v<v>/` y `s3://<b>/latest/`.
+
+`./mill cli.installLocal` instala localmente en `~/.local/bin/` (atajo para developers del proyecto, no para releases).
+
+**Operador instala (Linux/macOS)**:
+```bash
+mkdir -p ~/.local/bin
+aws s3 cp s3://captal-cli-releases/latest/captal.jar ~/.local/bin/captal.jar
+aws s3 cp s3://captal-cli-releases/latest/captal     ~/.local/bin/captal
+chmod +x ~/.local/bin/captal
+captal init --claude
+```
+
+**Operador instala (Windows)**:
+```powershell
+$dir = "$env:USERPROFILE\AppData\Local\captal"
+mkdir $dir -Force
+aws s3 cp s3://captal-cli-releases/latest/captal.jar "$dir\captal.jar"
+aws s3 cp s3://captal-cli-releases/latest/captal.bat "$dir\captal.bat"
+$env:Path += ";$dir"   # o agregar permanentemente via System Properties
+captal init --claude
+```
+
+**TODO**: el bucket `captal-cli-releases` es nuevo; agregar a Terraform infra (versioning + lifecycle policy para cleanup de releases viejos).
+
+### Recovery: rqlite perdio data
+Si tras redeploy de rqlite (o force-deploy del API) las queries devuelven 500 / "no result set returned":
+1. Force-deploy del API service (`aws ecs update-service ... --force-new-deployment`) para conexiones JDBC frescas
+2. Re-correr `captal shared push` para reinsertar surveys + advertisers
+3. Re-correr `captal locations push <slug>` para reinsertar location + i18n + videos + promos
+4. CloudFront invalidacion automatica via locations push
 
 ---
 
