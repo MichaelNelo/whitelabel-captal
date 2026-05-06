@@ -5,6 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="theme-color" content="#6366f1">
   <title>WiFi Gratis</title>
+  <!-- Set <base> dynamically so relative URLs resolve under /<slug>/ regardless of the current
+       SPA route (e.g. /<slug>/video). Must run before any <link>/<script> below. -->
+  <script>
+    (function () {
+      var slug = location.pathname.split('/').filter(Boolean)[0];
+      if (slug && slug !== 'api') {
+        var b = document.createElement('base');
+        b.href = '/' + slug + '/';
+        document.head.appendChild(b);
+      }
+    })();
+  </script>
   <link rel="stylesheet" href="{{CSS_PATH}}">
   <link rel="stylesheet" href="./custom-styles.css.gz" onerror="this.remove()">
 </head>
