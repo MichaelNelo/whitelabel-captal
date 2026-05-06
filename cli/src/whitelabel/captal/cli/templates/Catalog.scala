@@ -20,13 +20,17 @@ object Catalog:
 
   private val skillsFiles = List(
     "skills/configure-aws/SKILL.md",
+    "skills/yaml-reference/SKILL.md",
     "skills/add-survey/SKILL.md",
     "skills/add-advertiser/SKILL.md",
     "skills/deploy-shared/SKILL.md",
     "skills/add-video/SKILL.md",
     "skills/add-promo/SKILL.md",
     "skills/edit-i18n/SKILL.md",
-    "skills/deploy-location/SKILL.md"
+    "skills/deploy-location/SKILL.md",
+    "skills/add-location/SKILL.md",
+    "skills/recover-data/SKILL.md",
+    "skills/troubleshoot-deployment/SKILL.md"
   )
 
   /** Templates for `captal init` — AI skills, output to .agents/skills/. */
