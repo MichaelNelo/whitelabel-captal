@@ -46,55 +46,56 @@ object LocaleSessionSuite:
         ,
         test("PUT /api/session/locale with existing session updates locale"):
           for
-            backend       <- testBackend
+            backend <- testBackend
             // First call status to create session
-            statusResp    <- getStatus(backend, None)
+            statusResp <- getStatus(backend, None)
             cookie = extractSessionCookie(statusResp).get
-            countBefore   <- TestFixtures.countSessions
+            countBefore <- TestFixtures.countSessions
             // Then update locale
-            localeResp    <- putSetLocale(backend, "en", Some(cookie))
+            localeResp <- putSetLocale(backend, "en", Some(cookie))
             updatedCookie = extractSessionCookie(localeResp).get
-            countAfter    <- TestFixtures.countSessions
+            countAfter <- TestFixtures.countSessions
           yield assertTrue(
             statusResp.code.isSuccess,
             localeResp.code.isSuccess,
             cookie == updatedCookie,
             localeResp.body.contains("en"),
-            countAfter == countBefore) // No new session created
+            countAfter == countBefore
+          ) // No new session created
         ,
         test("status creates session, setLocale updates same session"):
           for
             backend    <- testBackend
             statusResp <- getStatus(backend, None)
             cookie = extractSessionCookie(statusResp).get
-            localeResp <- putSetLocale(backend, "en", Some(cookie))
+            localeResp      <- putSetLocale(backend, "en", Some(cookie))
             finalStatusResp <- getStatus(backend, Some(cookie))
           yield assertTrue(
             statusResp.code.isSuccess,
             localeResp.code.isSuccess,
             finalStatusResp.code.isSuccess,
             finalStatusResp.body.contains("en"),
-            finalStatusResp.body.contains("welcome"))
+            finalStatusResp.body.contains("welcome")
+          )
         ,
         test("setLocale with existing session updates locale but preserves session state"):
           for
-            backend    <- testBackend
+            backend <- testBackend
             // Create session via status
             statusResp <- getStatus(backend, None)
-            cookie     = extractSessionCookie(statusResp).get
-            sessionId  = user.SessionId.unsafe(cookie)
+            cookie    = extractSessionCookie(statusResp).get
+            sessionId = user.SessionId.unsafe(cookie)
             // Update phase directly
-            _          <- TestFixtures.updateSessionPhase(sessionId, Phase.AdvertiserVideo)
+            _ <- TestFixtures.updateSessionPhase(sessionId, Phase.AdvertiserVideo)
             // Update locale
             updateResp <- putSetLocale(backend, "pt", Some(cookie))
             updatedCookie = extractSessionCookie(updateResp).get
-            finalResp  <- getStatus(backend, Some(updatedCookie))
+            finalResp <- getStatus(backend, Some(updatedCookie))
           yield assertTrue(
             statusResp.code.isSuccess,
             updateResp.code.isSuccess,
             cookie == updatedCookie,
             finalResp.body.contains("pt"),
-            finalResp.body.contains("advertiser_video")
-          )
+            finalResp.body.contains("advertiser_video"))
       )
 end LocaleSessionSuite

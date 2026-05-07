@@ -9,7 +9,11 @@ import whitelabel.captal.core.application.{Event, EventHandler, Flow, NextStep, 
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository, VideoRepository}
 import whitelabel.captal.infra.RqliteDataSource
 import whitelabel.captal.infra.eventhandlers.*
-import whitelabel.captal.infra.repositories.{SurveyRepositoryQuill, UserRepositoryQuill, VideoRepositoryQuill}
+import whitelabel.captal.infra.repositories.{
+  SurveyRepositoryQuill,
+  UserRepositoryQuill,
+  VideoRepositoryQuill
+}
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.services.LocaleService
 import whitelabel.captal.infra.session.{SessionContext, SessionService}
@@ -49,7 +53,8 @@ object TestLayers:
       val dbHandler = EventLogHandler(ctx)
         .andThen(AnswerPersistenceHandler(ctx))
         .andThen(UserPersistenceHandler(ctx))
-        .andThen(SessionPhaseHandler(ctx, nextPhaseAfterIdentificationQuestion, nextPhaseAfterVideo))
+        .andThen(
+          SessionPhaseHandler(ctx, nextPhaseAfterIdentificationQuestion, nextPhaseAfterVideo))
         .andThen(SessionSurveyHandler(ctx))
         .andThen(SessionVideoHandler(ctx))
         .andThen(SurveyProgressHandler())
@@ -119,18 +124,13 @@ object TestLayers:
   private val nextAdvertiserSurveyFlowLayer: ZLayer[
     SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
     Nothing,
-    Flow.Aux[
-      Task,
-      ProvideNextAdvertiserSurveyCommand,
-      ProvideNextAdvertiserSurveyHandler.Response]
+    Flow.Aux[Task, ProvideNextAdvertiserSurveyCommand, ProvideNextAdvertiserSurveyHandler.Response]
   ] = ZLayer.fromFunction:
     (
         surveyRepo: SurveyRepository[Task],
         userRepo: UserRepository[Task],
         eventHandler: EventHandler[Task, Event]) =>
-      Flow(
-        ProvideNextAdvertiserSurveyHandler(surveyRepo, userRepo, Phase.Ready),
-        eventHandler)
+      Flow(ProvideNextAdvertiserSurveyHandler(surveyRepo, userRepo, Phase.Ready), eventHandler)
 
   private val answerAdvertiserFlowLayer: ZLayer[
     SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
@@ -147,9 +147,11 @@ object TestLayers:
   private val markVideoWatchedFlowLayer: ZLayer[
     VideoRepository[Task] & SessionContext & EventHandler[Task, Event],
     Nothing,
-    Flow.Aux[Task, MarkVideoWatchedCommand, NextStep]
-  ] = ZLayer.fromFunction:
-    (videoRepo: VideoRepository[Task], ctx: SessionContext, eventHandler: EventHandler[Task, Event]) =>
+    Flow.Aux[Task, MarkVideoWatchedCommand, NextStep]] = ZLayer.fromFunction:
+    (
+        videoRepo: VideoRepository[Task],
+        ctx: SessionContext,
+        eventHandler: EventHandler[Task, Event]) =>
       import zio.interop.catz.given
       new Flow[Task, MarkVideoWatchedCommand]:
         type Result = NextStep
@@ -159,7 +161,7 @@ object TestLayers:
             session <- ctx.getOrFail
             handler = MarkVideoWatchedHandler.withSession(videoRepo, session, nextPhaseAfterVideo)
             opResult <- handler.handle(command)
-            result <- ZIO.fromEither(
+            result   <- ZIO.fromEither(
               whitelabel.captal.core.Op.run(opResult).left.map(Flow.HandlerError(_)))
             (events, value) = result
             _ <- eventHandler.handle(events)

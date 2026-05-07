@@ -17,9 +17,11 @@ object DockerImageBuilder:
   /** Build, tag, and push an image to ECR.
     *
     * @param base
-    *   ECR URI of the base image WITH tag (e.g. `123.dkr.ecr.us-east-1.amazonaws.com/captal-api:v1.0`)
+    *   ECR URI of the base image WITH tag (e.g.
+    *   `123.dkr.ecr.us-east-1.amazonaws.com/captal-api:v1.0`)
     * @param repo
-    *   ECR repo URI of the destination, WITHOUT tag (e.g. `123.dkr.ecr.us-east-1.amazonaws.com/captal-shared`)
+    *   ECR repo URI of the destination, WITHOUT tag (e.g.
+    *   `123.dkr.ecr.us-east-1.amazonaws.com/captal-shared`)
     * @param tag
     *   The tag to apply (e.g. `20260502T143045` or `cafe-centro-20260502T143045`)
     * @param contextDir
@@ -48,12 +50,13 @@ object DockerImageBuilder:
         _          <- runDockerPush(fullTag)
       yield fullTag
 
-  private def ensureContextExists(dir: Path): IO[CliError, Unit] = ZIO
-    .attemptBlocking:
-      if !Files.exists(dir) then
-        throw new RuntimeException(s"Context directory not found: $dir")
-    .mapError(e => CliError.ConfigError(e.getMessage))
-    .unit
+  private def ensureContextExists(dir: Path): IO[CliError, Unit] =
+    ZIO
+      .attemptBlocking:
+        if !Files.exists(dir) then
+          throw new RuntimeException(s"Context directory not found: $dir")
+      .mapError(e => CliError.ConfigError(e.getMessage))
+      .unit
 
   private def extractDockerfile(resource: String): ZIO[Scope, CliError, Path] = ZIO
     .acquireRelease(
@@ -65,8 +68,7 @@ object DockerImageBuilder:
           throw new RuntimeException(s"Dockerfile resource not found in classpath: $resource")
         try Files.copy(stream, dockerfile, StandardCopyOption.REPLACE_EXISTING)
         finally stream.close()
-        dockerfile
-    )(p =>
+        dockerfile)(p =>
       ZIO
         .attemptBlocking:
           val parent = p.getParent
@@ -93,8 +95,7 @@ object DockerImageBuilder:
       "-f",
       dockerfile.toString,
       contextDir.toString),
-    s"docker build $tag"
-  )
+    s"docker build $tag")
 
   private def runDockerPush(tag: String): IO[CliError, Unit] = exec(
     List("docker", "push", tag),
@@ -118,30 +119,32 @@ object DockerImageBuilder:
         password,
         "docker login")
 
-  private def exec(cmd: List[String], operation: String): IO[CliError, Unit] = ZIO
-    .attemptBlocking:
-      val pb = new ProcessBuilder(cmd*).inheritIO()
-      val exitCode = pb.start().waitFor()
-      if exitCode != 0 then
-        throw new RuntimeException(s"$operation failed (exit code $exitCode)")
-    .mapError(e => CliError.BuildFailed(e.getMessage))
-    .unit
+  private def exec(cmd: List[String], operation: String): IO[CliError, Unit] =
+    ZIO
+      .attemptBlocking:
+        val pb = new ProcessBuilder(cmd*).inheritIO()
+        val exitCode = pb.start().waitFor()
+        if exitCode != 0 then
+          throw new RuntimeException(s"$operation failed (exit code $exitCode)")
+      .mapError(e => CliError.BuildFailed(e.getMessage))
+      .unit
 
   private def execWithStdin(
       cmd: List[String],
       stdin: String,
-      operation: String): IO[CliError, Unit] = ZIO
-    .attemptBlocking:
-      val pb = new ProcessBuilder(cmd*).redirectErrorStream(true)
-      val process = pb.start()
-      val out = process.getOutputStream
-      out.write(stdin.getBytes("UTF-8"))
-      out.close()
-      val output = new String(process.getInputStream.readAllBytes())
-      val exitCode = process.waitFor()
-      if exitCode != 0 then
-        throw new RuntimeException(s"$operation failed (exit code $exitCode):\n$output")
-    .mapError(e => CliError.BuildFailed(e.getMessage))
-    .unit
+      operation: String): IO[CliError, Unit] =
+    ZIO
+      .attemptBlocking:
+        val pb = new ProcessBuilder(cmd*).redirectErrorStream(true)
+        val process = pb.start()
+        val out = process.getOutputStream
+        out.write(stdin.getBytes("UTF-8"))
+        out.close()
+        val output = new String(process.getInputStream.readAllBytes())
+        val exitCode = process.waitFor()
+        if exitCode != 0 then
+          throw new RuntimeException(s"$operation failed (exit code $exitCode):\n$output")
+      .mapError(e => CliError.BuildFailed(e.getMessage))
+      .unit
 
 end DockerImageBuilder

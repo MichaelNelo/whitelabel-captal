@@ -2,10 +2,9 @@ package whitelabel.captal.cli.commands
 
 import java.nio.file.{Files, Paths}
 
-import zio.*
-
 import whitelabel.captal.cli.Output
 import whitelabel.captal.cli.templates.{Catalog, TemplateWriter}
+import zio.*
 
 /** Creates a new location at locations/<slug>/ with template files. */
 object LocationsAddCommand:
