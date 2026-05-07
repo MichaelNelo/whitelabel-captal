@@ -8,6 +8,7 @@ RUN chmod +x mill
 
 COPY core/ core/
 COPY endpoints/ endpoints/
+COPY provision/ provision/
 COPY infra/ infra/
 COPY api/ api/
 
