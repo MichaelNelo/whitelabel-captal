@@ -9,10 +9,7 @@ import zio.*
   * Used to soft-validate inbound captive-portal headers (e.g. compare `X-Ap-Mac` with the
   * provisioned `location.ap_mac`) without requiring a per-request DB query.
   */
-final case class CurrentLocation(
-    id: Option[String],
-    slug: Option[String],
-    apMac: Option[String])
+final case class CurrentLocation(id: Option[String], slug: Option[String], apMac: Option[String])
 
 object CurrentLocation:
   val empty: CurrentLocation = CurrentLocation(None, None, None)
@@ -20,8 +17,8 @@ object CurrentLocation:
   /** Build a layer for the given slug. Looks up the LocationRow once and snapshots
     * `(id, slug, apMac)`. Fails if slug is set but row is missing.
     */
-  def make(slug: Option[String]): ZLayer[LocationService, Throwable, CurrentLocation] =
-    ZLayer.fromZIO:
+  def make(slug: Option[String]): ZLayer[LocationService, Throwable, CurrentLocation] = ZLayer
+    .fromZIO:
       slug match
         case None =>
           ZIO.succeed(empty)

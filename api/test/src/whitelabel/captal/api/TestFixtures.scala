@@ -17,11 +17,13 @@ import zio.interop.catz.*
 
 object TestFixtures:
   private val testConfig = ConfigFactory.load("test.conf")
-  private val fly4sConfig = Fly4sConfig.default.copy(
-    locations = List(Location("db/migration")),
-    baselineOnMigrate = true,
-    baselineVersion = MigrationVersion("0"),
-    cleanOnValidationError = true)
+  private val fly4sConfig = Fly4sConfig
+    .default
+    .copy(
+      locations = List(Location("db/migration")),
+      baselineOnMigrate = true,
+      baselineVersion = MigrationVersion("0"),
+      cleanOnValidationError = true)
 
   def migrate: ZIO[Any, Throwable, Unit] = ZIO
     .attempt:
@@ -320,6 +322,7 @@ object TestFixtures:
         stmt.close()
       finally
         conn.close()
+      end try
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Locale Fixtures
@@ -480,8 +483,8 @@ object TestFixtures:
       advertiserName: String = "Test Advertiser",
       videoUrl: String = "https://cdn.example.com/video.mp4",
       videoTitle: String = "Test Video",
-      durationSeconds: Int = 15): ZIO[QuillSqlite, Throwable, VideoFixture] = ZIO.serviceWithZIO[
-    QuillSqlite]: quill =>
+      durationSeconds: Int = 15)
+      : ZIO[QuillSqlite, Throwable, VideoFixture] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*
     val now = java.time.Instant.now.toString
     val advertiserId = UUID.randomUUID.toString
@@ -508,7 +511,8 @@ object TestFixtures:
       isActive = 1,
       priority = 10,
       createdAt = now,
-      updatedAt = now)
+      updatedAt = now
+    )
 
     // Localized text for video title
     val titleRow = LocalizedTextRow(
@@ -530,55 +534,57 @@ object TestFixtures:
       videoUrl: String = "https://cdn.example.com/promo.mp4",
       videoTitle: String = "Promo Video",
       durationSeconds: Int = 10,
-      priority: Int = 1): ZIO[QuillSqlite, Throwable, VideoFixture] = ZIO.serviceWithZIO[QuillSqlite]:
-    quill =>
-      import quill.*
-      val now = java.time.Instant.now.toString
-      val videoId = video.Id.generate
+      priority: Int = 1)
+      : ZIO[QuillSqlite, Throwable, VideoFixture] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.*
+    val now = java.time.Instant.now.toString
+    val videoId = video.Id.generate
 
-      val videoRow = AdvertiserVideoRow(
-        id = videoId,
-        advertiserId = None,
-        videoType = "propaganda",
-        videoUrl = videoUrl,
-        durationSeconds = durationSeconds,
-        minWatchSeconds = 5,
-        showCountdown = 0,
-        noRepeatSeconds = None,
-        locationId = None,
-        isActive = 1,
-        priority = priority,
-        createdAt = now,
-        updatedAt = now)
+    val videoRow = AdvertiserVideoRow(
+      id = videoId,
+      advertiserId = None,
+      videoType = "propaganda",
+      videoUrl = videoUrl,
+      durationSeconds = durationSeconds,
+      minWatchSeconds = 5,
+      showCountdown = 0,
+      noRepeatSeconds = None,
+      locationId = None,
+      isActive = 1,
+      priority = priority,
+      createdAt = now,
+      updatedAt = now
+    )
 
-      // Localized text for video title
-      val titleRow = LocalizedTextRow(
-        id = UUID.randomUUID.toString,
-        entityId = videoId.asString,
-        locale = "en",
-        value = videoTitle,
-        category = "backend",
-        createdAt = now,
-        updatedAt = now)
+    // Localized text for video title
+    val titleRow = LocalizedTextRow(
+      id = UUID.randomUUID.toString,
+      entityId = videoId.asString,
+      locale = "en",
+      value = videoTitle,
+      category = "backend",
+      createdAt = now,
+      updatedAt = now)
 
-      for
-        _ <- run(query[AdvertiserVideoRow].insertValue(lift(videoRow)))
-        _ <- run(query[LocalizedTextRow].insertValue(lift(titleRow)))
-      yield VideoFixture("", videoId, videoUrl, durationSeconds, Some(videoTitle))
+    for
+      _ <- run(query[AdvertiserVideoRow].insertValue(lift(videoRow)))
+      _ <- run(query[LocalizedTextRow].insertValue(lift(titleRow)))
+    yield VideoFixture("", videoId, videoUrl, durationSeconds, Some(videoTitle))
 
-  def getVideoViews: ZIO[QuillSqlite, Throwable, List[VideoViewRow]] = ZIO.serviceWithZIO[QuillSqlite]:
-    quill =>
-      import quill.*
-      run(query[VideoViewRow])
+  def getVideoViews
+      : ZIO[QuillSqlite, Throwable, List[VideoViewRow]] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.*
+    run(query[VideoViewRow])
 
   def updateSessionCurrentVideo(
       sessionId: user.SessionId,
-      videoId: video.Id): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
-    import quill.*
-    run(
-      query[SessionRow]
-        .filter(_.id == lift(sessionId))
-        .update(_.currentVideoId -> Some(lift(videoId)))).unit
+      videoId: video.Id): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
+      import quill.*
+      run(
+        query[SessionRow]
+          .filter(_.id == lift(sessionId))
+          .update(_.currentVideoId -> Some(lift(videoId)))).unit
 
   def clearVideoData: ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     ZIO.attemptBlocking:
@@ -639,7 +645,8 @@ object TestFixtures:
         isActive = 1,
         priority = 10,
         createdAt = now,
-        updatedAt = now)
+        updatedAt = now
+      )
 
       val titleRow = LocalizedTextRow(
         id = UUID.randomUUID.toString,
@@ -659,55 +666,57 @@ object TestFixtures:
         isActive = 1,
         createdAt = now)
 
-      val questionsData = (1 to questionCount).map: order =>
-        val questionId = survey.question.Id.generate
-        val opt1Id = survey.question.OptionId.generate
-        val opt2Id = survey.question.OptionId.generate
-        val questionRow = QuestionRow(
-          id = questionId,
-          surveyId = surveyId,
-          questionType = "radio",
-          pointsAwarded = 10,
-          displayOrder = order,
-          hierarchyLevel = None,
-          isRequired = 1,
-          createdAt = now)
-        val textRow = LocalizedTextRow(
-          id = UUID.randomUUID.toString,
-          entityId = questionId.asString,
-          locale = "en",
-          value = s"$advertiserName Question $order",
-          category = "backend",
-          createdAt = now,
-          updatedAt = now)
-        val opt1Row = QuestionOptionRow(
-          id = opt1Id,
-          questionId = questionId,
-          displayOrder = 1,
-          parentOptionId = None)
-        val opt1TextRow = LocalizedTextRow(
-          id = UUID.randomUUID.toString,
-          entityId = opt1Id.asString,
-          locale = "en",
-          value = s"Option A",
-          category = "backend",
-          createdAt = now,
-          updatedAt = now)
-        val opt2Row = QuestionOptionRow(
-          id = opt2Id,
-          questionId = questionId,
-          displayOrder = 2,
-          parentOptionId = None)
-        val opt2TextRow = LocalizedTextRow(
-          id = UUID.randomUUID.toString,
-          entityId = opt2Id.asString,
-          locale = "en",
-          value = s"Option B",
-          category = "backend",
-          createdAt = now,
-          updatedAt = now)
-        (questionRow, textRow, opt1Row, opt1TextRow, opt2Row, opt2TextRow, List(opt1Id, opt2Id))
-      .toList
+      val questionsData = (1 to questionCount)
+        .map: order =>
+          val questionId = survey.question.Id.generate
+          val opt1Id = survey.question.OptionId.generate
+          val opt2Id = survey.question.OptionId.generate
+          val questionRow = QuestionRow(
+            id = questionId,
+            surveyId = surveyId,
+            questionType = "radio",
+            pointsAwarded = 10,
+            displayOrder = order,
+            hierarchyLevel = None,
+            isRequired = 1,
+            createdAt = now)
+          val textRow = LocalizedTextRow(
+            id = UUID.randomUUID.toString,
+            entityId = questionId.asString,
+            locale = "en",
+            value = s"$advertiserName Question $order",
+            category = "backend",
+            createdAt = now,
+            updatedAt = now
+          )
+          val opt1Row = QuestionOptionRow(
+            id = opt1Id,
+            questionId = questionId,
+            displayOrder = 1,
+            parentOptionId = None)
+          val opt1TextRow = LocalizedTextRow(
+            id = UUID.randomUUID.toString,
+            entityId = opt1Id.asString,
+            locale = "en",
+            value = s"Option A",
+            category = "backend",
+            createdAt = now,
+            updatedAt = now)
+          val opt2Row = QuestionOptionRow(
+            id = opt2Id,
+            questionId = questionId,
+            displayOrder = 2,
+            parentOptionId = None)
+          val opt2TextRow = LocalizedTextRow(
+            id = UUID.randomUUID.toString,
+            entityId = opt2Id.asString,
+            locale = "en",
+            value = s"Option B",
+            category = "backend",
+            createdAt = now,
+            updatedAt = now)
+          (questionRow, textRow, opt1Row, opt1TextRow, opt2Row, opt2TextRow, List(opt1Id, opt2Id))
+        .toList
 
       for
         _ <- run(query[AdvertiserRow].insertValue(lift(advertiserRow)))
@@ -715,14 +724,13 @@ object TestFixtures:
         _ <- run(query[LocalizedTextRow].insertValue(lift(titleRow)))
         _ <- run(query[SurveyRow].insertValue(lift(surveyRow)))
         _ <-
-          ZIO.foreach(questionsData):
-            (qRow, tRow, opt1Row, opt1TextRow, opt2Row, opt2TextRow, _) =>
-              run(query[QuestionRow].insertValue(lift(qRow))) *>
-                run(query[LocalizedTextRow].insertValue(lift(tRow))) *>
-                run(query[QuestionOptionRow].insertValue(lift(opt1Row))) *>
-                run(query[LocalizedTextRow].insertValue(lift(opt1TextRow))) *>
-                run(query[QuestionOptionRow].insertValue(lift(opt2Row))) *>
-                run(query[LocalizedTextRow].insertValue(lift(opt2TextRow)))
+          ZIO.foreach(questionsData): (qRow, tRow, opt1Row, opt1TextRow, opt2Row, opt2TextRow, _) =>
+            run(query[QuestionRow].insertValue(lift(qRow))) *>
+              run(query[LocalizedTextRow].insertValue(lift(tRow))) *>
+              run(query[QuestionOptionRow].insertValue(lift(opt1Row))) *>
+              run(query[LocalizedTextRow].insertValue(lift(opt1TextRow))) *>
+              run(query[QuestionOptionRow].insertValue(lift(opt2Row))) *>
+              run(query[LocalizedTextRow].insertValue(lift(opt2TextRow)))
       yield AdvertiserVideoSurveyFixture(
         advertiserId,
         videoId,
@@ -731,4 +739,5 @@ object TestFixtures:
         surveyId,
         questionsData.map(_._1.id),
         questionsData.map(_._7))
+      end for
 end TestFixtures

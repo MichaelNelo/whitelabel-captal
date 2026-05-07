@@ -2,10 +2,9 @@ package whitelabel.captal.cli.commands
 
 import java.nio.file.{Files, Paths}
 
-import zio.*
-
 import whitelabel.captal.cli.Output
 import whitelabel.captal.cli.templates.{Catalog, TemplateWriter}
+import zio.*
 
 /** Initializes a captal project with shared/, locations/, and .agents/skills/ directories. */
 object InitCommand:

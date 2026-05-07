@@ -21,19 +21,16 @@ case object AdvertiserVideoSurveyPage  extends Page
 case object ReadyPage                  extends Page
 
 object Router:
-  /** Slug-aware base path. In production the SPA is served from `/<slug>/index.html`, so all
-    * routes need that prefix; in dev the SPA runs at `/`, no prefix.
+  /** Slug-aware base path. In production the SPA is served from `/<slug>/index.html`, so all routes
+    * need that prefix; in dev the SPA runs at `/`, no prefix.
     */
   private val basePath: String =
-    val firstSegment = dom
-      .window
-      .location
-      .pathname
-      .split("/")
-      .find(_.nonEmpty)
+    val firstSegment = dom.window.location.pathname.split("/").find(_.nonEmpty)
     firstSegment match
-      case Some(slug) if slug != "api" => s"/$slug"
-      case _                           => ""
+      case Some(slug) if slug != "api" =>
+        s"/$slug"
+      case _ =>
+        ""
 
   // Route patterns
   private val welcomeRoute: Route[WelcomePage.type, Unit] = Route.static(

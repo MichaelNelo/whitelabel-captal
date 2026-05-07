@@ -51,125 +51,128 @@ final class SurveyRoutes(
 
   // ─── AnswerEmail ──────────────────────────────────────────────────────────
 
-  val answerEmailRoute: ZServerEndpoint[
-    SessionContext & SessionService & AnswerEmailFlowType, Any] = sessionEndpoint
-    .secured(
-      onMissingSession = SessionEndpoint.OnMissing.Fail,
-      allowedPhases = Seq(Phase.IdentificationQuestion))
-    .post
-    .in("api" / "survey" / "email")
-    .in(jsonBody[AnswerRequest])
-    .out(jsonBody[SurveyResponse])
-    .serverLogic(session =>
-      request =>
-        for
-          answerFlow <- ZIO.service[AnswerEmailFlowType]
-          result     <- answerFlow
-            .execute(AnswerEmailCommand(request.answer, Instant.now))
-            .map(SurveyResponse.from)
-            .catchAllCause: cause =>
-              val error =
-                cause.failureOrCause match
-                  case Left(e) =>
-                    e
-                  case Right(c) =>
-                    new Exception(s"Defect: ${c.prettyPrint}")
-              toApiError(error).flatMap(ZIO.fail(_))
-        yield result)
+  val answerEmailRoute
+      : ZServerEndpoint[SessionContext & SessionService & AnswerEmailFlowType, Any] =
+    sessionEndpoint
+      .secured(
+        onMissingSession = SessionEndpoint.OnMissing.Fail,
+        allowedPhases = Seq(Phase.IdentificationQuestion))
+      .post
+      .in("api" / "survey" / "email")
+      .in(jsonBody[AnswerRequest])
+      .out(jsonBody[SurveyResponse])
+      .serverLogic(session =>
+        request =>
+          for
+            answerFlow <- ZIO.service[AnswerEmailFlowType]
+            result     <- answerFlow
+              .execute(AnswerEmailCommand(request.answer, Instant.now))
+              .map(SurveyResponse.from)
+              .catchAllCause: cause =>
+                val error =
+                  cause.failureOrCause match
+                    case Left(e) =>
+                      e
+                    case Right(c) =>
+                      new Exception(s"Defect: ${c.prettyPrint}")
+                toApiError(error).flatMap(ZIO.fail(_))
+          yield result)
 
   // ─── AnswerProfiling ──────────────────────────────────────────────────────
 
-  val answerProfilingRoute: ZServerEndpoint[
-    SessionContext & SessionService & AnswerProfilingFlowType, Any] = sessionEndpoint
-    .secured(
-      onMissingSession = SessionEndpoint.OnMissing.Fail,
-      allowedPhases = Seq(Phase.IdentificationQuestion))
-    .post
-    .in("api" / "survey" / "profiling")
-    .in(jsonBody[AnswerRequest])
-    .out(jsonBody[SurveyResponse])
-    .serverLogic: _ =>
-      request =>
-        for
-          answerFlow <- ZIO.service[AnswerProfilingFlowType]
-          cmd = AnswerProfilingCommand(answer = request.answer, occurredAt = Instant.now)
-          result <- answerFlow
-            .execute(cmd)
-            .map(SurveyResponse.from)
-            .catchAllCause: cause =>
-              val error =
-                cause.failureOrCause match
-                  case Left(e) =>
-                    e
-                  case Right(c) =>
-                    new Exception(s"Defect: ${c.prettyPrint}")
-              toApiError(error).flatMap(ZIO.fail(_))
-        yield result
+  val answerProfilingRoute
+      : ZServerEndpoint[SessionContext & SessionService & AnswerProfilingFlowType, Any] =
+    sessionEndpoint
+      .secured(
+        onMissingSession = SessionEndpoint.OnMissing.Fail,
+        allowedPhases = Seq(Phase.IdentificationQuestion))
+      .post
+      .in("api" / "survey" / "profiling")
+      .in(jsonBody[AnswerRequest])
+      .out(jsonBody[SurveyResponse])
+      .serverLogic: _ =>
+        request =>
+          for
+            answerFlow <- ZIO.service[AnswerProfilingFlowType]
+            cmd = AnswerProfilingCommand(answer = request.answer, occurredAt = Instant.now)
+            result <- answerFlow
+              .execute(cmd)
+              .map(SurveyResponse.from)
+              .catchAllCause: cause =>
+                val error =
+                  cause.failureOrCause match
+                    case Left(e) =>
+                      e
+                    case Right(c) =>
+                      new Exception(s"Defect: ${c.prettyPrint}")
+                toApiError(error).flatMap(ZIO.fail(_))
+          yield result
 
   // ─── AnswerLocation ───────────────────────────────────────────────────────
 
-  val answerLocationRoute: ZServerEndpoint[
-    SessionContext & SessionService & AnswerLocationFlowType, Any] = sessionEndpoint
-    .secured(
-      onMissingSession = SessionEndpoint.OnMissing.Fail,
-      allowedPhases = Seq(Phase.IdentificationQuestion))
-    .post
-    .in("api" / "survey" / "location")
-    .in(jsonBody[AnswerRequest])
-    .out(jsonBody[SurveyResponse])
-    .serverLogic: _ =>
-      request =>
-        for
-          answerFlow <- ZIO.service[AnswerLocationFlowType]
-          cmd = AnswerLocationCommand(answer = request.answer, occurredAt = Instant.now)
-          result <- answerFlow
-            .execute(cmd)
-            .map(SurveyResponse.from)
-            .catchAllCause: cause =>
-              val error =
-                cause.failureOrCause match
-                  case Left(e) =>
-                    e
-                  case Right(c) =>
-                    new Exception(s"Defect: ${c.prettyPrint}")
-              toApiError(error).flatMap(ZIO.fail(_))
-        yield result
+  val answerLocationRoute
+      : ZServerEndpoint[SessionContext & SessionService & AnswerLocationFlowType, Any] =
+    sessionEndpoint
+      .secured(
+        onMissingSession = SessionEndpoint.OnMissing.Fail,
+        allowedPhases = Seq(Phase.IdentificationQuestion))
+      .post
+      .in("api" / "survey" / "location")
+      .in(jsonBody[AnswerRequest])
+      .out(jsonBody[SurveyResponse])
+      .serverLogic: _ =>
+        request =>
+          for
+            answerFlow <- ZIO.service[AnswerLocationFlowType]
+            cmd = AnswerLocationCommand(answer = request.answer, occurredAt = Instant.now)
+            result <- answerFlow
+              .execute(cmd)
+              .map(SurveyResponse.from)
+              .catchAllCause: cause =>
+                val error =
+                  cause.failureOrCause match
+                    case Left(e) =>
+                      e
+                    case Right(c) =>
+                      new Exception(s"Defect: ${c.prettyPrint}")
+                toApiError(error).flatMap(ZIO.fail(_))
+          yield result
 
   // ─── NextSurvey ───────────────────────────────────────────────────────────
 
-  val nextSurveyRoute: ZServerEndpoint[
-    SessionContext & SessionService & NextSurveyFlowType, Any] = sessionEndpoint
-    .secured(
-      onMissingSession = SessionEndpoint.OnMissing.Fail,
-      allowedPhases = Seq(Phase.Welcome, Phase.IdentificationQuestion))
-    .get
-    .in("api" / "survey" / "next")
-    .out(jsonBody[SurveyResponse])
-    .serverLogic: session =>
-      _ =>
-        for
-          // Transition from Welcome to IdentificationQuestion when user requests next survey
-          _ <-
-            if session.phase == Phase.Welcome then
-              ZIO
-                .serviceWithZIO[SessionService](
-                  _.setPhase(session.sessionId, Phase.IdentificationQuestion))
-                .mapError(ApiError.fromThrowable)
-            else
-              ZIO.unit
-          flow   <- ZIO.service[NextSurveyFlowType]
-          result <- flow
-            .execute(ProvideNextIdentificationSurveyCommand)
-            .map(SurveyResponse.from)
-            .catchAllCause: cause =>
-              val error =
-                cause.failureOrCause match
-                  case Left(e) =>
-                    e
-                  case Right(c) =>
-                    new Exception(s"Defect: ${c.prettyPrint}")
-              toApiError(error).flatMap(ZIO.fail(_))
-        yield result
+  val nextSurveyRoute: ZServerEndpoint[SessionContext & SessionService & NextSurveyFlowType, Any] =
+    sessionEndpoint
+      .secured(
+        onMissingSession = SessionEndpoint.OnMissing.Fail,
+        allowedPhases = Seq(Phase.Welcome, Phase.IdentificationQuestion))
+      .get
+      .in("api" / "survey" / "next")
+      .out(jsonBody[SurveyResponse])
+      .serverLogic: session =>
+        _ =>
+          for
+            // Transition from Welcome to IdentificationQuestion when user requests next survey
+            _ <-
+              if session.phase == Phase.Welcome then
+                ZIO
+                  .serviceWithZIO[SessionService](
+                    _.setPhase(session.sessionId, Phase.IdentificationQuestion))
+                  .mapError(ApiError.fromThrowable)
+              else
+                ZIO.unit
+            flow   <- ZIO.service[NextSurveyFlowType]
+            result <- flow
+              .execute(ProvideNextIdentificationSurveyCommand)
+              .map(SurveyResponse.from)
+              .catchAllCause: cause =>
+                val error =
+                  cause.failureOrCause match
+                    case Left(e) =>
+                      e
+                    case Right(c) =>
+                      new Exception(s"Defect: ${c.prettyPrint}")
+                toApiError(error).flatMap(ZIO.fail(_))
+          yield result
 
   // ─── Status (sets the session cookie) ─────────────────────────────────────
 
@@ -195,11 +198,9 @@ final class SurveyRoutes(
       case _ =>
         ZIO.unit
 
-  private def sameMac(a: String, b: String): Boolean =
-    normalize(a) == normalize(b)
+  private def sameMac(a: String, b: String): Boolean = normalize(a) == normalize(b)
 
-  private def normalize(mac: String): String =
-    mac.toLowerCase.replace("-", ":").trim
+  private def normalize(mac: String): String = mac.toLowerCase.replace("-", ":").trim
 
   val statusRoute: ZServerEndpoint[SessionContext & SessionService, Any] = endpoint
     .securityIn(cookieConfig.tapirInput)
@@ -212,11 +213,7 @@ final class SurveyRoutes(
     .zServerSecurityLogic: (cookie, userAgentOpt, clientMac, apMac, redirectUrl, ssid) =>
       val userAgent = userAgentOpt.getOrElse(defaultUserAgent)
       val portalParams = clientMac.map: mac =>
-        CaptivePortalParams(
-          mac,
-          apMac.getOrElse(""),
-          redirectUrl.getOrElse(""),
-          ssid.getOrElse(""))
+        CaptivePortalParams(mac, apMac.getOrElse(""), redirectUrl.getOrElse(""), ssid.getOrElse(""))
       for
         _       <- softValidateApMac(apMac, clientMac)
         session <- SessionEndpoint.resolveSession(
@@ -240,6 +237,7 @@ final class SurveyRoutes(
     answerProfilingRoute.widen[FullEnv],
     answerLocationRoute.widen[FullEnv],
     nextSurveyRoute.widen[FullEnv],
-    statusRoute.widen[FullEnv])
+    statusRoute.widen[FullEnv]
+  )
 
 end SurveyRoutes

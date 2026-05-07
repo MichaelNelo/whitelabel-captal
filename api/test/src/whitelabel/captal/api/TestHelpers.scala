@@ -8,7 +8,11 @@ import sttp.tapir.server.ServerEndpoint
 import sttp.tapir.server.stub.TapirStubInterpreter
 import sttp.tapir.ztapir.ZServerEndpoint
 import whitelabel.captal.core.application.commands.NextIdentificationSurvey.given
-import whitelabel.captal.core.application.commands.{NextAdvertiserSurvey, NextIdentificationSurvey, NextVideo}
+import whitelabel.captal.core.application.commands.{
+  NextAdvertiserSurvey,
+  NextIdentificationSurvey,
+  NextVideo
+}
 import whitelabel.captal.endpoints.AdvertiserSurveyResponse.given
 import whitelabel.captal.endpoints.VideoResponse.given
 import whitelabel.captal.endpoints.VideoWatchedResponse.given
@@ -55,7 +59,9 @@ object TestHelpers:
       val surveyEndpoints = surveyRoutes.routes.map(e => provideEnvToEndpoint(e, env))
       val localeEndpoints = localeRoutes.routes.map(e => provideEnvToEndpoint(e, env))
       val videoEndpoints = videoRoutes.routes.map(e => provideEnvToEndpoint(e, env))
-      val advertiserSurveyEndpoints = advertiserSurveyRoutes.routes.map(e => provideEnvToEndpoint(e, env))
+      val advertiserSurveyEndpoints = advertiserSurveyRoutes
+        .routes
+        .map(e => provideEnvToEndpoint(e, env))
       TapirStubInterpreter(SttpBackendStub[Task, Any](taskMonadError))
         .whenServerEndpointsRunLogic(
           surveyEndpoints ++ localeEndpoints ++ videoEndpoints ++ advertiserSurveyEndpoints)
@@ -75,20 +81,23 @@ object TestHelpers:
 
   // Default captive portal headers for tests
   private val defaultPortalHeaders = Map(
-    "X-Client-Mac"  -> "AA:BB:CC:DD:EE:FF",
-    "X-Ap-Mac"      -> "11:22:33:44:55:66",
+    "X-Client-Mac"   -> "AA:BB:CC:DD:EE:FF",
+    "X-Ap-Mac"       -> "11:22:33:44:55:66",
     "X-Redirect-Url" -> "http://google.com",
-    "X-Ssid"        -> "TestNetwork")
+    "X-Ssid"         -> "TestNetwork")
 
   def getStatus(backend: SttpBackend[Task, Any], sessionCookie: Option[String] = None) =
     val base = basicRequest.get(uri"http://test/api/status").response(asStringAlways)
-    val withHeaders = defaultPortalHeaders.foldLeft(base) { case (req, (k, v)) => req.header(k, v) }
+    val withHeaders =
+      defaultPortalHeaders.foldLeft(base) { case (req, (k, v)) =>
+        req.header(k, v)
+      }
     val withCookie = sessionCookie.fold(withHeaders)(c => withHeaders.cookie("captal_session", c))
     withCookie.send(backend)
 
   /** Create a new session via /api/status and return the session cookie */
-  def createSession(backend: SttpBackend[Task, Any]): Task[String] =
-    getStatus(backend, None).map(r => extractSessionCookie(r).get)
+  def createSession(backend: SttpBackend[Task, Any]): Task[String] = getStatus(backend, None).map(
+    r => extractSessionCookie(r).get)
 
   def getLocales(backend: SttpBackend[Task, Any]) = basicRequest
     .get(uri"http://test/api/locales")
@@ -143,15 +152,21 @@ object TestHelpers:
     .response(asStringAlways)
     .send(backend)
 
-  def parseNextVideo(body: String): Option[NextVideo] =
-    decode[VideoResponse](body).toOption.flatMap:
-      case VideoResponse.Video(data) => Some(data)
-      case VideoResponse.Step(_)     => None
+  def parseNextVideo(body: String): Option[NextVideo] = decode[VideoResponse](body)
+    .toOption
+    .flatMap:
+      case VideoResponse.Video(data) =>
+        Some(data)
+      case VideoResponse.Step(_) =>
+        None
 
-  def parseVideoStep(body: String): Boolean =
-    decode[VideoResponse](body).toOption.exists:
-      case VideoResponse.Step(_) => true
-      case _                     => false
+  def parseVideoStep(body: String): Boolean = decode[VideoResponse](body)
+    .toOption
+    .exists:
+      case VideoResponse.Step(_) =>
+        true
+      case _ =>
+        false
 
   def postMarkVideoWatched(
       backend: SttpBackend[Task, Any],
@@ -187,12 +202,19 @@ object TestHelpers:
     .send(backend)
 
   def parseNextAdvertiserSurvey(body: String): Option[NextAdvertiserSurvey] =
-    decode[AdvertiserSurveyResponse](body).toOption.flatMap:
-      case AdvertiserSurveyResponse.Survey(data) => Some(data)
-      case AdvertiserSurveyResponse.Step(_)      => None
+    decode[AdvertiserSurveyResponse](body)
+      .toOption
+      .flatMap:
+        case AdvertiserSurveyResponse.Survey(data) =>
+          Some(data)
+        case AdvertiserSurveyResponse.Step(_) =>
+          None
 
-  def parseAdvertiserSurveyStep(body: String): Boolean =
-    decode[AdvertiserSurveyResponse](body).toOption.exists:
-      case AdvertiserSurveyResponse.Step(_) => true
-      case _                               => false
+  def parseAdvertiserSurveyStep(body: String): Boolean = decode[AdvertiserSurveyResponse](body)
+    .toOption
+    .exists:
+      case AdvertiserSurveyResponse.Step(_) =>
+        true
+      case _ =>
+        false
 end TestHelpers

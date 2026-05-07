@@ -226,14 +226,15 @@ object Main extends ZIOAppDefault:
     for
       settings <- ZIO.service[ServerSettings]
       locSvc   <- ZIO.service[LocationService]
-      cl <- settings.locationSlug match
-        case None =>
-          ZIO.succeed(CurrentLocation.empty)
-        case Some(s) =>
-          locSvc
-            .findBySlug(s)
-            .someOrFail(LocationService.LocationNotFound(s))
-            .map(row => CurrentLocation(Some(row.id), Some(row.slug), row.apMac))
+      cl       <-
+        settings.locationSlug match
+          case None =>
+            ZIO.succeed(CurrentLocation.empty)
+          case Some(s) =>
+            locSvc
+              .findBySlug(s)
+              .someOrFail(LocationService.LocationNotFound(s))
+              .map(row => CurrentLocation(Some(row.id), Some(row.slug), row.apMac))
     yield cl
 
   // ─── Routes ───────────────────────────────────────────────────────────────────
@@ -242,10 +243,9 @@ object Main extends ZIOAppDefault:
     SessionContext & SessionService & LocaleService & QuillSqlite & SessionEndpoint &
       SessionCookieConfig & CurrentLocation & SurveyRoutes & LocaleRoutes & VideoRoutes &
       AdvertiserSurveyRoutes & SurveyRoutes.AnswerEmailFlowType &
-      SurveyRoutes.AnswerProfilingFlowType &
-      SurveyRoutes.AnswerLocationFlowType & SurveyRoutes.NextSurveyFlowType &
-      VideoRoutes.NextVideoFlowType & VideoRoutes.MarkVideoWatchedFlowType &
-      AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
+      SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
+      SurveyRoutes.NextSurveyFlowType & VideoRoutes.NextVideoFlowType &
+      VideoRoutes.MarkVideoWatchedFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType
 
   private def endpoints(
@@ -265,8 +265,11 @@ object Main extends ZIOAppDefault:
       else
         base
     locationSlug match
-      case Some(slug) => withDev.map(_.prependSecurityIn(slug))
-      case None       => withDev
+      case Some(slug) =>
+        withDev.map(_.prependSecurityIn(slug))
+      case None =>
+        withDev
+  end endpoints
 
   private def apiRoutes(
       devEndpoints: Boolean,
@@ -274,15 +277,14 @@ object Main extends ZIOAppDefault:
       surveyRoutes: SurveyRoutes,
       localeRoutes: LocaleRoutes,
       videoRoutes: VideoRoutes,
-      advertiserSurveyRoutes: AdvertiserSurveyRoutes) =
-    ZioHttpInterpreter().toHttp(
-      endpoints(
-        devEndpoints,
-        locationSlug,
-        surveyRoutes,
-        localeRoutes,
-        videoRoutes,
-        advertiserSurveyRoutes))
+      advertiserSurveyRoutes: AdvertiserSurveyRoutes) = ZioHttpInterpreter().toHttp(
+    endpoints(
+      devEndpoints,
+      locationSlug,
+      surveyRoutes,
+      localeRoutes,
+      videoRoutes,
+      advertiserSurveyRoutes))
 
   private def loggingMiddleware[R]: Middleware[R] =
     new Middleware[R]:
@@ -364,6 +366,7 @@ object Main extends ZIOAppDefault:
       else
         api
     baseRoutes @@ loggingMiddleware
+  end routes
 
   // ─── App layer composition ────────────────────────────────────────────────────
 
@@ -376,7 +379,7 @@ object Main extends ZIOAppDefault:
     for
       settings <- ZIO.service[ServerSettings]
       quill    <- ZIO.service[QuillSqlite]
-      _ <-
+      _        <-
         (settings.provisionDir, settings.locationSlug) match
           case (Some(dir), Some(slug)) =>
             ProvisionService.run(quill, dir, slug)
@@ -419,40 +422,42 @@ object Main extends ZIOAppDefault:
   // ─── Startup ──────────────────────────────────────────────────────────────────
 
   override val run: ZIO[Any, Throwable, Nothing] =
-    val program = for
-      settings               <- ZIO.service[ServerSettings]
-      surveyRoutes           <- ZIO.service[SurveyRoutes]
-      localeRoutes           <- ZIO.service[LocaleRoutes]
-      videoRoutes            <- ZIO.service[VideoRoutes]
-      advertiserSurveyRoutes <- ZIO.service[AdvertiserSurveyRoutes]
-      cookieConfig           <- ZIO.service[SessionCookieConfig]
-      ep = endpoints(
-        settings.devEndpoints,
-        settings.locationSlug,
-        surveyRoutes,
-        localeRoutes,
-        videoRoutes,
-        advertiserSurveyRoutes)
-      routeInfos = ep.map: e =>
-        s"  ${e.endpoint.method.map(_.method).getOrElse("*")} ${e.endpoint.showPathTemplate()}"
-      _ <- ZIO.logInfo(
-        s"Server starting on ${settings.config.address.getHostString}:${settings
-            .config
-            .address
-            .getPort}")
-      _ <- ZIO.logInfo(s"Dev mode: ${settings.devMode}, Dev endpoints: ${settings.devEndpoints}")
-      _ <- ZIO.logInfo(s"Session cookie: ${cookieConfig.name} (path=${cookieConfig.path})")
-      _ <- ZIO.logInfo(s"Mounted routes:\n${routeInfos.mkString("\n")}")
-      result <- Server.serve(
-        routes(
-          settings.devMode,
+    val program =
+      for
+        settings               <- ZIO.service[ServerSettings]
+        surveyRoutes           <- ZIO.service[SurveyRoutes]
+        localeRoutes           <- ZIO.service[LocaleRoutes]
+        videoRoutes            <- ZIO.service[VideoRoutes]
+        advertiserSurveyRoutes <- ZIO.service[AdvertiserSurveyRoutes]
+        cookieConfig           <- ZIO.service[SessionCookieConfig]
+        ep = endpoints(
           settings.devEndpoints,
           settings.locationSlug,
           surveyRoutes,
           localeRoutes,
           videoRoutes,
-          advertiserSurveyRoutes))
-    yield result
+          advertiserSurveyRoutes)
+        routeInfos = ep.map: e =>
+          s"  ${e.endpoint.method.map(_.method).getOrElse("*")} ${e.endpoint.showPathTemplate()}"
+        _ <- ZIO.logInfo(
+          s"Server starting on ${settings.config.address.getHostString}:${settings
+              .config
+              .address
+              .getPort}")
+        _ <- ZIO.logInfo(s"Dev mode: ${settings.devMode}, Dev endpoints: ${settings.devEndpoints}")
+        _ <- ZIO.logInfo(s"Session cookie: ${cookieConfig.name} (path=${cookieConfig.path})")
+        _ <- ZIO.logInfo(s"Mounted routes:\n${routeInfos.mkString("\n")}")
+        result <- Server.serve(
+          routes(
+            settings.devMode,
+            settings.devEndpoints,
+            settings.locationSlug,
+            surveyRoutes,
+            localeRoutes,
+            videoRoutes,
+            advertiserSurveyRoutes))
+      yield result
     program.provide(serverSettingsLayer, Server.live, appLayers)
+  end run
 
 end Main

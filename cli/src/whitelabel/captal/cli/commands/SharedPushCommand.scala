@@ -2,8 +2,6 @@ package whitelabel.captal.cli.commands
 
 import java.nio.file.Paths
 
-import whitelabel.captal.cli.docker.DockerImageBuilder
-import whitelabel.captal.cli.{CaptalConfig, CliError, Output}
 import software.amazon.awssdk.services.ecr.EcrClient
 import software.amazon.awssdk.services.ecs.EcsClient
 import software.amazon.awssdk.services.ecs.model.{
@@ -19,12 +17,15 @@ import software.amazon.awssdk.services.ecs.model.{
   RegisterTaskDefinitionRequest,
   RunTaskRequest
 }
+import whitelabel.captal.cli.docker.DockerImageBuilder
+import whitelabel.captal.cli.{CaptalConfig, CliError, Output}
 import zio.*
 
 /** Runs shared provisioning (surveys + advertisers) via an ephemeral ECS task.
   *
   * Build flow:
-  *   1. Build a derived Docker image FROM `images.provision` + COPY `shared/` → `/etc/captal/shared/`
+  *   1. Build a derived Docker image FROM `images.provision` + COPY `shared/` →
+  *      `/etc/captal/shared/`
   *   2. Push to the ECR repo `images.shared` with a fresh timestamp tag.
   *   3. Register an ephemeral task definition pointing to that image.
   *   4. Run it. Container executes `java -cp infra.jar SharedProvision` against the DB.
@@ -40,13 +41,14 @@ object SharedPushCommand:
       tag = timestampTag()
       config <- ZIO.service[CaptalConfig]
 
-      _ <- Output.step(1, 3, "Building shared provision image...")
+      _        <- Output.step(1, 3, "Building shared provision image...")
       imageUri <- DockerImageBuilder.buildAndPush(
         base = config.images.provision,
         repo = config.images.shared,
         tag = tag,
         contextDir = Paths.get("shared"),
-        dockerfileResource = "templates/dockerfiles/Dockerfile.shared")
+        dockerfileResource = "templates/dockerfiles/Dockerfile.shared"
+      )
 
       _          <- Output.step(2, 3, "Registering ephemeral task definition...")
       taskDefArn <- registerTaskDefinition(imageUri)
@@ -59,7 +61,10 @@ object SharedPushCommand:
 
   private def timestampTag(): String =
     val now = java.time.Instant.now()
-    val fmt = java.time.format.DateTimeFormatter
+    val fmt = java
+      .time
+      .format
+      .DateTimeFormatter
       .ofPattern("yyyyMMdd'T'HHmmss")
       .withZone(java.time.ZoneOffset.UTC)
     fmt.format(now)
@@ -68,7 +73,7 @@ object SharedPushCommand:
       imageUri: String): ZIO[CaptalConfig & EcsClient, CliError, String] =
     for
       config <- ZIO.service[CaptalConfig]
-      arn <-
+      arn    <-
         aws("ECS registerTaskDefinition"):
           ZIO.serviceWithZIO[EcsClient]: ecs =>
             ZIO.attemptBlocking:

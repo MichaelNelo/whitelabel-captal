@@ -17,8 +17,8 @@ object VideoSuite:
             backend      <- testBackend
             cookie       <- createSession(backend)
             // Complete identification to reach AdvertiserVideo phase
-            _         <- getNextSurvey(backend, cookie)
-            _         <- postEmailAnswer(backend, cookie, "video-test@example.com")
+            _ <- getNextSurvey(backend, cookie)
+            _ <- postEmailAnswer(backend, cookie, "video-test@example.com")
             // Now in AdvertiserVideo phase, get next video
             videoResp <- getNextVideo(backend, cookie)
             parsed = parseNextVideo(videoResp.body)
@@ -26,12 +26,11 @@ object VideoSuite:
             videoResp.code.isSuccess,
             parsed.isDefined,
             parsed.get.videoUrl == videoFixture.videoUrl,
-            parsed.get.durationSeconds == videoFixture.durationSeconds
-          )
+            parsed.get.durationSeconds == videoFixture.durationSeconds)
         ,
         test("GET /api/video/next returns NextStep when no videos available"):
           for
-            _       <- TestFixtures.seedEmailSurvey
+            _ <- TestFixtures.seedEmailSurvey
             // No videos seeded
             backend <- testBackend
             cookie  <- createSession(backend)
@@ -40,10 +39,7 @@ object VideoSuite:
             _         <- postEmailAnswer(backend, cookie, "novideo@example.com")
             videoResp <- getNextVideo(backend, cookie)
             isStep = parseVideoStep(videoResp.body)
-          yield assertTrue(
-            videoResp.code.isSuccess,
-            isStep
-          )
+          yield assertTrue(videoResp.code.isSuccess, isStep)
         ,
         test("GET /api/video/next rejects non-AdvertiserVideo phase"):
           for
@@ -52,21 +48,20 @@ object VideoSuite:
             cookie  <- createSession(backend)
             // Still in Welcome phase
             videoResp <- getNextVideo(backend, cookie)
-          yield assertTrue(
-            !videoResp.code.isSuccess || videoResp.body.contains("wrong_phase")
-          )
+          yield assertTrue(!videoResp.code.isSuccess || videoResp.body.contains("wrong_phase"))
         ,
-        test("POST /api/video/watched marks video as watched and transitions to AdvertiserVideoSurvey"):
+        test(
+          "POST /api/video/watched marks video as watched and transitions to AdvertiserVideoSurvey"):
           for
             _            <- TestFixtures.seedEmailSurvey
             videoFixture <- TestFixtures.seedAdvertiserWithVideoAndSurvey()
             backend      <- testBackend
             cookie       <- createSession(backend)
             // Complete identification to reach AdvertiserVideo phase
-            _         <- getNextSurvey(backend, cookie)
-            _         <- postEmailAnswer(backend, cookie, "watched@example.com")
+            _ <- getNextSurvey(backend, cookie)
+            _ <- postEmailAnswer(backend, cookie, "watched@example.com")
             // Get video (this assigns the video to session)
-            _         <- getNextVideo(backend, cookie)
+            _ <- getNextVideo(backend, cookie)
             // Mark video as watched
             watchResp <- postMarkVideoWatched(backend, cookie, 15, completed = true)
             parsed = parseVideoWatchedResponse(watchResp.body)
@@ -94,12 +89,11 @@ object VideoSuite:
             // Get video
             _ <- getNextVideo(backend, cookie)
             // Mark as partially watched
-            watchResp <- postMarkVideoWatched(backend, cookie, 10, completed = false)
+            watchResp  <- postMarkVideoWatched(backend, cookie, 10, completed = false)
             videoViews <- TestFixtures.getVideoViews
           yield assertTrue(
             watchResp.code.isSuccess,
             videoViews.nonEmpty,
-            videoViews.exists(v => v.completed == 0 && v.durationWatchedSeconds == 10)
-          )
+            videoViews.exists(v => v.completed == 0 && v.durationWatchedSeconds == 10))
       )
 end VideoSuite

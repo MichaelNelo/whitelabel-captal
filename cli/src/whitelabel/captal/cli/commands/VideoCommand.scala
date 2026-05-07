@@ -4,10 +4,9 @@ import java.nio.file.{Files, Path, Paths}
 
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.PutObjectRequest
-import zio.*
-
-import whitelabel.captal.cli.{CaptalConfig, CliError, Output}
 import whitelabel.captal.cli.templates.{Catalog, TemplateWriter}
+import whitelabel.captal.cli.{CaptalConfig, CliError, Output}
+import zio.*
 
 /** Uploads a video to S3 and creates a YAML placeholder in the provision directory. */
 object VideoCommand:

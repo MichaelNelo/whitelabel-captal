@@ -116,8 +116,8 @@ object SurveyProgressionSuite:
               previousSessionId,
               surveys.location.questionId,
               "some-state")
-            backend   <- testBackend
-            cookie    <- createSession(backend)
+            backend <- testBackend
+            cookie  <- createSession(backend)
             sessionId = user.SessionId.unsafe(cookie)
             _           <- TestFixtures.linkSessionToUser(sessionId, testUser.userId)
             _           <- TestFixtures.updateSessionPhase(sessionId, Phase.AdvertiserVideo)

@@ -18,18 +18,21 @@ object ProvisioningSuite:
 
   private def resourceDir(scenario: String): String =
     val url = getClass.getResource(s"/provision/$scenario")
-    if url == null then throw new RuntimeException(s"Test resource not found: /provision/$scenario")
+    if url == null then
+      throw new RuntimeException(s"Test resource not found: /provision/$scenario")
     Paths.get(url.toURI).toString
 
-  private def runSharedProvision(scenario: String): ZIO[QuillSqlite, Throwable, Unit] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+  private def runSharedProvision(scenario: String): ZIO[QuillSqlite, Throwable, Unit] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
       ProvisionService.runShared(quill, resourceDir(scenario))
 
-  private def runProvision(scenario: String): ZIO[QuillSqlite, Throwable, Unit] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+  private def runProvision(scenario: String): ZIO[QuillSqlite, Throwable, Unit] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
       ProvisionService.run(quill, resourceDir(scenario), locationSlug)
 
-  private def provisionAll(sharedScenario: String, locationScenario: String): ZIO[QuillSqlite, Throwable, Unit] =
+  private def provisionAll(
+      sharedScenario: String,
+      locationScenario: String): ZIO[QuillSqlite, Throwable, Unit] =
     runSharedProvision(sharedScenario) *> runProvision(locationScenario)
 
   val suite: Spec[QuillSqlite, Throwable] =
@@ -51,13 +54,13 @@ object ProvisioningSuite:
             manifest     <- queryManifest
           yield
             val expectedAdvertiserId = IdGenerator.advertiserId("acme")
-            val expectedVideoId =
-              IdGenerator.videoId(locationSlug, "acme", "acme-intro")
-            val expectedPromoId =
-              IdGenerator.promoVideoId(locationSlug, "welcome")
+            val expectedVideoId = IdGenerator.videoId(locationSlug, "acme", "acme-intro")
+            val expectedPromoId = IdGenerator.promoVideoId(locationSlug, "welcome")
             val expectedSurveyId = IdGenerator.surveyId("email")
-            val expectedAdvSurveyId =
-              IdGenerator.advertiserSurveyId(locationSlug, "acme-intro", "interest")
+            val expectedAdvSurveyId = IdGenerator.advertiserSurveyId(
+              locationSlug,
+              "acme-intro",
+              "interest")
 
             assertTrue(
               // Location
@@ -75,8 +78,7 @@ object ProvisioningSuite:
               videos.exists(v =>
                 v.id.asString == expectedVideoId &&
                   v.videoUrl == "https://cdn.example.com/acme-intro.mp4" &&
-                  v.durationSeconds == 15 &&
-                  v.videoType == "publicidad" &&
+                  v.durationSeconds == 15 && v.videoType == "publicidad" &&
                   v.locationId.contains(locationId)),
               videos.exists(v =>
                 v.id.asString == expectedPromoId &&
@@ -85,12 +87,10 @@ object ProvisioningSuite:
               // Surveys: 1 global email + 1 video survey
               surveys.size == 2,
               surveys.exists(s =>
-                s.id.asString == expectedSurveyId &&
-                  s.category == "email" &&
+                s.id.asString == expectedSurveyId && s.category == "email" &&
                   s.advertiserId.isEmpty),
               surveys.exists(s =>
-                s.id.asString == expectedAdvSurveyId &&
-                  s.category == "advertiser" &&
+                s.id.asString == expectedAdvSurveyId && s.category == "advertiser" &&
                   s.advertiserId.contains(expectedAdvertiserId)),
               // Questions: 1 for email + 1 for video survey
               questions.size == 2,
@@ -122,24 +122,22 @@ object ProvisioningSuite:
           yield assertTrue(
             manifest1.size == manifest2.size,
             manifest1.map(_.contentHash).toSet == manifest2.map(_.contentHash).toSet,
-            videos.size == 2
-          )
+            videos.size == 2)
         ,
         test("provision detects updates"):
           for
-            _ <- TestFixtures.clearAllData
-            _ <- provisionAll("shared", "basic")
+            _                 <- TestFixtures.clearAllData
+            _                 <- provisionAll("shared", "basic")
             advertisersBefore <- queryAdvertisers
             videosBefore      <- queryVideos
             manifestBefore    <- queryManifest
-            _ <- provisionAll("updated-shared", "updated")
-            advertisersAfter <- queryAdvertisers
-            videosAfter      <- queryVideos
-            i18nTexts        <- queryLocalizedTexts("frontend")
-            manifestAfter    <- queryManifest
+            _                 <- provisionAll("updated-shared", "updated")
+            advertisersAfter  <- queryAdvertisers
+            videosAfter       <- queryVideos
+            i18nTexts         <- queryLocalizedTexts("frontend")
+            manifestAfter     <- queryManifest
           yield
-            val expectedVideoId =
-              IdGenerator.videoId(locationSlug, "acme", "acme-intro")
+            val expectedVideoId = IdGenerator.videoId(locationSlug, "acme", "acme-intro")
 
             assertTrue(
               // Advertiser priority updated (via shared)
@@ -153,11 +151,9 @@ object ProvisioningSuite:
               videosAfter.find(_.id.asString == expectedVideoId).get.durationSeconds == 20,
               // i18n texts updated
               i18nTexts.exists(t =>
-                t.locale == "es" && t.entityId == "welcome" &&
-                  t.value == "Bienvenido a Captal"),
+                t.locale == "es" && t.entityId == "welcome" && t.value == "Bienvenido a Captal"),
               i18nTexts.exists(t =>
-                t.locale == "en" && t.entityId == "welcome" &&
-                  t.value == "Welcome to Captal"),
+                t.locale == "en" && t.entityId == "welcome" && t.value == "Welcome to Captal"),
               // Manifest hashes changed for updated video
               manifestBefore
                 .find(_.entityKey == s"video:$locationSlug/acme-intro")
@@ -168,19 +164,17 @@ object ProvisioningSuite:
         ,
         test("provision soft-deletes removed entities"):
           for
-            _ <- TestFixtures.clearAllData
-            _ <- provisionAll("shared", "basic")
+            _              <- TestFixtures.clearAllData
+            _              <- provisionAll("shared", "basic")
             videosBefore   <- queryVideos
             manifestBefore <- queryManifest
-            _ <- provisionAll("shared", "reduced")
-            videosAfter   <- queryAllVideos
-            advertisers   <- queryAdvertisers
-            manifestAfter <- queryManifest
+            _              <- provisionAll("shared", "reduced")
+            videosAfter    <- queryAllVideos
+            advertisers    <- queryAdvertisers
+            manifestAfter  <- queryManifest
           yield
-            val introVideoId =
-              IdGenerator.videoId(locationSlug, "acme", "acme-intro")
-            val promoVideoId =
-              IdGenerator.promoVideoId(locationSlug, "welcome")
+            val introVideoId = IdGenerator.videoId(locationSlug, "acme", "acme-intro")
+            val promoVideoId = IdGenerator.promoVideoId(locationSlug, "welcome")
 
             assertTrue(
               // Before: 2 active videos
@@ -204,13 +198,12 @@ object ProvisioningSuite:
           yield assertTrue(
             locations.head.id == IdGenerator.locationId(locationSlug),
             advertisers.head.id == IdGenerator.advertiserId("acme"),
-            videos.exists(_.id.asString ==
-              IdGenerator.videoId(locationSlug, "acme", "acme-intro")),
-            videos.exists(_.id.asString ==
-              IdGenerator.promoVideoId(locationSlug, "welcome")),
+            videos.exists(_.id.asString == IdGenerator.videoId(locationSlug, "acme", "acme-intro")),
+            videos.exists(_.id.asString == IdGenerator.promoVideoId(locationSlug, "welcome")),
             surveys.exists(_.id.asString == IdGenerator.surveyId("email")),
-            surveys.exists(_.id.asString ==
-              IdGenerator.advertiserSurveyId(locationSlug, "acme-intro", "interest"))
+            surveys.exists(
+              _.id.asString ==
+                IdGenerator.advertiserSurveyId(locationSlug, "acme-intro", "interest"))
           )
       ) @@ TestAspect.sequential
 
@@ -218,48 +211,49 @@ object ProvisioningSuite:
   // Query helpers
   // ─────────────────────────────────────────────────────────────────────────────
 
-  private def queryLocations: ZIO[QuillSqlite, Throwable, List[LocationRow]] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      run(query[LocationRow])
+  private def queryLocations
+      : ZIO[QuillSqlite, Throwable, List[LocationRow]] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.*
+    run(query[LocationRow])
 
-  private def queryAdvertisers: ZIO[QuillSqlite, Throwable, List[AdvertiserRow]] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+  private def queryAdvertisers: ZIO[QuillSqlite, Throwable, List[AdvertiserRow]] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
       run(query[AdvertiserRow].filter(_.isActive == 1))
 
-  private def queryVideos: ZIO[QuillSqlite, Throwable, List[AdvertiserVideoRow]] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+  private def queryVideos: ZIO[QuillSqlite, Throwable, List[AdvertiserVideoRow]] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
       run(query[AdvertiserVideoRow].filter(_.isActive == 1))
 
-  private def queryAllVideos: ZIO[QuillSqlite, Throwable, List[AdvertiserVideoRow]] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+  private def queryAllVideos: ZIO[QuillSqlite, Throwable, List[AdvertiserVideoRow]] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
       run(query[AdvertiserVideoRow])
 
-  private def querySurveys: ZIO[QuillSqlite, Throwable, List[SurveyRow]] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      run(query[SurveyRow].filter(_.isActive == 1))
+  private def querySurveys
+      : ZIO[QuillSqlite, Throwable, List[SurveyRow]] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.*
+    run(query[SurveyRow].filter(_.isActive == 1))
 
-  private def queryQuestions: ZIO[QuillSqlite, Throwable, List[QuestionRow]] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      run(query[QuestionRow])
+  private def queryQuestions
+      : ZIO[QuillSqlite, Throwable, List[QuestionRow]] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.*
+    run(query[QuestionRow])
 
-  private def queryQuestionOptions: ZIO[QuillSqlite, Throwable, List[QuestionOptionRow]] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+  private def queryQuestionOptions: ZIO[QuillSqlite, Throwable, List[QuestionOptionRow]] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
       run(query[QuestionOptionRow])
 
-  private def queryLocalizedTexts(
-      category: String): ZIO[QuillSqlite, Throwable, List[LocalizedTextRow]] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+  private def queryLocalizedTexts(category: String)
+      : ZIO[QuillSqlite, Throwable, List[LocalizedTextRow]] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
       import quill.*
       run(query[LocalizedTextRow].filter(_.category == lift(category)))
 
-  private def queryManifest: ZIO[QuillSqlite, Throwable, List[ProvisionManifestRow]] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+  private def queryManifest: ZIO[QuillSqlite, Throwable, List[ProvisionManifestRow]] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
       run(query[ProvisionManifestRow])
+end ProvisioningSuite
