@@ -77,7 +77,7 @@ object Main extends ZIOCliDefault:
   val cliApp: CliApp[Any, Any, CaptalCommand] =
     CliApp.make(
       name = "captal",
-      version = "1.1.0",
+      version = "1.3.3",
       summary = HelpDoc.Span.text("Whitelabel captive portal provisioning CLI"),
       command = captal,
       config = CliConfig.default.copy(finalCheckBuiltIn = false)
