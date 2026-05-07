@@ -27,6 +27,8 @@ object Catalog:
     "skills/add-video/SKILL.md",
     "skills/add-promo/SKILL.md",
     "skills/edit-i18n/SKILL.md",
+    "skills/i18n-reference/SKILL.md",
+    "skills/style-reference/SKILL.md",
     "skills/deploy-location/SKILL.md",
     "skills/add-location/SKILL.md",
     "skills/recover-data/SKILL.md",
