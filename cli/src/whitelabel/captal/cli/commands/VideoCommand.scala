@@ -30,7 +30,7 @@ object VideoCommand:
 
       _ <- Output.info(s"Uploading $fileName to s3://$bucket/$s3Key")
       _ <- upload(bucket, s3Key, file)
-      url = s"https://$bucket.s3.amazonaws.com/$s3Key"
+      url = s"https://${config.alb.domain}/$s3Key"
 
       baseDir    = locationDir(slug)
       adTemplate = Catalog.videoTemplate(videoName, advertiserSlug, url)
@@ -64,7 +64,7 @@ object VideoCommand:
 
       _ <- Output.info(s"Uploading $fileName to s3://$bucket/$s3Key")
       _ <- upload(bucket, s3Key, file)
-      url = s"https://$bucket.s3.amazonaws.com/$s3Key"
+      url = s"https://${config.alb.domain}/$s3Key"
 
       baseDir       = locationDir(slug)
       promoTemplate = Catalog.promoTemplate(videoSlug, url)
