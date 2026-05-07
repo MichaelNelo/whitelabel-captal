@@ -167,12 +167,21 @@ object TestLayers:
 
   val quill: ZLayer[Any, Throwable, QuillSqlite] = dataSourceLayer >>> quillLayer
 
+  // No slug in tests → SessionCookieConfig produces name="captal_session", path="/"
+  private val sessionCookieConfigLayer: ULayer[SessionCookieConfig] = ZLayer.succeed(
+    SessionCookieConfig.fromSlug(None))
+
+  // Tests run without an associated location row, so CurrentLocation is empty.
+  private val currentLocationLayer: ULayer[CurrentLocation] = ZLayer.succeed(CurrentLocation.empty)
+
   type TestEnv =
     SessionContext & SessionService & LocaleService & SurveyRoutes.AnswerEmailFlowType &
       SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
       SurveyRoutes.NextSurveyFlowType & VideoRoutes.NextVideoFlowType &
       VideoRoutes.MarkVideoWatchedFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
-      AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & QuillSqlite
+      AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & QuillSqlite & SessionCookieConfig &
+      CurrentLocation & SessionEndpoint & SurveyRoutes & LocaleRoutes & VideoRoutes &
+      AdvertiserSurveyRoutes
 
   val testEnv: ZLayer[Any, Throwable, TestEnv] = ZLayer.make[TestEnv](
     SessionContext.make,
@@ -191,6 +200,13 @@ object TestLayers:
     nextVideoFlowLayer,
     markVideoWatchedFlowLayer,
     nextAdvertiserSurveyFlowLayer,
-    answerAdvertiserFlowLayer
+    answerAdvertiserFlowLayer,
+    sessionCookieConfigLayer,
+    currentLocationLayer,
+    SessionEndpoint.layer,
+    SurveyRoutes.layer,
+    LocaleRoutes.layer,
+    VideoRoutes.layer,
+    AdvertiserSurveyRoutes.layer
   )
 end TestLayers
