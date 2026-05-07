@@ -47,6 +47,7 @@ import software.amazon.awssdk.services.elasticloadbalancingv2.model.{
   DescribeRulesRequest,
   DescribeTargetGroupsRequest,
   ModifyRuleRequest,
+  ModifyTargetGroupRequest,
   PathPatternConditionConfig,
   RuleCondition,
   TargetGroupNotFoundException,
@@ -93,14 +94,14 @@ object PushCommand:
         contextDir = locationDir,
         dockerfileResource = "templates/dockerfiles/Dockerfile.locations")
 
-      _          <- Output.step(3, 5, "Updating ECS service...")
+      _     <- Output.step(3, 5, "Configuring ALB rule...")
+      tgArn <- ensureTargetGroup(s"captal-$slug", slug, config)
+      _     <- upsertAlbRule(slug, tgArn, config)
+
+      _          <- Output.step(4, 5, "Updating ECS service...")
       _          <- ensureLogGroup(s"/ecs/captal-$slug")
-      tgArn      <- ensureTargetGroup(s"captal-$slug", slug, config)
       taskDefArn <- registerTaskDefinition(slug, imageUri)
       _          <- createOrUpdateService(slug, taskDefArn, desiredCount, tgArn)
-
-      _ <- Output.step(4, 5, "Configuring ALB rule...")
-      _ <- upsertAlbRule(slug, tgArn, config)
 
       _ <- Output.step(5, 5, "Invalidating CloudFront...")
       _ <- invalidateCdn(slug)
@@ -376,7 +377,7 @@ object PushCommand:
                     .launchType("FARGATE")
                     .networkConfiguration(networkConfig(config))
                     .loadBalancers(lb)
-                    .healthCheckGracePeriodSeconds(180)
+                    .healthCheckGracePeriodSeconds(300)
                     .enableExecuteCommand(true)
                     .build())
           *> Output.detail(s"Created service: $serviceName (replicas: $desiredCount)")
@@ -390,18 +391,18 @@ object PushCommand:
       name: String,
       slug: String,
       config: CaptalConfig): ZIO[ElasticLoadBalancingV2Client, CliError, String] =
-    aws("ELBv2 describeTargetGroups"):
+    aws("ELBv2 ensureTargetGroup"):
       ZIO.serviceWithZIO[ElasticLoadBalancingV2Client]: elbv2 =>
-        ZIO
-          .attemptBlocking:
-            elbv2
-              .describeTargetGroups(DescribeTargetGroupsRequest.builder().names(name).build())
-              .targetGroups()
-              .get(0)
-              .targetGroupArn()
-          .catchSome:
-            case _: TargetGroupNotFoundException =>
-              ZIO.attemptBlocking:
+        ZIO.attemptBlocking:
+          val arn =
+            try
+              elbv2
+                .describeTargetGroups(DescribeTargetGroupsRequest.builder().names(name).build())
+                .targetGroups()
+                .get(0)
+                .targetGroupArn()
+            catch
+              case _: TargetGroupNotFoundException =>
                 elbv2
                   .createTargetGroup(
                     CreateTargetGroupRequest
@@ -412,10 +413,25 @@ object PushCommand:
                       .vpcId(config.alb.vpcId)
                       .targetType(TargetTypeEnum.IP)
                       .healthCheckPath(s"/$slug/api/health")
+                      .healthCheckIntervalSeconds(30)
+                      .healthCheckTimeoutSeconds(10)
+                      .healthyThresholdCount(2)
+                      .unhealthyThresholdCount(5)
                       .build())
                   .targetGroups()
                   .get(0)
                   .targetGroupArn()
+          elbv2.modifyTargetGroup(
+            ModifyTargetGroupRequest
+              .builder()
+              .targetGroupArn(arn)
+              .healthCheckPath(s"/$slug/api/health")
+              .healthCheckIntervalSeconds(30)
+              .healthCheckTimeoutSeconds(10)
+              .healthyThresholdCount(2)
+              .unhealthyThresholdCount(5)
+              .build())
+          arn
 
   private def upsertAlbRule(
       slug: String,
