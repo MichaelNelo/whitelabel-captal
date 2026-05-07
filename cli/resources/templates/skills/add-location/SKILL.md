@@ -102,9 +102,40 @@ captal locations push <slug>
 
 This runs the full deploy flow (S3 copy of bundle, build derived ECR image, register task definition, create/update ECS service, ALB rule, CloudFront invalidation). See the `deploy-location` skill for what each step does.
 
-### 8. Verify
+### 8. Verify with a test URL
 
-Visit `https://<domain>/<slug>/` (production) and walk the flow. If errors appear, see `troubleshoot-deployment`.
+The captive portal expects to be reached via a UniFi redirect that carries identifying params in the query string. Construct a test URL using the location's `ap_mac` from `location.yaml`:
+
+```
+https://<domain>/<slug>/?id=<CLIENT_MAC>&ap=<AP_MAC>&ssid=<SSID>&url=<ORIGINAL_URL>
+```
+
+Concrete example for a location with `ap_mac: "AA:BB:CC:DD:EE:01"`:
+```
+https://production.captal.centauroads.com/cafe-centro/?id=11:22:33:44:55:66&ap=AA:BB:CC:DD:EE:01&ssid=CafeCentroGuest&url=http%3A%2F%2Fexample.com
+```
+
+#### Query param reference
+
+These are the four params UniFi appends when it redirects an unauthenticated client to the captive portal. The SPA reads them on load (`parseCaptivePortalHeaders` in `client/Main.scala`) and forwards them to the API as `X-*` headers on the first `/api/status` call.
+
+| URL param | Forwarded as header  | Source         | Purpose                                                                                  |
+|-----------|----------------------|----------------|------------------------------------------------------------------------------------------|
+| `id`      | `X-Client-Mac`       | client device  | MAC address of the user's device. Identifies the user across visits.                      |
+| `ap`      | `X-Ap-Mac`           | UniFi AP       | MAC of the access point the client connected to. **Must match `ap_mac` in `location.yaml`** for the API to associate the session with this location. |
+| `ssid`    | `X-Ssid`             | UniFi AP       | SSID (network name) the client connected to. Logged for analytics; not validated.         |
+| `url`     | `X-Redirect-Url`     | UniFi AP       | Original URL the user tried to visit before redirect. Logged; the SPA does not redirect to it (the user finishes the flow on the portal). |
+
+Real captive-portal traffic from UniFi looks like `?id=<mac>&ap=<mac>&t=<timestamp>&url=<original>&ssid=<ssid>`; the `t` (timestamp) param is ignored by the SPA.
+
+#### What to test
+
+1. Open the test URL in a fresh incognito window (so no existing session cookie is in play).
+2. Walk the flow: Welcome → identification surveys → advertiser video → video survey → Ready.
+3. In DevTools → Application → Cookies, confirm a cookie named `captal_session_<slug>` exists with `Path=/<slug>`.
+4. (Optional) Open a second incognito window with a *different* `id=` MAC and confirm a separate session is created (the API differentiates by client MAC + AP MAC pair).
+
+If errors appear, see `troubleshoot-deployment`.
 
 ## What lives where
 
