@@ -14,6 +14,23 @@ import zio.*
 
 object AdvertiserSurveyRoutes:
 
+  type NextAdvertiserSurveyFlowType = Flow.Aux[
+    Task,
+    ProvideNextAdvertiserSurveyCommand,
+    NextAdvertiserSurvey | NextStep]
+  type AnswerAdvertiserFlowType = Flow.Aux[Task, AnswerAdvertiserCommand, NextStep]
+
+  type FullEnv =
+    SessionContext & SessionService & NextAdvertiserSurveyFlowType & AnswerAdvertiserFlowType
+
+  val layer: ZLayer[SessionEndpoint, Nothing, AdvertiserSurveyRoutes] = ZLayer.fromFunction(
+    AdvertiserSurveyRoutes(_))
+
+end AdvertiserSurveyRoutes
+
+final class AdvertiserSurveyRoutes(sessionEndpoint: SessionEndpoint):
+  import AdvertiserSurveyRoutes.*
+
   private def toApiError(error: Throwable): UIO[ApiError] =
     error match
       case Flow.HandlerError(errors) =>
@@ -23,94 +40,80 @@ object AdvertiserSurveyRoutes:
       case other =>
         ZIO.logErrorCause("Internal error", Cause.fail(other)).as(ApiError.fromThrowable(other))
 
-  type NextAdvertiserSurveyFlowType = Flow.Aux[
-    Task,
-    ProvideNextAdvertiserSurveyCommand,
-    NextAdvertiserSurvey | NextStep]
-  type AnswerAdvertiserFlowType = Flow.Aux[Task, AnswerAdvertiserCommand, NextStep]
+  val nextAdvertiserSurveyRoute: ZServerEndpoint[
+    SessionContext & SessionService & NextAdvertiserSurveyFlowType, Any] = sessionEndpoint
+    .secured(
+      onMissingSession = SessionEndpoint.OnMissing.Fail,
+      allowedPhases = Seq(Phase.AdvertiserVideoSurvey))
+    .get
+    .in("api" / "survey" / "advertiser" / "next")
+    .out(jsonBody[AdvertiserSurveyResponse])
+    .serverLogic: session =>
+      _ =>
+        session.currentVideoId match
+          case None =>
+            ZIO.fail(ApiError.InternalError("No video ID in session"))
+          case Some(videoId) =>
+            for
+              flow     <- ZIO.service[NextAdvertiserSurveyFlowType]
+              response <- flow
+                .execute(ProvideNextAdvertiserSurveyCommand(videoId))
+                .map(AdvertiserSurveyResponse.from)
+                .catchAllCause: cause =>
+                  val error =
+                    cause.failureOrCause match
+                      case Left(e) =>
+                        e
+                      case Right(c) =>
+                        new Exception(s"Defect: ${c.prettyPrint}")
+                  toApiError(error).flatMap(ZIO.fail(_))
+              // Update phase when transitioning away from AdvertiserVideoSurvey
+              _ <-
+                response match
+                  case AdvertiserSurveyResponse.Step(step) =>
+                    ZIO
+                      .serviceWithZIO[SessionService](_.setPhase(session.sessionId, step.phase))
+                      .mapError(ApiError.fromThrowable)
+                  case _ =>
+                    ZIO.unit
+            yield response
 
-  object NextAdvertiserSurvey:
-    type Env = SessionContext & SessionService & NextAdvertiserSurveyFlowType
-
-    val route: ZServerEndpoint[Env, Any] = SessionEndpoint
-      .secured(
-        onMissingSession = SessionEndpoint.OnMissing.Fail,
-        allowedPhases = Seq(Phase.AdvertiserVideoSurvey))
-      .get
-      .in("api" / "survey" / "advertiser" / "next")
-      .out(jsonBody[AdvertiserSurveyResponse])
-      .serverLogic: session =>
-        _ =>
-          session.currentVideoId match
-            case None =>
-              ZIO.fail(ApiError.InternalError("No video ID in session"))
-            case Some(videoId) =>
-              for
-                flow     <- ZIO.service[NextAdvertiserSurveyFlowType]
-                response <- flow
-                  .execute(ProvideNextAdvertiserSurveyCommand(videoId))
-                  .map(AdvertiserSurveyResponse.from)
-                  .catchAllCause: cause =>
-                    val error =
-                      cause.failureOrCause match
-                        case Left(e) =>
-                          e
-                        case Right(c) =>
-                          new Exception(s"Defect: ${c.prettyPrint}")
-                    toApiError(error).flatMap(ZIO.fail(_))
-                // Update phase when transitioning away from AdvertiserVideoSurvey
-                _ <-
-                  response match
-                    case AdvertiserSurveyResponse.Step(step) =>
-                      ZIO
-                        .serviceWithZIO[SessionService](_.setPhase(session.sessionId, step.phase))
-                        .mapError(ApiError.fromThrowable)
-                    case _ =>
-                      ZIO.unit
-              yield response
-  end NextAdvertiserSurvey
-
-  object AnswerAdvertiser:
-    type Env = SessionContext & SessionService & AnswerAdvertiserFlowType
-
-    val route: ZServerEndpoint[Env, Any] = SessionEndpoint
-      .secured(
-        onMissingSession = SessionEndpoint.OnMissing.Fail,
-        allowedPhases = Seq(Phase.AdvertiserVideoSurvey))
-      .post
-      .in("api" / "survey" / "advertiser")
-      .in(jsonBody[AnswerRequest])
-      .out(jsonBody[AdvertiserSurveyResponse])
-      .serverLogic: session =>
-        request =>
-          session.currentVideoId match
-            case None =>
-              ZIO.fail(ApiError.InternalError("No video ID in session"))
-            case Some(videoId) =>
-              for
-                answerFlow <- ZIO.service[AnswerAdvertiserFlowType]
-                cmd = AnswerAdvertiserCommand(answer = request.answer, occurredAt = Instant.now)
-                _ <- answerFlow
-                  .execute(cmd)
-                  .catchAllCause: cause =>
-                    val error =
-                      cause.failureOrCause match
-                        case Left(e) =>
-                          e
-                        case Right(c) =>
-                          new Exception(s"Defect: ${c.prettyPrint}")
-                    toApiError(error).flatMap(ZIO.fail(_))
-                // One question per video — go to Ready after answering
-                _ <- ZIO
-                  .serviceWithZIO[SessionService](_.setPhase(session.sessionId, Phase.Ready))
-                  .mapError(ApiError.fromThrowable)
-              yield AdvertiserSurveyResponse.Step(NextStep(Phase.Ready))
-  end AnswerAdvertiser
-
-  type FullEnv =
-    SessionContext & SessionService & NextAdvertiserSurveyFlowType & AnswerAdvertiserFlowType
+  val answerAdvertiserRoute: ZServerEndpoint[
+    SessionContext & SessionService & AnswerAdvertiserFlowType, Any] = sessionEndpoint
+    .secured(
+      onMissingSession = SessionEndpoint.OnMissing.Fail,
+      allowedPhases = Seq(Phase.AdvertiserVideoSurvey))
+    .post
+    .in("api" / "survey" / "advertiser")
+    .in(jsonBody[AnswerRequest])
+    .out(jsonBody[AdvertiserSurveyResponse])
+    .serverLogic: session =>
+      request =>
+        session.currentVideoId match
+          case None =>
+            ZIO.fail(ApiError.InternalError("No video ID in session"))
+          case Some(videoId) =>
+            for
+              answerFlow <- ZIO.service[AnswerAdvertiserFlowType]
+              cmd = AnswerAdvertiserCommand(answer = request.answer, occurredAt = Instant.now)
+              _ <- answerFlow
+                .execute(cmd)
+                .catchAllCause: cause =>
+                  val error =
+                    cause.failureOrCause match
+                      case Left(e) =>
+                        e
+                      case Right(c) =>
+                        new Exception(s"Defect: ${c.prettyPrint}")
+                  toApiError(error).flatMap(ZIO.fail(_))
+              // One question per video — go to Ready after answering
+              _ <- ZIO
+                .serviceWithZIO[SessionService](_.setPhase(session.sessionId, Phase.Ready))
+                .mapError(ApiError.fromThrowable)
+            yield AdvertiserSurveyResponse.Step(NextStep(Phase.Ready))
 
   def routes: List[ZServerEndpoint[FullEnv, Any]] = List(
-    NextAdvertiserSurvey.route.widen[FullEnv],
-    AnswerAdvertiser.route.widen[FullEnv])
+    nextAdvertiserSurveyRoute.widen[FullEnv],
+    answerAdvertiserRoute.widen[FullEnv])
+
 end AdvertiserSurveyRoutes

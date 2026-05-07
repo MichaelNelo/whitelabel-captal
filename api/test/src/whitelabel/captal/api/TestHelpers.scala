@@ -48,10 +48,14 @@ object TestHelpers:
   def testBackend: ZIO[TestEnv, Nothing, SttpBackend[Task, Any]] = ZIO
     .environment[TestEnv]
     .map: env =>
-      val surveyEndpoints = SurveyRoutes.routes.map(e => provideEnvToEndpoint(e, env))
-      val localeEndpoints = LocaleRoutes.routes.map(e => provideEnvToEndpoint(e, env))
-      val videoEndpoints = VideoRoutes.routes.map(e => provideEnvToEndpoint(e, env))
-      val advertiserSurveyEndpoints = AdvertiserSurveyRoutes.routes.map(e => provideEnvToEndpoint(e, env))
+      val surveyRoutes = env.get[SurveyRoutes]
+      val localeRoutes = env.get[LocaleRoutes]
+      val videoRoutes = env.get[VideoRoutes]
+      val advertiserSurveyRoutes = env.get[AdvertiserSurveyRoutes]
+      val surveyEndpoints = surveyRoutes.routes.map(e => provideEnvToEndpoint(e, env))
+      val localeEndpoints = localeRoutes.routes.map(e => provideEnvToEndpoint(e, env))
+      val videoEndpoints = videoRoutes.routes.map(e => provideEnvToEndpoint(e, env))
+      val advertiserSurveyEndpoints = advertiserSurveyRoutes.routes.map(e => provideEnvToEndpoint(e, env))
       TapirStubInterpreter(SttpBackendStub[Task, Any](taskMonadError))
         .whenServerEndpointsRunLogic(
           surveyEndpoints ++ localeEndpoints ++ videoEndpoints ++ advertiserSurveyEndpoints)
@@ -64,8 +68,8 @@ object TestHelpers:
         .split(";")
         .headOption
         .flatMap: cookie =>
-          if cookie.startsWith("session_id=") then
-            Some(cookie.stripPrefix("session_id="))
+          if cookie.startsWith("captal_session=") then
+            Some(cookie.stripPrefix("captal_session="))
           else
             None
 
@@ -79,7 +83,7 @@ object TestHelpers:
   def getStatus(backend: SttpBackend[Task, Any], sessionCookie: Option[String] = None) =
     val base = basicRequest.get(uri"http://test/api/status").response(asStringAlways)
     val withHeaders = defaultPortalHeaders.foldLeft(base) { case (req, (k, v)) => req.header(k, v) }
-    val withCookie = sessionCookie.fold(withHeaders)(c => withHeaders.cookie("session_id", c))
+    val withCookie = sessionCookie.fold(withHeaders)(c => withHeaders.cookie("captal_session", c))
     withCookie.send(backend)
 
   /** Create a new session via /api/status and return the session cookie */
@@ -100,12 +104,12 @@ object TestHelpers:
       .body(s"""{"locale":"$locale"}""")
       .contentType("application/json")
       .response(asStringAlways)
-    val withCookie = sessionCookie.fold(request)(c => request.cookie("session_id", c))
+    val withCookie = sessionCookie.fold(request)(c => request.cookie("captal_session", c))
     withCookie.send(backend)
 
   def getNextSurvey(backend: SttpBackend[Task, Any], sessionCookie: String) = basicRequest
     .get(uri"http://test/api/survey/next")
-    .cookie("session_id", sessionCookie)
+    .cookie("captal_session", sessionCookie)
     .response(asStringAlways)
     .send(backend)
 
@@ -115,7 +119,7 @@ object TestHelpers:
   def postEmailAnswer(backend: SttpBackend[Task, Any], sessionCookie: String, email: String) =
     basicRequest
       .post(uri"http://test/api/survey/email")
-      .cookie("session_id", sessionCookie)
+      .cookie("captal_session", sessionCookie)
       .body(s"""{"answer":{"type":"text","value":"$email"}}""")
       .contentType("application/json")
       .response(asStringAlways)
@@ -126,7 +130,7 @@ object TestHelpers:
       sessionCookie: String,
       optionId: String) = basicRequest
     .post(uri"http://test/api/survey/profiling")
-    .cookie("session_id", sessionCookie)
+    .cookie("captal_session", sessionCookie)
     .body(s"""{"answer":{"type":"single","value":"$optionId"}}""")
     .contentType("application/json")
     .response(asStringAlways)
@@ -135,7 +139,7 @@ object TestHelpers:
   // Video helpers
   def getNextVideo(backend: SttpBackend[Task, Any], sessionCookie: String) = basicRequest
     .get(uri"http://test/api/video/next")
-    .cookie("session_id", sessionCookie)
+    .cookie("captal_session", sessionCookie)
     .response(asStringAlways)
     .send(backend)
 
@@ -155,7 +159,7 @@ object TestHelpers:
       durationWatched: Int,
       completed: Boolean) = basicRequest
     .post(uri"http://test/api/video/watched")
-    .cookie("session_id", sessionCookie)
+    .cookie("captal_session", sessionCookie)
     .body(s"""{"durationWatched":$durationWatched,"completed":$completed}""")
     .contentType("application/json")
     .response(asStringAlways)
@@ -167,7 +171,7 @@ object TestHelpers:
   // Advertiser survey helpers
   def getNextAdvertiserSurvey(backend: SttpBackend[Task, Any], sessionCookie: String) = basicRequest
     .get(uri"http://test/api/survey/advertiser/next")
-    .cookie("session_id", sessionCookie)
+    .cookie("captal_session", sessionCookie)
     .response(asStringAlways)
     .send(backend)
 
@@ -176,7 +180,7 @@ object TestHelpers:
       sessionCookie: String,
       optionId: String) = basicRequest
     .post(uri"http://test/api/survey/advertiser")
-    .cookie("session_id", sessionCookie)
+    .cookie("captal_session", sessionCookie)
     .body(s"""{"answer":{"type":"single","value":"$optionId"}}""")
     .contentType("application/json")
     .response(asStringAlways)

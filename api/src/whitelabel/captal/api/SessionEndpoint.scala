@@ -5,10 +5,33 @@ import sttp.tapir.ztapir.*
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.infrastructure.SessionData
 import whitelabel.captal.core.user
+import whitelabel.captal.endpoints.ApiError
 import whitelabel.captal.endpoints.ApiError.given
-import whitelabel.captal.endpoints.{ApiError, SurveyEndpoints}
 import whitelabel.captal.infra.session.{CaptivePortalParams, SessionContext, SessionService}
 import zio.*
+
+final class SessionEndpoint(cookieConfig: SessionCookieConfig):
+
+  def secured(
+      onMissingSession: SessionEndpoint.OnMissing = SessionEndpoint.OnMissing.Fail,
+      allowedPhases: Seq[Phase] = Seq.empty)
+      : ZPartialServerEndpoint[SessionService & SessionContext, Option[
+        String], SessionData, Unit, ApiError, Unit, Any] = endpoint
+    .securityIn(cookieConfig.tapirInput)
+    .errorOut(jsonBody[ApiError])
+    .zServerSecurityLogic: cookie =>
+      for
+        session <- SessionEndpoint.resolveSession(cookie, onMissingSession)
+        _       <-
+          if allowedPhases.isEmpty || allowedPhases.contains(session.phase) then
+            ZIO.unit
+          else
+            ZIO.fail(
+              ApiError.WrongPhase(session.phase.toString, allowedPhases.map(_.toString).toList))
+        _ <- SessionContext.set(session)
+      yield session
+
+end SessionEndpoint
 
 object SessionEndpoint:
   enum OnMissing:
@@ -55,22 +78,7 @@ object SessionEndpoint:
                     case OnMissing.Create(userAgent, locale, portalParams) =>
                       createSession(userAgent, locale, portalParams)
 
-  // Secured endpoint with optional phase validation
-  def secured(onMissingSession: OnMissing = OnMissing.Fail, allowedPhases: Seq[Phase] = Seq.empty)
-      : ZPartialServerEndpoint[SessionService & SessionContext, Option[
-        String], SessionData, Unit, ApiError, Unit, Any] = endpoint
-    .securityIn(SurveyEndpoints.sessionCookie)
-    .errorOut(jsonBody[ApiError])
-    .zServerSecurityLogic: cookie =>
-      for
-        session <- resolveSession(cookie, onMissingSession)
-        _       <-
-          if allowedPhases.isEmpty || allowedPhases.contains(session.phase) then
-            ZIO.unit
-          else
-            ZIO.fail(
-              ApiError.WrongPhase(session.phase.toString, allowedPhases.map(_.toString).toList))
-        _ <- SessionContext.set(session)
-      yield session
+  val layer: ZLayer[SessionCookieConfig, Nothing, SessionEndpoint] = ZLayer.fromFunction(
+    SessionEndpoint(_))
 
 end SessionEndpoint
