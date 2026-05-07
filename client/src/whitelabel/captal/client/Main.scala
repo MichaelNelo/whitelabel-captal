@@ -47,7 +47,7 @@ object App:
     cls := "nav-loader",
     div(
       cls := "loader-icon brand-pulse",
-      img(src := "/brand-icon.svg", cls := "brand-icon", alt := "Loading")))
+      img(src := "brand-icon.svg", cls := "brand-icon", alt := "Loading")))
 
   /** Extract captive portal params from the UniFi redirect URL. */
   private def parseCaptivePortalHeaders(): Map[String, String] =

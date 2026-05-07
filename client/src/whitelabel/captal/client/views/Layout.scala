@@ -62,7 +62,7 @@ object Layout:
   )
 
   private def brandIcon: HtmlElement = img(
-    src := "/brand-icon.svg",
+    src := "brand-icon.svg",
     cls := "brand-icon",
     alt := "Captal")
 end Layout
