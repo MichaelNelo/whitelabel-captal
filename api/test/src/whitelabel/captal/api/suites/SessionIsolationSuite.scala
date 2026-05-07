@@ -48,7 +48,7 @@ object SessionIsolationSuite:
 
             // Create a user who has already answered email in a PREVIOUS session
             testUser <- TestFixtures.createUser("isolation-test@example.com")
-            _ <- TestFixtures.createAnswer(
+            _        <- TestFixtures.createAnswer(
               testUser.userId,
               previousSessionId,
               emailSurvey.questionId,
@@ -58,9 +58,7 @@ object SessionIsolationSuite:
 
             // === Session 1: get profiling question (but DON'T answer) ===
             firstCookie <- createSession(backend)
-            _           <- TestFixtures.linkSessionToUser(
-              user.SessionId.unsafe(firstCookie),
-              testUser.userId)
+            _ <- TestFixtures.linkSessionToUser(user.SessionId.unsafe(firstCookie), testUser.userId)
             _ <- TestFixtures.updateSessionPhase(
               user.SessionId.unsafe(firstCookie),
               Phase.IdentificationQuestion)
@@ -96,6 +94,5 @@ object SessionIsolationSuite:
             answerResp.code.isSuccess,
             // Should NOT contain incompatible_answer_type error
             !answerResp.body.contains("incompatible_answer_type")
-          )
-      )
+          ))
 end SessionIsolationSuite

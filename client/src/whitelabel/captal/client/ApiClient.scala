@@ -28,15 +28,12 @@ object ApiClient:
     * `/` and there is no prefix segment, so we fall back to `/api`.
     */
   private val apiBase: String =
-    val firstSegment = dom
-      .window
-      .location
-      .pathname
-      .split("/")
-      .find(_.nonEmpty)
+    val firstSegment = dom.window.location.pathname.split("/").find(_.nonEmpty)
     firstSegment match
-      case Some(slug) if slug != "api" => s"/$slug/api"
-      case _                           => "/api"
+      case Some(slug) if slug != "api" =>
+        s"/$slug/api"
+      case _ =>
+        "/api"
 
   private inline def url(path: String): String = s"$apiBase$path"
 

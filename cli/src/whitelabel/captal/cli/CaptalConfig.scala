@@ -29,11 +29,7 @@ object CaptalConfig:
   object Aws:
     given Decoder[Aws] = deriveDecoder
 
-  final case class Images(
-      api: String,
-      provision: String,
-      shared: String,
-      locations: String)
+  final case class Images(api: String, provision: String, shared: String, locations: String)
   object Images:
     given Decoder[Images] = deriveDecoder
 

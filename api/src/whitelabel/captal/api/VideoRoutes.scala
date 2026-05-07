@@ -41,69 +41,70 @@ final class VideoRoutes(sessionEndpoint: SessionEndpoint):
       case other =>
         ZIO.logErrorCause("Internal error", Cause.fail(other)).as(ApiError.fromThrowable(other))
 
-  val nextVideoRoute: ZServerEndpoint[
-    SessionContext & SessionService & NextVideoFlowType, Any] = sessionEndpoint
-    .secured(
-      onMissingSession = SessionEndpoint.OnMissing.Fail,
-      allowedPhases = Seq(Phase.AdvertiserVideo))
-    .get
-    .in("api" / "video" / "next")
-    .out(jsonBody[VideoResponse])
-    .serverLogic: session =>
-      _ =>
-        for
-          flow     <- ZIO.service[NextVideoFlowType]
-          response <- flow
-            .execute(ProvideNextVideoCommand)
-            .map(VideoResponse.from)
-            .catchAllCause: cause =>
-              val error =
-                cause.failureOrCause match
-                  case Left(e) =>
-                    e
-                  case Right(c) =>
-                    new Exception(s"Defect: ${c.prettyPrint}")
-              toApiError(error).flatMap(ZIO.fail(_))
-          // Update phase when no video is available
-          _ <-
-            response match
-              case VideoResponse.Step(step) =>
-                ZIO
-                  .serviceWithZIO[SessionService](_.setPhase(session.sessionId, step.phase))
-                  .mapError(ApiError.fromThrowable)
-              case _ =>
-                ZIO.unit
-        yield response
+  val nextVideoRoute: ZServerEndpoint[SessionContext & SessionService & NextVideoFlowType, Any] =
+    sessionEndpoint
+      .secured(
+        onMissingSession = SessionEndpoint.OnMissing.Fail,
+        allowedPhases = Seq(Phase.AdvertiserVideo))
+      .get
+      .in("api" / "video" / "next")
+      .out(jsonBody[VideoResponse])
+      .serverLogic: session =>
+        _ =>
+          for
+            flow     <- ZIO.service[NextVideoFlowType]
+            response <- flow
+              .execute(ProvideNextVideoCommand)
+              .map(VideoResponse.from)
+              .catchAllCause: cause =>
+                val error =
+                  cause.failureOrCause match
+                    case Left(e) =>
+                      e
+                    case Right(c) =>
+                      new Exception(s"Defect: ${c.prettyPrint}")
+                toApiError(error).flatMap(ZIO.fail(_))
+            // Update phase when no video is available
+            _ <-
+              response match
+                case VideoResponse.Step(step) =>
+                  ZIO
+                    .serviceWithZIO[SessionService](_.setPhase(session.sessionId, step.phase))
+                    .mapError(ApiError.fromThrowable)
+                case _ =>
+                  ZIO.unit
+          yield response
 
-  val markWatchedRoute: ZServerEndpoint[
-    SessionContext & SessionService & MarkVideoWatchedFlowType, Any] = sessionEndpoint
-    .secured(
-      onMissingSession = SessionEndpoint.OnMissing.Fail,
-      allowedPhases = Seq(Phase.AdvertiserVideo))
-    .post
-    .in("api" / "video" / "watched")
-    .in(jsonBody[MarkVideoWatchedRequest])
-    .out(jsonBody[VideoWatchedResponse])
-    .serverLogic: session =>
-      request =>
-        for
-          flow <- ZIO.service[MarkVideoWatchedFlowType]
-          cmd = MarkVideoWatchedCommand(
-            durationWatched = request.durationWatched,
-            completed = request.completed,
-            occurredAt = Instant.now)
-          result <- flow
-            .execute(cmd)
-            .map((step: NextStep) => VideoWatchedResponse(Phase.toDbString(step.phase)))
-            .catchAllCause: cause =>
-              val error =
-                cause.failureOrCause match
-                  case Left(e) =>
-                    e
-                  case Right(c) =>
-                    new Exception(s"Defect: ${c.prettyPrint}")
-              toApiError(error).flatMap(ZIO.fail(_))
-        yield result
+  val markWatchedRoute
+      : ZServerEndpoint[SessionContext & SessionService & MarkVideoWatchedFlowType, Any] =
+    sessionEndpoint
+      .secured(
+        onMissingSession = SessionEndpoint.OnMissing.Fail,
+        allowedPhases = Seq(Phase.AdvertiserVideo))
+      .post
+      .in("api" / "video" / "watched")
+      .in(jsonBody[MarkVideoWatchedRequest])
+      .out(jsonBody[VideoWatchedResponse])
+      .serverLogic: session =>
+        request =>
+          for
+            flow <- ZIO.service[MarkVideoWatchedFlowType]
+            cmd = MarkVideoWatchedCommand(
+              durationWatched = request.durationWatched,
+              completed = request.completed,
+              occurredAt = Instant.now)
+            result <- flow
+              .execute(cmd)
+              .map((step: NextStep) => VideoWatchedResponse(Phase.toDbString(step.phase)))
+              .catchAllCause: cause =>
+                val error =
+                  cause.failureOrCause match
+                    case Left(e) =>
+                      e
+                    case Right(c) =>
+                      new Exception(s"Defect: ${c.prettyPrint}")
+                toApiError(error).flatMap(ZIO.fail(_))
+          yield result
 
   def routes: List[ZServerEndpoint[FullEnv, Any]] = List(
     nextVideoRoute.widen[FullEnv],

@@ -5,8 +5,6 @@ import java.nio.file.{Files, Path, Paths}
 import java.util.zip.GZIPOutputStream
 
 import io.circe.yaml.parser as yamlParser
-import whitelabel.captal.cli.docker.DockerImageBuilder
-import whitelabel.captal.cli.{CaptalConfig, CliError, Output}
 import software.amazon.awssdk.core.sync.RequestBody
 import software.amazon.awssdk.services.cloudfront.CloudFrontClient
 import software.amazon.awssdk.services.cloudfront.model.{
@@ -59,6 +57,8 @@ import software.amazon.awssdk.services.s3.model.{
   ListObjectsV2Request,
   PutObjectRequest
 }
+import whitelabel.captal.cli.docker.DockerImageBuilder
+import whitelabel.captal.cli.{CaptalConfig, CliError, Output}
 import whitelabel.captal.infra.provision.LocationYaml
 import zio.*
 
@@ -86,7 +86,7 @@ object PushCommand:
       _ <- Output.step(1, 5, "Syncing assets to S3...")
       _ <- uploadAssets(slug)
 
-      _ <- Output.step(2, 5, "Building location image...")
+      _        <- Output.step(2, 5, "Building location image...")
       imageUri <- DockerImageBuilder.buildAndPush(
         base = config.images.api,
         repo = config.images.locations,
@@ -110,7 +110,10 @@ object PushCommand:
     yield ()
 
   private def timestampTag(): String =
-    val fmt = java.time.format.DateTimeFormatter
+    val fmt = java
+      .time
+      .format
+      .DateTimeFormatter
       .ofPattern("yyyyMMdd'T'HHmmss")
       .withZone(java.time.ZoneOffset.UTC)
     fmt.format(java.time.Instant.now())
@@ -152,7 +155,10 @@ object PushCommand:
       ZIO.serviceWithZIO[S3Client]: s3 =>
         ZIO.attemptBlocking:
           val normalizedPrefix =
-            if bundlePrefix.endsWith("/") then bundlePrefix else s"$bundlePrefix/"
+            if bundlePrefix.endsWith("/") then
+              bundlePrefix
+            else
+              s"$bundlePrefix/"
           val response = s3.listObjectsV2(
             ListObjectsV2Request.builder().bucket(bucket).prefix(normalizedPrefix).build())
           val keys = response
@@ -161,7 +167,9 @@ object PushCommand:
             .map(_.key())
             .toArray
             .toList
-            .collect { case k: String => k }
+            .collect { case k: String =>
+              k
+            }
           if keys.isEmpty then
             throw new RuntimeException(
               s"No bundle found at s3://$bucket/$normalizedPrefix — push the bundle from the project release flow first")
@@ -236,7 +244,8 @@ object PushCommand:
             logs.createLogGroup(CreateLogGroupRequest.builder().logGroupName(name).build())
             ()
           .catchSome:
-            case _: ResourceAlreadyExistsException => ZIO.unit
+            case _: ResourceAlreadyExistsException =>
+              ZIO.unit
 
   // ─────────────────────────────────────────────────────────────────────────────
   // ECS: Task definition and service
@@ -247,7 +256,7 @@ object PushCommand:
       imageUri: String): ZIO[CaptalConfig & EcsClient, CliError, String] =
     for
       config <- ZIO.service[CaptalConfig]
-      arn <-
+      arn    <-
         aws("ECS registerTaskDefinition"):
           ZIO.serviceWithZIO[EcsClient]: ecs =>
             ZIO.attemptBlocking:

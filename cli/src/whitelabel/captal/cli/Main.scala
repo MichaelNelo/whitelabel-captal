@@ -1,8 +1,8 @@
 package whitelabel.captal.cli
 
+import whitelabel.captal.cli.commands.*
 import zio.*
 import zio.cli.*
-import whitelabel.captal.cli.commands.*
 
 enum CaptalCommand:
   case Init(claude: Boolean)

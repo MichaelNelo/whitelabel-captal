@@ -38,7 +38,7 @@ object SessionManagementSuite:
           for
             backend <- testBackend
             cookie  <- createSession(backend)
-            _ <- TestFixtures.updateSessionPhase(
+            _       <- TestFixtures.updateSessionPhase(
               user.SessionId.unsafe(cookie),
               Phase.AdvertiserVideo)
             statusResp <- getStatus(backend, Some(cookie))
@@ -48,9 +48,9 @@ object SessionManagementSuite:
           "lost session with existing user links to existing user instead of creating duplicate"):
           val testEmail = user.Email.unsafeFrom("returning@example.com")
           for
-            _           <- TestFixtures.seedEmailSurvey
-            backend     <- testBackend
-            firstCookie <- createSession(backend)
+            _               <- TestFixtures.seedEmailSurvey
+            backend         <- testBackend
+            firstCookie     <- createSession(backend)
             _               <- getNextSurvey(backend, firstCookie)
             _               <- postEmailAnswer(backend, firstCookie, "returning@example.com")
             userCountBefore <- TestFixtures.countUsersByEmail(testEmail)
