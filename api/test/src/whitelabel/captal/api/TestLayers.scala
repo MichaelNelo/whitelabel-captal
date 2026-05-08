@@ -182,8 +182,8 @@ object TestLayers:
       SurveyRoutes.NextSurveyFlowType & VideoRoutes.NextVideoFlowType &
       VideoRoutes.MarkVideoWatchedFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & QuillSqlite & SessionCookieConfig &
-      CurrentLocation & SessionEndpoint & SurveyRoutes & LocaleRoutes & VideoRoutes &
-      AdvertiserSurveyRoutes
+      CurrentLocation & UserCookieConfig & UserLookup & SessionEndpoint & SurveyRoutes &
+      LocaleRoutes & VideoRoutes & AdvertiserSurveyRoutes
 
   val testEnv: ZLayer[Any, Throwable, TestEnv] = ZLayer.make[TestEnv](
     SessionContext.make,
@@ -205,6 +205,8 @@ object TestLayers:
     answerAdvertiserFlowLayer,
     sessionCookieConfigLayer,
     currentLocationLayer,
+    UserCookieConfig.layer,
+    UserLookup.layer,
     SessionEndpoint.layer,
     SurveyRoutes.layer,
     LocaleRoutes.layer,
