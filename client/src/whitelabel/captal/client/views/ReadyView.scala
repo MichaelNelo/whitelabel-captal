@@ -4,7 +4,7 @@ import scala.concurrent.ExecutionContext.Implicits.global
 
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.i18n.I18nClient
-import whitelabel.captal.client.{ApiClient, AppState, BuildInfo, Router, Runtime}
+import whitelabel.captal.client.{ApiClient, AppState, BuildInfo, ErrorHandler, Router, Runtime}
 import whitelabel.captal.core.application.Phase
 
 object ReadyView:
@@ -20,8 +20,8 @@ object ReadyView:
           result match
             case Right(_) =>
               Router.syncWithPhase(Phase.Welcome)
-            case Left(_) =>
-              ()
+            case Left(err) =>
+              ErrorHandler.escalate(err)
           isResetting.set(false)
           AppState.setNavigating(false)
 

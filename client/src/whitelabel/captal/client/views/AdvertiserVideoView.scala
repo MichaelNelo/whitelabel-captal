@@ -7,7 +7,7 @@ import org.scalajs.dom
 import org.scalajs.dom.html.{Div, Video}
 import org.scalajs.dom.svg.Circle
 import whitelabel.captal.client.i18n.I18nClient
-import whitelabel.captal.client.{ApiClient, AppState, Router, Runtime}
+import whitelabel.captal.client.{ApiClient, AppState, ErrorHandler, Router, Runtime}
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.application.commands.NextVideo
 import whitelabel.captal.endpoints.VideoResponse
@@ -332,13 +332,20 @@ object AdvertiserVideoView:
           videoEl.setAttribute("playsinline", "")
           videoEl.preload = "auto"
           videoEl.src = data.videoUrl
+          // Escalate when the browser fails to load/decode the video (404, codec,
+          // network). Without this, the user is stuck on a black player with no feedback.
+          videoEl.addEventListener(
+            "error",
+            (_: dom.Event) =>
+              ErrorHandler.escalateMessage(s"Video load failed: ${videoEl.currentSrc}"))
           videoEl.load()
           videoRef.set(Some(videoEl))
           videoData.set(Some(data))
         case Right(VideoResponse.Step(nextStep)) =>
           Router.syncWithPhase(nextStep.phase)
-        case Left(_) =>
+        case Left(err) =>
           showIntro.set(false)
+          ErrorHandler.escalate(err)
 
   private def markAsWatched(duration: Int, completed: Boolean): Unit =
     AppState.setNavigating(true)
@@ -350,8 +357,9 @@ object AdvertiserVideoView:
             val nextPhase = Phase.fromDbString(resp.nextPhase)
             Router.syncWithPhase(nextPhase)
             AppState.setNavigating(false)
-          case Left(_) =>
+          case Left(err) =>
             AppState.setNavigating(false)
+            ErrorHandler.escalate(err)
 
   private def brandIcon: HtmlElement = img(
     src := "brand-icon.svg",

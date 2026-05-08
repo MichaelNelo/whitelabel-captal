@@ -4,7 +4,7 @@ import scala.concurrent.ExecutionContext.Implicits.global
 
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.i18n.I18nClient
-import whitelabel.captal.client.{ApiClient, AppState, Router, Runtime}
+import whitelabel.captal.client.{ApiClient, AppState, ErrorHandler, Router, Runtime}
 import whitelabel.captal.core.Op
 import whitelabel.captal.core.application.commands.NextIdentificationSurvey
 import whitelabel.captal.core.application.{IdentificationSurveyType, Phase}
@@ -23,7 +23,6 @@ object IdentificationQuestionView:
   private val textInput: Var[String] = Var("")
   private val isSubmitting: Var[Boolean] = Var(false)
   private val validationError: Var[Option[String]] = Var(None)
-  private val serverError: Var[Option[String]] = Var(None)
   private val isTouched: Var[Boolean] = Var(false)
 
   def render: HtmlElement = Layout(
@@ -44,7 +43,6 @@ object IdentificationQuestionView:
       }
     ),
     footer = div(
-      child.maybe <-- serverError.signal.map(_.map(msg => div(cls := "server-error", msg))),
       child <--
         AppState
           .currentSurvey
@@ -94,8 +92,8 @@ object IdentificationQuestionView:
               loadQuestion()
             case Some(_) =>
               ()
-        case Left(_) =>
-          Router.syncWithPhase(Phase.Welcome)
+        case Left(err) =>
+          ErrorHandler.escalate(err)
 
   private def loadQuestion(): Unit = Runtime.run:
     ApiClient
@@ -106,8 +104,8 @@ object IdentificationQuestionView:
         case Right(SurveyResponse.Step(nextStep)) =>
           AppState.setPhase(nextStep.phase)
           Router.syncWithPhase(nextStep.phase)
-        case Left(_) =>
-          ()
+        case Left(err) =>
+          ErrorHandler.escalate(err)
 
   private def questionCard(survey: NextIdentificationSurvey): HtmlElement =
     val cardStateSignal = isTouched
@@ -367,7 +365,6 @@ object IdentificationQuestionView:
     .now()
     .foreach: answer =>
       isSubmitting.set(true)
-      serverError.set(None)
 
       val apiCall =
         survey.surveyType match
@@ -400,23 +397,5 @@ object IdentificationQuestionView:
             AppState.setNavigating(false)
           case Left(error) =>
             isSubmitting.set(false)
-            serverError.set(Some(errorToMessage(error)))
-
-  private def errorToMessage(error: whitelabel.captal.endpoints.ApiError): String =
-    import whitelabel.captal.endpoints.ApiError.*
-    error match
-      case SessionMissing =>
-        "Session missing"
-      case SessionInvalid(_) =>
-        "Session invalid"
-      case SessionExpired =>
-        "Session expired"
-      case InvalidEmail(_) =>
-        I18nClient.current.question.invalidEmail
-      case InvalidEmailFormat(_) =>
-        I18nClient.current.question.invalidEmail
-      case InternalError(msg) =>
-        msg
-      case _ =>
-        I18nClient.current.error.generic
+            ErrorHandler.escalate(error)
 end IdentificationQuestionView
