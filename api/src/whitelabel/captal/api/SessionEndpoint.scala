@@ -38,6 +38,13 @@ object SessionEndpoint:
     case Fail
     case Create(userAgent: String, locale: String, portalParams: Option[CaptivePortalParams] = None)
 
+    /** Like Create but pre-populates `userId` from the cross-location `captal_user` cookie. */
+    case CreateForUser(
+        userAgent: String,
+        locale: String,
+        portalParams: Option[CaptivePortalParams],
+        userId: user.Id)
+
   private def createSession(
       userAgent: String,
       locale: String,
@@ -50,16 +57,36 @@ object SessionEndpoint:
       case None =>
         ZIO.fail(ApiError.SessionMissing)
 
+  private def createSessionForUser(
+      userAgent: String,
+      locale: String,
+      portalParams: Option[CaptivePortalParams],
+      userId: user.Id): ZIO[SessionService, ApiError, SessionData] =
+    portalParams match
+      case Some(params) =>
+        ZIO
+          .serviceWithZIO[SessionService](
+            _.createForUser(userAgent, locale, Phase.Welcome, params, userId))
+          .mapError(ApiError.fromThrowable)
+      case None =>
+        ZIO.fail(ApiError.SessionMissing)
+
+  private def fromOnMissing(
+      onMissing: OnMissing): ZIO[SessionService, ApiError, SessionData] =
+    onMissing match
+      case OnMissing.Fail =>
+        ZIO.fail(ApiError.SessionMissing)
+      case OnMissing.Create(userAgent, locale, portalParams) =>
+        createSession(userAgent, locale, portalParams)
+      case OnMissing.CreateForUser(userAgent, locale, portalParams, userId) =>
+        createSessionForUser(userAgent, locale, portalParams, userId)
+
   def resolveSession(
       cookie: Option[String],
       onMissing: OnMissing): ZIO[SessionService, ApiError, SessionData] =
     cookie match
       case None =>
-        onMissing match
-          case OnMissing.Fail =>
-            ZIO.fail(ApiError.SessionMissing)
-          case OnMissing.Create(userAgent, locale, portalParams) =>
-            createSession(userAgent, locale, portalParams)
+        fromOnMissing(onMissing)
       case Some(value) =>
         user.SessionId.fromString(value) match
           case None =>
@@ -75,8 +102,8 @@ object SessionEndpoint:
                   onMissing match
                     case OnMissing.Fail =>
                       ZIO.fail(ApiError.SessionExpired)
-                    case OnMissing.Create(userAgent, locale, portalParams) =>
-                      createSession(userAgent, locale, portalParams)
+                    case _ =>
+                      fromOnMissing(onMissing)
 
   val layer: ZLayer[SessionCookieConfig, Nothing, SessionEndpoint] = ZLayer.fromFunction(
     SessionEndpoint(_))
