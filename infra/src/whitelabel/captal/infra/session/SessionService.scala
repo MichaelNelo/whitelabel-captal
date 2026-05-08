@@ -25,6 +25,17 @@ trait SessionService:
       locale: String,
       phase: Phase,
       portalParams: CaptivePortalParams): Task[SessionData]
+
+  /** Same as [[create]] but pre-populates `userId` so a returning user (recognized via the
+    * cross-location `captal_user` cookie) can be linked to their existing answers from the start.
+    */
+  def createForUser(
+      userAgent: String,
+      locale: String,
+      phase: Phase,
+      portalParams: CaptivePortalParams,
+      userId: user.Id): Task[SessionData]
+
   def setPhase(sessionId: user.SessionId, phase: Phase): Task[Unit]
   def setLocale(sessionId: user.SessionId, locale: String): Task[Unit]
   def setCurrentQuestion(sessionId: user.SessionId, question: FullyQualifiedQuestionId): Task[Unit]
@@ -167,6 +178,86 @@ object SessionService:
               ssid = portalParams.ssid
             ))
       end create
+
+      def createForUser(
+          userAgent: String,
+          locale: String,
+          phase: Phase,
+          portalParams: CaptivePortalParams,
+          userId: user.Id): Task[SessionData] =
+        val sessionId = user.SessionId.generate
+        val deviceId = user.DeviceId.fromUserAgent(userAgent)
+        val now = java.time.Instant.now.toString
+
+        val deviceRow = DeviceRow(
+          id = deviceId,
+          userAgent = userAgent,
+          createdAt = now,
+          updatedAt = now)
+
+        val upsertDevice = run(
+          query[DeviceRow]
+            .insertValue(lift(deviceRow))
+            .onConflictUpdate(_.id)(
+              (t, e) => t.userAgent -> e.userAgent,
+              (t, _) => t.updatedAt -> lift(now)))
+
+        val sessionRow = SessionRow(
+          id = sessionId,
+          userId = Some(userId),
+          deviceId = deviceId,
+          locale = locale,
+          phase = phase,
+          currentSurveyId = None,
+          currentQuestionId = None,
+          currentVideoId = None,
+          lastPromoVideoId = None,
+          currentAdvertiserId = None,
+          locationId = locationId,
+          createdAt = now,
+          clientMac = portalParams.clientMac,
+          apMac = portalParams.apMac,
+          redirectUrl = portalParams.redirectUrl,
+          ssid = portalParams.ssid
+        )
+
+        val insertSession = run(
+          query[SessionRow].insert(
+            _.id                  -> lift(sessionRow.id),
+            _.userId              -> lift(sessionRow.userId),
+            _.deviceId            -> lift(sessionRow.deviceId),
+            _.locale              -> lift(sessionRow.locale),
+            _.phase               -> lift(sessionRow.phase),
+            _.currentSurveyId     -> lift(sessionRow.currentSurveyId),
+            _.currentQuestionId   -> lift(sessionRow.currentQuestionId),
+            _.currentVideoId      -> lift(sessionRow.currentVideoId),
+            _.lastPromoVideoId    -> lift(sessionRow.lastPromoVideoId),
+            _.currentAdvertiserId -> lift(sessionRow.currentAdvertiserId),
+            _.locationId          -> lift(sessionRow.locationId),
+            _.createdAt           -> lift(sessionRow.createdAt),
+            _.clientMac           -> lift(sessionRow.clientMac),
+            _.apMac               -> lift(sessionRow.apMac),
+            _.redirectUrl         -> lift(sessionRow.redirectUrl),
+            _.ssid                -> lift(sessionRow.ssid)
+          ))
+
+        (upsertDevice *> insertSession).orDie *>
+          ZIO.succeed(
+            SessionData(
+              sessionId,
+              Some(userId),
+              locale,
+              phase,
+              None,
+              None,
+              None,
+              locationId = locationId,
+              clientMac = portalParams.clientMac,
+              apMac = portalParams.apMac,
+              redirectUrl = portalParams.redirectUrl,
+              ssid = portalParams.ssid
+            ))
+      end createForUser
 
       def setCurrentQuestion(
           sessionId: user.SessionId,

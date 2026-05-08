@@ -241,8 +241,8 @@ object Main extends ZIOAppDefault:
 
   type FullEnv =
     SessionContext & SessionService & LocaleService & QuillSqlite & SessionEndpoint &
-      SessionCookieConfig & CurrentLocation & SurveyRoutes & LocaleRoutes & VideoRoutes &
-      AdvertiserSurveyRoutes & SurveyRoutes.AnswerEmailFlowType &
+      SessionCookieConfig & CurrentLocation & UserCookieConfig & UserLookup & SurveyRoutes &
+      LocaleRoutes & VideoRoutes & AdvertiserSurveyRoutes & SurveyRoutes.AnswerEmailFlowType &
       SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
       SurveyRoutes.NextSurveyFlowType & VideoRoutes.NextVideoFlowType &
       VideoRoutes.MarkVideoWatchedFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
@@ -399,6 +399,8 @@ object Main extends ZIOAppDefault:
       localeServiceLayer,
       sessionCookieConfigLayer,
       currentLocationLayer,
+      UserCookieConfig.layer,
+      UserLookup.layer,
       SessionEndpoint.layer,
       SurveyRoutes.layer,
       LocaleRoutes.layer,

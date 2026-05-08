@@ -6,6 +6,7 @@ import sttp.tapir.json.circe.*
 import sttp.tapir.ztapir.*
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Flow, NextStep, Phase}
+import whitelabel.captal.core.user
 import whitelabel.captal.endpoints.AnswerRequest.given
 import whitelabel.captal.endpoints.StatusResponse.given
 import whitelabel.captal.endpoints.SurveyResponse.given
@@ -25,19 +26,22 @@ object SurveyRoutes:
     NextIdentificationSurvey | NextStep]
 
   type FullEnv =
-    SessionContext & SessionService & AnswerEmailFlowType & AnswerProfilingFlowType &
-      AnswerLocationFlowType & NextSurveyFlowType
+    SessionContext & SessionService & UserLookup & AnswerEmailFlowType &
+      AnswerProfilingFlowType & AnswerLocationFlowType & NextSurveyFlowType
 
-  val layer
-      : ZLayer[SessionEndpoint & SessionCookieConfig & CurrentLocation, Nothing, SurveyRoutes] =
-    ZLayer.fromFunction(SurveyRoutes(_, _, _))
+  val layer: ZLayer[
+    SessionEndpoint & SessionCookieConfig & CurrentLocation & UserCookieConfig & UserLookup,
+    Nothing,
+    SurveyRoutes] = ZLayer.fromFunction(SurveyRoutes(_, _, _, _, _))
 
 end SurveyRoutes
 
 final class SurveyRoutes(
     sessionEndpoint: SessionEndpoint,
     cookieConfig: SessionCookieConfig,
-    currentLocation: CurrentLocation):
+    currentLocation: CurrentLocation,
+    userCookieConfig: UserCookieConfig,
+    userLookup: UserLookup):
   import SurveyRoutes.*
 
   private def toApiError(error: Throwable): UIO[ApiError] =
@@ -60,8 +64,8 @@ final class SurveyRoutes(
       .post
       .in("api" / "survey" / "email")
       .in(jsonBody[AnswerRequest])
-      .out(jsonBody[SurveyResponse])
-      .serverLogic(session =>
+      .out(userCookieConfig.tapirOutput.and(jsonBody[SurveyResponse]))
+      .serverLogic(_ =>
         request =>
           for
             answerFlow <- ZIO.service[AnswerEmailFlowType]
@@ -76,7 +80,14 @@ final class SurveyRoutes(
                     case Right(c) =>
                       new Exception(s"Defect: ${c.prettyPrint}")
                 toApiError(error).flatMap(ZIO.fail(_))
-          yield result)
+            // After flow, SessionContext is updated with the resolved userId by
+            // UserPersistenceHandler. Read it to set the cross-location user cookie.
+            updated   <- SessionContext.get
+            userCookie =
+              updated
+                .flatMap(_.userId)
+                .map(uid => userCookieConfig.asMeta(uid.asString))
+          yield (userCookie, result))
 
   // ─── AnswerProfiling ──────────────────────────────────────────────────────
 
@@ -202,25 +213,48 @@ final class SurveyRoutes(
 
   private def normalize(mac: String): String = mac.toLowerCase.replace("-", ":").trim
 
+  /** Resolve the on-missing-session strategy. Prefers a CreateForUser when the cross-location
+    * `captal_user` cookie carries a valid, existing user id; falls back to plain Create otherwise.
+    */
+  private def resolveOnMissing(
+      userCookie: Option[String],
+      userAgent: String,
+      portalParams: Option[CaptivePortalParams]): UIO[SessionEndpoint.OnMissing] =
+    val parsed = userCookie.flatMap(user.Id.fromString)
+    (parsed, portalParams) match
+      case (Some(uid), Some(_)) =>
+        userLookup.existsById(uid).map:
+          case true  =>
+            SessionEndpoint.OnMissing.CreateForUser(userAgent, defaultLocale, portalParams, uid)
+          case false =>
+            SessionEndpoint.OnMissing.Create(userAgent, defaultLocale, portalParams)
+      case _ =>
+        ZIO.succeed(SessionEndpoint.OnMissing.Create(userAgent, defaultLocale, portalParams))
+
   val statusRoute: ZServerEndpoint[SessionContext & SessionService, Any] = endpoint
     .securityIn(cookieConfig.tapirInput)
+    .securityIn(userCookieConfig.tapirInput)
     .securityIn(header[Option[String]]("User-Agent"))
     .securityIn(header[Option[String]]("X-Client-Mac"))
     .securityIn(header[Option[String]]("X-Ap-Mac"))
     .securityIn(header[Option[String]]("X-Redirect-Url"))
     .securityIn(header[Option[String]]("X-Ssid"))
     .errorOut(jsonBody[ApiError])
-    .zServerSecurityLogic: (cookie, userAgentOpt, clientMac, apMac, redirectUrl, ssid) =>
-      val userAgent = userAgentOpt.getOrElse(defaultUserAgent)
-      val portalParams = clientMac.map: mac =>
-        CaptivePortalParams(mac, apMac.getOrElse(""), redirectUrl.getOrElse(""), ssid.getOrElse(""))
-      for
-        _       <- softValidateApMac(apMac, clientMac)
-        session <- SessionEndpoint.resolveSession(
-          cookie,
-          SessionEndpoint.OnMissing.Create(userAgent, defaultLocale, portalParams))
-        _ <- SessionContext.set(session)
-      yield session
+    .zServerSecurityLogic:
+      (sessionCookie, userCookie, userAgentOpt, clientMac, apMac, redirectUrl, ssid) =>
+        val userAgent = userAgentOpt.getOrElse(defaultUserAgent)
+        val portalParams = clientMac.map: mac =>
+          CaptivePortalParams(
+            mac,
+            apMac.getOrElse(""),
+            redirectUrl.getOrElse(""),
+            ssid.getOrElse(""))
+        for
+          _          <- softValidateApMac(apMac, clientMac)
+          onMissing  <- resolveOnMissing(userCookie, userAgent, portalParams)
+          session    <- SessionEndpoint.resolveSession(sessionCookie, onMissing)
+          _          <- SessionContext.set(session)
+        yield session
     .get
     .in("api" / "status")
     .out(cookieConfig.tapirOutput.and(jsonBody[StatusResponse]))
