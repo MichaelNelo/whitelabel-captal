@@ -69,6 +69,6 @@ object App:
           case Right(status) =>
             i18n.I18nClient.setLocale(status.locale)
             Router.syncWithPhase(status.phase)
-          case Left(_) =>
-            ()
+          case Left(err) =>
+            ErrorHandler.escalate(err)
 end App
