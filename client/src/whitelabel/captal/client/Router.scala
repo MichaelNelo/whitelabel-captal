@@ -6,6 +6,7 @@ import org.scalajs.dom
 import whitelabel.captal.client.views.{
   AdvertiserVideoSurveyView,
   AdvertiserVideoView,
+  ErrorView,
   IdentificationQuestionView,
   ReadyView,
   WelcomeView
@@ -19,6 +20,7 @@ case object IdentificationQuestionPage extends Page
 case object AdvertiserVideoPage        extends Page
 case object AdvertiserVideoSurveyPage  extends Page
 case object ReadyPage                  extends Page
+case object ErrorPage                  extends Page
 
 object Router:
   /** Slug-aware base path. In production the SPA is served from `/<slug>/index.html`, so all routes
@@ -56,6 +58,11 @@ object Router:
     root / "ready" / endOfSegments,
     basePath = basePath)
 
+  private val errorRoute: Route[ErrorPage.type, Unit] = Route.static(
+    ErrorPage,
+    root / "error" / endOfSegments,
+    basePath = basePath)
+
   private object router
       extends com.raquo.waypoint.Router[Page](
         routes = List(
@@ -63,7 +70,8 @@ object Router:
           questionRoute,
           advertiserVideoRoute,
           advertiserVideoSurveyRoute,
-          readyRoute),
+          readyRoute,
+          errorRoute),
         getPageTitle = {
           case WelcomePage =>
             "WiFi Gratis"
@@ -75,6 +83,8 @@ object Router:
             "Encuesta"
           case ReadyPage =>
             "Listo"
+          case ErrorPage =>
+            "Error"
         },
         serializePage = {
           case WelcomePage =>
@@ -87,6 +97,8 @@ object Router:
             "survey"
           case ReadyPage =>
             "ready"
+          case ErrorPage =>
+            "error"
         },
         deserializePage = {
           case "welcome" =>
@@ -99,6 +111,8 @@ object Router:
             AdvertiserVideoSurveyPage
           case "ready" =>
             ReadyPage
+          case "error" =>
+            ErrorPage
           case _ =>
             WelcomePage
         }
@@ -111,6 +125,11 @@ object Router:
     console.log(s"syncWithPhase: phase=$phase, targetPage=$targetPage")
     router.pushState(targetPage)
     console.log("pushState done")
+
+  /** Navigate to the centralized error page. Sits outside the phase machine — call this from
+    * `ErrorHandler.escalate` when an unexpected API or runtime failure occurs.
+    */
+  def navigateToError(): Unit = router.pushState(ErrorPage)
 
   private def phaseToPage(phase: Phase): Page =
     phase match
@@ -135,4 +154,5 @@ object Router:
       .collectStatic(AdvertiserVideoPage)(AdvertiserVideoView.render)
       .collectStatic(AdvertiserVideoSurveyPage)(AdvertiserVideoSurveyView.render)
       .collectStatic(ReadyPage)(ReadyView.render)
+      .collectStatic(ErrorPage)(ErrorView.render)
 end Router

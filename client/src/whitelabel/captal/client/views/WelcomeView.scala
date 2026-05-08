@@ -4,7 +4,7 @@ import scala.concurrent.ExecutionContext.Implicits.global
 
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.i18n.I18nClient
-import whitelabel.captal.client.{ApiClient, AppState, Router, Runtime}
+import whitelabel.captal.client.{ApiClient, AppState, ErrorHandler, Router, Runtime}
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.endpoints.SurveyResponse
 
@@ -75,7 +75,8 @@ object WelcomeView:
             if status.phase != Phase.Welcome then
               Router.syncWithPhase(status.phase)
             status.locale
-          case Left(_) =>
+          case Left(err) =>
+            ErrorHandler.escalate(err)
             detectBrowserLocale()
       _ = I18nClient.setLocale(locale)
       localesResult <- ApiClient.getLocales()
@@ -114,8 +115,8 @@ object WelcomeView:
           case Right(SurveyResponse.Step(nextStep)) =>
             AppState.setPhase(nextStep.phase)
             Router.syncWithPhase(nextStep.phase)
-          case Left(_) =>
-            ()
+          case Left(err) =>
+            ErrorHandler.escalate(err)
         isStarting.set(false)
         AppState.setNavigating(false)
   end startFlow

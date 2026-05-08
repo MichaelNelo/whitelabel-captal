@@ -3,6 +3,7 @@ package whitelabel.captal.client
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.application.commands.{NextAdvertiserSurvey, NextIdentificationSurvey}
+import whitelabel.captal.endpoints.ApiError
 
 object AppState:
   // Locale from server (detected via Accept-Language)
@@ -41,4 +42,12 @@ object AppState:
   private val navigatingVar: Var[Boolean] = Var(false)
   val isNavigating: Signal[Boolean] = navigatingVar.signal
   def setNavigating(v: Boolean): Unit = navigatingVar.set(v)
+
+  // Last unhandled error — populated when an API call fails or an unexpected runtime exception
+  // occurs. Read by ErrorView; cleared on retry. Validation errors do NOT live here (they are
+  // inline-only via `.validation-error` divs in the question views).
+  private val errorVar: Var[Option[ApiError]] = Var(None)
+  val error: Signal[Option[ApiError]] = errorVar.signal
+  def setError(e: Option[ApiError]): Unit = errorVar.set(e)
+  def clearError(): Unit = errorVar.set(None)
 end AppState
