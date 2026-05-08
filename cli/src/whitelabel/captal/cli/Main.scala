@@ -11,9 +11,12 @@ enum CaptalCommand:
   case LocationsPush(slug: String)
   case VideoAdd(slug: String, advertiser: String, file: String)
   case PromoAdd(slug: String, file: String)
+  case SkillsUpdate
+  case Update(bucket: String, region: String)
 
 object Main extends ZIOCliDefault:
 
+  private val cliVersion = "1.5.0"
   private val slugArg = Args.text("slug")
 
   // ─── init ─────────────────────────────────────────────────────────────────
@@ -69,15 +72,44 @@ object Main extends ZIOCliDefault:
     .withHelp(HelpDoc.p("Manage videos"))
     .subcommands(videoAdd, promoAdd)
 
+  // ─── skills ───────────────────────────────────────────────────────────────
+
+  private val skillsUpdate: Command[CaptalCommand] = Command("update", Options.none, Args.none)
+    .withHelp(
+      HelpDoc.p(
+        "Add any skills bundled with this CLI version that are missing from .agents/skills/. Existing skills are left alone."))
+    .map(_ => CaptalCommand.SkillsUpdate)
+
+  private val skills: Command[CaptalCommand] = Command("skills", Options.none, Args.none)
+    .withHelp(HelpDoc.p("Manage AI agent skills"))
+    .subcommands(skillsUpdate)
+
+  // ─── update (self) ────────────────────────────────────────────────────────
+
+  private val updateBucketOpt = Options
+    .text("bucket")
+    .alias("b")
+    .withDefault("captal-cli-releases-dev")
+  private val updateRegionOpt = Options.text("region").alias("r").withDefault("us-east-1")
+
+  private val update: Command[CaptalCommand] = Command(
+    "update",
+    updateBucketOpt ++ updateRegionOpt,
+    Args.none)
+    .withHelp(
+      HelpDoc.p(
+        "Self-update the CLI jar from S3 (s3://<bucket>/latest/captal.jar). Compares against the version published at s3://<bucket>/latest/version.txt. Requires AWS credentials (env / profile / role)."))
+    .map((bucket, region) => CaptalCommand.Update(bucket, region))
+
   // ─── root ─────────────────────────────────────────────────────────────────
 
   private val captal: Command[CaptalCommand] = Command("captal", Options.none, Args.none)
-    .subcommands(init, shared, locations, video)
+    .subcommands(init, shared, locations, video, skills, update)
 
   val cliApp: CliApp[Any, Any, CaptalCommand] =
     CliApp.make(
       name = "captal",
-      version = "1.3.3",
+      version = cliVersion,
       summary = HelpDoc.Span.text("Whitelabel captive portal provisioning CLI"),
       command = captal,
       config = CliConfig.default.copy(finalCheckBuiltIn = false)
@@ -111,6 +143,12 @@ object Main extends ZIOCliDefault:
 
             case CaptalCommand.PromoAdd(slug, file) =>
               VideoCommand.runPromo(slug, file).provide(CaptalConfig.layer, AwsLayers.s3)
+
+            case CaptalCommand.SkillsUpdate =>
+              SkillsUpdateCommand.run
+
+            case CaptalCommand.Update(bucket, region) =>
+              UpdateCommand.run(cliVersion, bucket, region)
         ).as(cmd)
 
       program.tapError:
