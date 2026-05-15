@@ -19,7 +19,13 @@ Advertiser videos live in `locations/<slug>/videos/<video-slug>/`. Each video ha
 ```bash
 captal video add <location-slug> <advertiser-slug> /path/to/video.mp4
 ```
-This creates the video directory with `video.yaml` and a survey template.
+This creates the video directory with `video.yaml` and a `surveys/survey.yaml` placeholder.
+
+> ⚠️ **Crítico — editar o borrar el survey.yaml por defecto antes de `locations push`.**
+> El CLI siempre escribe `surveys/survey.yaml` con `text/options` igual a `"TODO"`. Si llega así a producción, los usuarios verán literalmente "TODO" como pregunta y "TODO"/"TODO" como opciones. Las dos formas de evitarlo:
+>
+> - **Editar** con el contenido real (preferido — las respuestas existentes se preservan porque los IDs de question/option son determinísticos por posición).
+> - **Borrar** el archivo si no querés survey asociada a este video. Nota: hoy el `softDelete` de `video-survey:` no está implementado, así que si ya pusheaste una survey y después borrás el YAML, las preguntas viejas siguen activas en la DB. Para limpiar requiere SQL manual.
 
 ### Option B: Manually
 1. Create the video directory:
