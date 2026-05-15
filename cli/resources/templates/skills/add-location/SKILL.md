@@ -107,26 +107,29 @@ This runs the full deploy flow (S3 copy of bundle, build derived ECR image, regi
 The captive portal expects to be reached via a UniFi redirect that carries identifying params in the query string. Construct a test URL using the location's `ap_mac` from `location.yaml`:
 
 ```
-https://<domain>/<slug>/?id=<CLIENT_MAC>&ap=<AP_MAC>&ssid=<SSID>&url=<ORIGINAL_URL>
+https://<domain>/<slug>/?id=<CLIENT_MAC>&ap=<AP_MAC>&ssid=<SSID>&url=<ORIGINAL_URL>&click_id=<CLICK_ID>
 ```
 
 Concrete example for a location with `ap_mac: "AA:BB:CC:DD:EE:01"`:
 ```
-https://production.captal.centauroads.com/cafe-centro/?id=11:22:33:44:55:66&ap=AA:BB:CC:DD:EE:01&ssid=CafeCentroGuest&url=http%3A%2F%2Fexample.com
+https://production.captal.centauroads.com/cafe-centro/?id=11:22:33:44:55:66&ap=AA:BB:CC:DD:EE:01&ssid=CafeCentroGuest&url=http%3A%2F%2Fexample.com&click_id=test-click-001
 ```
 
 #### Query param reference
 
-These are the four params UniFi appends when it redirects an unauthenticated client to the captive portal. The SPA reads them on load (`parseCaptivePortalHeaders` in `client/Main.scala`) and forwards them to the API as `X-*` headers on the first `/api/status` call.
+These are the params UniFi appends when it redirects an unauthenticated client to the captive portal. The SPA reads them on load (`parseCaptivePortalHeaders` in `client/Main.scala`) and forwards them to the API as `X-*` headers on the first `/api/status` call.
 
-| URL param | Forwarded as header  | Source         | Purpose                                                                                  |
-|-----------|----------------------|----------------|------------------------------------------------------------------------------------------|
-| `id`      | `X-Client-Mac`       | client device  | MAC address of the user's device. Identifies the user across visits.                      |
-| `ap`      | `X-Ap-Mac`           | UniFi AP       | MAC of the access point the client connected to. **Must match `ap_mac` in `location.yaml`** for the API to associate the session with this location. |
-| `ssid`    | `X-Ssid`             | UniFi AP       | SSID (network name) the client connected to. Logged for analytics; not validated.         |
-| `url`     | `X-Redirect-Url`     | UniFi AP       | Original URL the user tried to visit before redirect. Logged; the SPA does not redirect to it (the user finishes the flow on the portal). |
+| URL param  | Forwarded as header  | Required | Source         | Purpose                                                                                  |
+|------------|----------------------|----------|----------------|------------------------------------------------------------------------------------------|
+| `id`       | `X-Client-Mac`       | yes      | client device  | MAC address of the user's device. Identifies the user across visits.                      |
+| `click_id` | `X-Click-Id`         | yes      | UniFi          | Per-redirect identifier (typically a unique token UniFi generates per click). Stored on the session for attribution. |
+| `ap`       | `X-Ap-Mac`           | no       | UniFi AP       | MAC of the access point the client connected to. **Should match `ap_mac` in `location.yaml`** — soft-validated, mismatches get a warning log. |
+| `ssid`     | `X-Ssid`             | no       | UniFi AP       | SSID (network name) the client connected to. Logged for analytics; not validated.         |
+| `url`      | `X-Redirect-Url`     | no       | UniFi AP       | Original URL the user tried to visit before redirect. Logged; the SPA does not redirect to it (the user finishes the flow on the portal). |
 
-Real captive-portal traffic from UniFi looks like `?id=<mac>&ap=<mac>&t=<timestamp>&url=<original>&ssid=<ssid>`; the `t` (timestamp) param is ignored by the SPA.
+**Required params** (`id` and `click_id`) MUST be present when a session is being created. Missing either causes `ApiError.SessionMissing` and the SPA falls back to the error page. On subsequent requests where a session cookie is already set, these params are ignored.
+
+Real captive-portal traffic from UniFi looks like `?id=<mac>&ap=<mac>&t=<timestamp>&url=<original>&ssid=<ssid>&click_id=<token>`; the `t` (timestamp) param is ignored by the SPA.
 
 #### What to test
 

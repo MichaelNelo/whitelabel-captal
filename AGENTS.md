@@ -1053,6 +1053,121 @@ Si tras redeploy de rqlite (o force-deploy del API) las queries devuelven 500 / 
 
 ---
 
+## Cambios Recientes (sesiones dev/iteracion)
+
+> Resumen de lo trabajado en sesiones recientes despues del primer deploy a CloudFront. Detalles tecnicos por archivo en cada subseccion.
+
+### Aislamiento de sesiones por location (API v1.1.0)
+
+- **Bug**: el SPA sirve `/cafe-centro/` y `/valmy/` bajo el mismo dominio; la cookie `session_id` con `Path=/` se enviaba a TODAS las locations → sesiones mezcladas.
+- **Solucion**: cookie name + path slug-aware:
+  - Nombre `captal_session_<slug>` (e.g. `captal_session_cafe-centro`)
+  - Path `/<slug>` (e.g. `Path=/cafe-centro`)
+  - El browser indexa por `(domain, path, name)` → entradas separadas en DevTools, solo manda la relevante a cada location.
+- **Nuevo `SessionCookieConfig` case class** (`api/SessionCookieConfig.scala`): `fromSlug(Option[String])` produce config con `tapirInput`/`tapirOutput` para Tapir y `asMeta` para `CookieValueWithMeta`. Single source of truth derivada de `ServerSettings.locationSlug`.
+- **Refactor a clases**: `SessionEndpoint`, `SurveyRoutes`, `LocaleRoutes`, `VideoRoutes`, `AdvertiserSurveyRoutes` pasaron de `object` a `final class` parametrizada (Tapir requiere el nombre del cookie en construction time del endpoint). Wiring via ZLayer en `api/Main.scala` `appLayers`.
+- **El cliente NO cambia** — usa `dom.fetch` puro y deja al browser manejar cookies. El nombre del cookie es transparente para Scala.js.
+- **`endpoints/` modulo intacto** — los `val`s de `SurveyEndpoints` (answerEmail, nextSurvey, etc.) NO se usan en runtime por la API; `SurveyRoutes` redefine via `sessionEndpoint.secured(...).post.in(...)`. Solo aparecen en OpenAPI/Swagger.
+- **Migracion de cookies legacy**: no se hace cleanup activo del `session_id` huerfano; queda inerte porque nadie lo lee.
+
+### Soft-validate de AP MAC (API v1.1.0+)
+
+- **`CurrentLocation` case class** (`api/CurrentLocation.scala`): snapshot al startup de `(id, slug, apMac)` de la location del API instance. Cargada via `LocationService.findBySlug`. Empty para dev/test sin slug.
+- **`SurveyRoutes.softValidateApMac`**: en cada `/api/status`, si el header `X-Ap-Mac` no matchea `location.ap_mac` provisionado, **logea warning** (no rechaza). Catchea typos en `location.yaml` sin bloquear sesiones. MAC se normaliza (`lower`, `-` → `:`).
+- **Promote a hard fail (403)** si en el futuro queremos AP discipline.
+
+### User cookie cross-location para skip de email (API v1.2.0)
+
+- **Feature**: si un usuario respondio email en `/cafe-centro/`, al visitar `/valmy/` debe saltarse esa pregunta y avanzar al siguiente paso de identificacion.
+- **Disponible porque la `users` tabla es global** (sin `location_id`) y `UserPersistenceHandler` reusa user_id existente cuando matchea por email. `NextIdentificationSurveyHandler` ya skip-ea preguntas ya respondidas por `user_id`.
+- **Solucion**: cookie `captal_user=<userId>` con `Path=/` (compartida entre todas las locations).
+  - Set en `answerEmailRoute` despues de que el flow popule `session.userId` via `SessionContext`.
+  - Read en `statusRoute`: si hay cookie con UUID valido + el user existe en DB (vía nuevo `UserLookup` service), crea la sesion con `userId` pre-populado (`OnMissing.CreateForUser`).
+  - Atributos: `HttpOnly; Secure; SameSite=Lax; Max-Age=2592000` (30 dias).
+- **`UserCookieConfig`** (`api/UserCookieConfig.scala`): config estatica (no slug-aware).
+- **`UserLookup` service** (`api/UserLookup.scala`): id-based existence check, separado de `UserRepository` para evitar shadow `Tapir.query`/`Quill.query`.
+- **`SessionService.createForUser`**: variante de `create` que setea `userId` desde el inicio.
+- **Anti-forgery**: el userId del cookie se valida contra `users` table; un UUID forjado no matchea ninguna fila y se ignora. Sin HMAC (consecuencia de un cookie valido limitada a "skip-ear email"; documentado como TODO si crece superficie).
+
+### Click ID requerido (API v1.4.0 — pendiente de deploy)
+
+- **Migracion V14**: `ALTER TABLE sessions ADD click_id TEXT NOT NULL DEFAULT ''`. Filas legacy: `''`. Nuevas: requeridas.
+- **`SessionRow.clickId: String`**, `SessionData.clickId: String`, `CaptivePortalParams.clickId: String`.
+- **`SurveyRoutes.statusRoute`**: nuevo `securityIn(header[Option[String]]("X-Click-Id"))`. Construye `portalParams` solo si AMBOS `clientMac` y `clickId` estan presentes (y `clickId` no vacio). Si falta cualquiera en CREATE flow, falla con `ApiError.SessionMissing`. Existing sessions (cookie presente) ignoran los params.
+- **SPA**: `parseCaptivePortalHeaders` en `client/Main.scala` y `views/ErrorView.scala` mapea `click_id` (query param) → `X-Click-Id` (header).
+- **Skill `add-location`**: URL de test ahora incluye `&click_id=<token>` y la tabla de params marca `id` y `click_id` como `Required: yes`.
+
+### Bug fixes del cliente
+
+- **Brand-icon path absoluto** (`views/Layout.scala`, `AdvertiserVideoView.scala`, `Main.scala`): cambio de `src := "/brand-icon.svg"` → `src := "brand-icon.svg"`. Las URLs absolutas ignoraban el `<base href="/<slug>/">` inyectado por el inline script de `index.html.template` y aterrizaban en `/brand-icon.svg` (404 fuera del slug). Con relativa, resuelve a `/<slug>/brand-icon.svg`.
+- **Video URLs apuntaban a S3 directo** (`cli/commands/VideoCommand.scala`): `captal video add` generaba `url: https://<bucket>.s3.amazonaws.com/...` que daba 403 por bucket policy (allow only CloudFront via OAC). Cambiado a `https://${config.alb.domain}/<s3Key>` (CloudFront dominio publico). La SPA fallback function passthrough archivos con extension.
+- **ALB rule + ECS service order** (`cli/commands/PushCommand.scala`): TG se creaba antes del ECS service createService, pero el TG no tenia ALB rule asociada → AWS rechazaba el createService. Reordenado: step 3 = "Configuring ALB rule" (crea TG + ALB rule); step 4 = "Updating ECS service".
+- **TG health check too strict**: defaults (timeout 5s, healthy 5, unhealthy 2) tiraban targets sanos por jitter. Ajustados a `interval 30s, timeout 10s, healthy 2, unhealthy 5` via `modifyTargetGroup` (corre en cada push para que TGs existentes hereden settings nuevos).
+- **ECS grace period**: subido a 300s (de 180s) para que la API tenga tiempo de Migrate + provision antes que TG marque unhealthy.
+
+### Pagina de error centralizada
+
+- **`ErrorView` + `Router.ErrorPage`** (`client/views/ErrorView.scala`, `client/Router.scala`): ruta `/error`, renderiza con i18n keys `error.title`/`error.generic`/`error.retry`. Botón retry vuelve a hacer `getStatus` y deja al router sincronizar fase.
+- **`AppState.error: Var[Option[ApiError]]`** — fuente de verdad del ultimo error.
+- **`ErrorHandler.escalate(err)` / `escalateMessage(s)`** (`client/ErrorHandler.scala`): unico punto de fallback. Setea `AppState.error` y navega a `/error`.
+- **Refactor de views**: `IdentificationQuestionView`, `AdvertiserVideoSurveyView` ya no tienen `serverError` Var ni el helper `errorToMessage`. Todos los `case Left(_)` silenciosos (en `Main`, `WelcomeView`, `ReadyView`, `AdvertiserVideoView`) ahora llaman `ErrorHandler.escalate`. **Validation errors siguen inline** (`.validation-error` con `question.invalidEmail` etc.) — no son API errors.
+- **`Runtime.run` escala Future failures** (timeout, decode crash) tambien.
+- **Video load error**: nuevo `videoEl.addEventListener("error", ...)` en `AdvertiserVideoView` escala cuando el browser falla cargando el `<video>` (404 de S3, codec mismatch, network) — sin esto, el usuario veia un player negro sin feedback.
+- CSS selectors (`.error-view`, `.error-content`, `.error-icon`, `.error-title`, `.error-message`) ya estaban definidos en `client/assets/styles.css`.
+
+### Wiring de soft-delete (API v1.3.0)
+
+- **Bug**: `ProvisionService.softDeleteEntity` solo loggeaba "Don't know how to soft-delete" para `video:`, `video-survey:`, `i18n:` (catch-all). Borrar un `survey.yaml` o `<locale>.yaml` no hacia nada en DB → SPA seguia sirviendo el contenido viejo (e.g. surveys placeholder con "TODO").
+- **Solucion**: wireados los casos faltantes:
+  - `video:<slug>/<videoSlug>` — brute-force: por cada advertiser activo, llama `deactivateVideo(videoId(slug, adv.id, videoSlug))`. Solo el id que existe pega; los demas son UPDATE no-op. Helper nuevo `EntityWriter.listActiveAdvertisers`.
+  - `video-survey:<slug>/<videoSlug>/<surveySlug>` — `deactivateSurvey(advertiserSurveyId(...))`. SPA filtra por `survey.is_active=1`.
+  - `i18n:<slug>/<locale>` — `EntityWriter.deleteI18nForLocation(locationId, locale)` (hard-delete; `localized_texts` no tiene `is_active`).
+- **Caveat**: las `answers` rows siguen apuntando a question_ids que quedan "orfanas" (las tablas `questions`/`question_options` no tienen `is_active` propio). La SPA filtra antes de descender, no las ve, pero quedan en DB como ruido para analytics. Manual SQL purge si se quiere limpiar.
+- **`softDeleteEntity` ahora recibe `locationId`** como tercer parametro (necesario para `i18n:`).
+
+### Coexistencia rqlite single-node + multi-node (Terraform)
+
+- `modules/rqlite/main.tf`: branch interno por `var.desired_count`:
+  - `desired_count = 1` (dev): **EFS persistente** mount en `/rqlite/file`. Capacity provider FARGATE (no eviction). Deploy stop-then-start (`max=100, min=0`) para garantizar que solo una rqlited escribe sobre EFS. Nuevo `aws_efs_file_system` + mount targets + access point + EFS SG + task role policy `elasticfilesystem:Client*`.
+  - `desired_count >= 3` (prod): ephemeral + FARGATE_SPOT + rolling (`max=200, min=50`) como antes. S3 auto-backup activo.
+- Validacion: `desired_count` debe ser 1 o impar >= 3.
+- Dev `terraform.tfvars`: `rqlite_desired_count = 1` ahora; prod sigue en 3.
+
+### CLI distribution publica + self-update
+
+- **Bucket `captal-cli-releases-dev` ahora publico** para `latest/*` y `v*/*` (cambio en `modules/cli-releases/main.tf`): bucket policy + relajar `block_public_policy`/`restrict_public_buckets` (manteniendo `block_public_acls=true`). Operadores descargan sin AWS creds.
+- **`captal update`** (`cli/commands/UpdateCommand.scala`):
+  - Fetch via `HttpURLConnection` (no AWS SDK, no creds) de `<bucket-url>/latest/version.txt`.
+  - Compara con `Main.cliVersion`. Si distintos, descarga `<bucket-url>/latest/captal.jar` a `<currentJarPath>.new`.
+  - **NO reemplaza in-place** (Windows lockea el JAR mientras la JVM corre).
+- **Wrapper scripts hacen el swap** al startup (en `build.mill`):
+  - `captal` (bash): `if [ -f "$DIR/captal.jar.new" ]; then mv -f ... captal.jar; fi; exec java -jar captal.jar "$@"`.
+  - `captal.bat` (Windows): `if exist "%DIR%captal.jar.new" move /Y captal.jar.new captal.jar; java -jar captal.jar %*`.
+- **`captal skills update`** (`cli/commands/SkillsUpdateCommand.scala`): syncea `.agents/skills/` con las skills bundleadas en el JAR (via `Catalog.skillsTemplates`). Solo agrega faltantes; no sobreescribe existentes.
+- **`cli.publishS3` Mill task** ahora tambien publica `latest/version.txt` y `v<version>/version.txt`.
+
+### Docker auth automatica en push
+
+- `DockerImageBuilder.buildAndPush` (`cli/docker/DockerImageBuilder.scala`): el `ecrLogin` ahora corre **antes** del `docker build` (no despues como antes). Necesario porque `FROM $BASE` en el Dockerfile derivado tira de ECR — si el operador no esta logueado, el pull falla. Ya no hace falta `aws ecr get-login-password | docker login` manual antes de `captal shared push` o `captal locations push`.
+
+### Skills nuevas y actualizadas
+
+- `yaml-reference` (NUEVA): referencia completa de schemas YAML del proyecto (captal.yaml, surveys/, advertisers/, location.yaml, i18n/, videos/, promo/) con tabla de tipos de pregunta y reglas de validacion.
+- `i18n-reference` (NUEVA): listado completo de las 36 claves i18n requeridas con placeholders + baselines copy-paste para es/en.
+- `style-reference` (NUEVA, v1.1.0): API completa de CSS variables (~50 properties) + anatomia DOM por pantalla (Welcome, Question, Video, Survey, Ready, Error, Initial loader, Nav overlay) + recipes practicos + class hooks compartidos + state modifiers.
+- `add-location`: paso 8 expandido con URL de test UniFi (`?id=...&ap=...&ssid=...&url=...&click_id=...`) + tabla de params + `click_id` marcado como required.
+- `add-video`: bloque ⚠️ critico explicando que `surveys/survey.yaml` se crea con `text: "TODO"` y opciones `"TODO"`/`"TODO"`; el operador DEBE editarlo o borrarlo antes de push. Aclara que el soft-delete del video-survey ahora funciona (API v1.3.0+).
+- `add-survey`: nota arriba que solo cubre identification surveys (email/profiling/location); para video surveys remite a `add-video`.
+- 13 skills totales se distribuyen con `captal init` y `captal skills update`.
+
+### Versiones publicadas en ECR / S3
+
+- **API**: `captal-api-dev:v1.0.0` → `v1.1.0` (cookie isolation + soft-validate + cross-location user) → `v1.2.0` (= v1.1.0 + soft-delete wiring) → `v1.3.0` (= v1.2.0 + click_id pendiente push como v1.4.0).
+- **Provision**: `captal-provision-dev:v1.0.0` → `v1.3.0` (con el soft-delete wiring).
+- **CLI**: `1.0.0` → `1.1.x` (ALB rule fix, target group settings) → `1.2.0` (modify TG settings via push) → `1.3.x` (video CloudFront URL fix, brand-icon path fix, skills nuevas) → `1.4.0` (rolloutApiBase, revertida) → `1.5.0` (self-update + skills update) → `1.5.1` (HTTP fetch publico) → `1.5.2` (ECR auth antes de build) → `1.5.3` (wrapper-based JAR swap para Windows) → `1.5.4` (skills add-video/add-survey TODO note). Publicada en `s3://captal-cli-releases-dev/latest/` y `v<version>/`.
+
+---
+
 ## Documentacion Adicional
 
 - **docs/EVENT_SOURCING_SUMMARY.md**: Detalle completo del modelo de Event Sourcing
