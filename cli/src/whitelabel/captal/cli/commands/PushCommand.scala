@@ -275,7 +275,6 @@ object PushCommand:
                     .value("/etc/captal/provision")
                     .build(),
                   KeyValuePair.builder().name("DB_URL").value(config.database.url).build(),
-                  KeyValuePair.builder().name("DB_DEV_SEED").value("false").build(),
                   KeyValuePair
                     .builder()
                     .name("SERVER_DEV_MODE")
