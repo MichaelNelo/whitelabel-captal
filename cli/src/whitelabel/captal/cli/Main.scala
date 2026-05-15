@@ -9,6 +9,7 @@ enum CaptalCommand:
   case SharedPush
   case LocationsAdd(slug: String)
   case LocationsPush(slug: String)
+  case LocationsPushAll
   case VideoAdd(slug: String, advertiser: String, file: String)
   case PromoAdd(slug: String, file: String)
   case SkillsUpdate
@@ -16,7 +17,7 @@ enum CaptalCommand:
 
 object Main extends ZIOCliDefault:
 
-  private val cliVersion = "1.5.5"
+  private val cliVersion = "1.6.0"
   private val slugArg = Args.text("slug")
 
   // ─── init ─────────────────────────────────────────────────────────────────
@@ -48,9 +49,18 @@ object Main extends ZIOCliDefault:
     .withHelp(HelpDoc.p("Deploy location to AWS (S3 + ECS + ALB)"))
     .map(CaptalCommand.LocationsPush(_))
 
+  private val locationsPushAll: Command[CaptalCommand] = Command(
+    "push-all",
+    Options.none,
+    Args.none)
+    .withHelp(
+      HelpDoc.p(
+        "Deploy ALL locations under locations/<slug>/ in sequence. Useful after bumping the API base image version in shared/captal.yaml."))
+    .map(_ => CaptalCommand.LocationsPushAll)
+
   private val locations: Command[CaptalCommand] = Command("locations", Options.none, Args.none)
     .withHelp(HelpDoc.p("Manage locations"))
-    .subcommands(locationsAdd, locationsPush)
+    .subcommands(locationsAdd, locationsPush, locationsPushAll)
 
   // ─── video ────────────────────────────────────────────────────────────────
 
@@ -125,6 +135,18 @@ object Main extends ZIOCliDefault:
             case CaptalCommand.LocationsPush(slug) =>
               PushCommand
                 .run(slug)
+                .provide(
+                  CaptalConfig.layer,
+                  AwsLayers.s3,
+                  AwsLayers.ecs,
+                  AwsLayers.elbv2,
+                  AwsLayers.ecr,
+                  AwsLayers.cloudfront,
+                  AwsLayers.cloudwatchLogs)
+
+            case CaptalCommand.LocationsPushAll =>
+              PushAllCommand
+                .run
                 .provide(
                   CaptalConfig.layer,
                   AwsLayers.s3,
