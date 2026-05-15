@@ -115,7 +115,8 @@ final case class AdvertiserVideoRow(
     isActive: Int,
     priority: Int,
     createdAt: String,
-    updatedAt: String)
+    updatedAt: String,
+    productCampaignId: Option[String] = None)
 
 final case class VideoViewRow(
     id: String,

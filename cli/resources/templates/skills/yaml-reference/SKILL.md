@@ -191,6 +191,9 @@ title:
 description:                    # optional
   es: "..."
   en: "..."
+productCampaignId: "blazes-2026" # optional admin id for the product/campaign this video
+                                 # promotes (beyond the advertiser brand). Stored on the
+                                 # row for reporting; not surfaced to the SPA.
 ```
 
 ## `locations/<slug>/videos/<...>/surveys/<name>.yaml` — per-video surveys

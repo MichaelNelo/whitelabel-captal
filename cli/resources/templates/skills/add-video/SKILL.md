@@ -50,6 +50,10 @@ This creates the video directory with `video.yaml` and a `surveys/survey.yaml` p
    # description:                     # optional
    #   es: "..."
    #   en: "..."
+   # productCampaignId: "summer-2026" # optional admin identifier for the product/campaign
+                                      # this video promotes (beyond the advertiser brand).
+                                      # Persisted on the advertiser_videos row for reporting;
+                                      # NOT exposed to the SPA.
    ```
 
 3. Optionally add surveys in `surveys/`:
