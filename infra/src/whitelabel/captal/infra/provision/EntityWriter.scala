@@ -208,6 +208,31 @@ object EntityWriter:
         .filter(_.id == lift(id))
         .update(_.isActive -> 0, _.updatedAt -> lift(now))).unit
 
+  /** List all active advertisers — used by softDeleteEntity to brute-force the videoId
+    * computation when removing a `video:` entity (the advertiser slug isn't stored in the
+    * manifest entity key, but the AdvertiserVideo.id is uuid5 of `(locationSlug, advertiserSlug,
+    * videoSlug)`).
+    */
+  def listActiveAdvertisers(quill: QuillSqlite): Task[List[AdvertiserRow]] =
+    import quill.*
+    run(query[AdvertiserRow].filter(_.isActive == 1))
+
+  /** Hard-delete the localized_text rows for a (location, locale) frontend bundle.
+    *
+    * Unlike surveys/videos, `localized_texts` has no `is_active` flag — the SPA reads everything
+    * matching `(locale, category='frontend', location_id)` and falls back to `[<key>]` on misses.
+    * Removing a locale means the operator no longer wants to serve those translations, so the
+    * cleanest action is to drop the rows entirely.
+    */
+  def deleteI18nForLocation(quill: QuillSqlite)(locationId: String, locale: String): Task[Unit] =
+    import quill.*
+    run(
+      query[LocalizedTextRow]
+        .filter(r =>
+          r.locationId == lift(Option(locationId)) && r.locale == lift(locale) &&
+            r.category == lift("frontend"))
+        .delete).unit
+
   /** Upsert a provision manifest entry */
   def upsertManifest(quill: QuillSqlite)(
       entityKey: String,
