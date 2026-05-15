@@ -67,7 +67,8 @@ final case class VideoYaml(
     noRepeatSeconds: Option[Int] = None,
     priority: Int = 10,
     title: Map[String, String],
-    description: Option[Map[String, String]] = None)
+    description: Option[Map[String, String]] = None,
+    productCampaignId: Option[String] = None)
 object VideoYaml:
   given Decoder[VideoYaml] = deriveDecoder
 
