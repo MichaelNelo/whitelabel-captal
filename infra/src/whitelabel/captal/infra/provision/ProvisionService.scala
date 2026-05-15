@@ -304,7 +304,8 @@ object ProvisionService:
           ,
           yaml.noRepeatSeconds,
           Some(locationId),
-          yaml.priority
+          yaml.priority,
+          yaml.productCampaignId
         )
       _ <- upsertLocalizedTexts(quill, videoId, yaml.title, "")
       _ <-
@@ -376,7 +377,8 @@ object ProvisionService:
           ,
           None,
           Some(locationId),
-          yaml.priority)
+          yaml.priority,
+          None)
       _ <- upsertLocalizedTexts(quill, videoId, yaml.title, "")
       _ <-
         yaml.description.fold(ZIO.unit)(desc => upsertLocalizedTexts(quill, videoId, desc, "_desc"))

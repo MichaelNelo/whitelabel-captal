@@ -10,3 +10,6 @@ title:
 # description:
 #   es: "TODO"
 #   en: "TODO"
+# Optional admin identifier for the product/campaign this video promotes (e.g. "summer-2026").
+# Used for reporting; not surfaced to users.
+# productCampaignId: ""

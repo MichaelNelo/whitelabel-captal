@@ -51,7 +51,8 @@ object EntityWriter:
       showCountdown: Int,
       noRepeatSeconds: Option[Int],
       locationId: Option[String],
-      priority: Int): Task[Unit] =
+      priority: Int,
+      productCampaignId: Option[String]): Task[Unit] =
     import quill.*
     val now = java.time.Instant.now.toString
     val row = AdvertiserVideoRow(
@@ -67,19 +68,21 @@ object EntityWriter:
       1,
       priority,
       now,
-      now
+      now,
+      productCampaignId
     )
     run(
       query[AdvertiserVideoRow]
         .insertValue(lift(row))
         .onConflictUpdate(_.id)(
-          (t, e) => t.videoUrl        -> e.videoUrl,
-          (t, e) => t.durationSeconds -> e.durationSeconds,
-          (t, e) => t.minWatchSeconds -> e.minWatchSeconds,
-          (t, e) => t.showCountdown   -> e.showCountdown,
-          (t, e) => t.priority        -> e.priority,
-          (t, _) => t.isActive        -> lift(1),
-          (t, _) => t.updatedAt       -> lift(now)
+          (t, e) => t.videoUrl          -> e.videoUrl,
+          (t, e) => t.durationSeconds   -> e.durationSeconds,
+          (t, e) => t.minWatchSeconds   -> e.minWatchSeconds,
+          (t, e) => t.showCountdown     -> e.showCountdown,
+          (t, e) => t.priority          -> e.priority,
+          (t, e) => t.productCampaignId -> e.productCampaignId,
+          (t, _) => t.isActive          -> lift(1),
+          (t, _) => t.updatedAt         -> lift(now)
         )).unit
   end upsertVideo
 
