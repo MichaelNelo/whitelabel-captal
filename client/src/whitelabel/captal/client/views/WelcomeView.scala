@@ -66,35 +66,16 @@ object WelcomeView:
     styleAttr := s"animation-delay: ${index * 0.1}s",
     span(cls := "step-text", child.text <-- textSignal))
 
+  /** Fetch the list of available locales for the dropdown. The session-creation `/api/status`
+    * call already happened once at boot in `Main.syncPhaseOnLoad` — locale + phase sync live
+    * there. This view only needs the locales list.
+    */
   private def loadLocales(): Unit = Runtime.run:
-    for
-      statusResult <- ApiClient.getStatus()
-      locale =
-        statusResult match
-          case Right(status) =>
-            if status.phase != Phase.Welcome then
-              Router.syncWithPhase(status.phase)
-            status.locale
-          case Left(err) =>
-            ErrorHandler.escalate(err)
-            detectBrowserLocale()
-      _ = I18nClient.setLocale(locale)
-      localesResult <- ApiClient.getLocales()
-    yield localesResult match
+    ApiClient.getLocales().map:
       case Right(locales) if locales.nonEmpty =>
         availableLocales.set(locales)
       case _ =>
         ()
-
-  private def detectBrowserLocale(): String =
-    import org.scalajs.dom
-    val browserLang = dom.window.navigator.language
-    if browserLang.startsWith("es") then
-      "es"
-    else if browserLang.startsWith("en") then
-      "en"
-    else
-      "es" // default
 
   private def setLocaleOnServer(locale: String): Unit = Runtime.run:
     ApiClient.setLocale(locale)
