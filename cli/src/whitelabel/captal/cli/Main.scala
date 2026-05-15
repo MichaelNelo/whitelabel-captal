@@ -12,11 +12,11 @@ enum CaptalCommand:
   case VideoAdd(slug: String, advertiser: String, file: String)
   case PromoAdd(slug: String, file: String)
   case SkillsUpdate
-  case Update(bucket: String, region: String)
+  case Update(baseUrl: String)
 
 object Main extends ZIOCliDefault:
 
-  private val cliVersion = "1.5.0"
+  private val cliVersion = "1.5.4"
   private val slugArg = Args.text("slug")
 
   // ─── init ─────────────────────────────────────────────────────────────────
@@ -86,20 +86,16 @@ object Main extends ZIOCliDefault:
 
   // ─── update (self) ────────────────────────────────────────────────────────
 
-  private val updateBucketOpt = Options
-    .text("bucket")
-    .alias("b")
-    .withDefault("captal-cli-releases-dev")
-  private val updateRegionOpt = Options.text("region").alias("r").withDefault("us-east-1")
+  private val updateUrlOpt = Options
+    .text("url")
+    .alias("u")
+    .withDefault("https://captal-cli-releases-dev.s3.us-east-1.amazonaws.com/latest")
 
-  private val update: Command[CaptalCommand] = Command(
-    "update",
-    updateBucketOpt ++ updateRegionOpt,
-    Args.none)
+  private val update: Command[CaptalCommand] = Command("update", updateUrlOpt, Args.none)
     .withHelp(
       HelpDoc.p(
-        "Self-update the CLI jar from S3 (s3://<bucket>/latest/captal.jar). Compares against the version published at s3://<bucket>/latest/version.txt. Requires AWS credentials (env / profile / role)."))
-    .map((bucket, region) => CaptalCommand.Update(bucket, region))
+        "Self-update the CLI jar from the public release URL (default: latest from captal-cli-releases-dev). Compares <url>/version.txt against the running version and downloads <url>/captal.jar if newer. No AWS credentials needed."))
+    .map(url => CaptalCommand.Update(url))
 
   // ─── root ─────────────────────────────────────────────────────────────────
 
@@ -147,8 +143,8 @@ object Main extends ZIOCliDefault:
             case CaptalCommand.SkillsUpdate =>
               SkillsUpdateCommand.run
 
-            case CaptalCommand.Update(bucket, region) =>
-              UpdateCommand.run(cliVersion, bucket, region)
+            case CaptalCommand.Update(baseUrl) =>
+              UpdateCommand.run(cliVersion, baseUrl)
         ).as(cmd)
 
       program.tapError:
