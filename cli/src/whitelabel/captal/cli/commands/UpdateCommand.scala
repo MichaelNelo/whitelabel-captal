@@ -1,35 +1,37 @@
 package whitelabel.captal.cli.commands
 
-import java.nio.file.{Files, Path, Paths, StandardCopyOption}
+import java.io.{BufferedInputStream, FileOutputStream}
+import java.net.{HttpURLConnection, URI}
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Path, Paths}
 
-import software.amazon.awssdk.regions.Region
-import software.amazon.awssdk.services.s3.S3Client
-import software.amazon.awssdk.services.s3.model.{GetObjectRequest, NoSuchKeyException}
 import whitelabel.captal.cli.{CliError, Output}
 import zio.*
 
-/** Self-update the CLI jar from S3.
+/** Self-update the CLI jar from the public S3 release bucket.
   *
-  * Reads `s3://<bucket>/latest/version.txt`, compares against the running version, and if
-  * different downloads `s3://<bucket>/latest/captal.jar` to the running jar's path. The Windows
-  * batch wrapper just runs the jar so it's transparently picked up next invocation.
+  * Reads `<base-url>/version.txt`, compares against the running version, and if different
+  * downloads `<base-url>/captal.jar` to the running jar's path. The wrapper scripts
+  * (`captal` shell, `captal.bat`) just `java -jar captal.jar` so the next invocation
+  * picks up the new jar automatically.
   *
-  * Auth uses the AWS SDK default credential provider chain (env vars / AWS profile / EC2 role).
-  * No `shared/captal.yaml` is required — this command runs from any directory.
+  * Uses anonymous HTTP fetch — no AWS credentials needed. The bucket must allow public
+  * read on the `latest` and `v...` prefixes (via Terraform module `cli-releases`).
   */
 object UpdateCommand:
 
-  def run(currentVersion: String, bucket: String, region: String): IO[CliError, Unit] =
+  def run(currentVersion: String, baseUrl: String): IO[CliError, Unit] =
+    val normalized = baseUrl.stripSuffix("/")
     for
-      _              <- Output.header(s"Checking for updates from s3://$bucket/latest/ ...")
-      jarPath        <- locateRunningJar
-      remoteVersion  <- fetchRemoteVersion(bucket, region)
-      _              <- Output.info(s"Current: v$currentVersion   Latest: v$remoteVersion")
-      _              <-
+      _             <- Output.header(s"Checking for updates from $normalized/ ...")
+      jarPath       <- locateRunningJar
+      remoteVersion <- httpGetString(s"$normalized/version.txt")
+      _             <- Output.info(s"Current: v$currentVersion   Latest: v$remoteVersion")
+      _ <-
         if remoteVersion == currentVersion then
           Output.success("Already up to date")
         else
-          downloadAndReplace(bucket, region, jarPath, remoteVersion)
+          downloadAndReplace(s"$normalized/captal.jar", jarPath, remoteVersion)
     yield ()
 
   // ─── Locate the running jar ─────────────────────────────────────────────────
@@ -39,8 +41,7 @@ object UpdateCommand:
       val codeSource = classOf[UpdateCommand.type].getProtectionDomain.getCodeSource
       Option(codeSource).flatMap(cs => Option(cs.getLocation)) match
         case Some(url) =>
-          val uri = url.toURI
-          val p = Paths.get(uri)
+          val p = Paths.get(url.toURI)
           if Files.isRegularFile(p) && p.toString.endsWith(".jar") then
             p
           else
@@ -50,68 +51,70 @@ object UpdateCommand:
           throw new RuntimeException("Cannot locate running jar (no code source)")
     .mapError(e => CliError.BuildFailed(s"locate jar: ${e.getMessage}"))
 
-  // ─── Read latest/version.txt ─────────────────────────────────────────────────
+  // ─── HTTP helpers ────────────────────────────────────────────────────────────
 
-  private def fetchRemoteVersion(bucket: String, region: String): IO[CliError, String] = ZIO
-    .scoped:
-      ZIO
-        .fromAutoCloseable(ZIO.attemptBlocking(s3Client(region)))
-        .flatMap: client =>
-          ZIO.attemptBlocking:
-            val req = GetObjectRequest.builder().bucket(bucket).key("latest/version.txt").build()
-            val bytes = client.getObjectAsBytes(req).asByteArray()
-            new String(bytes, java.nio.charset.StandardCharsets.UTF_8).trim
-    .mapError:
-      case _: NoSuchKeyException =>
-        CliError.BuildFailed(
-          s"s3://$bucket/latest/version.txt not found — re-publish the CLI to populate it")
-      case e: Throwable =>
-        CliError.AwsError("S3 getObject (version.txt)", e)
+  private def httpGetString(url: String): IO[CliError, String] = ZIO
+    .attemptBlocking:
+      val conn = URI.create(url).toURL.openConnection().asInstanceOf[HttpURLConnection]
+      conn.setRequestMethod("GET")
+      conn.setConnectTimeout(10000)
+      conn.setReadTimeout(15000)
+      conn.connect()
+      val code = conn.getResponseCode
+      if code != 200 then
+        conn.disconnect()
+        throw new RuntimeException(s"HTTP $code from $url")
+      val body =
+        try
+          new String(conn.getInputStream.readAllBytes(), StandardCharsets.UTF_8).trim
+        finally conn.disconnect()
+      body
+    .mapError(e => CliError.BuildFailed(s"GET $url: ${e.getMessage}"))
 
-  // ─── Download new jar and replace in place ───────────────────────────────────
+  private def httpDownload(url: String, target: Path): IO[CliError, Unit] = ZIO
+    .attemptBlocking:
+      val conn = URI.create(url).toURL.openConnection().asInstanceOf[HttpURLConnection]
+      conn.setRequestMethod("GET")
+      conn.setConnectTimeout(15000)
+      conn.setReadTimeout(60000)
+      conn.connect()
+      val code = conn.getResponseCode
+      if code != 200 then
+        conn.disconnect()
+        throw new RuntimeException(s"HTTP $code from $url")
+      try
+        val in = new BufferedInputStream(conn.getInputStream)
+        val out = new FileOutputStream(target.toFile)
+        try
+          val buf = new Array[Byte](64 * 1024)
+          var n = in.read(buf)
+          while n != -1 do
+            out.write(buf, 0, n)
+            n = in.read(buf)
+        finally
+          out.close()
+          in.close()
+      finally conn.disconnect()
+    .mapError(e => CliError.BuildFailed(s"download $url: ${e.getMessage}"))
+
+  // ─── Download new jar; swap is deferred to the wrapper script ───────────────
+  //
+  // On Windows the running JVM holds an exclusive lock on the JAR, so we cannot replace it
+  // in-place. Cross-platform fix: download to `<jar>.new` and let the `captal` / `captal.bat`
+  // wrapper rename it on the NEXT invocation (the wrappers do `mv -f .new -> .jar` before
+  // launching Java). Linux/macOS could replace in-place but using the same flow keeps
+  // behavior consistent.
 
   private def downloadAndReplace(
-      bucket: String,
-      region: String,
+      jarUrl: String,
       currentJar: Path,
       newVersion: String): IO[CliError, Unit] =
     val tempJar = currentJar.resolveSibling(currentJar.getFileName.toString + ".new")
     for
       _ <- Output.info(s"Downloading v$newVersion to ${tempJar.getFileName} ...")
-      _ <- ZIO
-        .scoped:
-          ZIO
-            .fromAutoCloseable(ZIO.attemptBlocking(s3Client(region)))
-            .flatMap: client =>
-              ZIO.attemptBlocking:
-                val req = GetObjectRequest.builder().bucket(bucket).key("latest/captal.jar").build()
-                client.getObject(req, tempJar)
-                ()
-        .mapError(e => CliError.AwsError("S3 download captal.jar", e))
-      _ <- ZIO
-        .attemptBlocking:
-          Files.move(
-            tempJar,
-            currentJar,
-            StandardCopyOption.REPLACE_EXISTING,
-            StandardCopyOption.ATOMIC_MOVE)
-          ()
-        .catchAll: t =>
-          // ATOMIC_MOVE may not be supported on the OS / FS. Fall back to plain replace.
-          ZIO.attemptBlocking:
-            Files.move(tempJar, currentJar, StandardCopyOption.REPLACE_EXISTING)
-            ()
-        .mapError: e =>
-          CliError.BuildFailed(
-            s"replace jar at $currentJar: ${e.getMessage}. The new jar is at $tempJar — replace manually if needed.")
-      _ <- Output.success(s"Updated v$newVersion installed at $currentJar — re-run captal to use the new version")
+      _ <- httpDownload(jarUrl, tempJar)
+      _ <- Output.success(
+        s"Update staged at $tempJar — the next `captal` invocation will swap it in automatically")
     yield ()
-
-  // ─── Helpers ────────────────────────────────────────────────────────────────
-
-  private def s3Client(region: String): S3Client = S3Client
-    .builder()
-    .region(Region.of(region))
-    .build()
 
 end UpdateCommand
