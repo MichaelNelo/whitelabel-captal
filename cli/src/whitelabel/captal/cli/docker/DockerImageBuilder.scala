@@ -42,10 +42,10 @@ object DockerImageBuilder:
       for
         _          <- ensureContextExists(contextDir)
         dockerfile <- extractDockerfile(dockerfileResource)
-        _          <- Output.detail(s"Building image $fullTag from $base...")
-        _          <- runDockerBuild(base, fullTag, dockerfile, contextDir)
         _          <- Output.detail(s"Authenticating to ECR...")
         _          <- ecrLogin(repo)
+        _          <- Output.detail(s"Building image $fullTag from $base...")
+        _          <- runDockerBuild(base, fullTag, dockerfile, contextDir)
         _          <- Output.detail(s"Pushing $fullTag...")
         _          <- runDockerPush(fullTag)
       yield fullTag
