@@ -522,3 +522,35 @@ object client extends BaseJSModule:
 
     PathRef(dest)
 
+  /** Publish the bundle to S3 under `<bucket>/<prefix>/`. Replaces 4 manual `aws s3 cp`
+    * invocations and ensures Content-Type / Content-Encoding metadata stay consistent.
+    *
+    * Usage: `./mill client.publishS3 --bucket captal-dev-assets --prefix bundle`
+    *        Optional: `--region us-east-1` (default).
+    *
+    * Operator must run `aws sso login` or have AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY set.
+    */
+  def publishS3(bucket: String, prefix: String, region: String = "us-east-1") = Task.Command:
+    val src = bundle().path
+    val normalizedPrefix = prefix.stripSuffix("/")
+    val destBase = s"s3://$bucket/$normalizedPrefix"
+    // (name, content-type, content-encoding)
+    val files: Seq[(String, String, Option[String])] = Seq(
+      ("index.html",     "text/html; charset=utf-8", None),
+      ("brand-icon.svg", "image/svg+xml",            None),
+      ("main.js.gz",     "application/javascript",   Some("gzip")),
+      ("styles.css.gz",  "text/css",                 Some("gzip")))
+    for (name, ctype, enc) <- files do
+      val baseArgs = Seq(
+        "aws", "s3", "cp",
+        (src / name).toString,
+        s"$destBase/$name",
+        "--region", region,
+        "--content-type", ctype)
+      val args = enc.fold(baseArgs)(e => baseArgs ++ Seq("--content-encoding", e))
+      println(s"[publish] $name -> $destBase/$name")
+      val result = os.proc(args).call(check = false, stderr = os.Pipe)
+      if result.exitCode != 0 then
+        sys.error(s"[publish] aws s3 cp failed for $name: ${result.err.trim()}")
+    println(s"[publish] uploaded bundle to $destBase")
+
