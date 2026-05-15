@@ -71,10 +71,11 @@ object ErrorView:
   private def parseCaptivePortalHeaders(): Map[String, String] =
     val params = new dom.URLSearchParams(dom.window.location.search)
     List(
-      "id"   -> "X-Client-Mac",
-      "ap"   -> "X-Ap-Mac",
-      "url"  -> "X-Redirect-Url",
-      "ssid" -> "X-Ssid")
+      "id"       -> "X-Client-Mac",
+      "ap"       -> "X-Ap-Mac",
+      "url"      -> "X-Redirect-Url",
+      "ssid"     -> "X-Ssid",
+      "click_id" -> "X-Click-Id")
       .flatMap: (urlParam, headerName) =>
         Option(params.get(urlParam)).filter(_.nonEmpty).map(headerName -> _)
       .toMap

@@ -16,7 +16,8 @@ final case class CaptivePortalParams(
     clientMac: String,
     apMac: String,
     redirectUrl: String,
-    ssid: String)
+    ssid: String,
+    clickId: String)
 
 trait SessionService:
   def findById(sessionId: user.SessionId): Task[Option[SessionData]]
@@ -138,7 +139,8 @@ object SessionService:
           clientMac = portalParams.clientMac,
           apMac = portalParams.apMac,
           redirectUrl = portalParams.redirectUrl,
-          ssid = portalParams.ssid
+          ssid = portalParams.ssid,
+          clickId = portalParams.clickId
         )
 
         val insertSession = run(
@@ -158,7 +160,8 @@ object SessionService:
             _.clientMac           -> lift(sessionRow.clientMac),
             _.apMac               -> lift(sessionRow.apMac),
             _.redirectUrl         -> lift(sessionRow.redirectUrl),
-            _.ssid                -> lift(sessionRow.ssid)
+            _.ssid                -> lift(sessionRow.ssid),
+            _.clickId             -> lift(sessionRow.clickId)
           ))
 
         (upsertDevice *> insertSession).orDie *>
@@ -175,7 +178,8 @@ object SessionService:
               clientMac = portalParams.clientMac,
               apMac = portalParams.apMac,
               redirectUrl = portalParams.redirectUrl,
-              ssid = portalParams.ssid
+              ssid = portalParams.ssid,
+              clickId = portalParams.clickId
             ))
       end create
 
@@ -218,7 +222,8 @@ object SessionService:
           clientMac = portalParams.clientMac,
           apMac = portalParams.apMac,
           redirectUrl = portalParams.redirectUrl,
-          ssid = portalParams.ssid
+          ssid = portalParams.ssid,
+          clickId = portalParams.clickId
         )
 
         val insertSession = run(
@@ -238,7 +243,8 @@ object SessionService:
             _.clientMac           -> lift(sessionRow.clientMac),
             _.apMac               -> lift(sessionRow.apMac),
             _.redirectUrl         -> lift(sessionRow.redirectUrl),
-            _.ssid                -> lift(sessionRow.ssid)
+            _.ssid                -> lift(sessionRow.ssid),
+            _.clickId             -> lift(sessionRow.clickId)
           ))
 
         (upsertDevice *> insertSession).orDie *>
@@ -255,7 +261,8 @@ object SessionService:
               clientMac = portalParams.clientMac,
               apMac = portalParams.apMac,
               redirectUrl = portalParams.redirectUrl,
-              ssid = portalParams.ssid
+              ssid = portalParams.ssid,
+              clickId = portalParams.clickId
             ))
       end createForUser
 
@@ -297,7 +304,8 @@ object SessionService:
       row.clientMac,
       row.apMac,
       row.redirectUrl,
-      row.ssid
+      row.ssid,
+      row.clickId
     )
   end toSessionData
 

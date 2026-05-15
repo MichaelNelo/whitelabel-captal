@@ -17,4 +17,5 @@ final case class SessionData(
     clientMac: String = "",
     apMac: String = "",
     redirectUrl: String = "",
-    ssid: String = "")
+    ssid: String = "",
+    clickId: String = "")

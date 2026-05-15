@@ -52,7 +52,12 @@ object App:
   /** Extract captive portal params from the UniFi redirect URL. */
   private def parseCaptivePortalHeaders(): Map[String, String] =
     val params = new dom.URLSearchParams(dom.window.location.search)
-    List("id" -> "X-Client-Mac", "ap" -> "X-Ap-Mac", "url" -> "X-Redirect-Url", "ssid" -> "X-Ssid")
+    List(
+      "id"       -> "X-Client-Mac",
+      "ap"       -> "X-Ap-Mac",
+      "url"      -> "X-Redirect-Url",
+      "ssid"     -> "X-Ssid",
+      "click_id" -> "X-Click-Id")
       .flatMap: (urlParam, headerName) =>
         Option(params.get(urlParam)).filter(_.nonEmpty).map(headerName -> _)
       .toMap
