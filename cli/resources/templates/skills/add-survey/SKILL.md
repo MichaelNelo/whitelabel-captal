@@ -6,6 +6,10 @@ version: 1.0.0
 
 # Add an identification survey
 
+> Note: for surveys attached to advertiser videos (one question shown after each video), see the
+> `add-video` skill — those live under `locations/<slug>/videos/<video>/surveys/` and have
+> different validation rules. This skill covers ONLY the identification surveys.
+
 ## Overview
 Identification surveys (email, profiling, location) are shared across all locations. They live in `shared/surveys/`.
 
