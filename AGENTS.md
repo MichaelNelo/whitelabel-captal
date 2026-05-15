@@ -667,7 +667,7 @@ captal video add-promo <slug> <file>            # Sube promo a S3 + crea promo.y
 4. Push a ECR
 5. Crea log group `/ecs/captal-<slug>` (idempotente, via SDK)
 6. Crea/asegura target group `captal-<slug>` con health check `/<slug>/api/health`
-7. Register task definition `captal-<slug>` con env vars `LOCATION_SLUG`, `PROVISION_DIR=/etc/captal/provision`, `DB_URL`, `DB_DEV_SEED=false`, etc. + `taskRoleArn` (requerido para ECS Exec)
+7. Register task definition `captal-<slug>` con env vars `LOCATION_SLUG`, `PROVISION_DIR=/etc/captal/provision`, `DB_URL`, etc. + `taskRoleArn` (requerido para ECS Exec)
 8. Create/Update service ECS `captal-<slug>` con `loadBalancers` block (TG attached) + `enableExecuteCommand=true` + healthCheckGracePeriodSeconds=180
 9. Upsert ALB rule path-pattern `/<slug>/api/*` → target group
 10. CloudFront `createInvalidation` para `/<slug>/*`
