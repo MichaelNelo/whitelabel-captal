@@ -239,16 +239,25 @@ final class SurveyRoutes(
     .securityIn(header[Option[String]]("X-Ap-Mac"))
     .securityIn(header[Option[String]]("X-Redirect-Url"))
     .securityIn(header[Option[String]]("X-Ssid"))
+    .securityIn(header[Option[String]]("X-Click-Id"))
     .errorOut(jsonBody[ApiError])
     .zServerSecurityLogic:
-      (sessionCookie, userCookie, userAgentOpt, clientMac, apMac, redirectUrl, ssid) =>
+      (sessionCookie, userCookie, userAgentOpt, clientMac, apMac, redirectUrl, ssid, clickId) =>
         val userAgent = userAgentOpt.getOrElse(defaultUserAgent)
-        val portalParams = clientMac.map: mac =>
-          CaptivePortalParams(
-            mac,
-            apMac.getOrElse(""),
-            redirectUrl.getOrElse(""),
-            ssid.getOrElse(""))
+        // Build portalParams only when both clientMac AND click_id are present (both required by
+        // the UniFi captive-portal redirect contract). If either is missing on a CREATE flow,
+        // session resolution falls through to ApiError.SessionMissing.
+        val portalParams = (clientMac, clickId) match
+          case (Some(mac), Some(cid)) if cid.nonEmpty =>
+            Some(
+              CaptivePortalParams(
+                mac,
+                apMac.getOrElse(""),
+                redirectUrl.getOrElse(""),
+                ssid.getOrElse(""),
+                cid))
+          case _ =>
+            None
         for
           _          <- softValidateApMac(apMac, clientMac)
           onMissing  <- resolveOnMissing(userCookie, userAgent, portalParams)
