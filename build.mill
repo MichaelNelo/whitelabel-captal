@@ -365,13 +365,23 @@ object cli extends BaseModule:
     mvn"org.slf4j:slf4j-nop:1.7.36")
   def mainClass = Some("whitelabel.captal.cli.Main")
 
+  // Wrappers swap a freshly-downloaded captal.jar.new into place BEFORE launching Java.
+  // Required on Windows where the running JVM locks the jar so `captal update` can't
+  // replace it in-place; safe no-op on Linux/macOS.
   private val bashWrapper = """#!/usr/bin/env bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/captal.jar.new" ]; then
+  mv -f "$SCRIPT_DIR/captal.jar.new" "$SCRIPT_DIR/captal.jar"
+fi
 exec java -jar "$SCRIPT_DIR/captal.jar" "$@"
 """
 
   private val batWrapper = """@echo off
+setlocal
 set "SCRIPT_DIR=%~dp0"
+if exist "%SCRIPT_DIR%captal.jar.new" (
+  move /Y "%SCRIPT_DIR%captal.jar.new" "%SCRIPT_DIR%captal.jar" >nul
+)
 java -jar "%SCRIPT_DIR%captal.jar" %*
 """
 
@@ -410,6 +420,20 @@ java -jar "%SCRIPT_DIR%captal.jar" %*
       val result = os.proc(args).call(check = false, stderr = os.Pipe)
       if result.exitCode != 0 then
         sys.error(s"[publish] aws s3 cp failed for $name: ${result.err.trim()}")
+
+    // Publish version.txt at both prefixes — read by `captal update` to detect new releases.
+    val versionFile = src / "version.txt"
+    os.write.over(versionFile, version)
+    for prefix <- prefixes do
+      val args = Seq(
+        "aws", "s3", "cp",
+        versionFile.toString,
+        s"$prefix/version.txt",
+        "--content-type", "text/plain")
+      println(s"[publish] version.txt -> $prefix/version.txt")
+      val result = os.proc(args).call(check = false, stderr = os.Pipe)
+      if result.exitCode != 0 then
+        sys.error(s"[publish] aws s3 cp failed for version.txt: ${result.err.trim()}")
     println(s"[publish] uploaded captal v$version to $bucket")
 
   /** Install the CLI locally to ~/.local/bin/ (Linux/macOS) for development convenience.
