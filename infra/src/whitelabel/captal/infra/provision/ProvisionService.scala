@@ -90,7 +90,7 @@ object ProvisionService:
       // 6. Execute deletes (soft-delete)
       _ <-
         ZIO.foreachDiscard(deletes): action =>
-          softDeleteEntity(quill, action.entityKey) *>
+          softDeleteEntity(quill, action.entityKey, locationId) *>
             EntityWriter.deleteManifest(quill)(action.entityKey)
 
       _ <- ZIO.logInfo("Provisioning complete")
@@ -445,23 +445,56 @@ object ProvisionService:
       EntityWriter.upsertLocalizedText(quill)(id, entityIdWithSuffix, locale, value)
 
   /** Soft-delete an entity based on its key prefix. */
-  private def softDeleteEntity(quill: QuillSqlite, entityKey: String): Task[Unit] =
+  private def softDeleteEntity(
+      quill: QuillSqlite,
+      entityKey: String,
+      locationId: String): Task[Unit] =
     entityKey match
+      // video:<locationSlug>/<videoSlug> — the advertiser slug isn't in the key, so we brute-force
+      // by trying each active advertiser. `deactivateVideo` is a no-op UPDATE on a non-matching id.
       case key if key.startsWith("video:") =>
-        val parts = key.stripPrefix("video:").split("/")
+        val parts = key.stripPrefix("video:").split("/", 2)
         if parts.length == 2 then
-          // Need to read the video.yaml to get the advertiser slug for the ID
-          // Since we're deleting, we deactivate all videos matching the pattern
-          ZIO.logWarning(s"Soft-delete for video key $key — manual cleanup may be needed")
+          val (locationSlug, videoSlug) = (parts(0), parts(1))
+          for
+            advertisers <- EntityWriter.listActiveAdvertisers(quill)
+            _ <- ZIO.foreachDiscard(advertisers): adv =>
+              val candidate = IdGenerator.videoId(locationSlug, adv.id, videoSlug)
+              EntityWriter.deactivateVideo(quill)(candidate)
+          yield ()
         else
           ZIO.unit
+
+      // promo:<locationSlug>/<videoSlug> — id is deterministic from those two parts.
       case key if key.startsWith("promo:") =>
-        val parts = key.stripPrefix("promo:").split("/")
+        val parts = key.stripPrefix("promo:").split("/", 2)
         if parts.length == 2 then
           val id = IdGenerator.promoVideoId(parts(0), parts(1))
           EntityWriter.deactivateVideo(quill)(id)
         else
           ZIO.unit
+
+      // video-survey:<locationSlug>/<videoSlug>/<surveySlug> — surveyId is uuid5 of those parts
+      // (see provisionVideoSurvey which calls `advertiserSurveyId(locationSlug, videoSlug,
+      // surveySlug)`). Deactivating the survey row stops the SPA from serving the question set;
+      // existing answers stay in the `answers` table, linked to now-orphaned question_ids.
+      case key if key.startsWith("video-survey:") =>
+        val parts = key.stripPrefix("video-survey:").split("/", 3)
+        if parts.length == 3 then
+          val surveyId = IdGenerator.advertiserSurveyId(parts(0), parts(1), parts(2))
+          EntityWriter.deactivateSurvey(quill)(surveyId)
+        else
+          ZIO.unit
+
+      // i18n:<locationSlug>/<locale> — drop the localized_text rows for this location+locale.
+      // The SPA falls back to `[<key>]` literals on missing translations.
+      case key if key.startsWith("i18n:") =>
+        val parts = key.stripPrefix("i18n:").split("/", 2)
+        if parts.length == 2 then
+          EntityWriter.deleteI18nForLocation(quill)(locationId, parts(1))
+        else
+          ZIO.unit
+
       case _ =>
         ZIO.logWarning(s"Don't know how to soft-delete: $entityKey")
 
