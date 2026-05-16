@@ -24,6 +24,16 @@ object TemplateWriter:
   def writeAllIfAbsent(baseDir: Path, templates: List[Template]): Task[Unit] =
     ZIO.foreachDiscard(templates)(writeIfAbsent(baseDir, _))
 
+  /** Always write the template, overwriting any existing file. Returns true if the file existed
+    * before (was overwritten), false if it was created fresh.
+    */
+  def writeOverwrite(baseDir: Path, template: Template): Task[Boolean] = ZIO.attempt:
+    val target = baseDir.resolve(template.path)
+    val existed = Files.exists(target)
+    Files.createDirectories(target.getParent)
+    Files.writeString(target, template.content)
+    existed
+
 /** Loads template files from classpath resources with placeholder substitution. */
 object Templates:
 
