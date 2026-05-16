@@ -1,14 +1,17 @@
 package whitelabel.captal.cli.commands
 
-import java.nio.file.{Files, Paths}
+import java.nio.file.Paths
 
 import whitelabel.captal.cli.Output
-import whitelabel.captal.cli.templates.{Catalog, Template, TemplateWriter}
+import whitelabel.captal.cli.templates.{Catalog, TemplateWriter}
 import zio.*
 
-/** Sync the skills bundled with this CLI version into `.agents/skills/`. Adds any skills that
-  * exist in the CLI but not on disk; existing skills are left alone (no overwrites). Useful
-  * after `captal update` brings new skills via a CLI upgrade.
+/** Overwrite `.agents/skills/` with the skills bundled in this CLI version.
+  *
+  * Always writes (no skip-if-exists) so operators get the latest copy after every `captal update`
+  * — that includes bug fixes, new sections, and renames within an existing skill. Any local
+  * edits to bundled skills will be lost; if the operator wants local customizations they should
+  * be kept in a separate file outside `.agents/skills/<bundled-name>/`.
   */
 object SkillsUpdateCommand:
 
@@ -16,16 +19,15 @@ object SkillsUpdateCommand:
     val baseDir = Paths.get(".agents")
     val templates = Catalog.skillsTemplates
     for
-      _      <- Output.header(s"Syncing ${templates.size} skill(s) into $baseDir/skills/")
-      added  <- ZIO.foreach(templates) { tpl =>
-        TemplateWriter.writeIfAbsent(baseDir, tpl).map(written => tpl -> written)
+      _       <- Output.header(s"Syncing ${templates.size} skill(s) into $baseDir/skills/")
+      results <- ZIO.foreach(templates) { tpl =>
+        TemplateWriter.writeOverwrite(baseDir, tpl).map(existed => tpl -> existed)
       }
-      writtenList = added.collect { case (t, true) => t }
-      skippedList = added.collect { case (t, false) => t }
-      _ <- ZIO.foreachDiscard(writtenList)(t => Output.success(s"Added ${t.path}"))
-      _ <- ZIO.when(skippedList.nonEmpty)(
-        Output.detail(s"Skipped ${skippedList.size} existing skill(s)"))
+      updated = results.collect { case (t, true) => t }
+      added   = results.collect { case (t, false) => t }
+      _ <- ZIO.foreachDiscard(added)(t => Output.success(s"Added ${t.path}"))
+      _ <- ZIO.foreachDiscard(updated)(t => Output.detail(s"Updated ${t.path}"))
       _ <- Output.info(
-        s"Done — added ${writtenList.size}, kept ${skippedList.size} as-is. Re-run after `captal update` to pick up new skills.")
+        s"Done — added ${added.size}, updated ${updated.size}. Existing skill files were overwritten.")
     yield ()
 end SkillsUpdateCommand
