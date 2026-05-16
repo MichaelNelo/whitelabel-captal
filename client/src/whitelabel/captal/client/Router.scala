@@ -13,14 +13,16 @@ import whitelabel.captal.client.views.{
 }
 import whitelabel.captal.core.application.Phase
 
-// Pages for the router
-sealed trait Page
-case object WelcomePage                extends Page
-case object IdentificationQuestionPage extends Page
-case object AdvertiserVideoPage        extends Page
-case object AdvertiserVideoSurveyPage  extends Page
-case object ReadyPage                  extends Page
-case object ErrorPage                  extends Page
+/** Closed hierarchy of SPA routes. Scala 3 enum (not `sealed trait`) to match the project
+  * convention for finite enumerations.
+  */
+enum Page:
+  case Welcome
+  case IdentificationQuestion
+  case AdvertiserVideo
+  case AdvertiserVideoSurvey
+  case Ready
+  case Error
 
 object Router:
   /** Slug-aware base path. In production the SPA is served from `/<slug>/index.html`, so all routes
@@ -35,31 +37,31 @@ object Router:
         ""
 
   // Route patterns
-  private val welcomeRoute: Route[WelcomePage.type, Unit] = Route.static(
-    WelcomePage,
+  private val welcomeRoute: Route[Page.Welcome.type, Unit] = Route.static(
+    Page.Welcome,
     root / endOfSegments,
     basePath = basePath)
 
-  private val questionRoute: Route[IdentificationQuestionPage.type, Unit] = Route.static(
-    IdentificationQuestionPage,
+  private val questionRoute: Route[Page.IdentificationQuestion.type, Unit] = Route.static(
+    Page.IdentificationQuestion,
     root / "question" / endOfSegments,
     basePath = basePath)
 
-  private val advertiserVideoRoute: Route[AdvertiserVideoPage.type, Unit] = Route.static(
-    AdvertiserVideoPage,
+  private val advertiserVideoRoute: Route[Page.AdvertiserVideo.type, Unit] = Route.static(
+    Page.AdvertiserVideo,
     root / "video" / endOfSegments,
     basePath = basePath)
 
-  private val advertiserVideoSurveyRoute: Route[AdvertiserVideoSurveyPage.type, Unit] = Route
-    .static(AdvertiserVideoSurveyPage, root / "survey" / endOfSegments, basePath = basePath)
+  private val advertiserVideoSurveyRoute: Route[Page.AdvertiserVideoSurvey.type, Unit] = Route
+    .static(Page.AdvertiserVideoSurvey, root / "survey" / endOfSegments, basePath = basePath)
 
-  private val readyRoute: Route[ReadyPage.type, Unit] = Route.static(
-    ReadyPage,
+  private val readyRoute: Route[Page.Ready.type, Unit] = Route.static(
+    Page.Ready,
     root / "ready" / endOfSegments,
     basePath = basePath)
 
-  private val errorRoute: Route[ErrorPage.type, Unit] = Route.static(
-    ErrorPage,
+  private val errorRoute: Route[Page.Error.type, Unit] = Route.static(
+    Page.Error,
     root / "error" / endOfSegments,
     basePath = basePath)
 
@@ -73,48 +75,48 @@ object Router:
           readyRoute,
           errorRoute),
         getPageTitle = {
-          case WelcomePage =>
+          case Page.Welcome =>
             "WiFi Gratis"
-          case IdentificationQuestionPage =>
+          case Page.IdentificationQuestion =>
             "Pregunta"
-          case AdvertiserVideoPage =>
+          case Page.AdvertiserVideo =>
             "Video"
-          case AdvertiserVideoSurveyPage =>
+          case Page.AdvertiserVideoSurvey =>
             "Encuesta"
-          case ReadyPage =>
+          case Page.Ready =>
             "Listo"
-          case ErrorPage =>
+          case Page.Error =>
             "Error"
         },
         serializePage = {
-          case WelcomePage =>
+          case Page.Welcome =>
             "welcome"
-          case IdentificationQuestionPage =>
+          case Page.IdentificationQuestion =>
             "question"
-          case AdvertiserVideoPage =>
+          case Page.AdvertiserVideo =>
             "video"
-          case AdvertiserVideoSurveyPage =>
+          case Page.AdvertiserVideoSurvey =>
             "survey"
-          case ReadyPage =>
+          case Page.Ready =>
             "ready"
-          case ErrorPage =>
+          case Page.Error =>
             "error"
         },
         deserializePage = {
           case "welcome" =>
-            WelcomePage
+            Page.Welcome
           case "question" =>
-            IdentificationQuestionPage
+            Page.IdentificationQuestion
           case "video" =>
-            AdvertiserVideoPage
+            Page.AdvertiserVideo
           case "survey" =>
-            AdvertiserVideoSurveyPage
+            Page.AdvertiserVideoSurvey
           case "ready" =>
-            ReadyPage
+            Page.Ready
           case "error" =>
-            ErrorPage
+            Page.Error
           case _ =>
-            WelcomePage
+            Page.Welcome
         }
       )
 
@@ -129,30 +131,30 @@ object Router:
   /** Navigate to the centralized error page. Sits outside the phase machine — call this from
     * `ErrorHandler.escalate` when an unexpected API or runtime failure occurs.
     */
-  def navigateToError(): Unit = router.pushState(ErrorPage)
+  def navigateToError(): Unit = router.pushState(Page.Error)
 
   private def phaseToPage(phase: Phase): Page =
     phase match
       case Phase.Welcome =>
-        WelcomePage
+        Page.Welcome
       case Phase.IdentificationQuestion =>
-        IdentificationQuestionPage
+        Page.IdentificationQuestion
       case Phase.AdvertiserVideo =>
-        AdvertiserVideoPage
+        Page.AdvertiserVideo
       case Phase.AdvertiserVideoSurvey =>
-        AdvertiserVideoSurveyPage
+        Page.AdvertiserVideoSurvey
       case Phase.AdvertiserQuestion =>
-        AdvertiserVideoSurveyPage
+        Page.AdvertiserVideoSurvey
       case Phase.Ready =>
-        ReadyPage
+        Page.Ready
 
   // SplitRender for efficient view switching
   val splitter: SplitRender[Page, HtmlElement] =
     SplitRender[Page, HtmlElement](router.currentPageSignal)
-      .collectStatic(WelcomePage)(WelcomeView.render)
-      .collectStatic(IdentificationQuestionPage)(IdentificationQuestionView.render)
-      .collectStatic(AdvertiserVideoPage)(AdvertiserVideoView.render)
-      .collectStatic(AdvertiserVideoSurveyPage)(AdvertiserVideoSurveyView.render)
-      .collectStatic(ReadyPage)(ReadyView.render)
-      .collectStatic(ErrorPage)(ErrorView.render)
+      .collectStatic(Page.Welcome)(WelcomeView.render)
+      .collectStatic(Page.IdentificationQuestion)(IdentificationQuestionView.render)
+      .collectStatic(Page.AdvertiserVideo)(AdvertiserVideoView.render)
+      .collectStatic(Page.AdvertiserVideoSurvey)(AdvertiserVideoSurveyView.render)
+      .collectStatic(Page.Ready)(ReadyView.render)
+      .collectStatic(Page.Error)(ErrorView.render)
 end Router
