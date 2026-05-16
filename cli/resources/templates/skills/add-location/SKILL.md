@@ -110,9 +110,16 @@ The captive portal expects to be reached via a UniFi redirect that carries ident
 https://<domain>/<slug>/?id=<CLIENT_MAC>&ap=<AP_MAC>&ssid=<SSID>&url=<ORIGINAL_URL>&click_id=<CLICK_ID>
 ```
 
-Concrete example for a location with `ap_mac: "AA:BB:CC:DD:EE:01"`:
+> **Agent instruction**: every time the user asks for a test URL, generate a fresh randomized
+> `click_id` — never reuse the previous one or a hard-coded literal. Each UniFi redirect in
+> production carries a unique click_id and the API persists it on the session row for
+> attribution; reusing the same token defeats the purpose. Suggested format: a short hex/UUID
+> like `test-$(uuidgen)` or `test-<8-hex-chars>` (e.g. `test-a3f9b21c`). If you have shell
+> access: `printf 'test-%s\n' "$(openssl rand -hex 4)"`.
+
+Concrete example for a location with `ap_mac: "AA:BB:CC:DD:EE:01"` (the `click_id` shown below is illustrative — generate a new one each time):
 ```
-https://production.captal.centauroads.com/cafe-centro/?id=11:22:33:44:55:66&ap=AA:BB:CC:DD:EE:01&ssid=CafeCentroGuest&url=http%3A%2F%2Fexample.com&click_id=test-click-001
+https://production.captal.centauroads.com/cafe-centro/?id=11:22:33:44:55:66&ap=AA:BB:CC:DD:EE:01&ssid=CafeCentroGuest&url=http%3A%2F%2Fexample.com&click_id=test-a3f9b21c
 ```
 
 #### Query param reference
