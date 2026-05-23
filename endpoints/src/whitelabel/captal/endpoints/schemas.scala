@@ -93,6 +93,8 @@ object i18n:
   given CirceDecoder[I18n.Welcome.Steps] = deriveDecoder
   given CirceEncoder[I18n.Welcome.Button] = deriveEncoder
   given CirceDecoder[I18n.Welcome.Button] = deriveDecoder
+  given CirceEncoder[I18n.Welcome.Authorized] = deriveEncoder
+  given CirceDecoder[I18n.Welcome.Authorized] = deriveDecoder
   given CirceEncoder[I18n.Welcome] = deriveEncoder
   given CirceDecoder[I18n.Welcome] = deriveDecoder
   given CirceEncoder[I18n.Loading] = deriveEncoder
@@ -111,6 +113,7 @@ object i18n:
   // Tapir schemas for I18n
   given Schema[I18n.Welcome.Steps] = Schema.derived
   given Schema[I18n.Welcome.Button] = Schema.derived
+  given Schema[I18n.Welcome.Authorized] = Schema.derived
   given Schema[I18n.Welcome] = Schema.derived
   given Schema[I18n.Ready] = Schema.derived
   given Schema[I18n.Loading] = Schema.derived
