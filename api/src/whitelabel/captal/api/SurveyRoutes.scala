@@ -269,9 +269,29 @@ final class SurveyRoutes(
     .out(cookieConfig.tapirOutput.and(jsonBody[StatusResponse]))
     .serverLogic: session =>
       _ =>
-        ZIO.succeed(
-          Some(cookieConfig.asMeta(session.sessionId.asString)),
-          StatusResponse(session.phase, session.locale))
+        Clock
+          .instant
+          .flatMap: now =>
+            val isExpired = session.phase == whitelabel.captal.core.application.Phase.Authorized &&
+              session.accessExpiresAt.exists(_.isBefore(now))
+            if isExpired then
+              // Reset the session: phase → Welcome, clear userId and current* fields. The user
+              // record and the cross-location `captal_user` cookie stay so the next visit skips
+              // email.
+              ZIO
+                .serviceWithZIO[SessionService](_.resetForExpiration(session.sessionId))
+                .mapError(ApiError.fromThrowable)
+                .as(
+                  (
+                    Some(cookieConfig.asMeta(session.sessionId.asString)),
+                    StatusResponse(
+                      whitelabel.captal.core.application.Phase.Welcome,
+                      session.locale,
+                      None)))
+            else
+              ZIO.succeed(
+                Some(cookieConfig.asMeta(session.sessionId.asString)),
+                StatusResponse(session.phase, session.locale, session.accessExpiresAt))
 
   // ─── Aggregate ────────────────────────────────────────────────────────────
 
