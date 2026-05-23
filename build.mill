@@ -53,7 +53,7 @@ private def ensureRqlite(containerName: String, hostPort: Int): String =
       "-p",
       s"$hostPort:4001",
       "-e",
-      "SQLITE_EXTENSIONS=sqlean",
+      "SQLITE_EXTENSIONS=sqlean,misc",
       "rqlite/rqlite:8.36.2"
     ).call(check = false, stderr = os.Pipe)
 
