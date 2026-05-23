@@ -1,5 +1,7 @@
 package whitelabel.captal.client
 
+import java.time.Instant
+
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.application.commands.{NextAdvertiserSurvey, NextIdentificationSurvey}
@@ -50,4 +52,11 @@ object AppState:
   val error: Signal[Option[ApiError]] = errorVar.signal
   def setError(e: Option[ApiError]): Unit = errorVar.set(e)
   def clearError(): Unit = errorVar.set(None)
+
+  // Access expiration timestamp when phase == Authorized. WelcomeView uses this to render the
+  // countdown; when the timestamp passes, it polls `/api/status` and the server resets the
+  // session back to Welcome.
+  private val accessExpiresAtVar: Var[Option[Instant]] = Var(None)
+  val accessExpiresAt: Signal[Option[Instant]] = accessExpiresAtVar.signal
+  def setAccessExpiresAt(t: Option[Instant]): Unit = accessExpiresAtVar.set(t)
 end AppState

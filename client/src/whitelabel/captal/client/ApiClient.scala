@@ -118,4 +118,11 @@ object ApiClient:
 
   def answerAdvertiser(answer: AnswerValue): Future[Either[ApiError, AdvertiserSurveyResponse]] =
     postJson(url("/survey/advertiser"), AnswerRequest(answer))
+
+  /** POST `/api/finish`. Triggers `UnifiAuthorizationHandler` post-commit. The response is a
+    * [[StatusResponse]] reflecting the session **after** UniFi ran: on success, `phase =
+    * Authorized` + `accessExpiresAt = Some(...)`; on UniFi failure / no-config, `phase = Ready` +
+    * `accessExpiresAt = None` (caller can retry by calling `finish()` again).
+    */
+  def finish(): Future[Either[ApiError, StatusResponse]] = post(url("/finish"))
 end ApiClient
