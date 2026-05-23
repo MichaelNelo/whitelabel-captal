@@ -42,6 +42,15 @@ trait SessionService:
   def setCurrentQuestion(sessionId: user.SessionId, question: FullyQualifiedQuestionId): Task[Unit]
   def clearCurrentQuestion(sessionId: user.SessionId): Task[Unit]
 
+  /** Mark the session as authorized (Phase.Authorized) until the given instant. */
+  def setAuthorized(sessionId: user.SessionId, expiresAt: java.time.Instant): Task[Unit]
+
+  /** Reset a session whose access has expired: phase back to Welcome, clear all transient
+    * fields (userId, current survey/question/video/advertiser, access_expires_at). The session
+    * row itself is kept so the cookie continues to resolve.
+    */
+  def resetForExpiration(sessionId: user.SessionId): Task[Unit]
+
 object SessionService:
   inline def findByIdQuery = quote: (sessionIdParam: user.SessionId) =>
     query[SessionRow].filter(_.id == sessionIdParam)
@@ -91,6 +100,24 @@ object SessionService:
 
   inline def clearCurrentAdvertiserQuery = quote: (sessionIdParam: user.SessionId) =>
     query[SessionRow].filter(_.id == sessionIdParam).update(_.currentAdvertiserId -> None)
+
+  inline def setAuthorizedQuery = quote:
+    (sessionIdParam: user.SessionId, expiresAtParam: String, phaseParam: Phase) =>
+      query[SessionRow]
+        .filter(_.id == sessionIdParam)
+        .update(_.phase -> phaseParam, _.accessExpiresAt -> Some(expiresAtParam))
+
+  inline def resetForExpirationQuery = quote: (sessionIdParam: user.SessionId, phaseParam: Phase) =>
+    query[SessionRow]
+      .filter(_.id == sessionIdParam)
+      .update(
+        _.phase               -> phaseParam,
+        _.userId              -> None,
+        _.currentSurveyId     -> None,
+        _.currentQuestionId   -> None,
+        _.currentVideoId      -> None,
+        _.currentAdvertiserId -> None,
+        _.accessExpiresAt     -> None)
 
   def apply(quill: QuillSqlite, locationId: Option[String] = None): SessionService =
     new SessionService:
@@ -284,6 +311,16 @@ object SessionService:
       def setLocale(sessionId: user.SessionId, locale: String): Task[Unit] =
         run(updateLocaleQuery(lift(sessionId), lift(locale))).unit.orDie
 
+      def setAuthorized(sessionId: user.SessionId, expiresAt: java.time.Instant): Task[Unit] =
+        run(
+          setAuthorizedQuery(
+            lift(sessionId),
+            lift(expiresAt.toString),
+            lift(Phase.Authorized))).unit.orDie
+
+      def resetForExpiration(sessionId: user.SessionId): Task[Unit] =
+        run(resetForExpirationQuery(lift(sessionId), lift(Phase.Welcome))).unit.orDie
+
   private def toSessionData(row: SessionRow): SessionData =
     val currentQuestion =
       (row.currentSurveyId, row.currentQuestionId) match
@@ -305,7 +342,8 @@ object SessionService:
       row.apMac,
       row.redirectUrl,
       row.ssid,
-      row.clickId
+      row.clickId,
+      row.accessExpiresAt.map(java.time.Instant.parse)
     )
   end toSessionData
 

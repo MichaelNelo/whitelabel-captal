@@ -27,7 +27,8 @@ final case class SessionRow(
     apMac: String,
     redirectUrl: String,
     ssid: String,
-    clickId: String)
+    clickId: String,
+    accessExpiresAt: Option[String] = None)
 
 final case class SurveyRow(
     id: survey.Id,
