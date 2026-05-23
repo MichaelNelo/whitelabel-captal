@@ -11,10 +11,16 @@ version: 1.0.0
 A `Phase` represents where the user is in the captive-portal flow. The current enum (`core/.../application/phase.scala`):
 
 ```
-Welcome → IdentificationQuestion → AdvertiserVideo → AdvertiserVideoSurvey → AdvertiserQuestion → Ready
+Welcome → IdentificationQuestion → AdvertiserVideo → AdvertiserVideoSurvey → AdvertiserQuestion → Ready → Authorized
 ```
 
 The phase is persisted on `sessions.phase`, advanced by `SessionPhaseHandler`, validated by `sessionEndpoint.secured(allowedPhases = ...)`, and mapped to a SPA route by `Router.phaseToPage`.
+
+**Phase.Ready vs Phase.Authorized** (gotcha):
+- `Ready` = "survey terminado, esperando que UniFi autorice".
+- `Authorized` = "UniFi confirmó el voucher; `accessExpiresAt` poblado en la session".
+- La transición `Ready → Authorized` la hace **únicamente** `UnifiAuthorizationHandler` post-commit (no `SessionPhaseHandler`). Si UniFi falla, la sesión queda en `Ready` y `/api/finish` se puede reintentar.
+- `Phase.Authorized` mapea a `Page.Welcome` en el cliente (la `WelcomeView` detecta `phase=Authorized + accessExpiresAt` y muestra countdown), no a `Page.Ready`.
 
 ## Steps
 
@@ -31,6 +37,7 @@ enum Phase:
   case AdvertiserQuestion
   case BonusGame             // NEW — placed where it should appear in the flow
   case Ready
+  case Authorized
 ```
 
 Also update `Phase.fromDbString` / `Phase.toDbString` if defined (some places serialize via case name; check the file).

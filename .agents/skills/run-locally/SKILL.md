@@ -48,8 +48,11 @@ export PROVISION_DIR=$PWD/locations/cafe-centro
 export SHARED_DIR=$PWD/shared
 export SERVER_DEV_MODE=true
 export SERVER_DEV_ENDPOINTS=true
+# export UNIFI_PROXY_URL="http://localhost:8888"  # opcional: para testear el handler vía tinyproxy local
 ./mill api.dev
 ```
+
+**UniFi**: si el `location.yaml` no tiene bloque `unifi` (host + apiToken), `UnifiAuthorizationHandler` loggea "no config" y skipea — la sesión queda en `Phase.Ready` tras `/api/finish`. Para testear el path completo, agregar credenciales válidas y dejar la API en la misma LAN del UCG (o configurar `UNIFI_PROXY_URL` apuntando a un tinyproxy/Tailscale-router que enrute al Controller).
 
 Or via the helper task (defaults built in):
 
