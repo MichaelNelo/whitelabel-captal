@@ -43,3 +43,11 @@ database:
 server:
   devMode: false
   devEndpoints: false
+
+unifi:
+  # Optional. URL of the HTTP proxy that routes UniFi Controller traffic.
+  # Required in production where the API runs on ECS Fargate and reaches
+  # the on-premise UCG via Tailscale subnet router + tinyproxy.
+  # Example: "http://tinyproxy.captal-dev.local:8888"
+  # Empty/omitted → direct connection (only viable on the same LAN).
+  proxyUrl: ""
