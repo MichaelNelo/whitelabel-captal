@@ -217,6 +217,13 @@ database:
 server:
   devMode: false
   devEndpoints: false
+
+unifi:
+  # Optional. HTTP proxy URL used by the API to reach the on-premise UniFi Controller.
+  # In cloud deploys, the API runs on ECS Fargate and cannot reach the customer's LAN
+  # directly — point this at a tinyproxy (ECS daemon) behind a Tailscale subnet router.
+  # Empty/omitted → direct connection (only viable in same-LAN dev setups).
+  proxyUrl: "http://tinyproxy.captal-dev.local:8888"
 ```
 
 ## Validation
