@@ -1,7 +1,9 @@
 package whitelabel.captal.infra.repositories
 
 import io.getquill.*
+import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.infrastructure.UserRepository
+import whitelabel.captal.core.survey.question.FullyQualifiedQuestionId
 import whitelabel.captal.core.user
 import whitelabel.captal.core.user.{State, User}
 import whitelabel.captal.infra.schema.QuillSqlite
@@ -9,7 +11,7 @@ import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.given
 import whitelabel.captal.infra.schema.users.given
 import whitelabel.captal.infra.session.SessionContext
-import whitelabel.captal.infra.{SessionRow, UserRow}
+import whitelabel.captal.infra.{AnswerRow, QuestionRow, SessionRow, UserRow}
 import zio.*
 
 object UserRepositoryQuill:
@@ -25,6 +27,13 @@ object UserRepositoryQuill:
         if session.id == sessionIdParam && session.userId.contains(userIdParam) &&
           session.currentSurveyId.isDefined && session.currentQuestionId.isDefined
       yield (userRow.id, session.currentSurveyId, session.currentQuestionId)
+
+  // Query that returns the (surveyId, questionId) pairs the user has answered
+  inline def findAnsweredQuestionsByUserQuery = quote: (userIdParam: user.Id) =>
+    for
+      a <- query[AnswerRow] if a.userId == userIdParam
+      q <- query[QuestionRow] if q.id == a.questionId
+    yield (q.surveyId, q.id)
 
   def apply(quill: QuillSqlite, ctx: SessionContext): UserRepository[Task] =
     new UserRepository[Task]:
@@ -95,6 +104,36 @@ object UserRepositoryQuill:
                   ZIO.none
             case None =>
               ZIO.none
+
+      def findReadyUser(): Task[Option[User[State.Ready]]] = ctx
+        .getOrFail
+        .flatMap: sessionData =>
+          if sessionData.phase != Phase.Ready then ZIO.none
+          else
+            sessionData.userId match
+              case None =>
+                ZIO.none
+              case Some(userId) =>
+                run(findWithEmailByIdQuery(lift(userId)))
+                  .map(_.headOption)
+                  .orDie
+                  .flatMap:
+                    case None =>
+                      ZIO.none
+                    case Some(_) =>
+                      run(findAnsweredQuestionsByUserQuery(lift(userId)))
+                        .map: rows =>
+                          val answeredQuestionIds = rows.map { case (sid, qid) =>
+                            FullyQualifiedQuestionId(sid, qid)
+                          }
+                          Some(
+                            User[State.Ready](
+                              userId,
+                              State.Ready(
+                                sessionData.redirectUrl,
+                                sessionData.currentVideoId,
+                                answeredQuestionIds)))
+                        .orDie
 
   val layer: ZLayer[QuillSqlite & SessionContext, Nothing, UserRepository[Task]] = ZLayer
     .fromFunction(apply)
