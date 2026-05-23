@@ -17,7 +17,8 @@ object I18n:
       subtitle: String,
       steps: Welcome.Steps,
       button: Welcome.Button,
-      selectLanguage: String)
+      selectLanguage: String,
+      authorized: Welcome.Authorized)
 
   object Welcome:
     final case class Steps(step1: String, step2: String, step3: String)
@@ -29,6 +30,11 @@ object I18n:
     object Button:
       given Decoder[Button] = deriveDecoder[Button]
       given Encoder[Button] = deriveEncoder[Button]
+
+    final case class Authorized(title: String)
+    object Authorized:
+      given Decoder[Authorized] = deriveDecoder[Authorized]
+      given Encoder[Authorized] = deriveEncoder[Authorized]
 
     given Decoder[Welcome] = deriveDecoder[Welcome]
     given Encoder[Welcome] = deriveEncoder[Welcome]

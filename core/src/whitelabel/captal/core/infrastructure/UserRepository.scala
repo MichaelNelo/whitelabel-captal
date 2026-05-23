@@ -7,3 +7,4 @@ trait UserRepository[F[_]]:
   def findAnswering(): F[Option[User[State.AnsweringQuestion]]]
   def findWatchingVideo(): F[Option[User[State.WatchingVideo]]]
   def findAnsweringVideoSurvey(): F[Option[User[State.AnsweringVideoSurvey]]]
+  def findReadyUser(): F[Option[User[State.Ready]]]

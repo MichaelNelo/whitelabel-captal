@@ -25,3 +25,8 @@ enum Event:
       advertiserId: AdvertiserId,
       nextQuestion: FullyQualifiedQuestionId,
       occurredAt: Instant)
+  case UserFinishedProcess(
+      userId: Id,
+      videoId: Option[video.Id],
+      answeredQuestionIds: List[FullyQualifiedQuestionId],
+      occurredAt: Instant)

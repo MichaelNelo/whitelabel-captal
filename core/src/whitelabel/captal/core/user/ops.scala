@@ -131,4 +131,27 @@ object ops:
       value,
       now)
   end extension
+
+  extension (user: User[State.Ready])
+    /** Transición Ready → Authorized + emite UserFinishedProcess.
+      *
+      * El `User[State.Authorized]` resultante es un valor ephemeral (sólo en memoria) — la
+      * proyección desde DB sigue siendo `State.Ready` mientras `session.phase = Ready`. Una vez
+      * que `UnifiAuthorizationHandler` (post-commit) confirma con el Controller, `session.phase`
+      * pasa a Authorized y el ciclo cierra.
+      *
+      * Si UniFi falla, `session.phase` queda en Ready y `findReadyUser` sigue devolviendo el
+      * user — la próxima llamada a `/api/finish` re-ejecuta `finish` y reintentamos.
+      */
+    def finish(now: Instant): UserOp[User[State.Authorized]] =
+      val authorized = user.copy[State.Authorized](state = State.Authorized(
+        user.state.redirectUrl,
+        user.state.watchedVideoId,
+        user.state.answeredQuestionIds))
+      val event = Event.UserFinishedProcess(
+        user.id,
+        user.state.watchedVideoId,
+        user.state.answeredQuestionIds,
+        now)
+      Op.emit(event, authorized)
 end ops
