@@ -18,7 +18,8 @@ final case class CaptalConfig(
     alb: CaptalConfig.Alb,
     cloudfront: CaptalConfig.CloudFront,
     database: CaptalConfig.Database,
-    server: CaptalConfig.Server = CaptalConfig.Server())
+    server: CaptalConfig.Server = CaptalConfig.Server(),
+    unifi: CaptalConfig.Unifi = CaptalConfig.Unifi())
 
 object CaptalConfig:
   final case class Aws(
@@ -68,6 +69,14 @@ object CaptalConfig:
   final case class Server(devMode: Boolean = false, devEndpoints: Boolean = false)
   object Server:
     given Decoder[Server] = deriveDecoder
+
+  /** Infra-shared UniFi config. The proxy URL routes UCG traffic through tinyproxy →
+    * Tailscale subnet router in production. Empty/omitted → API connects directly (only viable
+    * when API and UCG share a LAN, i.e. local dev).
+    */
+  final case class Unifi(proxyUrl: Option[String] = None)
+  object Unifi:
+    given Decoder[Unifi] = deriveDecoder
 
   given Decoder[CaptalConfig] = deriveDecoder
 
