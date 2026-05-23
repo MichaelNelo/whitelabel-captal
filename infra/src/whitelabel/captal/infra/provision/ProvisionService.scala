@@ -118,7 +118,7 @@ object ProvisionService:
       yaml    <- ZIO
         .fromEither(yamlParser.parse(content).flatMap(_.as[LocationYaml]))
         .mapError(e => new RuntimeException(s"Failed to parse location.yaml: $e"))
-      _ <- EntityWriter.upsertLocation(quill)(locationId, slug, yaml.name, yaml.ap_mac)
+      _ <- EntityWriter.upsertLocation(quill)(locationId, slug, yaml.name, yaml.ap_mac, yaml.unifi)
       _ <- ZIO.logInfo(s"Provisioned location: $slug -> $locationId")
     yield ()
 
