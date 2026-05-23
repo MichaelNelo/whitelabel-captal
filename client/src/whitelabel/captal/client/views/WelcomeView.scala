@@ -1,6 +1,9 @@
 package whitelabel.captal.client.views
 
+import java.time.Instant
+
 import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.duration.DurationInt
 
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.i18n.I18nClient
@@ -15,51 +18,112 @@ object WelcomeView:
   def render: HtmlElement = Layout(
     isLoading = I18nClient.isLoaded.map(!_),
     content = div(
-      cls := "welcome-view",
-      h1(cls := "welcome-title", child.text <-- I18nClient.i18n.map(_.welcome.title)),
-      p(cls  := "welcome-subtitle", child.text <-- I18nClient.i18n.map(_.welcome.subtitle)),
-      div(
-        cls := "welcome-steps",
-        step(I18nClient.i18n.map(_.welcome.steps.step1), 1),
-        step(I18nClient.i18n.map(_.welcome.steps.step2), 2),
-        step(I18nClient.i18n.map(_.welcome.steps.step3), 3)
-      ),
-      onMountCallback { _ =>
-        loadLocales()
+      child <--
+        AppState
+          .phase
+          .combineWith(AppState.accessExpiresAt)
+          .map:
+            case (Some(Phase.Authorized), Some(expiresAt)) =>
+              authorizedContent(expiresAt)
+            case _ =>
+              welcomeContent),
+    footer = div(
+      child <--
+        AppState
+          .phase
+          .map:
+            case Some(Phase.Authorized) =>
+              authorizedFooter
+            case _ =>
+              welcomeFooter)
+  )
+
+  private def welcomeContent: HtmlElement = div(
+    cls := "welcome-view",
+    h1(cls := "welcome-title", child.text <-- I18nClient.i18n.map(_.welcome.title)),
+    p(cls  := "welcome-subtitle", child.text <-- I18nClient.i18n.map(_.welcome.subtitle)),
+    div(
+      cls := "welcome-steps",
+      step(I18nClient.i18n.map(_.welcome.steps.step1), 1),
+      step(I18nClient.i18n.map(_.welcome.steps.step2), 2),
+      step(I18nClient.i18n.map(_.welcome.steps.step3), 3)
+    ),
+    onMountCallback { _ =>
+      loadLocales()
+    }
+  )
+
+  private def welcomeFooter: HtmlElement = div(
+    select(
+      cls := "locale-button",
+      children <--
+        availableLocales
+          .signal
+          .map: locales =>
+            locales.map: loc =>
+              option(value := loc, loc.toUpperCase, selected <-- I18nClient.locale.map(_ == loc)),
+      onChange.mapToValue --> { loc =>
+        I18nClient.setLocale(loc)
+        setLocaleOnServer(loc)
       }
     ),
-    footer = div(
-      select(
-        cls := "locale-button",
-        children <--
-          availableLocales
-            .signal
-            .map: locales =>
-              locales.map: loc =>
-                option(value := loc, loc.toUpperCase, selected <-- I18nClient.locale.map(_ == loc)),
-        onChange.mapToValue --> { loc =>
-          I18nClient.setLocale(loc)
-          setLocaleOnServer(loc)
-        }
-      ),
-      button(
-        cls := "welcome-button",
-        disabled <-- isStarting.signal,
-        child.text <--
-          isStarting
-            .signal
-            .combineWith(I18nClient.i18n)
-            .map:
-              case (true, i18n) =>
-                i18n.welcome.button.connecting
-              case (false, i18n) =>
-                i18n.welcome.button.start,
-        onClick --> { _ =>
-          startFlow()
-        }
-      )
+    button(
+      cls := "welcome-button",
+      disabled <-- isStarting.signal,
+      child.text <--
+        isStarting
+          .signal
+          .combineWith(I18nClient.i18n)
+          .map:
+            case (true, i18n) =>
+              i18n.welcome.button.connecting
+            case (false, i18n) =>
+              i18n.welcome.button.start,
+      onClick --> { _ =>
+        startFlow()
+      }
     )
   )
+
+  /** Authorized view: shows a countdown until `expiresAt`. Once the deadline is reached, polls
+    * `/api/status`; the server resets the session and we render the normal Welcome again.
+    */
+  private def authorizedContent(expiresAt: Instant): HtmlElement =
+    // Tick every second to refresh the countdown label.
+    val tickStream = EventStream.periodic(1000).startWith(0L)
+    div(
+      cls := "welcome-view",
+      h1(
+        cls := "welcome-title",
+        child.text <-- I18nClient.i18n.map(_.welcome.authorized.title)),
+      p(
+        cls := "welcome-subtitle countdown",
+        child.text <-- tickStream.map: _ =>
+          formatRemaining(expiresAt)),
+      tickStream --> { _ =>
+        if java.time.Instant.now().isAfter(expiresAt) then refreshStatusAfterExpiration()
+      }
+    )
+
+  private def authorizedFooter: HtmlElement = div()
+
+  private def formatRemaining(expiresAt: Instant): String =
+    val now = java.time.Instant.now()
+    val seconds = math.max(0L, java.time.Duration.between(now, expiresAt).getSeconds)
+    val minutes = seconds / 60
+    val secs    = seconds % 60
+    f"$minutes%02d:$secs%02d"
+
+  private def refreshStatusAfterExpiration(): Unit = Runtime.run:
+    ApiClient
+      .getStatus()
+      .map:
+        case Right(status) =>
+          AppState.setAccessExpiresAt(status.accessExpiresAt)
+          AppState.setPhase(status.phase)
+          Router.syncWithPhase(status.phase)
+        case Left(err) =>
+          ErrorHandler.escalate(err)
 
   private def step(textSignal: Signal[String], index: Int): HtmlElement = div(
     cls       := "step",

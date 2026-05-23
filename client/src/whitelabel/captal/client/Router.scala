@@ -147,6 +147,8 @@ object Router:
         Page.AdvertiserVideoSurvey
       case Phase.Ready =>
         Page.Ready
+      case Phase.Authorized =>
+        Page.Welcome // WelcomeView detects Authorized phase + countdown
 
   // SplitRender for efficient view switching
   val splitter: SplitRender[Page, HtmlElement] =
