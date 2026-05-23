@@ -9,7 +9,11 @@ import io.circe.{Decoder, Encoder}
 import whitelabel.captal.core.Op.{convertError, convertEvent}
 import whitelabel.captal.core.application.IdentificationSurveyType.given
 import whitelabel.captal.core.application.conversions.given
-import whitelabel.captal.core.application.{IdentificationSurveyType, NextStep, Phase}
+import whitelabel.captal.core.application.{
+  FallbackPhase,
+  IdentificationSurveyType,
+  NextStep
+}
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository}
 import whitelabel.captal.core.survey.question.codecs.given
 import whitelabel.captal.core.survey.question.{FullyQualifiedQuestionId, QuestionToAnswer}
@@ -33,7 +37,10 @@ object ProvideNextIdentificationSurveyHandler:
   def apply[F[_]: Monad](
       surveyRepo: SurveyRepository[F],
       userRepo: UserRepository[F],
-      terminalPhase: Phase): Handler.Aux[F, ProvideNextIdentificationSurveyCommand.type, Response] =
+      fallback: FallbackPhase): Handler.Aux[
+    F,
+    ProvideNextIdentificationSurveyCommand.type,
+    Response] =
     new Handler[F, ProvideNextIdentificationSurveyCommand.type]:
       type Result = Response
 
@@ -53,18 +60,18 @@ object ProvideNextIdentificationSurveyHandler:
             createGuest(None, Instant.now)
               .convertEvent
               .convertError
-              .as(NextStep(terminalPhase): Response)
+              .as(NextStep(fallback.phase): Response)
           case (Some(existingUser), Some(next)) =>
             val nextQuestion = Some(FullyQualifiedQuestionId(next.surveyId, next.question.id))
             existingUser
-              .assignSurvey(nextQuestion, terminalPhase, Instant.now)
+              .assignSurvey(nextQuestion, fallback.phase, Instant.now)
               .convertEvent
               .convertError
               .as(next: Response)
           case (Some(existingUser), None) =>
             existingUser
-              .assignSurvey(None, terminalPhase, Instant.now)
+              .assignSurvey(None, fallback.phase, Instant.now)
               .convertEvent
               .convertError
-              .as(NextStep(terminalPhase): Response)
+              .as(NextStep(fallback.phase): Response)
 end ProvideNextIdentificationSurveyHandler

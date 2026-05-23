@@ -8,7 +8,7 @@ import cats.syntax.functor.*
 import io.circe.{Decoder, Encoder}
 import whitelabel.captal.core.Op.{convertError, convertEvent}
 import whitelabel.captal.core.application.conversions.given
-import whitelabel.captal.core.application.{NextStep, Phase}
+import whitelabel.captal.core.application.{FallbackPhase, NextStep}
 import whitelabel.captal.core.infrastructure.{UserRepository, VideoRepository}
 import whitelabel.captal.core.user.ops.*
 import whitelabel.captal.core.video.VideoToWatch
@@ -38,7 +38,7 @@ object ProvideNextVideoHandler:
   def apply[F[_]: Monad](
       videoRepo: VideoRepository[F],
       userRepo: UserRepository[F],
-      terminalPhase: Phase): Handler.Aux[F, ProvideNextVideoCommand.type, Response] =
+      fallback: FallbackPhase): Handler.Aux[F, ProvideNextVideoCommand.type, Response] =
     new Handler[F, ProvideNextVideoCommand.type]:
       type Result = Response
 
@@ -72,9 +72,9 @@ object ProvideNextVideoHandler:
                     .convertError
                     .as(NextVideo.fromVideoToWatch(videoToWatch): Response))
               case None =>
-                // No video available, go to terminal phase
-                Monad[F].pure(CoreOp.pure(NextStep(terminalPhase): Response))
+                // No video available — redirect to the fallback phase
+                Monad[F].pure(CoreOp.pure(NextStep(fallback.phase): Response))
           case None =>
             // User not identified, shouldn't happen in this phase but handle gracefully
-            Monad[F].pure(CoreOp.pure(NextStep(terminalPhase): Response))
+            Monad[F].pure(CoreOp.pure(NextStep(fallback.phase): Response))
 end ProvideNextVideoHandler

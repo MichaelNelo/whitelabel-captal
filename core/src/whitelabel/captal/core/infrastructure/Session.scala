@@ -1,5 +1,7 @@
 package whitelabel.captal.core.infrastructure
 
+import java.time.Instant
+
 import whitelabel.captal.core.survey.AdvertiserId
 import whitelabel.captal.core.survey.question.FullyQualifiedQuestionId
 import whitelabel.captal.core.{application, user, video}
@@ -18,4 +20,5 @@ final case class SessionData(
     apMac: String = "",
     redirectUrl: String = "",
     ssid: String = "",
-    clickId: String = "")
+    clickId: String = "",
+    accessExpiresAt: Option[Instant] = None)
