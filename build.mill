@@ -168,6 +168,7 @@ object infra extends BaseModule:
   def moduleDeps = Seq(core, provision)
   def mvnDeps = Seq(
     mvn"dev.zio::zio:2.1.14",
+    mvn"dev.zio::zio-http:3.0.1",
     mvn"io.getquill::quill-jdbc-zio:4.8.6",
     mvn"com.github.geirolz::fly4s:1.0.8",
     mvn"dev.zio::zio-interop-cats:23.1.0.3",
