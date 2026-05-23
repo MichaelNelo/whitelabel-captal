@@ -8,7 +8,7 @@ import cats.syntax.functor.*
 import io.circe.{Decoder, Encoder}
 import whitelabel.captal.core.Op.{convertError, convertEvent}
 import whitelabel.captal.core.application.conversions.given
-import whitelabel.captal.core.application.{NextStep, Phase}
+import whitelabel.captal.core.application.{FallbackPhase, NextStep}
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository}
 import whitelabel.captal.core.survey.question.codecs.given
 import whitelabel.captal.core.survey.question.{FullyQualifiedQuestionId, QuestionToAnswer}
@@ -32,7 +32,7 @@ object ProvideNextAdvertiserSurveyHandler:
   def apply[F[_]: Monad](
       surveyRepo: SurveyRepository[F],
       userRepo: UserRepository[F],
-      terminalPhase: Phase): Handler.Aux[F, ProvideNextAdvertiserSurveyCommand, Response] =
+      fallback: FallbackPhase): Handler.Aux[F, ProvideNextAdvertiserSurveyCommand, Response] =
     new Handler[F, ProvideNextAdvertiserSurveyCommand]:
       type Result = Response
 
@@ -54,8 +54,8 @@ object ProvideNextAdvertiserSurveyHandler:
               .convertError
               .as(next: Response)
           case (_, None) =>
-            // No more questions for this advertiser
-            CoreOp.pure(NextStep(terminalPhase): Response)
+            // No more questions for this advertiser — redirect to fallback
+            CoreOp.pure(NextStep(fallback.phase): Response)
           case (None, _) =>
-            CoreOp.pure(NextStep(terminalPhase): Response)
+            CoreOp.pure(NextStep(fallback.phase): Response)
 end ProvideNextAdvertiserSurveyHandler

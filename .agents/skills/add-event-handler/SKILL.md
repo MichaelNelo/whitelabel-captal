@@ -8,7 +8,10 @@ version: 1.0.0
 
 ## Event sourcing model
 
-Commands produce **events** (in `core/`); events are processed by **handlers** (in `infra/eventhandlers/`) inside a single Quill transaction (`TransactionalEventHandler`). Handlers are pure functions of `(Event, SessionContext, Quill) → Task[Unit]`.
+Commands produce **events** (in `core/`); events are processed by **two kinds of handlers** (in `infra/eventhandlers/`):
+
+1. **Transactional** (`DbEventHandler`): run inside a single Quill transaction (`TransactionalEventHandler`). Pure functions of `(Event, SessionContext, Quill) → Task[Unit]`. Use for DB writes that must commit atomically with the rest of the chain.
+2. **Post-commit** (`EventHandler[Task, Event]`): composed via `.andThen` **after** `TransactionalEventHandler` in `Main.eventHandlerLayer`. Run only if the transaction committed. Use for external side-effects (HTTP calls, queue publishes) that should not roll back DB writes on failure. Example: `UnifiAuthorizationHandler` (UniFi `authorize-guest`).
 
 Each command's handler returns `Op[Event...]` which contains the events to dispatch. After the handler returns, `Flow.execute` runs the events through the registered chain of handlers.
 
@@ -72,18 +75,30 @@ Use the existing handlers in `infra/.../eventhandlers/` as patterns: `UserPersis
 
 ### 4. Register the handler in the chain
 
-In `api/src/whitelabel/captal/api/Main.scala`, find `eventHandlerLayer` and `.andThen` your new handler:
+In `api/src/whitelabel/captal/api/Main.scala`, find `eventHandlerLayer` and `.andThen` your new handler.
+
+**Transactional (DB write)** — within the `dbHandler` chain:
 
 ```scala
 val dbHandler = EventLogHandler(ctx)
   .andThen(AnswerPersistenceHandler(ctx))
   .andThen(UserPersistenceHandler(ctx))
-  .andThen(UserLocaleChangedHandler(ctx))   // NEW
+  .andThen(UserLocaleChangedHandler(ctx))   // NEW (transactional)
   .andThen(SessionPhaseHandler(ctx, ...))
   ...
+val transactional = TransactionalEventHandler(dbHandler, quill)
 ```
 
-Order matters: the chain runs sequentially; if your handler depends on rows another handler creates, register after it.
+**Post-commit (external side-effect)** — after the transactional wrapper:
+
+```scala
+val transactional = TransactionalEventHandler(dbHandler, quill)
+val unifiAuth = UnifiAuthorizationHandler(currentLocation.unifi, ctx, sessionService, client)
+val anotherPostCommit = MyExternalApiHandler(...)
+transactional.andThen(unifiAuth).andThen(anotherPostCommit)
+```
+
+Order matters: the chain runs sequentially; if your handler depends on rows another handler creates, register after it. Post-commit handlers run **only if** the transaction committed; their failures DO NOT roll back.
 
 **Also** add the same `.andThen` in `api/test/src/whitelabel/captal/api/TestLayers.scala` `eventHandlerLayer` — otherwise tests don't exercise your handler.
 
@@ -107,6 +122,7 @@ Two layers of test:
 
 ## Anti-patterns
 
-- ❌ Side effects outside `handle` (e.g., starting a fiber, calling an external API non-transactionally) — breaks event-sourcing semantics. Use a separate non-transactional handler if you really need async.
-- ❌ Throwing exceptions from `handle` — return a failing `Task` so the transaction rolls back.
+- ❌ Calling external APIs from a `DbEventHandler` — slow HTTP inside a DB transaction → connection-pool starvation. Move to a post-commit `EventHandler[Task, Event]` (pattern: `UnifiAuthorizationHandler`).
+- ❌ Throwing exceptions from a transactional `handle` — return a failing `Task` so the rollback happens cleanly. For post-commit handlers, catch with `.either` and log; never let a side-effect failure crash the request.
 - ❌ Emitting an event without a corresponding handler — silent no-op, debugging nightmare.
+- ❌ Post-commit handler that re-emits events expecting the chain to re-run — there's no replay; design idempotency at the side-effect level (e.g., UniFi `authorize-guest` is idempotent by MAC).

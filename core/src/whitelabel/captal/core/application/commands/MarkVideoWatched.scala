@@ -5,8 +5,8 @@ import java.time.Instant
 import cats.Monad
 import cats.syntax.functor.*
 import whitelabel.captal.core.Op.{convertError, convertEvent}
+import whitelabel.captal.core.application.NextStep
 import whitelabel.captal.core.application.conversions.given
-import whitelabel.captal.core.application.{NextStep, Phase}
 import whitelabel.captal.core.infrastructure.{SessionData, VideoRepository}
 import whitelabel.captal.core.video.{Error as VideoError, Event as VideoEvent}
 import whitelabel.captal.core.{Op as CoreOp, video as videoPkg}
@@ -19,7 +19,7 @@ final case class MarkVideoWatchedCommand(
 object MarkVideoWatchedHandler:
   def apply[F[_]: Monad](
       videoRepo: VideoRepository[F],
-      nextPhase: Phase): Handler.Aux[F, MarkVideoWatchedCommand, NextStep] =
+      nextStep: NextStep): Handler.Aux[F, MarkVideoWatchedCommand, NextStep] =
     new Handler[F, MarkVideoWatchedCommand]:
       type Result = NextStep
 
@@ -27,12 +27,12 @@ object MarkVideoWatchedHandler:
         // This handler expects the current video ID to be in the session context
         // The actual video ID will be obtained from the session in the route
         // Here we just emit the VideoVisualized event
-        Monad[F].pure(CoreOp.pure(NextStep(nextPhase)))
+        Monad[F].pure(CoreOp.pure(nextStep))
 
   def withSession[F[_]: Monad](
       videoRepo: VideoRepository[F],
       session: SessionData,
-      nextPhase: Phase): Handler.Aux[F, MarkVideoWatchedCommand, NextStep] =
+      nextStep: NextStep): Handler.Aux[F, MarkVideoWatchedCommand, NextStep] =
     new Handler[F, MarkVideoWatchedCommand]:
       type Result = NextStep
 
@@ -57,7 +57,7 @@ object MarkVideoWatchedHandler:
                     .emit[videoPkg.Event, videoPkg.Error](event)
                     .convertEvent
                     .convertError
-                    .as(NextStep(nextPhase))
+                    .as(nextStep)
                 case None =>
                   CoreOp
                     .fail[videoPkg.Event, videoPkg.Error, NextStep](

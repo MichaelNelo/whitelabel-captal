@@ -9,6 +9,7 @@ enum Phase:
   case AdvertiserVideoSurvey
   case AdvertiserQuestion
   case Ready
+  case Authorized
 
 object Phase:
   def toDbString(phase: Phase): String =
@@ -25,6 +26,8 @@ object Phase:
         "advertiser_question"
       case Ready =>
         "ready"
+      case Authorized =>
+        "authorized"
 
   def fromDbString(s: String): Phase =
     s match
@@ -40,6 +43,8 @@ object Phase:
         AdvertiserQuestion
       case "ready" =>
         Ready
+      case "authorized" =>
+        Authorized
       case _ =>
         Welcome
 
