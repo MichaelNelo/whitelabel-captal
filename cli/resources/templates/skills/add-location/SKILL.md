@@ -43,9 +43,35 @@ Pick a slug that's URL-safe (lowercase, alphanumeric + hyphens). It becomes the 
 name: "Cafe Centro Plaza"      # human-readable name
 ap_mac: "AA:BB:CC:DD:EE:01"    # MAC of the access point. Used to filter sessions.
 desiredCount: 1                # optional; overrides ecs.desiredCount from captal.yaml
+
+# Optional — UniFi Controller access for guest authorization
+unifi:
+  host: "192.168.1.1"               # IP or hostname of the Controller on the LAN
+  apiToken: "<API_KEY>"             # generated in the Controller UI (see below)
+  port: 8443                        # default 8443; UnifiOS uses 443
+  site: "default"                   # site name in the Controller (typically "default")
+  unifiOs: true                     # true for UDM / Dream Machine; false for standalone Controllers
+  defaultDurationMinutes: 1440      # how long the authorize-guest grant lasts (24h default)
 ```
 
 The `ap_mac` is critical: when a user device connects via a UniFi captive portal, the redirect URL includes `?ap=<mac>`. The API filters sessions by this MAC.
+
+The `unifi` block is optional. Locations without it are still provisioned but cannot grant internet access through the Controller (any future authorize-guest endpoint will skip them or fall back to a noop). Provide it when the location has a UniFi Controller reachable from wherever the captal API runs.
+
+#### How to get the `apiToken`
+
+On the Controller UI:
+
+1. Open **UniFi OS** (UDM / Dream Machine) → **Settings** → **Control Plane** → **Integrations** → **Create API Key**. Give it a descriptive name (e.g. `captal-portal-cafe-centro`) and copy the token immediately (it is shown only once).
+2. On older standalone Controllers without UnifiOS, create a dedicated local admin user with limited permissions and use its credentials instead — that path is not covered by the `apiToken` field yet; coordinate before deploying.
+
+#### Typical values per hardware
+
+| Hardware                                | `host`                     | `port` | `unifiOs` |
+|-----------------------------------------|----------------------------|--------|-----------|
+| Dream Machine / DM Pro / DM SE          | LAN IP (often the gateway) | 443    | true      |
+| Cloud Key Gen2+ (UnifiOS)               | LAN IP                     | 443    | true      |
+| Network Application standalone (Linux / Docker) | LAN IP             | 8443   | false     |
 
 ### 3. Edit i18n translations
 

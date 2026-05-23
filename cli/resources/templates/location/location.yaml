@@ -1,3 +1,10 @@
 name: "{{slug}}"
 # ap_mac: "AA:BB:CC:DD:EE:FF"
 # desiredCount: 1
+# unifi:
+#   host: "192.168.1.1"           # IP del UniFi Controller en la LAN
+#   apiToken: "YOUR_API_KEY"      # generada en Settings → Control Plane → Integrations
+#   port: 8443                    # default 8443 (443 en UnifiOS, 8080 si HTTP)
+#   site: "default"               # nombre del site en el Controller
+#   unifiOs: true                 # true para UDM/Dream Machine, false para Controller standalone
+#   defaultDurationMinutes: 1440  # cuanto dura la autorizacion (24h por default)

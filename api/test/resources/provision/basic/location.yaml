@@ -1,2 +1,5 @@
 name: Test Location
 ap_mac: "AA:BB:CC:DD:EE:FF"
+unifi:
+  host: "192.168.1.1"
+  apiToken: "test-token"
