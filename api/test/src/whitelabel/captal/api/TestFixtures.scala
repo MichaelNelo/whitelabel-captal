@@ -576,6 +576,24 @@ object TestFixtures:
     import quill.*
     run(query[VideoViewRow])
 
+  def queryEventLog
+      : ZIO[QuillSqlite, Throwable, List[EventLogRow]] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.*
+    run(query[EventLogRow])
+
+  def setSessionAuthorized(
+      sessionId: user.SessionId,
+      expiresAt: java.time.Instant): ZIO[QuillSqlite, Throwable, Unit] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      val expiresAtOpt: Option[String] = Some(expiresAt.toString)
+      run(
+        query[SessionRow]
+          .filter(_.id == lift(sessionId))
+          .update(
+            _.phase           -> lift(Phase.Authorized),
+            _.accessExpiresAt -> lift(expiresAtOpt))).unit
+
   def updateSessionCurrentVideo(
       sessionId: user.SessionId,
       videoId: video.Id): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]:
