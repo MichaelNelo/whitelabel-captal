@@ -73,6 +73,8 @@ object App:
         .map:
           case Right(status) =>
             i18n.I18nClient.setLocale(status.locale)
+            AppState.setAccessExpiresAt(status.accessExpiresAt)
+            AppState.setPhase(status.phase)
             Router.syncWithPhase(status.phase)
           case Left(err) =>
             ErrorHandler.escalate(err)
