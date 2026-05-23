@@ -147,7 +147,13 @@ final case class LocationRow(
     isActive: Int,
     createdAt: String,
     updatedAt: String,
-    apMac: Option[String])
+    apMac: Option[String],
+    unifiHost: Option[String] = None,
+    unifiPort: Option[Int] = None,
+    unifiSite: Option[String] = None,
+    unifiUseOs: Option[Int] = None,
+    unifiApiToken: Option[String] = None,
+    unifiDurationMinutes: Option[Int] = None)
 
 final case class ProvisionManifestRow(
     entityKey: String,

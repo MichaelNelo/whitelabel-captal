@@ -3,7 +3,7 @@ package whitelabel.captal.api.suites
 import java.nio.file.Paths
 
 import io.getquill.*
-import whitelabel.captal.api.TestFixtures
+import whitelabel.captal.api.{TestFixtures, UnifiAccess}
 import whitelabel.captal.infra.*
 import whitelabel.captal.infra.provision.{IdGenerator, ProvisionService}
 import whitelabel.captal.infra.schema.QuillSqlite
@@ -186,6 +186,61 @@ object ProvisioningSuite:
               advertisers.size == 1,
               advertisers.head.isActive == 1
             )
+        ,
+        test("provisions UniFi config from location.yaml and applies defaults"):
+          for
+            _         <- TestFixtures.clearAllData
+            _         <- provisionAll("shared", "basic")
+            locations <- queryLocations
+          yield
+            val row = locations.head
+            val access = UnifiAccess.fromRow(row)
+            assertTrue(
+              row.unifiHost.contains("192.168.1.1"),
+              row.unifiApiToken.contains("test-token"),
+              row.unifiPort.isEmpty,
+              row.unifiSite.isEmpty,
+              row.unifiUseOs.isEmpty,
+              row.unifiDurationMinutes.isEmpty,
+              access.exists(_.host == "192.168.1.1"),
+              access.exists(_.apiToken == "test-token"),
+              access.exists(_.port == 8443),
+              access.exists(_.site == "default"),
+              access.exists(_.unifiOs),
+              access.exists(_.defaultDurationMinutes == 1440)
+            )
+        ,
+        test("locations without unifi block have no UnifiAccess"):
+          for
+            _         <- TestFixtures.clearAllData
+            _         <- provisionAll("shared", "reduced")
+            locations <- queryLocations
+          yield
+            val row = locations.head
+            assertTrue(
+              row.unifiHost.isEmpty,
+              row.unifiApiToken.isEmpty,
+              row.unifiPort.isEmpty,
+              row.unifiSite.isEmpty,
+              row.unifiUseOs.isEmpty,
+              row.unifiDurationMinutes.isEmpty,
+              UnifiAccess.fromRow(row).isEmpty
+            )
+        ,
+        test("provision clears UniFi columns when the block is removed"):
+          for
+            _              <- TestFixtures.clearAllData
+            _              <- provisionAll("shared", "basic")
+            locationsBefore <- queryLocations
+            _              <- provisionAll("shared", "reduced")
+            locationsAfter <- queryLocations
+          yield assertTrue(
+            locationsBefore.head.unifiHost.contains("192.168.1.1"),
+            locationsBefore.head.unifiApiToken.contains("test-token"),
+            locationsAfter.head.unifiHost.isEmpty,
+            locationsAfter.head.unifiApiToken.isEmpty,
+            UnifiAccess.fromRow(locationsAfter.head).isEmpty
+          )
         ,
         test("IDs are deterministic"):
           for

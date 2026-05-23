@@ -11,9 +11,21 @@ import io.circe.generic.semiauto.*
 final case class LocationYaml(
     name: String,
     ap_mac: Option[String] = None,
-    desiredCount: Option[Int] = None)
+    desiredCount: Option[Int] = None,
+    unifi: Option[UnifiYaml] = None)
 object LocationYaml:
   given Decoder[LocationYaml] = deriveDecoder
+
+/** UniFi Controller access config for guest authorization. */
+final case class UnifiYaml(
+    host: String,
+    apiToken: String,
+    port: Option[Int] = None,
+    site: Option[String] = None,
+    unifiOs: Option[Boolean] = None,
+    defaultDurationMinutes: Option[Int] = None)
+object UnifiYaml:
+  given Decoder[UnifiYaml] = deriveDecoder
 
 /** Flat key-value translations for the frontend */
 type I18nYaml = Map[String, String]
