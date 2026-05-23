@@ -1,14 +1,354 @@
 # Contexto del Proyecto - Portal Captivo Whitelabel
 
-## Descripcion del Proyecto
+## TL;DR para Agentes
 
-Este repositorio implementa un **portal captivo whitelabel** para redes WiFi. El sistema permite a usuarios conectarse a internet a cambio de:
+- **Stack**: Scala 3 / Mill / ZIO / Tapir / Quill / rqlite + Scala.js (Laminar / Waypoint) en el frontend.
+- **Deploy**: AWS ECS Fargate + ALB + CloudFront en la cuenta `460486036288` (region `us-east-1`).
+- **Dominio**: `production.captal.centauroads.com` (CloudFront) y `staging.captal.centauroads.com` (ALB legacy).
 
-1. Proporcionar datos de identificacion (email, perfilado)
-2. Visualizar publicidad
-3. Responder encuestas
+**Primer paso para cualquier tarea — leer la skill relevante**:
+- Skills **operacionales** (deploy, troubleshoot, agregar location/video/survey): `cli/resources/templates/skills/<name>/SKILL.md` (también se distribuyen al operador vía `captal init` + `captal skills update`).
+- Skills **de desarrollo** (agregar endpoint / phase / migración, release del API o CLI, correr local): `.agents/skills/<name>/SKILL.md` (solo viven en este repo).
 
-El proyecto utiliza arquitectura **Event Sourcing** y esta implementado en **Scala 3** usando **Mill** como build tool y **ZIO** como runtime.
+**Comandos de descubrimiento del estado real** (más rápido que confiar en este doc):
+
+```bash
+# Última versión de la CLI publicada
+curl -s https://captal-cli-releases-dev.s3.us-east-1.amazonaws.com/latest/version.txt
+
+# Última imagen API/Provision en ECR
+aws ecr describe-images --repository-name captal-api-dev --region us-east-1 \
+  --query 'sort_by(imageDetails[?imageTags!=null],&imagePushedAt)[-1].imageTags[0]'
+
+# Locations activas (TGs en el ALB)
+aws elbv2 describe-target-groups --region us-east-1 \
+  --query 'TargetGroups[?starts_with(TargetGroupName,`captal-`)].TargetGroupName'
+```
+
+Para cualquier task concreta — leé la skill primero, después AGENTS.md, después el código.
+
+---
+
+## Estructura de archivos
+
+Layout actual del repo (paths relativos a la raíz):
+
+```
+.
+├── core/                                # Dominio puro (cross-compilado JVM+JS)
+│   └── src/whitelabel/captal/core/
+│       ├── application/                 # Phases, commands, events, flow types
+│       │   ├── commands/                # AnswerEmail, ProvideNextVideo, etc.
+│       │   ├── queries/
+│       │   └── phase.scala, event.scala, flow.scala
+│       ├── i18n/I18n.scala              # I18n schema (source of truth para claves)
+│       ├── infrastructure/              # SessionData, repositories trait
+│       ├── survey/                      # Survey + question + AnswerValue
+│       │   └── question/                # Question types, rules, options, validation
+│       ├── user/                        # User + State + Id + Email
+│       └── video/                       # Video.Id
+│
+├── endpoints/                           # Tapir endpoint definitions (cross-compilado)
+│   └── src/whitelabel/captal/endpoints/
+│       ├── SurveyEndpoints.scala
+│       ├── LocaleEndpoints.scala
+│       ├── VideoEndpoints.scala
+│       ├── AdvertiserSurveyEndpoints.scala
+│       ├── ApiError.scala
+│       └── *Request.scala / *Response.scala
+│
+├── provision/                           # YAML models — minimal, sin Quill/DB deps
+│   └── src/whitelabel/captal/infra/provision/
+│       └── models.scala                 # LocationYaml, SurveyYaml, VideoYaml, ...
+│
+├── infra/                               # DB + Event handlers + Services (JVM only)
+│   ├── resources/
+│   │   ├── application.conf
+│   │   └── db/migration/V*.sql          # Flyway migrations (V1 … V15 hoy)
+│   └── src/whitelabel/captal/infra/
+│       ├── Migrate.scala                # Flyway runner
+│       ├── RqliteDataSource.scala       # JDBC wrapper sobre rqlite HTTP
+│       ├── rows.scala                   # *Row case classes (Quill)
+│       ├── schema/                      # SchemaMeta + decoders + QuillSqlite type
+│       ├── eventhandlers/               # DbEventHandler chain
+│       │   ├── EventLogHandler, AnswerPersistenceHandler, UserPersistenceHandler
+│       │   ├── SessionPhaseHandler, SessionSurveyHandler, SessionVideoHandler
+│       │   ├── SurveyProgressHandler, TransactionalEventHandler
+│       ├── repositories/                # SurveyRepositoryQuill, UserRepositoryQuill, VideoRepositoryQuill
+│       ├── services/                    # LocationService, LocaleService
+│       ├── session/                     # SessionService, SessionContext, CaptivePortalParams
+│       └── provision/                   # ProvisionService, ProvisionPlan, EntityWriter, IdGenerator
+│
+├── api/                                 # HTTP server (JVM only)
+│   ├── resources/application.conf
+│   ├── src/whitelabel/captal/api/
+│   │   ├── Main.scala                   # ZIOAppDefault + ZLayer composition
+│   │   ├── SessionEndpoint.scala        # class — secured() factory
+│   │   ├── SessionCookieConfig.scala    # name + path slug-aware
+│   │   ├── UserCookieConfig.scala       # cross-location user cookie
+│   │   ├── UserLookup.scala             # id-based user existence check
+│   │   ├── CurrentLocation.scala        # boot snapshot del location row
+│   │   ├── SurveyRoutes.scala / LocaleRoutes / VideoRoutes / AdvertiserSurveyRoutes
+│   │   ├── HealthRoutes.scala
+│   │   └── ErrorView.scala (no, ese vive en client/)
+│   └── test/                            # ZIO Test suites + TestFixtures + TapirStubInterpreter
+│       └── src/whitelabel/captal/api/suites/
+│
+├── client/                              # Scala.js SPA (Laminar + Waypoint)
+│   ├── assets/
+│   │   ├── styles.css                   # ~1500 lines, ~50 CSS vars en :root
+│   │   └── brand-icon.svg
+│   ├── index.html.template              # Renderizado por Mill con <base href> injection inline
+│   └── src/whitelabel/captal/client/
+│       ├── Main.scala                   # App entry point + syncPhaseOnLoad
+│       ├── Router.scala                 # enum Page + Waypoint Router + SplitRender
+│       ├── AppState.scala               # Vars (locale, phase, currentSurvey, error, ...)
+│       ├── ApiClient.scala              # dom.fetch wrapper
+│       ├── Runtime.scala                # Future error escalation
+│       ├── ErrorHandler.scala           # Centralized escalate(err) → /error
+│       ├── i18n/I18nClient.scala
+│       └── views/
+│           ├── Layout.scala             # Wrapper común (brand icon, loading state)
+│           ├── WelcomeView, IdentificationQuestionView
+│           ├── AdvertiserVideoView, AdvertiserVideoSurveyView
+│           ├── ReadyView, ErrorView
+│
+├── cli/                                 # captal CLI (zio-cli + AWS SDK)
+│   ├── resources/templates/
+│   │   ├── shared/                      # YAML templates para `captal init`
+│   │   ├── location/                    # YAML templates para `captal locations add`
+│   │   ├── video/                       # YAML templates para `captal video add`
+│   │   ├── dockerfiles/                 # Dockerfile.shared, Dockerfile.locations (derived)
+│   │   └── skills/                      # OPERATOR-facing skills (distribuidas a usuarios)
+│   └── src/whitelabel/captal/cli/
+│       ├── Main.scala                   # CaptalCommand enum + cliApp
+│       ├── CaptalConfig.scala           # shared/captal.yaml loader
+│       ├── CliError.scala, Output.scala
+│       ├── AwsLayers.scala              # ZLayer factories for S3/ECS/ELBv2/ECR/...
+│       ├── docker/DockerImageBuilder.scala
+│       ├── templates/                   # Catalog, TemplateWriter, Template
+│       └── commands/
+│           ├── InitCommand, SharedPushCommand
+│           ├── LocationsAddCommand, PushCommand, PushAllCommand
+│           ├── VideoCommand
+│           ├── SkillsUpdateCommand, UpdateCommand
+│
+├── .agents/skills/                      # DEV-facing skills (solo en este repo)
+│   ├── add-migration, add-api-endpoint, add-event-handler, add-phase
+│   ├── bump-api-version, bump-cli-version, run-locally
+│
+├── Dockerfile.api                       # Producción API image (FROM eclipse-temurin:21)
+├── Dockerfile.provision                 # Ephemeral provision image
+├── build.mill                           # Mill build (mill 1.x)
+└── docs/                                # Diagrams + extended notes
+```
+
+> Convención: módulos **JVM-only** = `infra/`, `api/`, `cli/`. **Cross-compile** (JVM+JS) = `core/`, `endpoints/`. `provision/` es JVM-only pero minimal (solo case classes + circe decoders, sin Quill/DB) para que pueda ser dep del CLI sin arrastrar 60+ MB.
+
+---
+
+## Architecture invariants
+
+Cosas que NUNCA deben violarse — usadas como checklist mental al editar:
+
+- **Una `Phase` siempre tiene** una entrada en `Router.phaseToPage`, un caso en `SessionPhaseHandler` (si tiene transition), y validación vía `sessionEndpoint.secured(allowedPhases = ...)` en los endpoints que la requieran.
+- **Todo YAML schema vive en `provision/src/.../models.scala`**, no en `infra/` ni `cli/`. Mantiene `provision/` reusable cross-CLI/API.
+- **`users` es global** — no tiene `location_id`. El resto de entidades provisionables (`surveys`, `advertiser_videos`, `localized_texts`) sí están scopeadas por location.
+- **IDs son uuid5 determinístico** de un seed string en `IdGenerator`. Reproducible: el mismo slug + content siempre da el mismo id → upserts idempotentes.
+- **Cookie de sesión**: name = `captal_session_<slug>`, `Path=/<slug>`. **NUNCA** usar `session_id` global (sesiones se mezclarían entre locations).
+- **Cookie user cross-location**: name = `captal_user`, `Path=/`. Identifica al usuario entre locations para skip de email.
+- **Imágenes derivadas son inmutables** — `captal-shared-dev:<tag>` y `captal-locations-dev:<tag>` se construyen con timestamp; re-push con mismo tag puede romper deploys en curso. Cada `captal locations push` genera tag nuevo.
+- **Migraciones Flyway son inmutables** post-merge. Bug en `V<n>__*.sql` ya aplicada → nuevo `V<n+1>__fix_*.sql`, nunca editar la vieja.
+- **`captal_session_<slug>`/`captal_user`/`X-Click-Id`** — `X-Click-Id` requerido en CREATE de sesión nueva (sin él → `SessionMissing`). En requests subsecuentes con cookie ya seteada, se ignora.
+- **`localized_texts` se borra en hard-delete** (no tiene `is_active`). El resto de entidades soft-delete via `is_active=0`.
+
+---
+
+## Client (Scala.js SPA) — convenciones
+
+> Detalle exhaustivo en skill `client-patterns`. Aquí solo los principios para que un agente entrante no tropiece.
+
+- **HTTP**: `ApiClient` usa `dom.fetch` directo, **NO** Tapir client interpreter. Los `cookie[Option[String]](...)` inputs/outputs de los endpoints son ignorados por el cliente — el browser auto-maneja todas las cookies (`captal_session_<slug>`, `captal_user`).
+- **State**: `AppState` es el único `Var` compartido entre vistas (`locale`, `phase`, `currentSurvey`, `error`, `isNavigating`). Estado local a una vista (`isSubmitting`, `validationError`, `isFullscreen`) vive como `private val foo: Var[T]` en esa view.
+- **Reactivity**: signals son la API primaria (`val foo: Signal[Bar]`); `Var` solo internamente. Subscribe vía `child.text <-- signal`, nunca `signal.foreach(println)`.
+- **Routing**: `Router.Page` es un Scala 3 `enum`. Cada `Phase` mapea a una `Page` via `phaseToPage`. `Page.Error` vive FUERA del phase machine — se navega vía `ErrorHandler.escalate(err)`.
+- **Error handling**: API call `Left(ApiError)` → `ErrorHandler.escalate(err)` (centralizado, navega a `/error`). Future failure → `Runtime.run` captura y escala. Validation errors (input del usuario malformado) → `validationError: Var[Option[String]]` inline + `.validation-error`, NO escalate.
+- **i18n**: `I18nClient.i18n: Signal[I18n]` siempre disponible. Vistas leen `I18nClient.i18n.map(_.welcome.title)`. Para cambiar locale: `I18nClient.setLocale(loc)`. Claves vienen de `LocaleService` que arma desde `localized_texts` filtrado por `location_id` actual.
+- **Paths siempre relativos**: el inline-script en `index.html.template` injecta `<base href="/<slug>/">`. Paths absolutos (`/brand-icon.svg`) ignoran el base y rompen en producción. Usar `src := "brand-icon.svg"`.
+- **BuildInfo**: `ENVIRONMENT=dev` materializa `BuildInfo.isDevMode = true` en compile-time. Toggles dev features (e.g. reset button en ReadyView). **Caveat**: Mill cachea `client.generatedSources`; `./mill clean client.generatedSources` antes de toggleear `ENVIRONMENT`.
+- **UniFi params**: `parseCaptivePortalHeaders` en `Main.scala` lee `?id=...&click_id=...&ap=...&ssid=...&url=...` y los manda como `X-*` headers a la API. `id` y `click_id` son requeridos en CREATE de sesión (sin ellos → `SessionMissing`).
+- **CSS first**: antes de agregar un selector nuevo, ver skill `style-reference` para reusar (`.welcome-button` para CTAs primarios, `.question-submit-button` para form submits, etc.). Theming via CSS variables en `:root`.
+
+---
+
+## UniFi integration — captive portal interaction
+
+> Estado actual: el portal cautivo recibe los params del redirect UniFi y captura los datos (vía `click_id`, `X-Client-Mac`, `X-Ap-Mac`), pero el **otorgamiento de acceso a internet al cliente** todavía NO está implementado. Esta sección documenta cómo se interactúa con UniFi cuando lo agreguemos.
+
+### Modelo del flujo completo (cuando esté listo)
+
+```
+[Cliente conecta a WiFi]
+    ↓
+[AP/UniFi Controller bloquea tráfico hacia internet]
+    ↓
+[UniFi redirige al cliente a: https://<our-portal>/?id=<mac>&ap=<mac>&ssid=<...>&url=<orig>&click_id=<token>]
+    ↓
+[SPA captal carga, usuario completa flow (email → profiling → video → encuesta → Ready)]
+    ↓
+[En la transición a Ready: API llama al UniFi Controller para autorizar la MAC del cliente]
+    ↓
+[UniFi unbloquea tráfico → cliente navega libre]
+    ↓
+[Tras N minutos: el authorize expira; cliente vuelve a captive portal si reintenta]
+```
+
+### Requisitos para implementar el "grant access"
+
+Para que el portal pueda autorizar dispositivos hace falta:
+
+1. **Credenciales del UniFi Controller** (URL + username + password o API key). Almacenar en AWS Secrets Manager o como env var en la task ECS. NUNCA en el repo ni en `shared/captal.yaml`.
+2. **Acceso de red desde el ECS task al Controller**. Si el Controller está on-prem y el ECS en AWS dev, requiere VPN site-to-site o exposición pública del Controller con allowlist por IP del NAT.
+3. **Site name del UniFi Controller** (típicamente `default` salvo multi-site setups).
+4. **Política de duración**: cuánto tiempo se autoriza (e.g. 24h, 1 semana). Probablemente configurable por location.
+5. **Mapping click_id → autorización**: persistir que el `click_id` X disparó la autorización Y, para reconciliación + analytics.
+
+### UniFi Controller API — endpoints relevantes
+
+UniFi expone una **REST API** vía HTTPS al puerto 8443 (Controller) o 443 (Network Application en UniFi OS). Auth: login session-based (cookie `unifises` + `csrf_token`).
+
+#### Autenticación
+
+```http
+POST https://<controller>:8443/api/login
+Content-Type: application/json
+
+{ "username": "captal-portal", "password": "<secret>", "remember": true }
+```
+
+Response: cookie `unifises=...` + header `x-csrf-token: ...`. Reusar para todas las requests subsecuentes hasta expirar.
+
+UniFi OS variant (newer):
+```http
+POST https://<controller>/api/auth/login
+```
+Returns JWT-like token in `X-CSRF-Token` header + session cookies.
+
+#### Authorize a guest (otorgar acceso)
+
+Endpoint clave para captive-portal flow:
+
+```http
+POST https://<controller>:8443/api/s/<site>/cmd/stamgr
+Cookie: unifises=...
+X-CSRF-Token: ...
+Content-Type: application/json
+
+{
+  "cmd": "authorize-guest",
+  "mac": "aa:bb:cc:dd:ee:ff",
+  "minutes": 1440,
+  "up": 5000,        // optional: upload limit kbps
+  "down": 20000,     // optional: download limit kbps
+  "bytes": 5242880,  // optional: total bytes cap
+  "ap_mac": "11:22:33:44:55:66"  // optional: scope to specific AP
+}
+```
+
+Response: `{"meta":{"rc":"ok"}, "data":[]}`. Once authorized, the client's MAC is whitelisted on the AP for the specified duration.
+
+#### Unauthorize a guest (forzar logout)
+
+```http
+POST https://<controller>:8443/api/s/<site>/cmd/stamgr
+{ "cmd": "unauthorize-guest", "mac": "aa:bb:cc:dd:ee:ff" }
+```
+
+#### List currently-authorized guests
+
+```http
+GET https://<controller>:8443/api/s/<site>/stat/guest
+```
+
+Returns guests with: `mac`, `ap_mac`, `authorized_by`, `start`, `end`, `duration` (seconds), `bytes_total`, `tx_bytes`, `rx_bytes`.
+
+Útil para dashboards / reconciliación: "¿el cliente con click_id X efectivamente fue autorizado?".
+
+#### Get a specific guest's session
+
+```http
+GET https://<controller>:8443/api/s/<site>/stat/user/<mac>
+```
+
+Returns: `bytes_total`, `connect_time` (seconds connected), `last_seen`, `network`, `essid`, plus device fingerprinting.
+
+Bueno para mostrar al usuario "llevás 23 minutos navegando" si quisiéramos.
+
+#### List active clients on an AP
+
+```http
+GET https://<controller>:8443/api/s/<site>/stat/sta
+```
+
+Returns ALL connected clients with state (`authorized`, `noted`, `is_guest`, etc.). Filter client-side por `ap_mac`.
+
+#### Disconnect a client (kick)
+
+```http
+POST https://<controller>:8443/api/s/<site>/cmd/stamgr
+{ "cmd": "kick-sta", "mac": "aa:bb:cc:dd:ee:ff" }
+```
+
+Forces reconnect — útil para forzar re-autenticación.
+
+### Caveats conocidos
+
+- **CSRF token expiración**: las sesiones del Controller expiran tras inactividad (~24h). El cliente debe re-loguear automáticamente al recibir 401.
+- **TLS self-signed**: la mayoría de Controllers usan cert auto-firmado. El cliente HTTP debe configurarse para confiar (o terminar TLS en un proxy intermedio).
+- **Rate limits**: el Controller no documenta límites pero puede tirar 503 bajo carga. Implementar retry con backoff.
+- **MAC normalization**: UniFi normaliza a lowercase con `:`. El SPA / cliente puede mandar uppercase con `-`. Normalizar en el `UnifiService` antes de llamar.
+- **Multi-controller setups**: algunas locations grandes tienen un Controller dedicado. El `UnifiConfig` puede ser per-location (en `location.yaml`) en lugar de global.
+- **Webhooks UniFi**: el Controller puede ser configurado para llamar a un webhook on guest-events (authorize, deauthorize, disconnect). Alternativa al polling — menos código a futuro.
+
+### Referencias
+
+- UniFi Controller API (no oficial, mantenida por la comunidad): https://ubntwiki.com/products/software/unifi-controller/api
+- Python SDK como referencia: https://github.com/Art-of-WiFi/UniFi-API-client
+- Guía de captive portal authentication oficial: https://help.ui.com/hc/en-us/articles/115000166827
+
+---
+
+## Common task → file map
+
+| Tarea | Archivos primarios |
+|---|---|
+| Agregar API endpoint | `endpoints/.../<Name>Endpoints.scala` + `api/.../<Name>Routes.scala` + `api/test/.../suites/<Name>Suite.scala`. Skill: `add-api-endpoint`. |
+| Agregar Phase | `core/.../application/phase.scala` + `infra/.../eventhandlers/SessionPhaseHandler.scala` + `client/.../Router.scala` (`Page` enum + `phaseToPage`) + nueva view. Skill: `add-phase`. |
+| Migración DB | `infra/resources/db/migration/V<n>__*.sql` + `infra/.../rows.scala` (campo) + `EntityWriter` (insert + upsert) + `ProvisionService` (pasar el value). Skill: `add-migration`. |
+| Nuevo evento + handler | `core/.../<aggregate>/Event.scala` + `infra/.../eventhandlers/<Name>Handler.scala` + `.andThen` en `Main.eventHandlerLayer` Y `TestLayers.eventHandlerLayer`. Skill: `add-event-handler`. |
+| Nueva entidad provisionable | `provision/.../models.scala` (YAML) + `infra/.../rows.scala` + migration + `EntityWriter` + `ProvisionService.{provisionX, scanDisk, provisionEntity, softDeleteEntity}` |
+| Wire un AWS service en CLI | `cli/.../AwsLayers.scala` + agregar al `.provide(...)` en `cli/Main.scala` |
+| Nueva skill | Crear `.agents/skills/<name>/SKILL.md` (dev) o `cli/resources/templates/skills/<name>/SKILL.md` (operator); registrar en `cli/.../Catalog.scala` si es operator |
+| Release de API base | Skill: `bump-api-version` |
+| Release del CLI | Skill: `bump-cli-version` |
+| Correr el stack en local | Skill: `run-locally` |
+
+---
+
+## Symptom → first thing to check
+
+| Síntoma | Primero |
+|---|---|
+| `401 SessionMissing` inesperado en `/api/status` | ¿El request lleva `X-Client-Mac` Y `X-Click-Id`? Ambos requeridos en CREATE flow. |
+| Frontend muestra `[welcome.title]` literal | Location no provisionada (i18n rows missing) o cookie apunta a location distinta. `captal locations push <slug>`. |
+| Video da 403 al cargarse | URL del `video.yaml` apunta a `<bucket>.s3.amazonaws.com/...` (bucket privado). Cambiar a `https://production.captal.centauroads.com/<slug>/<filename>` (vía CloudFront). |
+| `survey.yaml` muestra "TODO" en prod | El operador no editó el placeholder de `captal video add`. Editar in-place (preserva respuestas) o borrar (soft-delete real desde API v1.3.0+). |
+| API task no arranca, exit code 1 | Logs `/ecs/captal-<slug>`: probable `ProvisionService.run` con `PROVISION_DIR` o `LOCATION_SLUG` missing/inválido. |
+| `captal locations push` falla en createService 400 "no associated load balancer" | TG creado pero ALB rule no — bug histórico. Verificar que `upsertAlbRule` corre ANTES de `createOrUpdateService` (orden: step 3 = ALB, step 4 = ECS). |
+| `captal update` falla en Windows con "process cannot access the file" | Wrapper viejo (pre-1.5.3) sin lógica de swap. Bajar nuevo `captal.bat` manualmente. |
+| rqlite queries devuelven 500 `no result set returned` después de redeploy | Fargate ephemeral perdió data. `aws ecs update-service ... --force-new-deployment` API services + `captal shared push` + `captal locations push-all`. Skill: `recover-data`. |
+| Cookies no se isolan entre locations | Verificar en DevTools: nombre debe ser `captal_session_<slug>` con `Path=/<slug>`. Si dice solo `session_id`, API en versión vieja (< v1.1.0). |
+| SPA muestra error page sin razón clara | `Runtime.run` escala fallos de Future. Revisar consola del browser para el error original. |
 
 ---
 
@@ -1164,7 +1504,7 @@ Si tras redeploy de rqlite (o force-deploy del API) las queries devuelven 500 / 
 
 - **API**: `captal-api-dev:v1.0.0` → `v1.1.0` (cookie isolation + soft-validate + cross-location user) → `v1.2.0` (= v1.1.0 + soft-delete wiring) → `v1.3.0` (= v1.2.0 + click_id pendiente push como v1.4.0).
 - **Provision**: `captal-provision-dev:v1.0.0` → `v1.3.0` (con el soft-delete wiring).
-- **CLI**: `1.0.0` → `1.1.x` (ALB rule fix, target group settings) → `1.2.0` (modify TG settings via push) → `1.3.x` (video CloudFront URL fix, brand-icon path fix, skills nuevas) → `1.4.0` (rolloutApiBase, revertida) → `1.5.0` (self-update + skills update) → `1.5.1` (HTTP fetch publico) → `1.5.2` (ECR auth antes de build) → `1.5.3` (wrapper-based JAR swap para Windows) → `1.5.4` (skills add-video/add-survey TODO note). Publicada en `s3://captal-cli-releases-dev/latest/` y `v<version>/`.
+- **CLI**: `1.0.0` → `1.1.x` (ALB rule fix, target group settings) → `1.2.0` (modify TG settings via push) → `1.3.x` (video CloudFront URL fix, brand-icon path fix, skills nuevas) → `1.4.0` (rolloutApiBase, revertida) → `1.5.0` (self-update + skills update) → `1.5.1` (HTTP fetch publico) → `1.5.2` (ECR auth antes de build) → `1.5.3` (wrapper-based JAR swap para Windows) → `1.5.4` (skills add-video/add-survey TODO note) → `1.6.3`. Publicada en `s3://captal-cli-releases-dev/latest/` y `v<version>/`.
 
 ---
 
