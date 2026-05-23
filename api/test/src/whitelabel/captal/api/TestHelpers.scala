@@ -56,15 +56,18 @@ object TestHelpers:
       val localeRoutes = env.get[LocaleRoutes]
       val videoRoutes = env.get[VideoRoutes]
       val advertiserSurveyRoutes = env.get[AdvertiserSurveyRoutes]
+      val finishRoutes = env.get[FinishRoutes]
       val surveyEndpoints = surveyRoutes.routes.map(e => provideEnvToEndpoint(e, env))
       val localeEndpoints = localeRoutes.routes.map(e => provideEnvToEndpoint(e, env))
       val videoEndpoints = videoRoutes.routes.map(e => provideEnvToEndpoint(e, env))
       val advertiserSurveyEndpoints = advertiserSurveyRoutes
         .routes
         .map(e => provideEnvToEndpoint(e, env))
+      val finishEndpoints = finishRoutes.routes.map(e => provideEnvToEndpoint(e, env))
       TapirStubInterpreter(SttpBackendStub[Task, Any](taskMonadError))
         .whenServerEndpointsRunLogic(
-          surveyEndpoints ++ localeEndpoints ++ videoEndpoints ++ advertiserSurveyEndpoints)
+          surveyEndpoints ++ localeEndpoints ++ videoEndpoints ++ advertiserSurveyEndpoints ++
+            finishEndpoints)
         .backend()
 
   def extractSessionCookie(response: Response[String]): Option[String] = response
@@ -218,4 +221,11 @@ object TestHelpers:
         true
       case _ =>
         false
+
+  // Finish helpers
+  def postFinish(backend: SttpBackend[Task, Any], sessionCookie: String) = basicRequest
+    .post(uri"http://test/api/finish")
+    .cookie("captal_session", sessionCookie)
+    .response(asStringAlways)
+    .send(backend)
 end TestHelpers

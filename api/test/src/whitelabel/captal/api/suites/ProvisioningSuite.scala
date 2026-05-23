@@ -3,7 +3,7 @@ package whitelabel.captal.api.suites
 import java.nio.file.Paths
 
 import io.getquill.*
-import whitelabel.captal.api.{TestFixtures, UnifiAccess}
+import whitelabel.captal.api.TestFixtures
 import whitelabel.captal.infra.*
 import whitelabel.captal.infra.provision.{IdGenerator, ProvisionService}
 import whitelabel.captal.infra.schema.QuillSqlite
