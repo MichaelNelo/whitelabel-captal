@@ -56,7 +56,7 @@ unifi:
 
 The `ap_mac` is critical: when a user device connects via a UniFi captive portal, the redirect URL includes `?ap=<mac>`. The API filters sessions by this MAC.
 
-The `unifi` block is optional. Locations without it are still provisioned but cannot grant internet access through the Controller (any future authorize-guest endpoint will skip them or fall back to a noop). Provide it when the location has a UniFi Controller reachable from wherever the captal API runs.
+The `unifi` block is optional. Locations without it are still provisioned but cannot grant internet access through the Controller: the `UnifiAuthorizationHandler` (post-commit) detects no config, logs "skipping authorization", and the user's session stays in `Phase.Ready` (the SPA's thank-you page) instead of progressing to `Authorized`. Provide it when the location has a UniFi Controller reachable from wherever the captal API runs — directly (same LAN) or via the `unifi.proxyUrl` configured in `shared/captal.yaml` (tinyproxy + Tailscale on cloud deploys).
 
 #### How to get the `apiToken`
 

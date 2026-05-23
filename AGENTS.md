@@ -54,6 +54,8 @@ Layout actual del repo (paths relativos a la raíz):
 │       ├── LocaleEndpoints.scala
 │       ├── VideoEndpoints.scala
 │       ├── AdvertiserSurveyEndpoints.scala
+│       ├── FinishEndpoints.scala        # POST /api/finish → StatusResponse
+│       ├── StatusResponse.scala         # phase + locale + accessExpiresAt
 │       ├── ApiError.scala
 │       └── *Request.scala / *Response.scala
 │
@@ -64,16 +66,18 @@ Layout actual del repo (paths relativos a la raíz):
 ├── infra/                               # DB + Event handlers + Services (JVM only)
 │   ├── resources/
 │   │   ├── application.conf
-│   │   └── db/migration/V*.sql          # Flyway migrations (V1 … V15 hoy)
+│   │   └── db/migration/V*.sql          # Flyway migrations (V1 … V17 hoy: V16=unifi fields, V17=access_expires_at)
 │   └── src/whitelabel/captal/infra/
 │       ├── Migrate.scala                # Flyway runner
 │       ├── RqliteDataSource.scala       # JDBC wrapper sobre rqlite HTTP
 │       ├── rows.scala                   # *Row case classes (Quill)
+│       ├── UnifiAccess.scala            # Per-location UniFi config (host, token, port, site, …)
 │       ├── schema/                      # SchemaMeta + decoders + QuillSqlite type
-│       ├── eventhandlers/               # DbEventHandler chain
+│       ├── eventhandlers/               # DbEventHandler chain + post-commit handlers
 │       │   ├── EventLogHandler, AnswerPersistenceHandler, UserPersistenceHandler
 │       │   ├── SessionPhaseHandler, SessionSurveyHandler, SessionVideoHandler
 │       │   ├── SurveyProgressHandler, TransactionalEventHandler
+│       │   ├── UnifiAuthorizationHandler    # post-commit: calls UniFi authorize-guest
 │       ├── repositories/                # SurveyRepositoryQuill, UserRepositoryQuill, VideoRepositoryQuill
 │       ├── services/                    # LocationService, LocaleService
 │       ├── session/                     # SessionService, SessionContext, CaptivePortalParams
@@ -183,9 +187,9 @@ Cosas que NUNCA deben violarse — usadas como checklist mental al editar:
 
 ## UniFi integration — captive portal interaction
 
-> Estado actual: el portal cautivo recibe los params del redirect UniFi y captura los datos (vía `click_id`, `X-Client-Mac`, `X-Ap-Mac`), pero el **otorgamiento de acceso a internet al cliente** todavía NO está implementado. Esta sección documenta cómo se interactúa con UniFi cuando lo agreguemos.
+> **Estado**: integración implementada end-to-end. El handler post-commit `UnifiAuthorizationHandler` (`infra/eventhandlers/`) llama al UCG cuando se emite `UserEvent.UserFinishedProcess`, y on success setea `session.phase = Authorized` + `accessExpiresAt`. Si UniFi falla, el session queda en `Phase.Ready` y la próxima llamada a `/api/finish` reintenta seamless.
 
-### Modelo del flujo completo (cuando esté listo)
+### Modelo del flujo completo
 
 ```
 [Cliente conecta a WiFi]
@@ -194,24 +198,61 @@ Cosas que NUNCA deben violarse — usadas como checklist mental al editar:
     ↓
 [UniFi redirige al cliente a: https://<our-portal>/?id=<mac>&ap=<mac>&ssid=<...>&url=<orig>&click_id=<token>]
     ↓
-[SPA captal carga, usuario completa flow (email → profiling → video → encuesta → Ready)]
+[SPA captal carga, usuario completa flow (email → profiling → video → encuesta)]
     ↓
-[En la transición a Ready: API llama al UniFi Controller para autorizar la MAC del cliente]
+[Última encuesta respondida → server retorna phase=Ready → cliente navega a /ready]
     ↓
-[UniFi unbloquea tráfico → cliente navega libre]
+[ReadyView.onMount → POST /api/finish → emite UserFinishedProcess]
     ↓
-[Tras N minutos: el authorize expira; cliente vuelve a captive portal si reintenta]
+[Post-commit: UnifiAuthorizationHandler llama UniFi authorize-guest vía HTTPS]
+    ↓
+   ┌── UniFi 2xx ──────────────────────────────────────────────────┐
+   ↓                                                                ↓
+[setAuthorized(sessionId, expiresAt)]                  [UniFi 5xx / timeout / no config]
+[Response: phase=Authorized + accessExpiresAt]         [Response: phase=Ready + None]
+   ↓                                                                ↓
+[Cliente Router.syncWithPhase(Authorized)]             [Queda en /ready; reload re-monta → retry]
+[WelcomeView en modo Authorized con countdown]
+   ↓
+[accessExpiresAt vence → cliente sigue connected hasta UniFi expire de su lado]
+[En reload posterior: /api/status detecta accessExpiresAt past → resetForExpiration → phase=Welcome]
 ```
 
-### Requisitos para implementar el "grant access"
+### Modelo Phase / State
 
-Para que el portal pueda autorizar dispositivos hace falta:
+Dos pares con semánticas distintas pero acopladas:
 
-1. **Credenciales del UniFi Controller** (URL + username + password o API key). Almacenar en AWS Secrets Manager o como env var en la task ECS. NUNCA en el repo ni en `shared/captal.yaml`.
-2. **Acceso de red desde el ECS task al Controller**. Si el Controller está on-prem y el ECS en AWS dev, requiere VPN site-to-site o exposición pública del Controller con allowlist por IP del NAT.
-3. **Site name del UniFi Controller** (típicamente `default` salvo multi-site setups).
-4. **Política de duración**: cuánto tiempo se autoriza (e.g. 24h, 1 semana). Probablemente configurable por location.
-5. **Mapping click_id → autorización**: persistir que el `click_id` X disparó la autorización Y, para reconciliación + analytics.
+- **Session `Phase` (server state)**:
+  - `Ready` = "user terminó el survey flow, esperando UniFi". Pocos ms o más si UniFi falla.
+  - `Authorized` = "UniFi confirmó el voucher; `accessExpiresAt` poblado". Transición la hace **sólo** `UnifiAuthorizationHandler` post-commit. Si UniFi no está configurado o falla, la sesión nunca llega a `Authorized` — diseño intencional para soportar retry.
+
+- **User aggregate `State` (in-memory type-state)**:
+  - `State.Ready(redirectUrl, watchedVideoId, answeredQuestionIds)` — proyectado desde DB cuando `session.phase == Ready`. Único estado que `UserRepository.findReadyUser` retorna.
+  - `State.Authorized(...)` — ephemeral: sólo existe en memoria como el retorno tipado del `finish` op (`User[State.Ready] → User[State.Authorized] + emite UserFinishedProcess`). No hay `findAuthorizedUser` en el repo, porque para cuando session.phase=Authorized el flow ya está cerrado.
+
+**Patrón retry-by-design**: como session.phase queda en `Ready` hasta que UniFi succeed, `findReadyUser` sigue retornando el user, y un nuevo POST `/api/finish` re-ejecuta `finish` → re-emite el evento → handler reintenta. El `ReadyView` del cliente lo aprovecha: re-mount = retry automático (idempotente porque UniFi `authorize-guest` es idempotente por MAC).
+
+### Configuración
+
+**Per-location** (en `location.yaml` → columns en `locations`):
+```yaml
+unifi:
+  host: "192.168.1.1"           # IP/hostname del Controller
+  apiToken: "YOUR_API_KEY"      # Settings → Integrations
+  port: 8443                    # Opcional (default 8443)
+  site: "default"               # Opcional
+  unifiOs: true                 # Opcional (default true para UDM/Dream Machine)
+  defaultDurationMinutes: 1440  # Opcional (default 24h)
+```
+
+**Infra-shared** (en `shared/captal.yaml` → env-var `UNIFI_PROXY_URL` en la task ECS):
+```yaml
+unifi:
+  proxyUrl: "http://tinyproxy.captal-dev.local:8888"
+  # Vacío → conexión directa (sólo local dev o API en misma LAN del UCG).
+```
+
+El proxy es necesario en deploy porque ECS Fargate no tiene visibilidad directa a la LAN del cliente. La cadena en producción es **tinyproxy (ECS daemon) → Tailscale subnet router (VM) → LAN → UCG**. `trustAllClientLayer` en `UnifiAuthorizationHandler` configura zio-http con `ClientSSLConfig.Default` (trust-all para self-signed) + `Proxy(url)` cuando hay `proxyUrl`.
 
 ### UniFi Controller API — endpoints relevantes
 
@@ -376,10 +417,12 @@ Forces reconnect — útil para forzar re-autenticación.
 - **Despliegue producción vivo**: dev environment con CloudFront + ALB en coexistencia (production.captal.centauroads.com -> CloudFront, staging.* -> ALB Lambda CDN)
 - **Imagenes derivadas baked-in**: CLI construye y pushea imagenes con provision data via docker build local
 - **CloudFront SPA**: distribution con SPA fallback CloudFront Function + base href dinamico para soportar slug-aware paths
+- **Integración UniFi (authorize-guest)**: `UnifiAuthorizationHandler` post-commit en `infra/eventhandlers/` llama al UCG con trust-all SSL + proxy opcional, idempotente, con retry-by-design (session.phase queda en Ready si UniFi falla → próximo `/api/finish` reintenta)
+- **Fase Authorized**: nueva fase + `accessExpiresAt` en sessions, `WelcomeView` muestra countdown, `/api/status` resetea fase al expirar (`resetForExpiration`)
+- **HTTP proxy support**: `UNIFI_PROXY_URL` env var en el API server, configurado via CLI (`shared/captal.yaml: unifi.proxyUrl`) — habilita acceso al UCG on-prem vía tinyproxy + Tailscale en deploys cloud
+- **`/api/finish` endpoint**: emite `UserFinishedProcess`, retorna `StatusResponse` post-commit con `accessExpiresAt` para que el cliente no necesite round-trip extra a `/api/status`
 
 ### Pendiente 📋
-- Fase Ready completa (acceso WiFi tras encuesta)
-- Integracion con controlador de hotspot
 - **rqlite EFS**: migrar storage efimero Fargate a EFS para evitar perdida de datos en redeploys
 - **JDBC resilience**: HikariCP test-on-borrow + reconexion auto cuando un nodo rqlite reinicia
 - **rqlite deployment min healthy %**: configurar para mantener quorum durante restarts escalonados
@@ -784,8 +827,11 @@ enum Phase:
   case AdvertiserVideo         // Viendo video publicitario
   case AdvertiserVideoSurvey   // Encuesta atada al video que se acaba de ver
   case AdvertiserQuestion      // Encuesta general del anunciante
-  case Ready                   // Listo para acceder a WiFi
+  case Ready                   // Survey terminado, esperando que UniFi autorice
+  case Authorized              // UniFi confirmó voucher; accessExpiresAt poblado
 ```
+
+`Ready → Authorized` solo lo transiciona `UnifiAuthorizationHandler` post-commit (no `SessionPhaseHandler`). Si UniFi falla / no está configurado, la sesión queda en `Ready` permitiendo retry vía nueva llamada a `/api/finish`.
 
 ### IdentificationSurveyType
 
@@ -821,14 +867,27 @@ enum QuestionType:
 ### Agregado User
 
 ```scala
-// Estados del User
+// Estados del User (type-state pattern)
 enum State:
+  case Guest                                       // pre-email
   case WithEmail(email: Email)
-  case AnsweringQuestion(surveyId: survey.Id, questionId: survey.question.Id)
+  case AnsweringQuestion(surveyId, questionId)     // mid-identification survey
+  case WatchingVideo(videoId: video.Id)
+  case AnsweringVideoSurvey(advertiserId, surveyId, questionId)
+  case Ready(                                      // post-survey, pre-UniFi
+      redirectUrl: String,
+      watchedVideoId: Option[video.Id],
+      answeredQuestionIds: List[FullyQualifiedQuestionId])
+  case Authorized(                                 // ephemeral; retorno tipado de `finish` op
+      redirectUrl: String,
+      watchedVideoId: Option[video.Id],
+      answeredQuestionIds: List[FullyQualifiedQuestionId])
 
 // Entidad User tipada por estado
 final case class User[S <: State](id: user.Id, state: S)
 ```
+
+**Nota**: `State.Authorized` no se proyecta desde DB. El único path para obtener un `User[State.Authorized]` es el retorno del `finish` op (`User[State.Ready] → User[State.Authorized]` + emite `UserFinishedProcess`). El `UserRepository` sólo expone `findReadyUser(): Option[User[State.Ready]]`.
 
 ### Eventos
 
@@ -847,23 +906,36 @@ enum Event:
 // Eventos de User
 enum Event:
   case UserCreated(userId, email, occurredAt)
-  case SurveyAssigned(userId, surveyId, questionId, occurredAt)
-  case NewUserArrived(surveyId, questionId, occurredAt)
+  case NewUserArrived(userId, nextQuestion, occurredAt)
+  case SurveyAssigned(userId, question, occurredAt)
+  case IdentificationCompleted(userId, occurredAt)
+  case VideoAssigned(userId, videoId, advertiserId, videoType, occurredAt)
+  case VideoVisualized(userId, videoId, durationWatched, completed, occurredAt)
+  case VideoSurveyAssigned(userId, advertiserId, question, occurredAt)
+  case UserFinishedProcess(userId, videoId, answeredQuestionIds, occurredAt)
 ```
 
 ---
 
 ## Event Handlers Disponibles
 
-| Handler | Tipo | Funcion |
-|---------|------|---------|
-| `AnswerPersistenceHandler` | `DbEventHandler` | Persiste respuestas en `answers` |
-| `UserPersistenceHandler` | `DbEventHandler` | Crea usuarios (o vincula existentes), actualiza session |
-| `SessionPhaseHandler` | `DbEventHandler` | Actualiza fase de la session |
-| `SessionSurveyHandler` | `DbEventHandler` | Actualiza survey/question actual en session |
-| `SurveyProgressHandler` | `DbEventHandler` | Actualiza progreso del survey, marca completado |
+**Chain transaccional** (`DbEventHandler`, todos corren en una sola transacción Quill vía `TransactionalEventHandler`):
 
-Todos corren en una sola transaccion via `TransactionalEventHandler`.
+| Handler | Funcion |
+|---------|---------|
+| `EventLogHandler` | Persiste todos los eventos en `event_log` para audit + analytics |
+| `AnswerPersistenceHandler` | Persiste respuestas en `answers` |
+| `UserPersistenceHandler` | Crea usuarios (o vincula existentes), actualiza session |
+| `SessionPhaseHandler` | Actualiza fase de la session (Welcome → Identification → … → Ready) |
+| `SessionSurveyHandler` | Actualiza survey/question actual en session |
+| `SessionVideoHandler` | Actualiza `currentVideoId` y `currentAdvertiserId` en session |
+| `SurveyProgressHandler` | Actualiza progreso del survey, marca completado |
+
+**Post-commit** (`EventHandler[Task, Event]`, compuesto con `.andThen` después del `TransactionalEventHandler`; fallos no rollbackean DB):
+
+| Handler | Funcion |
+|---------|---------|
+| `UnifiAuthorizationHandler` | Listen `UserFinishedProcess` → HTTPS al UCG con `cmd=authorize-guest` → on 2xx llama `sessionService.setAuthorized(sessionId, expiresAt)` (transición Ready→Authorized). HTTP failures: log + skip; session queda en Ready para retry. |
 
 ---
 
@@ -886,20 +958,28 @@ Todos corren en una sola transaccion via `TransactionalEventHandler`.
 
 | Endpoint | Metodo | Path | Request | Response |
 |----------|--------|------|---------|----------|
-| Status | GET | `/api/status` | - | `StatusResponse` (phase, locale) |
-| Next Survey | GET | `/api/survey/next` | - | `Option[NextIdentificationSurvey]` |
-| Answer Email | POST | `/api/survey/email` | `AnswerValue` | `QuestionAnswer` |
-| Answer Profiling | POST | `/api/survey/profiling` | `AnswerValue` | `QuestionAnswer` |
-| Answer Location | POST | `/api/survey/location` | `AnswerValue` | `QuestionAnswer` |
+| Status | GET | `/api/status` | - | `StatusResponse` (phase, locale, **accessExpiresAt**) |
+| Next Survey | GET | `/api/survey/next` | - | `SurveyResponse` (Survey \| Step) |
+| Answer Email | POST | `/api/survey/email` | `AnswerRequest` | `SurveyResponse` |
+| Answer Profiling | POST | `/api/survey/profiling` | `AnswerRequest` | `SurveyResponse` |
+| Answer Location | POST | `/api/survey/location` | `AnswerRequest` | `SurveyResponse` |
 
 ### Video / Advertiser Endpoints
 
 | Endpoint | Metodo | Path | Request | Response |
 |----------|--------|------|---------|----------|
-| Get Next Video | GET | `/api/video/next` | - | `VideoMetadata` |
-| Mark Watched | POST | `/api/video/watched` | - | `StatusResponse` |
-| Get Advertiser Survey | GET | `/api/advertiser-survey/next` | - | `Option[QuestionToAnswer]` |
-| Answer Advertiser Survey | POST | `/api/advertiser-survey/answer` | `AnswerValue` | `QuestionAnswer` |
+| Get Next Video | GET | `/api/video/next` | - | `VideoResponse` (Video \| Step) |
+| Mark Watched | POST | `/api/video/watched` | `MarkVideoWatchedRequest` | `VideoWatchedResponse` |
+| Get Advertiser Survey | GET | `/api/survey/advertiser/next` | - | `AdvertiserSurveyResponse` |
+| Answer Advertiser Survey | POST | `/api/survey/advertiser` | `AnswerRequest` | `AdvertiserSurveyResponse` |
+
+### Finish / Authorization
+
+| Endpoint | Metodo | Path | Request | Response |
+|----------|--------|------|---------|----------|
+| Finish | POST | `/api/finish` | - | `StatusResponse` (post-commit: phase=Authorized + accessExpiresAt si UniFi succeed; Ready + None si falló/no-config) |
+
+`/api/finish` emite `UserEvent.UserFinishedProcess` y deja que `UnifiAuthorizationHandler` post-commit llame al UCG. Tras el commit, se re-lee `sessionService.findById` para devolver el snapshot actualizado en la response (evita un round-trip extra a `/api/status`).
 
 ### Locale/i18n Endpoints
 
@@ -929,8 +1009,9 @@ Los endpoints validan la fase del usuario via partial server endpoints (`Session
 | `POST /api/survey/{email,profiling,location}` | IdentificationQuestion |
 | `GET /api/video/next` | AdvertiserVideo |
 | `POST /api/video/watched` | AdvertiserVideo |
-| `GET /api/advertiser-survey/next` | AdvertiserVideoSurvey, AdvertiserQuestion |
-| `POST /api/advertiser-survey/answer` | AdvertiserVideoSurvey, AdvertiserQuestion |
+| `GET /api/survey/advertiser/next` | AdvertiserVideoSurvey, AdvertiserQuestion |
+| `POST /api/survey/advertiser` | AdvertiserVideoSurvey, AdvertiserQuestion |
+| `POST /api/finish` | Ready |
 
 Si la fase no coincide, retorna `ApiError.WrongPhase(current, expected)`.
 
@@ -988,7 +1069,7 @@ captal video add-promo <slug> <file>            # Sube promo a S3 + crea promo.y
 
 ### Configuracion
 
-`shared/captal.yaml` define AWS region, ECR images (4 repos), bucket S3 + bundlePrefix, cluster ECS, subnets/SGs, ALB listener, CloudFront distributionId, database URL. La skill `configure-aws` guia su llenado con comandos `aws` CLI. Si no se incluyen credenciales explicitas, el SDK usa la cadena default.
+`shared/captal.yaml` define AWS region, ECR images (4 repos), bucket S3 + bundlePrefix, cluster ECS, subnets/SGs, ALB listener, CloudFront distributionId, database URL y opcionalmente `unifi.proxyUrl` (HTTP proxy para que el handler UniFi llegue al UCG on-prem en deploys cloud — vacío = conexión directa). La skill `configure-aws` guia su llenado con comandos `aws` CLI. Si no se incluyen credenciales explicitas, el SDK usa la cadena default.
 
 ### Flujo de despliegue (que hace cada comando bajo el capot)
 
@@ -1007,7 +1088,7 @@ captal video add-promo <slug> <file>            # Sube promo a S3 + crea promo.y
 4. Push a ECR
 5. Crea log group `/ecs/captal-<slug>` (idempotente, via SDK)
 6. Crea/asegura target group `captal-<slug>` con health check `/<slug>/api/health`
-7. Register task definition `captal-<slug>` con env vars `LOCATION_SLUG`, `PROVISION_DIR=/etc/captal/provision`, `DB_URL`, etc. + `taskRoleArn` (requerido para ECS Exec)
+7. Register task definition `captal-<slug>` con env vars `LOCATION_SLUG`, `PROVISION_DIR=/etc/captal/provision`, `DB_URL`, `SERVER_DEV_*` y — si `captal.yaml` tiene `unifi.proxyUrl` no vacío — `UNIFI_PROXY_URL` + `taskRoleArn` (requerido para ECS Exec)
 8. Create/Update service ECS `captal-<slug>` con `loadBalancers` block (TG attached) + `enableExecuteCommand=true` + healthCheckGracePeriodSeconds=180
 9. Upsert ALB rule path-pattern `/<slug>/api/*` → target group
 10. CloudFront `createInvalidation` para `/<slug>/*`
@@ -1204,12 +1285,10 @@ ENVIRONMENT=dev ./mill client.bundle
 ## TODOs Pendientes
 
 ### Pruebas E2E en UI usando Playwright
-Implementar tests E2E del cliente web (Welcome → IdentificationQuestion → Video → AdvertiserSurvey → Ready) usando Playwright MCP.
+Implementar tests E2E del cliente web (Welcome → IdentificationQuestion → Video → AdvertiserSurvey → Ready → Authorized) usando Playwright MCP.
 
-### Fase Ready completa
-- Integracion con controlador de hotspot para liberar acceso WiFi
-- Timer de sesion (max 5 min)
-- Reconexion: re-evaluar surveys pendientes
+### Tests para UnifiAuthorizationHandler
+Mock del UCG con zio-http test server; cubrir happy-path (2xx → setAuthorized), 4xx/5xx (sin transición + retry funciona), timeout, no-config.
 
 ---
 
