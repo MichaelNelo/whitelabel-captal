@@ -23,8 +23,11 @@ object MigrateCommand:
     for
       _    <- Output.header("Captal schema migration")
       plan <- buildPlan
-      _    <-
-        if plan.isEmpty then Output.success("No pending migrations.")
+      _ <-
+        if plan.isEmpty then
+          // Even when there's nothing to apply, clear any stale state so the warning hook stops
+          // firing in case the operator fixed conflicts manually after declining a prompt.
+          Output.success("No pending migrations.") *> CliState.clear
         else applyPlan(plan, dryRun, yes)
     yield ()
 
@@ -69,7 +72,9 @@ object MigrateCommand:
       _ <- ZIO.when(!dryRun)(applyChanges(plan))
       _ <-
         if dryRun then Output.info("Dry run — no files were modified.")
-        else Output.success(s"Migrated ${plan.size} file(s).")
+        else
+          // Migration succeeded → clear .captal/state.json so the warning hook stops firing.
+          CliState.clear *> Output.success(s"Migrated ${plan.size} file(s).")
     yield ()
 
   private def applyChanges(plan: List[FilePlan]): ZIO[Any, CliError, Unit] = ZIO
