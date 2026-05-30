@@ -78,7 +78,7 @@ object PushCommand:
       config <- ZIO.service[CaptalConfig]
       locationDir = LocationsDir.resolve(slug)
       locationYaml <- readLocationYaml(locationDir)
-      desiredCount = locationYaml.desiredCount.getOrElse(config.ecs.desiredCount)
+      desiredCount = locationYaml.desiredCount.getOrElse(config.aws.ecs.desiredCount)
       tag          = s"$slug-${timestampTag()}"
 
       _ <- Output.header(s"Deploying location '$slug'")
@@ -88,8 +88,8 @@ object PushCommand:
 
       _        <- Output.step(2, 5, "Building location image...")
       imageUri <- DockerImageBuilder.buildAndPush(
-        base = config.images.api,
-        repo = config.images.locations,
+        base = config.aws.images.api,
+        repo = config.aws.images.locations,
         tag = tag,
         contextDir = locationDir,
         dockerfileResource = "templates/dockerfiles/Dockerfile.locations")
@@ -141,9 +141,9 @@ object PushCommand:
   private def uploadAssets(slug: String): ZIO[CaptalConfig & S3Client, CliError, Unit] =
     for
       config <- ZIO.service[CaptalConfig]
-      _      <- copyBundleFromMaster(slug, config.s3.bucket, config.s3.bundlePrefix)
-      _      <- uploadCustomAssets(slug, config.s3.bucket)
-      _      <- Output.detail(s"Synced assets to s3://${config.s3.bucket}/$slug/")
+      _      <- copyBundleFromMaster(slug, config.aws.s3.bucket, config.aws.s3.bundlePrefix)
+      _      <- uploadCustomAssets(slug, config.aws.s3.bucket)
+      _      <- Output.detail(s"Synced assets to s3://${config.aws.s3.bucket}/$slug/")
     yield ()
 
   /** Server-side copy of all objects under `<bundlePrefix>` to `<slug>/`. Idempotent. */
@@ -172,7 +172,7 @@ object PushCommand:
             }
           if keys.isEmpty then
             throw new RuntimeException(
-              s"No bundle found at s3://$bucket/$normalizedPrefix — push the bundle from the project release flow first")
+              s"No bundle found at s3://$bucket/$normalizedPrefix - push the bundle from the project release flow first")
           keys.foreach { srcKey =>
             val relative = srcKey.stripPrefix(normalizedPrefix)
             val destKey = s"$slug/$relative"
@@ -312,11 +312,11 @@ object PushCommand:
                 .family(family)
                 .networkMode(NetworkMode.AWSVPC)
                 .requiresCompatibilities(Compatibility.FARGATE)
-                .cpu(config.ecs.cpu)
-                .memory(config.ecs.memory)
+                .cpu(config.aws.ecs.cpu)
+                .memory(config.aws.ecs.memory)
                 .containerDefinitions(container)
-                .executionRoleArn(config.ecs.executionRoleArn)
-              config.ecs.taskRoleArn.foreach(builder.taskRoleArn)
+                .executionRoleArn(config.aws.ecs.executionRoleArn)
+              config.aws.ecs.taskRoleArn.foreach(builder.taskRoleArn)
 
               ecs.registerTaskDefinition(builder.build()).taskDefinition().taskDefinitionArn()
       _ <- Output.detail(s"Registered task definition: $arn")
@@ -327,8 +327,8 @@ object PushCommand:
     .awsvpcConfiguration(
       AwsVpcConfiguration
         .builder()
-        .subnets(config.ecs.subnets*)
-        .securityGroups(config.ecs.securityGroups*)
+        .subnets(config.aws.ecs.subnets*)
+        .securityGroups(config.aws.ecs.securityGroups*)
         .assignPublicIp(AssignPublicIp.ENABLED)
         .build())
     .build()
@@ -348,7 +348,7 @@ object PushCommand:
               val resp = ecs.describeServices(
                 DescribeServicesRequest
                   .builder()
-                  .cluster(config.ecs.cluster)
+                  .cluster(config.aws.ecs.cluster)
                   .services(serviceName)
                   .build())
               resp.services().stream().filter(_.status() == "ACTIVE").count() > 0
@@ -366,7 +366,7 @@ object PushCommand:
                 ecs.updateService(
                   UpdateServiceRequest
                     .builder()
-                    .cluster(config.ecs.cluster)
+                    .cluster(config.aws.ecs.cluster)
                     .service(serviceName)
                     .taskDefinition(taskDefArn)
                     .desiredCount(desiredCount)
@@ -381,7 +381,7 @@ object PushCommand:
                 ecs.createService(
                   CreateServiceRequest
                     .builder()
-                    .cluster(config.ecs.cluster)
+                    .cluster(config.aws.ecs.cluster)
                     .serviceName(serviceName)
                     .taskDefinition(taskDefArn)
                     .desiredCount(desiredCount)
@@ -421,7 +421,7 @@ object PushCommand:
                       .name(name)
                       .protocol("HTTP")
                       .port(8080)
-                      .vpcId(config.alb.vpcId)
+                      .vpcId(config.aws.alb.vpcId)
                       .targetType(TargetTypeEnum.IP)
                       .healthCheckPath(s"/$slug/api/health")
                       .healthCheckIntervalSeconds(30)
@@ -458,7 +458,7 @@ object PushCommand:
             .targetGroupArn(tgArn)
             .build()
           val rules = elbv2.describeRules(
-            DescribeRulesRequest.builder().listenerArn(config.alb.listenerArn).build())
+            DescribeRulesRequest.builder().listenerArn(config.aws.alb.listenerArn).build())
 
           val existingRule = rules
             .rules()
@@ -496,7 +496,7 @@ object PushCommand:
             elbv2.createRule(
               CreateRuleRequest
                 .builder()
-                .listenerArn(config.alb.listenerArn)
+                .listenerArn(config.aws.alb.listenerArn)
                 .conditions(
                   RuleCondition
                     .builder()
@@ -522,7 +522,7 @@ object PushCommand:
             cf.createInvalidation(
               CreateInvalidationRequest
                 .builder()
-                .distributionId(config.cloudfront.distributionId)
+                .distributionId(config.aws.cloudfront.distributionId)
                 .invalidationBatch(
                   InvalidationBatch
                     .builder()
