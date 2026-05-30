@@ -18,7 +18,7 @@ enum CaptalCommand:
 
 object Main extends ZIOCliDefault:
 
-  private val cliVersion = "2.0.0"
+  private val cliVersion = "2.0.1"
   private val slugArg = Args.text("slug")
 
   // ─── init ─────────────────────────────────────────────────────────────────
