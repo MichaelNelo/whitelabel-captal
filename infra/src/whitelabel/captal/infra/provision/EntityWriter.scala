@@ -27,14 +27,7 @@ object EntityWriter:
       apMac,
       unifiHost = unifi.map(_.host),
       unifiPort = unifi.flatMap(_.port),
-      unifiSite = unifi.flatMap(_.site),
-      unifiUseOs = unifi
-        .flatMap(_.unifiOs)
-        .map(b =>
-          if b then
-            1
-          else
-            0),
+      unifiSiteId = unifi.flatMap(_.siteId),
       unifiApiToken = unifi.map(_.apiToken),
       unifiDurationMinutes = unifi.flatMap(_.defaultDurationMinutes)
     )
@@ -46,8 +39,7 @@ object EntityWriter:
           (t, e) => t.apMac                -> e.apMac,
           (t, e) => t.unifiHost            -> e.unifiHost,
           (t, e) => t.unifiPort            -> e.unifiPort,
-          (t, e) => t.unifiSite            -> e.unifiSite,
-          (t, e) => t.unifiUseOs           -> e.unifiUseOs,
+          (t, e) => t.unifiSiteId          -> e.unifiSiteId,
           (t, e) => t.unifiApiToken        -> e.unifiApiToken,
           (t, e) => t.unifiDurationMinutes -> e.unifiDurationMinutes,
           (t, _) => t.isActive             -> lift(1),

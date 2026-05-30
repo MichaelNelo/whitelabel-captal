@@ -1,6 +1,7 @@
 package whitelabel.captal.infra.eventhandlers
 
-import io.circe.Json
+import io.circe.parser as circeParser
+import io.circe.{Decoder, Json}
 import whitelabel.captal.core.application.{Event, EventHandler}
 import whitelabel.captal.core.user.Event as UserEvent
 import whitelabel.captal.infra.UnifiAccess
@@ -10,18 +11,26 @@ import zio.http.*
 import zio.http.netty.NettyConfig
 
 /** Event handler that listens for [[whitelabel.captal.core.user.Event.UserFinishedProcess]] and
-  * calls the UniFi Controller's `authorize-guest` endpoint to grant internet access to the client's
-  * MAC for the configured duration.
+  * grants internet access to the client's MAC for `defaultDurationMinutes` minutes via the UniFi
+  * Network Integration v1 API.
+  *
+  * The Integration v1 flow is two-step:
+  *   1. `GET /proxy/network/integration/v1/sites/{siteId}/clients?filter=macAddress.eq('AA:BB:..')`
+  *      → extract `clientId` from the response (single match expected for an active client).
+  *   2. `POST /proxy/network/integration/v1/sites/{siteId}/clients/{clientId}/actions` with body
+  *      `{"action": "AUTHORIZE_GUEST_ACCESS", "timeLimitMinutes": <n>}`.
+  *
+  * The legacy `/api/s/{site}/cmd/stamgr` endpoint with `authorize-guest` payload is no longer used.
   *
   * Lives outside the transactional event handler chain (composed via `.andThen` after the
   * transaction commits) so HTTP failures don't roll back DB writes.
   *
   * Behaviour:
   *   - If no [[UnifiAccess]] is configured for the location → logs and skips.
-  *   - On UniFi 2xx → marks the session [[Phase.Authorized]] with `expiresAt = occurredAt +
-  *     defaultDurationMinutes`.
-  *   - On UniFi failure (timeout, non-2xx, etc.) → logs and skips. The session remains in
-  *     [[Phase.Ready]]; the user can retry via `/api/finish` again.
+  *   - On UniFi 2xx (both calls) → marks the session [[Phase.Authorized]] with `expiresAt =
+  *     occurredAt + defaultDurationMinutes`.
+  *   - On any UniFi failure (timeout, non-2xx, client not found, parse error) → logs and skips. The
+  *     session remains in [[Phase.Ready]]; the user can retry via `/api/finish` again.
   */
 object UnifiAuthorizationHandler:
 
@@ -35,8 +44,8 @@ object UnifiAuthorizationHandler:
     * which rejects self-signed).
     *
     * The optional `proxyUrl` parameter is needed in production deploys where the API runs on ECS
-    * Fargate and reaches the on-premise UCG via `tinyproxy (ECS daemon) → Tailscale subnet router
-    * (VM) → LAN`. In local/test, leave it `None` for direct connection.
+    * Fargate and reaches the on-premise UCG via `tailscale-proxy (ECS daemon) → Tailscale subnet
+    * router (VM) → LAN`. In local/test, leave it `None` for direct connection.
     */
   def trustAllClientLayer(proxyUrl: Option[String]): ZLayer[Any, Throwable, Client] =
     val configLayer: ZLayer[Any, Throwable, ZClient.Config] = ZLayer.fromZIO:
@@ -78,7 +87,7 @@ object UnifiAuthorizationHandler:
                 for
                   session <- ctx.getOrFail
                   expiresAt = occurredAt.plusSeconds(unifiCfg.defaultDurationMinutes * 60L)
-                  result <- callAuthorizeGuest(client, unifiCfg, session.clientMac).either
+                  result <- authorizeGuest(client, unifiCfg, session.clientMac).either
                   _      <-
                     result match
                       case Left(error) =>
@@ -96,25 +105,82 @@ object UnifiAuthorizationHandler:
         end match
       end handle
 
-  private def callAuthorizeGuest(
+  /** Two-step Integration v1 flow: look up clientId by MAC, then POST the AUTHORIZE_GUEST_ACCESS
+    * action. Both calls share the same X-API-KEY auth header.
+    */
+  private def authorizeGuest(
       client: Client,
       unifi: UnifiAccess,
       clientMac: String): Task[Unit] =
-    val basePath =
-      if unifi.unifiOs then
-        "proxy/network/api"
-      else
-        "api"
-    val urlStr = s"https://${unifi.host}:${unifi.port}/$basePath/s/${unifi.site}/cmd/stamgr"
+    val base = s"https://${unifi.host}:${unifi.port}/proxy/network/integration/v1"
     val macNormalized = clientMac.toLowerCase.replace("-", ":")
-    val bodyJson =
-      Json
-        .obj(
-          "cmd"     -> Json.fromString("authorize-guest"),
-          "mac"     -> Json.fromString(macNormalized),
-          "minutes" -> Json.fromInt(unifi.defaultDurationMinutes))
-        .noSpaces
+    for
+      clientId <- findClientId(client, base, unifi.siteId, unifi.apiToken, macNormalized)
+      _ <- postAuthorize(
+        client,
+        base,
+        unifi.siteId,
+        clientId,
+        unifi.apiToken,
+        unifi.defaultDurationMinutes)
+    yield ()
 
+  /** GET /sites/{siteId}/clients?filter=macAddress.eq('mac') — returns a paginated list; we expect
+    * exactly one match for a connected guest about to be authorized.
+    */
+  private def findClientId(
+      client: Client,
+      base: String,
+      siteId: String,
+      apiToken: String,
+      macLower: String): Task[String] =
+    val filter = s"macAddress.eq('$macLower')"
+    val urlStr =
+      s"$base/sites/$siteId/clients?filter=${java.net.URLEncoder.encode(filter, "UTF-8")}"
+    for
+      url <- ZIO
+        .fromEither(URL.decode(urlStr))
+        .mapError(e => new RuntimeException(s"Invalid UniFi URL '$urlStr': ${e.getMessage}"))
+      request = Request.get(url).addHeader("X-API-KEY", apiToken)
+      response <- client.batched(request)
+      body     <- response.body.asString
+      _ <- ZIO.when(response.status.code < 200 || response.status.code >= 300)(
+        ZIO.fail(
+          new RuntimeException(s"UniFi GET /clients returned ${response.status.code}: $body")))
+      clientId <- ZIO
+        .fromEither(extractClientId(body, macLower))
+        .mapError(e => new RuntimeException(s"UniFi /clients parse failed: $e"))
+    yield clientId
+
+  /** Decode the JSON envelope `{"data": [{"id": "...", ...}, ...]}` and return the first id. */
+  private def extractClientId(body: String, macLower: String): Either[String, String] =
+    given Decoder[String] = Decoder.decodeString
+    circeParser
+      .parse(body)
+      .left
+      .map(_.getMessage)
+      .flatMap: json =>
+        val ids = json.hcursor.downField("data").values match
+          case Some(arr) =>
+            arr.toList.flatMap(_.hcursor.get[String]("id").toOption)
+          case None =>
+            Nil
+        ids.headOption.toRight(s"no client found for MAC $macLower")
+
+  /** POST /sites/{siteId}/clients/{clientId}/actions with AUTHORIZE_GUEST_ACCESS. */
+  private def postAuthorize(
+      client: Client,
+      base: String,
+      siteId: String,
+      clientId: String,
+      apiToken: String,
+      durationMinutes: Int): Task[Unit] =
+    val urlStr = s"$base/sites/$siteId/clients/$clientId/actions"
+    val bodyJson = Json
+      .obj(
+        "action"           -> Json.fromString("AUTHORIZE_GUEST_ACCESS"),
+        "timeLimitMinutes" -> Json.fromInt(durationMinutes))
+      .noSpaces
     for
       url <- ZIO
         .fromEither(URL.decode(urlStr))
@@ -122,17 +188,11 @@ object UnifiAuthorizationHandler:
       request = Request
         .post(url, Body.fromString(bodyJson))
         .addHeader(Header.ContentType(MediaType.application.json))
-        .addHeader("X-API-KEY", unifi.apiToken)
+        .addHeader("X-API-KEY", apiToken)
       response <- client.batched(request)
-      _        <-
-        if response.status.code < 200 || response.status.code >= 300 then
-          response
-            .body
-            .asString
-            .flatMap: body =>
-              ZIO.fail(new RuntimeException(s"UniFi returned ${response.status.code}: $body"))
-        else
-          ZIO.unit
+      _ <- ZIO.when(response.status.code < 200 || response.status.code >= 300)(
+        response.body.asString.flatMap: body =>
+          ZIO.fail(
+            new RuntimeException(s"UniFi POST /actions returned ${response.status.code}: $body")))
     yield ()
-  end callAuthorizeGuest
 end UnifiAuthorizationHandler
