@@ -1,7 +1,7 @@
 package whitelabel.captal.cli
 
 import whitelabel.captal.cli.commands.*
-import whitelabel.captal.cli.migrations.{CliState, Migrations, SemVer, YamlOp}
+import whitelabel.captal.cli.migrations.{CliState, MigrationScanner, SemVer}
 import zio.*
 import zio.cli.*
 
@@ -214,39 +214,76 @@ object Main extends ZIOCliDefault:
     }
 
   /** Override the ZIOAppDefault entrypoint so we can wrap `cliApp.run` with the schema-migration
-    * warning hook: load state.json → run user's command → print warning if any migrations are
-    * pending → update state.json with the current CLI version.
+    * hook. Two paths:
     *
-    * The state-file IO is best-effort (uses `.ignore`/`.orElseSucceed`) so a busted state file
-    * never blocks the actual command. The warning fires only when pending migrations contain at
-    * least one Delete/Rename op — Add-only migrations are silent since `Add` typically introduces
-    * optional fields the operator may legitimately want absent.
+    *   - **First run post-update** (`state.version != currentCliVersion`): full project scan via
+    *     [[MigrationScanner.fullScan]]. If conflicts are found, prompt the operator. Y → apply
+    *     migrations inline (via [[MigrateCommand]]) then continue with the user's command. N →
+    *     save the conflict list to state.json for cheap re-scans next time. Either way, the
+    *     user's original command still runs afterwards.
+    *   - **Subsequent run** (`state.version == current`): re-scan ONLY the cached `pendingFiles`.
+    *     If some have been fixed manually, drop them from the list. If the list empties, delete
+    *     the state file (self-cleanup). Otherwise, emit a warning before running the command.
+    *
+    * State-file IO is best-effort (`.ignore` / `.orElseSucceed`) so a busted state file never
+    * blocks the actual command.
     */
   override def run: ZIO[zio.ZIOAppArgs, Any, Any] =
     val current = SemVer.parseOrZero(cliVersion)
     for
-      args     <- ZIO.service[zio.ZIOAppArgs].map(_.getArgs.toList)
-      state    <- CliState.load
-      pending   = Migrations.pendingSince(state.lastSeenCliVersion, current).filter(needsWarning)
-      result   <- cliApp.run(args).either
-      _        <- ZIO.when(pending.nonEmpty)(printPendingWarning(pending))
-      _        <- CliState.save(CliState(current))
-      out      <- ZIO.fromEither(result)
+      args  <- ZIO.service[zio.ZIOAppArgs].map(_.getArgs.toList)
+      state <- CliState.load
+      _ <-
+        if state.version != current then onFirstRunPostUpdate(current)
+        else onSubsequentRun(state, current)
+      out <- cliApp.run(args)
     yield out
 
-  /** True iff this migration contains at least one Delete/Rename op — Add-only ones don't fire the
-    * warning (they're typically optional defaults).
+  /** Full project scan + interactive prompt. Runs BEFORE the user's command so migrations are
+    * applied first if the operator answers Y.
     */
-  private def needsWarning(m: whitelabel.captal.cli.migrations.Migration): Boolean =
-    m.ops.exists:
-      case _: YamlOp.Add => false
-      case _             => true
+  private def onFirstRunPostUpdate(current: SemVer): UIO[Unit] =
+    for
+      conflicts <- MigrationScanner.fullScan
+      _ <-
+        if conflicts.isEmpty then CliState.save(CliState(current, Nil))
+        else promptApplyNow(conflicts, current)
+    yield ()
 
-  private def printPendingWarning(
-      pending: IndexedSeq[whitelabel.captal.cli.migrations.Migration]): UIO[Unit] =
+  /** Interactive y/N. Default (empty answer) → Y. Y → run migrate inline + clear state.
+    * N → save state with the conflict list cached for subsequent invocations.
+    */
+  private def promptApplyNow(conflicts: List[String], current: SemVer): UIO[Unit] =
     Output.warn(
-      s"${pending.size} schema migration(s) pending — your YAMLs may be out of date:") *>
-      ZIO.foreachDiscard(pending): m =>
-        Output.detail(s"  ${m.version} — ${m.description}")
-      *> Output.info("Run `captal migrate` to apply them. Use `--dry-run` to preview first.")
+      s"${conflicts.size} file(s) need schema migrations — your YAMLs may be out of date:") *>
+      ZIO.foreachDiscard(conflicts)(p => Output.detail(s"  - $p")) *>
+      Console.print("Apply now? [Y/n]: ").orDie *>
+      Console.readLine.orDie.flatMap: answer =>
+        if answer.trim.isEmpty || answer.trim.toLowerCase.startsWith("y") then
+          MigrateCommand
+            .run(dryRun = false, yes = true)
+            .catchAll(e => Output.error(e.message)) *> CliState.clear
+        else
+          CliState.save(CliState(current, conflicts)) *>
+            Output.info("Skipped. Run `captal migrate` later to apply.")
+
+  /** Re-scan ONLY the cached files. If the list empties, delete state.json. Otherwise update it
+    * and emit a warning.
+    */
+  private def onSubsequentRun(state: CliState, current: SemVer): UIO[Unit] =
+    if state.pendingFiles.isEmpty then ZIO.unit
+    else
+      for
+        stillPending <- MigrationScanner.rescanFiles(state.pendingFiles)
+        _ <-
+          if stillPending.isEmpty then
+            CliState.clear *> Output.success("All pending schema migrations resolved.")
+          else
+            CliState.save(CliState(current, stillPending)) *> printPendingWarning(stillPending)
+      yield ()
+
+  private def printPendingWarning(files: List[String]): UIO[Unit] =
+    Output.warn(s"${files.size} file(s) with pending schema migrations:") *>
+      ZIO.foreachDiscard(files)(p => Output.detail(s"  - $p")) *>
+      Output.info("Run `captal migrate` to apply them. Use `--dry-run` to preview first.")
 end Main

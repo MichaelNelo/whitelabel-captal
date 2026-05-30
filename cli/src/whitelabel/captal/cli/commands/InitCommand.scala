@@ -17,9 +17,10 @@ object InitCommand:
       _ <- TemplateWriter.writeAllIfAbsent(Paths.get("shared"), Catalog.sharedTemplates)
       _ <- TemplateWriter.writeAllIfAbsent(Paths.get(".agents"), Catalog.skillsTemplates)
       _ <- ZIO.when(claude)(createClaudeSymlink)
-      // Seed .captal/state.json with the current CLI version so fresh installs never get
-      // schema-migration warnings — they just created the project with the right schema.
-      _ <- CliState.save(CliState(SemVer.parseOrZero(cliVersion)))
+      // Seed .captal/state.json with the current CLI version and no pending files so fresh
+      // installs never trigger the first-run-post-update path (they just created the project
+      // with the right schema — there's nothing to migrate).
+      _ <- CliState.save(CliState(SemVer.parseOrZero(cliVersion), Nil))
       _ <- Output.detail("shared/surveys/     (email, profiling, location)")
       _ <- Output.detail("shared/advertisers/ (add <slug>.yaml files)")
       _ <- Output.detail("shared/captal.yaml  (configure AWS + infrastructure)")
