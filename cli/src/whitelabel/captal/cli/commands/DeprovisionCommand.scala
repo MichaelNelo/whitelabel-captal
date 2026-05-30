@@ -61,13 +61,13 @@ object DeprovisionCommand:
     for
       _ <- Output.header(s"Deprovisioning location '$slug'")
       _ <- Output.warn("This will permanently delete the AWS infrastructure for this location:")
-      _ <- Output.detail("• ALB listener rule")
-      _ <- Output.detail("• ECS service + task definitions")
-      _ <- Output.detail("• ALB target group")
-      _ <- Output.detail("• CloudWatch log group")
-      _ <- Output.detail("• ECR image tags matching this slug")
-      _ <- Output.detail(s"• S3 assets under <bucket>/$slug/")
-      _ <- Output.detail(s"• CloudFront cache for /$slug/*")
+      _ <- Output.detail("  - ALB listener rule")
+      _ <- Output.detail("  - ECS service + task definitions")
+      _ <- Output.detail("  - ALB target group")
+      _ <- Output.detail("  - CloudWatch log group")
+      _ <- Output.detail("  - ECR image tags matching this slug")
+      _ <- Output.detail(s"  - S3 assets under <bucket>/$slug/")
+      _ <- Output.detail(s"  - CloudFront cache for /$slug/*")
       _ <- Output.info(s"The local locations/$slug/ directory is NOT touched.")
       _ <- confirmOrAbort(slug, skipPrompt)
 
@@ -126,7 +126,7 @@ object DeprovisionCommand:
           ZIO.attemptBlocking:
             val pathPattern = s"/$slug/api/*"
             val rules = elbv2.describeRules(
-              DescribeRulesRequest.builder().listenerArn(config.alb.listenerArn).build())
+              DescribeRulesRequest.builder().listenerArn(config.aws.alb.listenerArn).build())
             val matching = rules
               .rules()
               .stream()
@@ -162,7 +162,7 @@ object DeprovisionCommand:
             val describe = ecs.describeServices(
               DescribeServicesRequest
                 .builder()
-                .cluster(config.ecs.cluster)
+                .cluster(config.aws.ecs.cluster)
                 .services(serviceName)
                 .build())
             val active = describe.services().stream().anyMatch(_.status() == "ACTIVE")
@@ -174,14 +174,14 @@ object DeprovisionCommand:
               ecs.updateService(
                 UpdateServiceRequest
                   .builder()
-                  .cluster(config.ecs.cluster)
+                  .cluster(config.aws.ecs.cluster)
                   .service(serviceName)
                   .desiredCount(0)
                   .build())
               ecs.deleteService(
                 DeleteServiceRequest
                   .builder()
-                  .cluster(config.ecs.cluster)
+                  .cluster(config.aws.ecs.cluster)
                   .service(serviceName)
                   .force(true)
                   .build())
@@ -263,7 +263,7 @@ object DeprovisionCommand:
       ZIO.serviceWithZIO[CaptalConfig]: config =>
         ZIO.serviceWithZIO[EcrClient]: ecr =>
           ZIO.attemptBlocking:
-            val repoName = ecrRepoNameFromUri(config.images.locations)
+            val repoName = ecrRepoNameFromUri(config.aws.images.locations)
             val prefix = s"$slug-"
             try
               val matching = ecr
@@ -331,7 +331,7 @@ object DeprovisionCommand:
             while !done do
               val reqBuilder = ListObjectsV2Request
                 .builder()
-                .bucket(config.s3.bucket)
+                .bucket(config.aws.s3.bucket)
                 .prefix(prefix)
               continuation.foreach(reqBuilder.continuationToken)
               val resp = s3.listObjectsV2(reqBuilder.build())
@@ -352,7 +352,7 @@ object DeprovisionCommand:
                     s3.deleteObjects(
                       DeleteObjectsRequest
                         .builder()
-                        .bucket(config.s3.bucket)
+                        .bucket(config.aws.s3.bucket)
                         .delete(Delete.builder().objects(batch.asJava).build())
                         .build())
                 totalDeleted += ids.size
@@ -366,13 +366,13 @@ object DeprovisionCommand:
                 .lang
                 .System
                 .out
-                .println(s"  (already gone) no objects under s3://${config.s3.bucket}/$prefix")
+                .println(s"  (already gone) no objects under s3://${config.aws.s3.bucket}/$prefix")
             else
               java
                 .lang
                 .System
                 .out
-                .println(s"  Deleted $totalDeleted object(s) from s3://${config.s3.bucket}/$prefix")
+                .println(s"  Deleted $totalDeleted object(s) from s3://${config.aws.s3.bucket}/$prefix")
 
   // ─────────────────────────────────────────────────────────────────────────────
   // CloudFront: invalidate to clear cached responses for this slug
@@ -386,7 +386,7 @@ object DeprovisionCommand:
             cf.createInvalidation(
               CreateInvalidationRequest
                 .builder()
-                .distributionId(config.cloudfront.distributionId)
+                .distributionId(config.aws.cloudfront.distributionId)
                 .invalidationBatch(
                   InvalidationBatch
                     .builder()

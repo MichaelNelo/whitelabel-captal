@@ -15,7 +15,7 @@ import zio.*
   * `captal.bat`) just `java -jar captal.jar` so the next invocation picks up the new jar
   * automatically.
   *
-  * Uses anonymous HTTP fetch — no AWS credentials needed. The bucket must allow public read on the
+  * Uses anonymous HTTP fetch - no AWS credentials needed. The bucket must allow public read on the
   * `latest` and `v...` prefixes (via Terraform module `cli-releases`).
   */
 object UpdateCommand:
@@ -114,7 +114,7 @@ object UpdateCommand:
       _ <- Output.info(s"Downloading v$newVersion to ${tempJar.getFileName} ...")
       _ <- httpDownload(jarUrl, tempJar)
       _ <- Output.success(
-        s"Update staged at $tempJar — the next `captal` invocation will swap it in automatically")
+        s"Update staged at $tempJar - the next `captal` invocation will swap it in automatically")
     yield ()
 
 end UpdateCommand
