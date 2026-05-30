@@ -149,6 +149,47 @@ object MigrationsSpec extends TestSuite:
       })
     }
 
+    test("Migration v2.2.0 — aws: block refactor on shared/captal.yaml") - {
+      val src = """
+        |aws:
+        |  region: us-east-1
+        |images:
+        |  api: foo
+        |s3:
+        |  bucket: my-bucket
+        |ecs:
+        |  cluster: captal-dev
+        |alb:
+        |  listenerArn: arn:aws:elbv2:...
+        |cloudfront:
+        |  distributionId: D123
+        |database:
+        |  url: jdbc:rqlite:http://x
+        |""".stripMargin
+
+      val json = yamlParser.parse(src).toOption.get
+      // The v2.2.0 migration is the last entry in the registry.
+      val v220 = Migrations.all.find(_.version == SemVer(2, 2, 0)).get
+      val (out, changes) = MigrationRunner.applyOps(json, v220.ops)
+
+      assert(changes.size == 5)
+
+      val aws = out.hcursor.downField("aws")
+      assert(aws.downField("images").get[String]("api") == Right("foo"))
+      assert(aws.downField("s3").get[String]("bucket") == Right("my-bucket"))
+      assert(aws.downField("ecs").get[String]("cluster") == Right("captal-dev"))
+      assert(aws.downField("alb").get[String]("listenerArn") == Right("arn:aws:elbv2:..."))
+      assert(aws.downField("cloudfront").get[String]("distributionId") == Right("D123"))
+      // pre-existing aws.region preserved
+      assert(aws.get[String]("region") == Right("us-east-1"))
+      // top-level images/s3/ecs/alb/cloudfront gone
+      assert(out.hcursor.downField("images").focus.isEmpty)
+      assert(out.hcursor.downField("s3").focus.isEmpty)
+      assert(out.hcursor.downField("cloudfront").focus.isEmpty)
+      // database stays top-level
+      assert(out.hcursor.downField("database").get[String]("url") == Right("jdbc:rqlite:http://x"))
+    }
+
     test("CliState round-trip + clear via temp project dir") - {
       // Use a temp directory as the "cwd" so we don't touch the real .captal/state.json. We do
       // this by chdir'ing temporarily. uTest tests are sequential within a TestSuite (default).
