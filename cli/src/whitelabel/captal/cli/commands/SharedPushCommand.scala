@@ -43,8 +43,8 @@ object SharedPushCommand:
 
       _        <- Output.step(1, 3, "Building shared provision image...")
       imageUri <- DockerImageBuilder.buildAndPush(
-        base = config.images.provision,
-        repo = config.images.shared,
+        base = config.aws.images.provision,
+        repo = config.aws.images.shared,
         tag = tag,
         contextDir = Paths.get("shared"),
         dockerfileResource = "templates/dockerfiles/Dockerfile.shared"
@@ -110,11 +110,11 @@ object SharedPushCommand:
                 .family("captal-shared-provision")
                 .networkMode(NetworkMode.AWSVPC)
                 .requiresCompatibilities(Compatibility.FARGATE)
-                .cpu(config.ecs.cpu)
-                .memory(config.ecs.memory)
+                .cpu(config.aws.ecs.cpu)
+                .memory(config.aws.ecs.memory)
                 .containerDefinitions(container)
-                .executionRoleArn(config.ecs.executionRoleArn)
-              config.ecs.taskRoleArn.foreach(builder.taskRoleArn)
+                .executionRoleArn(config.aws.ecs.executionRoleArn)
+              config.aws.ecs.taskRoleArn.foreach(builder.taskRoleArn)
 
               ecs.registerTaskDefinition(builder.build()).taskDefinition().taskDefinitionArn()
       _ <- Output.detail(s"Registered task definition: $arn")
@@ -128,8 +128,8 @@ object SharedPushCommand:
         .awsvpcConfiguration(
           AwsVpcConfiguration
             .builder()
-            .subnets(config.ecs.subnets*)
-            .securityGroups(config.ecs.securityGroups*)
+            .subnets(config.aws.ecs.subnets*)
+            .securityGroups(config.aws.ecs.securityGroups*)
             .assignPublicIp(AssignPublicIp.ENABLED)
             .build())
         .build()
@@ -140,7 +140,7 @@ object SharedPushCommand:
               val resp = ecs.runTask(
                 RunTaskRequest
                   .builder()
-                  .cluster(config.ecs.cluster)
+                  .cluster(config.aws.ecs.cluster)
                   .taskDefinition(taskDefArn)
                   .launchType("FARGATE")
                   .networkConfiguration(netConfig)
@@ -149,7 +149,7 @@ object SharedPushCommand:
                 throw new RuntimeException(s"Failed to start task: ${resp.failures()}")
               resp.tasks().get(0).taskArn()
       _ <- Output.detail(s"Started task: $taskArn")
-      _ <- pollTaskCompletion(config.ecs.cluster, taskArn)
+      _ <- pollTaskCompletion(config.aws.ecs.cluster, taskArn)
     yield ()
 
   private def pollTaskCompletion(cluster: String, taskArn: String): ZIO[EcsClient, CliError, Unit] =

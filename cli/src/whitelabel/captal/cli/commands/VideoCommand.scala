@@ -21,7 +21,7 @@ object VideoCommand:
     for
       config <- ZIO.service[CaptalConfig]
       file   <- validateVideoFile(videoPath)
-      bucket    = config.s3.bucket
+      bucket    = config.aws.s3.bucket
       fileName  = file.getFileName.toString
       videoSlug = fileName.replaceFirst("\\.[^.]+$", "")
       videoName = s"$advertiserSlug-$videoSlug"
@@ -29,7 +29,7 @@ object VideoCommand:
 
       _ <- Output.info(s"Uploading $fileName to s3://$bucket/$s3Key")
       _ <- upload(bucket, s3Key, file)
-      url = s"https://${config.alb.domain}/$s3Key"
+      url = s"https://${config.aws.alb.domain}/$s3Key"
 
       baseDir    = locationDir(slug)
       adTemplate = Catalog.videoTemplate(videoName, advertiserSlug, url)
@@ -56,14 +56,14 @@ object VideoCommand:
     for
       config <- ZIO.service[CaptalConfig]
       file   <- validateVideoFile(videoPath)
-      bucket    = config.s3.bucket
+      bucket    = config.aws.s3.bucket
       fileName  = file.getFileName.toString
       videoSlug = fileName.replaceFirst("\\.[^.]+$", "")
       s3Key     = s"$slug/$fileName"
 
       _ <- Output.info(s"Uploading $fileName to s3://$bucket/$s3Key")
       _ <- upload(bucket, s3Key, file)
-      url = s"https://${config.alb.domain}/$s3Key"
+      url = s"https://${config.aws.alb.domain}/$s3Key"
 
       baseDir       = locationDir(slug)
       promoTemplate = Catalog.promoTemplate(videoSlug, url)

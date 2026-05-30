@@ -12,21 +12,25 @@ import zio.*
   */
 final case class CaptalConfig(
     aws: CaptalConfig.Aws,
-    images: CaptalConfig.Images,
-    s3: CaptalConfig.S3,
-    ecs: CaptalConfig.Ecs,
-    alb: CaptalConfig.Alb,
-    cloudfront: CaptalConfig.CloudFront,
     database: CaptalConfig.Database,
     server: CaptalConfig.Server = CaptalConfig.Server(),
     unifi: CaptalConfig.Unifi = CaptalConfig.Unifi())
 
 object CaptalConfig:
+  /** Provider-specific config for AWS. Future backends (Azure, GCP, on-prem K8s) would get parallel
+    * `azure: Option[Azure]` / `gcp: Option[Gcp]` blocks at the top level of [[CaptalConfig]] when
+    * implemented. Today AWS is the only supported provider; this case class is required.
+    */
   final case class Aws(
       region: String = "us-east-1",
       accessKeyId: Option[String] = None,
       secretAccessKey: Option[String] = None,
-      sessionToken: Option[String] = None)
+      sessionToken: Option[String] = None,
+      images: Images,
+      s3: S3,
+      ecs: Ecs,
+      alb: Alb,
+      cloudfront: CloudFront)
   object Aws:
     given Decoder[Aws] = deriveDecoder
 
