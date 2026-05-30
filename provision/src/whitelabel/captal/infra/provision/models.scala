@@ -10,22 +10,31 @@ import io.circe.generic.semiauto.*
 /** Location metadata — slug comes from LOCATION_SLUG env var */
 final case class LocationYaml(
     name: String,
-    ap_mac: Option[String] = None,
     desiredCount: Option[Int] = None,
     unifi: Option[UnifiYaml] = None)
 object LocationYaml:
   given Decoder[LocationYaml] = deriveDecoder
 
-/** UniFi Controller access config for guest authorization (Integration v1 API).
+/** UniFi Controller access config for guest authorization (Integration v1 API) + captive portal
+  * routing.
   *
-  * `siteId` is the UUID returned by `GET /proxy/network/integration/v1/sites` on the controller.
-  * The legacy site name ("default") does NOT work — the operator must look it up once and copy.
+  *   - `apMac`: MAC of the AP that the UCG redirects from. Used by the captive portal dispatcher
+  *     Lambda to resolve which location's slug a request belongs to. Required when this location is
+  *     reachable via the dispatcher (i.e. effectively always).
+  *   - `siteId`: UUID returned by `GET /proxy/network/integration/v1/sites`. The legacy site name
+  *     ("default") does NOT work — the operator looks it up once and copies.
+  *   - `redirectUrl`: optional override for the dispatcher's redirect target. When set, the Lambda
+  *     302s the device to this URL instead of `<cloudfront-host>/<slug>/`, preserving all UCG query
+  *     params (`ap`, `id`, `t`, `url`, `ssid`). Use when the location runs a different portal SPA
+  *     (e.g. branded marketing landing) but still wants to route via captal's GA IP.
   */
 final case class UnifiYaml(
     host: String,
     apiToken: String,
+    apMac: Option[String] = None,
     port: Option[Int] = None,
     siteId: Option[String] = None,
+    redirectUrl: Option[String] = None,
     defaultDurationMinutes: Option[Int] = None)
 object UnifiYaml:
   given Decoder[UnifiYaml] = deriveDecoder

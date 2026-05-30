@@ -1,16 +1,17 @@
 name: "{{slug}}"
-# REQUIRED for UCG → captive portal routing. The dispatcher Lambda behind
-# Global Accelerator looks up this slug by querying `SELECT slug FROM locations
-# WHERE ap_mac = ?` against rqlite. Without ap_mac set, devices hitting the
-# captive portal get HTTP 404 ("No location registered for AP ...").
-# Get the MAC from UniFi: Devices → click AP → Details → MAC Address.
-# ap_mac: "AA:BB:CC:DD:EE:FF"
 # desiredCount: 1
 # unifi:
 #   host: "192.168.1.1"           # IP/host del UCG en la LAN (alcanzable via tailnet)
 #   apiToken: "YOUR_API_KEY"      # Settings → Control Plane → Integrations → Create API Key
+#   apMac: "AA:BB:CC:DD:EE:FF"    # MAC del AP que captura este site. REQUIRED para que el
+#                                 # dispatcher Lambda pueda resolver este slug. Lo conseguís
+#                                 # de UniFi: Devices → click AP → Details → MAC Address.
 #   port: 443                     # default 443 (Integration v1 vive bajo HTTPS estándar)
 #   siteId: "00000000-0000-..."   # UUID del site (NO el nombre "default"). Descubrir con:
 #                                 #   curl https://<ucg>:443/proxy/network/integration/v1/sites \
 #                                 #     -H "X-API-KEY:<token>" -k
 #   defaultDurationMinutes: 1440  # cuanto dura la autorizacion (24h por default)
+#   redirectUrl: ""               # Optional. Override del destino del dispatcher. Si está set,
+#                                 # el Lambda 302 a <redirectUrl>?<original-UCG-params> en vez
+#                                 # de a <cloudfront>/<slug>/. Use case: location con portal
+#                                 # SPA custom (no captal) que usa nuestra GA IP como router.

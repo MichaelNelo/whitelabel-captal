@@ -267,7 +267,11 @@ object Main extends ZIOAppDefault:
               .findBySlug(s)
               .someOrFail(LocationService.LocationNotFound(s))
               .map: row =>
-                CurrentLocation(Some(row.id), Some(row.slug), row.apMac, UnifiAccess.fromRow(row))
+                CurrentLocation(
+                  Some(row.id),
+                  Some(row.slug),
+                  row.unifiApMac,
+                  UnifiAccess.fromRow(row))
     yield cl
 
   // ─── Routes ───────────────────────────────────────────────────────────────────
