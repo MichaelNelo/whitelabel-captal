@@ -151,11 +151,25 @@ Filename = advertiser slug. Referenced by videos via the `advertiser:` field —
 
 ```yaml
 name: "Cafe Centro Plaza"       # human-readable name
-ap_mac: "AA:BB:CC:DD:EE:01"     # AP MAC; optional but used to filter sessions by AP
 desiredCount: 1                 # optional; overrides ecs.desiredCount from captal.yaml
+unifi:                          # required when this location uses UniFi captive portal
+  host: "192.168.1.1"           # UCG IP/host on the LAN (reachable via the tailnet)
+  apiToken: "YOUR_API_KEY"      # Settings → Control Plane → Integrations
+  apMac: "AA:BB:CC:DD:EE:01"    # AP MAC — REQUIRED so the dispatcher Lambda can
+                                # resolve this slug from the GA static IP.
+                                # Get from UniFi: Devices → click AP → Details → MAC Address.
+  port: 443                     # optional (default 443; Integration v1 lives under standard HTTPS)
+  siteId: "00000000-0000-..."   # Site UUID (NOT the "default" name). Discover with:
+                                #   curl https://<ucg>/proxy/network/integration/v1/sites \
+                                #        -H "X-API-KEY:<token>" -k
+  defaultDurationMinutes: 1440  # optional (default 24h)
+  redirectUrl: ""               # optional. When set, the dispatcher 302s the device
+                                # to this URL (appending all UCG query params) instead of
+                                # the captal SPA. Use case: location with an external
+                                # portal SPA that uses our GA IP only as a router.
 ```
 
-Slug comes from the directory name, not from a YAML field.
+Slug comes from the directory name, not from a YAML field. **Note**: top-level `ap_mac` no longer exists — it now lives inside `unifi.apMac` as of CLI v2.1.0. Operators with legacy `ap_mac` see a warning after running any `captal` command; running `captal migrate` moves the field automatically.
 
 ## `locations/<slug>/i18n/{es,en}.yaml`
 

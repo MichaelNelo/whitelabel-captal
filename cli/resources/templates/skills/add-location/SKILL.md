@@ -41,37 +41,44 @@ Pick a slug that's URL-safe (lowercase, alphanumeric + hyphens). It becomes the 
 
 ```yaml
 name: "Cafe Centro Plaza"      # human-readable name
-ap_mac: "AA:BB:CC:DD:EE:01"    # MAC of the access point. Used to filter sessions.
 desiredCount: 1                # optional; overrides ecs.desiredCount from captal.yaml
 
-# Optional — UniFi Controller access for guest authorization
+# Required when this location uses UniFi captive portal (Integration v1 API)
 unifi:
-  host: "192.168.1.1"               # IP or hostname of the Controller on the LAN
-  apiToken: "<API_KEY>"             # generated in the Controller UI (see below)
-  port: 8443                        # default 8443; UnifiOS uses 443
-  site: "default"                   # site name in the Controller (typically "default")
-  unifiOs: true                     # true for UDM / Dream Machine; false for standalone Controllers
-  defaultDurationMinutes: 1440      # how long the authorize-guest grant lasts (24h default)
+  host: "192.168.1.1"               # UCG IP/host on the LAN (reachable via the tailnet)
+  apiToken: "<API_KEY>"             # generated in Settings → Control Plane → Integrations
+  apMac: "AA:BB:CC:DD:EE:01"        # AP MAC — REQUIRED so the dispatcher Lambda resolves
+                                    # this slug from the GA static IP. Get from UniFi:
+                                    # Devices → click AP → Details → MAC Address.
+  port: 443                         # optional; default 443 (Integration v1 lives under HTTPS)
+  siteId: "00000000-0000-..."       # Site UUID (NOT the "default" name). Discover with:
+                                    #   curl https://<ucg>/proxy/network/integration/v1/sites \
+                                    #        -H "X-API-KEY:<token>" -k
+  defaultDurationMinutes: 1440      # how long the guest authorization lasts (default 24h)
+  redirectUrl: ""                   # optional. When set, the dispatcher 302s the device to
+                                    # this URL (appending UCG params) instead of the captal SPA.
 ```
 
-The `ap_mac` is critical: when a user device connects via a UniFi captive portal, the redirect URL includes `?ap=<mac>`. The API filters sessions by this MAC.
+The `apMac` is critical for routing: the captive portal dispatcher Lambda (behind the Global Accelerator IP that UniFi points at) runs `SELECT slug FROM locations WHERE unifi_ap_mac = ?` against rqlite. Without a unique `apMac`, devices hitting the portal get HTTP 404.
 
-The `unifi` block is optional. Locations without it are still provisioned but cannot grant internet access through the Controller: the `UnifiAuthorizationHandler` (post-commit) detects no config, logs "skipping authorization", and the user's session stays in `Phase.Ready` (the SPA's thank-you page) instead of progressing to `Authorized`. Provide it when the location has a UniFi Controller reachable from wherever the captal API runs — directly (same LAN) or via the `unifi.proxyUrl` configured in `shared/captal.yaml` (tinyproxy + Tailscale on cloud deploys).
+The `unifi` block is required for any location that should grant internet access. Locations without it are still provisioned (you can host a static SPA for them) but the `UnifiAuthorizationHandler` (post-commit) detects no config, logs "skipping authorization", and the session stays in `Phase.Ready` instead of progressing to `Authorized`. The handler reaches the UCG through `unifi.proxyUrl` configured in `shared/captal.yaml` (Tailscale-userspace HTTP proxy on cloud deploys).
 
 #### How to get the `apiToken`
 
-On the Controller UI:
+On the Controller UI: **Settings** → **Control Plane** → **Integrations** → **Create API Key**. Give it a descriptive name (e.g. `captal-portal-cafe-centro`) and copy the token immediately (shown only once).
 
-1. Open **UniFi OS** (UDM / Dream Machine) → **Settings** → **Control Plane** → **Integrations** → **Create API Key**. Give it a descriptive name (e.g. `captal-portal-cafe-centro`) and copy the token immediately (it is shown only once).
-2. On older standalone Controllers without UnifiOS, create a dedicated local admin user with limited permissions and use its credentials instead — that path is not covered by the `apiToken` field yet; coordinate before deploying.
+#### How to get the `siteId`
+
+```bash
+curl https://<ucg-host>:443/proxy/network/integration/v1/sites \
+  -H "X-API-KEY:<apiToken>" -k
+```
+
+Response: `{"data": [{"id": "<uuid>", "internalReference": "default", ...}]}`. Copy `id` (NOT `internalReference` — the legacy "default" name does not work with the Integration v1 endpoints).
 
 #### Typical values per hardware
 
-| Hardware                                | `host`                     | `port` | `unifiOs` |
-|-----------------------------------------|----------------------------|--------|-----------|
-| Dream Machine / DM Pro / DM SE          | LAN IP (often the gateway) | 443    | true      |
-| Cloud Key Gen2+ (UnifiOS)               | LAN IP                     | 443    | true      |
-| Network Application standalone (Linux / Docker) | LAN IP             | 8443   | false     |
+All UCG hardware (Dream Machine, DM Pro, DM SE, Cloud Key Gen2+, Network Application via UniFi OS) uses port 443 and the same `/proxy/network/integration/v1/` base path. Standalone (non-UCG) Controllers are NOT supported as of CLI v2.0.0 — operators on standalone need to migrate to UCG.
 
 ### 3. Edit i18n translations
 
