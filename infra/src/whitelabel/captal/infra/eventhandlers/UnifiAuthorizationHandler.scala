@@ -1,7 +1,6 @@
 package whitelabel.captal.infra.eventhandlers
 
-import io.circe.parser as circeParser
-import io.circe.{Decoder, Json}
+import io.circe.{Decoder, Json, parser as circeParser}
 import whitelabel.captal.core.application.{Event, EventHandler}
 import whitelabel.captal.core.user.Event as UserEvent
 import whitelabel.captal.infra.UnifiAccess
@@ -108,15 +107,12 @@ object UnifiAuthorizationHandler:
   /** Two-step Integration v1 flow: look up clientId by MAC, then POST the AUTHORIZE_GUEST_ACCESS
     * action. Both calls share the same X-API-KEY auth header.
     */
-  private def authorizeGuest(
-      client: Client,
-      unifi: UnifiAccess,
-      clientMac: String): Task[Unit] =
+  private def authorizeGuest(client: Client, unifi: UnifiAccess, clientMac: String): Task[Unit] =
     val base = s"https://${unifi.host}:${unifi.port}/proxy/network/integration/v1"
     val macNormalized = clientMac.toLowerCase.replace("-", ":")
     for
       clientId <- findClientId(client, base, unifi.siteId, unifi.apiToken, macNormalized)
-      _ <- postAuthorize(
+      _        <- postAuthorize(
         client,
         base,
         unifi.siteId,
@@ -144,13 +140,15 @@ object UnifiAuthorizationHandler:
       request = Request.get(url).addHeader("X-API-KEY", apiToken)
       response <- client.batched(request)
       body     <- response.body.asString
-      _ <- ZIO.when(response.status.code < 200 || response.status.code >= 300)(
-        ZIO.fail(
-          new RuntimeException(s"UniFi GET /clients returned ${response.status.code}: $body")))
+      _        <-
+        ZIO.when(response.status.code < 200 || response.status.code >= 300)(
+          ZIO.fail(
+            new RuntimeException(s"UniFi GET /clients returned ${response.status.code}: $body")))
       clientId <- ZIO
         .fromEither(extractClientId(body, macLower))
         .mapError(e => new RuntimeException(s"UniFi /clients parse failed: $e"))
     yield clientId
+  end findClientId
 
   /** Decode the JSON envelope `{"data": [{"id": "...", ...}, ...]}` and return the first id. */
   private def extractClientId(body: String, macLower: String): Either[String, String] =
@@ -160,11 +158,12 @@ object UnifiAuthorizationHandler:
       .left
       .map(_.getMessage)
       .flatMap: json =>
-        val ids = json.hcursor.downField("data").values match
-          case Some(arr) =>
-            arr.toList.flatMap(_.hcursor.get[String]("id").toOption)
-          case None =>
-            Nil
+        val ids =
+          json.hcursor.downField("data").values match
+            case Some(arr) =>
+              arr.toList.flatMap(_.hcursor.get[String]("id").toOption)
+            case None =>
+              Nil
         ids.headOption.toRight(s"no client found for MAC $macLower")
 
   /** POST /sites/{siteId}/clients/{clientId}/actions with AUTHORIZE_GUEST_ACCESS. */
@@ -176,11 +175,12 @@ object UnifiAuthorizationHandler:
       apiToken: String,
       durationMinutes: Int): Task[Unit] =
     val urlStr = s"$base/sites/$siteId/clients/$clientId/actions"
-    val bodyJson = Json
-      .obj(
-        "action"           -> Json.fromString("AUTHORIZE_GUEST_ACCESS"),
-        "timeLimitMinutes" -> Json.fromInt(durationMinutes))
-      .noSpaces
+    val bodyJson =
+      Json
+        .obj(
+          "action"           -> Json.fromString("AUTHORIZE_GUEST_ACCESS"),
+          "timeLimitMinutes" -> Json.fromInt(durationMinutes))
+        .noSpaces
     for
       url <- ZIO
         .fromEither(URL.decode(urlStr))
@@ -190,9 +190,15 @@ object UnifiAuthorizationHandler:
         .addHeader(Header.ContentType(MediaType.application.json))
         .addHeader("X-API-KEY", apiToken)
       response <- client.batched(request)
-      _ <- ZIO.when(response.status.code < 200 || response.status.code >= 300)(
-        response.body.asString.flatMap: body =>
-          ZIO.fail(
-            new RuntimeException(s"UniFi POST /actions returned ${response.status.code}: $body")))
+      _        <-
+        ZIO.when(response.status.code < 200 || response.status.code >= 300)(
+          response
+            .body
+            .asString
+            .flatMap: body =>
+              ZIO.fail(
+                new RuntimeException(
+                  s"UniFi POST /actions returned ${response.status.code}: $body")))
     yield ()
+  end postAuthorize
 end UnifiAuthorizationHandler
