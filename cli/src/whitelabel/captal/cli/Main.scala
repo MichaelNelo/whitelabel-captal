@@ -124,7 +124,7 @@ object Main extends ZIOCliDefault:
     Args.none)
     .withHelp(
       HelpDoc.p(
-        "Apply schema migrations to project YAMLs (e.g. locations/*/location.yaml). Idempotent — safe to re-run. --dry-run shows changes without writing; --yes skips the comments-will-be-lost prompt (CI-friendly). Use git to recover from mistakes."))
+        "Apply schema migrations to project YAMLs (e.g. locations/*/location.yaml). Idempotent - safe to re-run. --dry-run shows changes without writing; --yes skips the comments-will-be-lost prompt (CI-friendly). Use git to recover from mistakes."))
     .map((dryRun, yes) => CaptalCommand.Migrate(dryRun, yes))
 
   // ─── root ─────────────────────────────────────────────────────────────────
@@ -255,7 +255,7 @@ object Main extends ZIOCliDefault:
     */
   private def promptApplyNow(conflicts: List[String], current: SemVer): UIO[Unit] =
     Output.warn(
-      s"${conflicts.size} file(s) need schema migrations — your YAMLs may be out of date:") *>
+      s"${conflicts.size} file(s) need schema migrations - your YAMLs may be out of date:") *>
       ZIO.foreachDiscard(conflicts)(p => Output.detail(s"  - $p")) *>
       Console.print("Apply now? [Y/n]: ").orDie *>
       Console.readLine.orDie.flatMap: answer =>
