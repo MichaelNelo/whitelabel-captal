@@ -3,19 +3,23 @@ package whitelabel.captal.cli.commands
 import java.nio.file.{Files, Paths}
 
 import whitelabel.captal.cli.Output
+import whitelabel.captal.cli.migrations.{CliState, SemVer}
 import whitelabel.captal.cli.templates.{Catalog, TemplateWriter}
 import zio.*
 
 /** Initializes a captal project with shared/, locations/, and .agents/skills/ directories. */
 object InitCommand:
 
-  def run(claude: Boolean): Task[Unit] =
+  def run(claude: Boolean, cliVersion: String): Task[Unit] =
     for
       _ <- Output.header("Initializing captal project")
       _ <- createDirectories
       _ <- TemplateWriter.writeAllIfAbsent(Paths.get("shared"), Catalog.sharedTemplates)
       _ <- TemplateWriter.writeAllIfAbsent(Paths.get(".agents"), Catalog.skillsTemplates)
       _ <- ZIO.when(claude)(createClaudeSymlink)
+      // Seed .captal/state.json with the current CLI version so fresh installs never get
+      // schema-migration warnings — they just created the project with the right schema.
+      _ <- CliState.save(CliState(SemVer.parseOrZero(cliVersion)))
       _ <- Output.detail("shared/surveys/     (email, profiling, location)")
       _ <- Output.detail("shared/advertisers/ (add <slug>.yaml files)")
       _ <- Output.detail("shared/captal.yaml  (configure AWS + infrastructure)")
