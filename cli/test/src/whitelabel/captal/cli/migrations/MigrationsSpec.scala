@@ -148,4 +148,38 @@ object MigrationsSpec extends TestSuite:
         case _                   => false
       })
     }
+
+    test("CliState round-trip + clear via temp project dir") - {
+      // Use a temp directory as the "cwd" so we don't touch the real .captal/state.json. We do
+      // this by chdir'ing temporarily. uTest tests are sequential within a TestSuite (default).
+      val originalUserDir = System.getProperty("user.dir")
+      val tmp = java.nio.file.Files.createTempDirectory("captal-state-test")
+      try
+        System.setProperty("user.dir", tmp.toString)
+
+        // Initial state — no file yet → load returns default (SemVer.zero, Nil).
+        val loaded0 = zio.Unsafe.unsafe(implicit u => zio.Runtime.default.unsafe.run(CliState.load).getOrThrow())
+        assert(loaded0 == CliState.default)
+
+        // Save a non-default state, then load it back.
+        val s1 = CliState(SemVer(2, 1, 0), List("locations/a.yaml", "locations/b.yaml"))
+        zio.Unsafe.unsafe(implicit u => zio.Runtime.default.unsafe.run(CliState.save(s1)).getOrThrow())
+        val loaded1 = zio.Unsafe.unsafe(implicit u => zio.Runtime.default.unsafe.run(CliState.load).getOrThrow())
+        assert(loaded1 == s1)
+
+        // Clear deletes the file → load returns default again.
+        zio.Unsafe.unsafe(implicit u => zio.Runtime.default.unsafe.run(CliState.clear).getOrThrow())
+        val loaded2 = zio.Unsafe.unsafe(implicit u => zio.Runtime.default.unsafe.run(CliState.load).getOrThrow())
+        assert(loaded2 == CliState.default)
+        assert(!java.nio.file.Files.exists(tmp.resolve(".captal/state.json")))
+      finally
+        System.setProperty("user.dir", originalUserDir)
+        // Best-effort cleanup of the temp tree.
+        scala.util.Try {
+          java.nio.file.Files
+            .walk(tmp)
+            .sorted(java.util.Comparator.reverseOrder())
+            .forEach(p => java.nio.file.Files.deleteIfExists(p))
+        }
+    }
 end MigrationsSpec
