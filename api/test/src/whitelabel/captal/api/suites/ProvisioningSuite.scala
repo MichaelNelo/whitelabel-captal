@@ -199,8 +199,10 @@ object ProvisioningSuite:
               row.unifiHost.contains("192.168.1.1"),
               row.unifiApiToken.contains("test-token"),
               row.unifiSiteId.contains("test-site-uuid"),
+              row.unifiApMac.contains("AA:BB:CC:DD:EE:FF"),
               row.unifiPort.isEmpty,
               row.unifiDurationMinutes.isEmpty,
+              row.unifiRedirectUrl.isEmpty,
               access.exists(_.host == "192.168.1.1"),
               access.exists(_.apiToken == "test-token"),
               access.exists(_.port == 443),
@@ -220,6 +222,8 @@ object ProvisioningSuite:
               row.unifiApiToken.isEmpty,
               row.unifiPort.isEmpty,
               row.unifiSiteId.isEmpty,
+              row.unifiApMac.isEmpty,
+              row.unifiRedirectUrl.isEmpty,
               row.unifiDurationMinutes.isEmpty,
               UnifiAccess.fromRow(row).isEmpty
             )
