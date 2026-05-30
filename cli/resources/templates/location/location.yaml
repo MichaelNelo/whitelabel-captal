@@ -1,10 +1,16 @@
 name: "{{slug}}"
+# REQUIRED for UCG → captive portal routing. The dispatcher Lambda behind
+# Global Accelerator looks up this slug by querying `SELECT slug FROM locations
+# WHERE ap_mac = ?` against rqlite. Without ap_mac set, devices hitting the
+# captive portal get HTTP 404 ("No location registered for AP ...").
+# Get the MAC from UniFi: Devices → click AP → Details → MAC Address.
 # ap_mac: "AA:BB:CC:DD:EE:FF"
 # desiredCount: 1
 # unifi:
-#   host: "192.168.1.1"           # IP del UniFi Controller en la LAN
-#   apiToken: "YOUR_API_KEY"      # generada en Settings → Control Plane → Integrations
-#   port: 8443                    # default 8443 (443 en UnifiOS, 8080 si HTTP)
-#   site: "default"               # nombre del site en el Controller
-#   unifiOs: true                 # true para UDM/Dream Machine, false para Controller standalone
+#   host: "192.168.1.1"           # IP/host del UCG en la LAN (alcanzable via tailnet)
+#   apiToken: "YOUR_API_KEY"      # Settings → Control Plane → Integrations → Create API Key
+#   port: 443                     # default 443 (Integration v1 vive bajo HTTPS estándar)
+#   siteId: "00000000-0000-..."   # UUID del site (NO el nombre "default"). Descubrir con:
+#                                 #   curl https://<ucg>:443/proxy/network/integration/v1/sites \
+#                                 #     -H "X-API-KEY:<token>" -k
 #   defaultDurationMinutes: 1440  # cuanto dura la autorizacion (24h por default)
