@@ -198,15 +198,13 @@ object ProvisioningSuite:
             assertTrue(
               row.unifiHost.contains("192.168.1.1"),
               row.unifiApiToken.contains("test-token"),
+              row.unifiSiteId.contains("test-site-uuid"),
               row.unifiPort.isEmpty,
-              row.unifiSite.isEmpty,
-              row.unifiUseOs.isEmpty,
               row.unifiDurationMinutes.isEmpty,
               access.exists(_.host == "192.168.1.1"),
               access.exists(_.apiToken == "test-token"),
-              access.exists(_.port == 8443),
-              access.exists(_.site == "default"),
-              access.exists(_.unifiOs),
+              access.exists(_.port == 443),
+              access.exists(_.siteId == "test-site-uuid"),
               access.exists(_.defaultDurationMinutes == 1440)
             )
         ,
@@ -221,8 +219,7 @@ object ProvisioningSuite:
               row.unifiHost.isEmpty,
               row.unifiApiToken.isEmpty,
               row.unifiPort.isEmpty,
-              row.unifiSite.isEmpty,
-              row.unifiUseOs.isEmpty,
+              row.unifiSiteId.isEmpty,
               row.unifiDurationMinutes.isEmpty,
               UnifiAccess.fromRow(row).isEmpty
             )
