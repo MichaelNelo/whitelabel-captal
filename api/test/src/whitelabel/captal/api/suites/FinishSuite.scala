@@ -9,12 +9,11 @@ import zio.test.*
 object FinishSuite:
   private val FinishedProcessEventType = "user.finished_process"
 
-  private def findFinishedEvent(rows: List[whitelabel.captal.infra.EventLogRow]) = rows
-    .filter(_.eventType == FinishedProcessEventType)
+  private def findFinishedEvent(rows: List[whitelabel.captal.infra.EventLogRow]) = rows.filter(
+    _.eventType == FinishedProcessEventType)
 
-  private def parseEventData(row: whitelabel.captal.infra.EventLogRow): Json = parse(row.eventData)
-    .toOption
-    .get
+  private def parseEventData(row: whitelabel.captal.infra.EventLogRow): Json =
+    parse(row.eventData).toOption.get
 
   val suite: Spec[TestEnv, Throwable] =
     zio
@@ -36,8 +35,8 @@ object FinishSuite:
             eventLog   <- TestFixtures.queryEventLog
           yield
             val finishedRows = findFinishedEvent(eventLog)
-            val data         = parseEventData(finishedRows.head)
-            val videoIdJson  = data.hcursor.downField("videoId").focus.getOrElse(Json.Null)
+            val data = parseEventData(finishedRows.head)
+            val videoIdJson = data.hcursor.downField("videoId").focus.getOrElse(Json.Null)
             val questionIds = data
               .hcursor
               .downField("answeredQuestionIds")
@@ -49,8 +48,7 @@ object FinishSuite:
               finishedRows.size == 1,
               !videoIdJson.isNull,
               videoIdJson.asString.contains(fixture.videoId.asString),
-              questionIds.size == 2
-            )
+              questionIds.size == 2)
         ,
         test("Reject when in Welcome phase"):
           for
@@ -61,8 +59,7 @@ object FinishSuite:
           yield assertTrue(
             !finishResp.code.isSuccess,
             finishResp.body.contains("wrong_phase"),
-            findFinishedEvent(eventLog).isEmpty
-          )
+            findFinishedEvent(eventLog).isEmpty)
         ,
         test("Reject when in IdentificationQuestion phase"):
           for
@@ -75,24 +72,23 @@ object FinishSuite:
           yield assertTrue(
             !finishResp.code.isSuccess,
             finishResp.body.contains("wrong_phase"),
-            findFinishedEvent(eventLog).isEmpty
-          )
+            findFinishedEvent(eventLog).isEmpty)
         ,
         test("Identification only — no video, no survey → finish has only email answer, no video"):
           for
-            _          <- TestFixtures.seedEmailSurvey
-            backend    <- testBackend
-            cookie     <- createSession(backend)
-            _          <- getNextSurvey(backend, cookie)
-            _          <- postEmailAnswer(backend, cookie, "finish-id-only@example.com")
+            _       <- TestFixtures.seedEmailSurvey
+            backend <- testBackend
+            cookie  <- createSession(backend)
+            _       <- getNextSurvey(backend, cookie)
+            _       <- postEmailAnswer(backend, cookie, "finish-id-only@example.com")
             // No videos seeded → /api/video/next cascades to Phase.Ready via fallbackFromVideo
             _          <- getNextVideo(backend, cookie)
             finishResp <- postFinish(backend, cookie)
             eventLog   <- TestFixtures.queryEventLog
           yield
             val finishedRows = findFinishedEvent(eventLog)
-            val data         = parseEventData(finishedRows.head)
-            val videoIdJson  = data.hcursor.downField("videoId").focus.getOrElse(Json.Null)
+            val data = parseEventData(finishedRows.head)
+            val videoIdJson = data.hcursor.downField("videoId").focus.getOrElse(Json.Null)
             val questionIds = data
               .hcursor
               .downField("answeredQuestionIds")
@@ -103,8 +99,6 @@ object FinishSuite:
               finishResp.code.isSuccess,
               finishedRows.size == 1,
               videoIdJson.isNull,
-              questionIds.size == 1
-            )
-        ,
+              questionIds.size == 1)
       )
 end FinishSuite

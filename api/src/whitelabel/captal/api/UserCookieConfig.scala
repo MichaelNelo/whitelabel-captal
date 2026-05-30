@@ -7,8 +7,8 @@ import zio.*
 
 /** Cross-location user cookie. Unlike `SessionCookieConfig` (which is slug-aware and scoped by
   * path), this cookie is broadcast to ALL locations under the same domain via `Path=/`. Used to
-  * recognize a returning user who has already answered the email identification at another
-  * location → skip that question on subsequent visits.
+  * recognize a returning user who has already answered the email identification at another location
+  * → skip that question on subsequent visits.
   *
   * Set when email is answered (`answerEmailRoute`); read on session creation (`statusRoute`).
   */

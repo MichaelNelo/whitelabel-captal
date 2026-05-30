@@ -30,3 +30,4 @@ enum Event:
       videoId: Option[video.Id],
       answeredQuestionIds: List[FullyQualifiedQuestionId],
       occurredAt: Instant)
+end Event

@@ -70,9 +70,9 @@ object CaptalConfig:
   object Server:
     given Decoder[Server] = deriveDecoder
 
-  /** Infra-shared UniFi config. The proxy URL routes UCG traffic through tinyproxy →
-    * Tailscale subnet router in production. Empty/omitted → API connects directly (only viable
-    * when API and UCG share a LAN, i.e. local dev).
+  /** Infra-shared UniFi config. The proxy URL routes UCG traffic through tinyproxy → Tailscale
+    * subnet router in production. Empty/omitted → API connects directly (only viable when API and
+    * UCG share a LAN, i.e. local dev).
     */
   final case class Unifi(proxyUrl: Option[String] = None)
   object Unifi:

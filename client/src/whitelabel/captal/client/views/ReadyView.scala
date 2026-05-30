@@ -12,21 +12,23 @@ object ReadyView:
 
   /** Triggered on every mount. If UniFi succeeded → response has phase=Authorized and a defined
     * accessExpiresAt; the router will switch to WelcomeView in Authorized mode (countdown). If
-    * UniFi failed or no config → phase stays Ready, accessExpiresAt = None and we remain on
-    * /ready (a reload re-mounts → retries). Server-side `findReadyUser` is idempotent.
+    * UniFi failed or no config → phase stays Ready, accessExpiresAt = None and we remain on /ready
+    * (a reload re-mounts → retries). Server-side `findReadyUser` is idempotent.
     */
   private def callFinish(): Unit =
     AppState.setNavigating(true)
     Runtime.run:
-      ApiClient.finish().map:
-        case Right(status) =>
-          AppState.setPhase(status.phase)
-          AppState.setAccessExpiresAt(status.accessExpiresAt)
-          Router.syncWithPhase(status.phase)
-          AppState.setNavigating(false)
-        case Left(err) =>
-          AppState.setNavigating(false)
-          ErrorHandler.escalate(err)
+      ApiClient
+        .finish()
+        .map:
+          case Right(status) =>
+            AppState.setPhase(status.phase)
+            AppState.setAccessExpiresAt(status.accessExpiresAt)
+            Router.syncWithPhase(status.phase)
+            AppState.setNavigating(false)
+          case Left(err) =>
+            AppState.setNavigating(false)
+            ErrorHandler.escalate(err)
 
   private def resetPhase(): Unit =
     isResetting.set(true)
@@ -54,7 +56,9 @@ object ReadyView:
         cls       := "ready-subtitle",
         styleAttr := "animation-delay: 1200ms",
         child.text <-- I18nClient.i18n.map(_.ready.subtitle)),
-      onMountCallback { _ => callFinish() }
+      onMountCallback { _ =>
+        callFinish()
+      }
     ),
     footer =
       if BuildInfo.isDevMode then
@@ -72,7 +76,9 @@ object ReadyView:
                   else
                     resetText
             ,
-            onClick --> { _ => resetPhase() }
+            onClick --> { _ =>
+              resetPhase()
+            }
           ))
       else
         div()

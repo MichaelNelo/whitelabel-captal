@@ -88,7 +88,8 @@ object TestHelpers:
     "X-Ap-Mac"       -> "11:22:33:44:55:66",
     "X-Redirect-Url" -> "http://google.com",
     "X-Ssid"         -> "TestNetwork",
-    "X-Click-Id"     -> "test-click-id")
+    "X-Click-Id"     -> "test-click-id"
+  )
 
   def getStatus(backend: SttpBackend[Task, Any], sessionCookie: Option[String] = None) =
     val base = basicRequest.get(uri"http://test/api/status").response(asStringAlways)

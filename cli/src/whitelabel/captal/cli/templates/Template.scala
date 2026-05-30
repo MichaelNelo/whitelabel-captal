@@ -33,6 +33,7 @@ object TemplateWriter:
     Files.createDirectories(target.getParent)
     Files.writeString(target, template.content)
     existed
+end TemplateWriter
 
 /** Loads template files from classpath resources with placeholder substitution. */
 object Templates:

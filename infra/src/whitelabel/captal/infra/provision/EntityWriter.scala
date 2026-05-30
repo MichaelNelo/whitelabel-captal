@@ -1,6 +1,4 @@
 package whitelabel.captal.infra.provision
-
-import io.circe.syntax.*
 import io.getquill.*
 import whitelabel.captal.infra.*
 import whitelabel.captal.infra.schema.QuillSqlite
@@ -30,7 +28,13 @@ object EntityWriter:
       unifiHost = unifi.map(_.host),
       unifiPort = unifi.flatMap(_.port),
       unifiSite = unifi.flatMap(_.site),
-      unifiUseOs = unifi.flatMap(_.unifiOs).map(b => if b then 1 else 0),
+      unifiUseOs = unifi
+        .flatMap(_.unifiOs)
+        .map(b =>
+          if b then
+            1
+          else
+            0),
       unifiApiToken = unifi.map(_.apiToken),
       unifiDurationMinutes = unifi.flatMap(_.defaultDurationMinutes)
     )
@@ -47,7 +51,9 @@ object EntityWriter:
           (t, e) => t.unifiApiToken        -> e.unifiApiToken,
           (t, e) => t.unifiDurationMinutes -> e.unifiDurationMinutes,
           (t, _) => t.isActive             -> lift(1),
-          (t, _) => t.updatedAt            -> lift(now))).unit
+          (t, _) => t.updatedAt            -> lift(now)
+        )).unit
+  end upsertLocation
 
   def upsertAdvertiser(quill: QuillSqlite)(id: String, name: String, priority: Int): Task[Unit] =
     import quill.*
@@ -232,10 +238,9 @@ object EntityWriter:
         .filter(_.id == lift(id))
         .update(_.isActive -> 0, _.updatedAt -> lift(now))).unit
 
-  /** List all active advertisers — used by softDeleteEntity to brute-force the videoId
-    * computation when removing a `video:` entity (the advertiser slug isn't stored in the
-    * manifest entity key, but the AdvertiserVideo.id is uuid5 of `(locationSlug, advertiserSlug,
-    * videoSlug)`).
+  /** List all active advertisers — used by softDeleteEntity to brute-force the videoId computation
+    * when removing a `video:` entity (the advertiser slug isn't stored in the manifest entity key,
+    * but the AdvertiserVideo.id is uuid5 of `(locationSlug, advertiserSlug, videoSlug)`).
     */
   def listActiveAdvertisers(quill: QuillSqlite): Task[List[AdvertiserRow]] =
     import quill.*

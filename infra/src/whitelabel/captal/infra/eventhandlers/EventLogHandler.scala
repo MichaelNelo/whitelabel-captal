@@ -143,13 +143,14 @@ object EventLogHandler:
           (
             "user.finished_process",
             Json.obj(
-              "userId"  -> Json.fromString(userId.asString),
-              "videoId" -> videoId.fold(Json.Null)(id => Json.fromString(id.asString)),
-              "answeredQuestionIds" -> Json.arr(
-                answeredQuestionIds.map(q =>
-                  Json.obj(
-                    "surveyId"   -> Json.fromString(q.surveyId.asString),
-                    "questionId" -> Json.fromString(q.questionId.asString)))*),
+              "userId"              -> Json.fromString(userId.asString),
+              "videoId"             -> videoId.fold(Json.Null)(id => Json.fromString(id.asString)),
+              "answeredQuestionIds" ->
+                Json.arr(
+                  answeredQuestionIds.map(q =>
+                    Json.obj(
+                      "surveyId"   -> Json.fromString(q.surveyId.asString),
+                      "questionId" -> Json.fromString(q.questionId.asString)))*),
               "occurredAt" -> Json.fromString(occurredAt.toString)
             ),
             occurredAt))

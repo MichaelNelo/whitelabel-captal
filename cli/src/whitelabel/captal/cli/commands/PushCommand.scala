@@ -263,11 +263,7 @@ object PushCommand:
               val family = s"captal-$slug"
               val baseEnv = List(
                 KeyValuePair.builder().name("LOCATION_SLUG").value(slug).build(),
-                KeyValuePair
-                  .builder()
-                  .name("PROVISION_DIR")
-                  .value("/etc/captal/provision")
-                  .build(),
+                KeyValuePair.builder().name("PROVISION_DIR").value("/etc/captal/provision").build(),
                 KeyValuePair.builder().name("DB_URL").value(config.database.url).build(),
                 KeyValuePair
                   .builder()
@@ -280,11 +276,12 @@ object PushCommand:
                   .value(config.server.devEndpoints.toString)
                   .build()
               )
-              val envVars = config.unifi.proxyUrl match
-                case Some(url) if url.nonEmpty =>
-                  baseEnv :+ KeyValuePair.builder().name("UNIFI_PROXY_URL").value(url).build()
-                case _ =>
-                  baseEnv
+              val envVars =
+                config.unifi.proxyUrl match
+                  case Some(url) if url.nonEmpty =>
+                    baseEnv :+ KeyValuePair.builder().name("UNIFI_PROXY_URL").value(url).build()
+                  case _ =>
+                    baseEnv
               val container = ContainerDefinition
                 .builder()
                 .name("captal")

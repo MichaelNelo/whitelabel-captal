@@ -70,8 +70,7 @@ object AdvertiserVideoSurveyView:
                 onClick --> { _ =>
                   submitAnswer(survey)
                 }
-              )
-    )
+              ))
   )
 
   private def questionsContent(survey: NextAdvertiserSurvey): HtmlElement = div(

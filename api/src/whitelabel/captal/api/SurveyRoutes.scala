@@ -26,8 +26,8 @@ object SurveyRoutes:
     NextIdentificationSurvey | NextStep]
 
   type FullEnv =
-    SessionContext & SessionService & UserLookup & AnswerEmailFlowType &
-      AnswerProfilingFlowType & AnswerLocationFlowType & NextSurveyFlowType
+    SessionContext & SessionService & UserLookup & AnswerEmailFlowType & AnswerProfilingFlowType &
+      AnswerLocationFlowType & NextSurveyFlowType
 
   val layer: ZLayer[
     SessionEndpoint & SessionCookieConfig & CurrentLocation & UserCookieConfig & UserLookup,
@@ -82,11 +82,8 @@ final class SurveyRoutes(
                 toApiError(error).flatMap(ZIO.fail(_))
             // After flow, SessionContext is updated with the resolved userId by
             // UserPersistenceHandler. Read it to set the cross-location user cookie.
-            updated   <- SessionContext.get
-            userCookie =
-              updated
-                .flatMap(_.userId)
-                .map(uid => userCookieConfig.asMeta(uid.asString))
+            updated <- SessionContext.get
+            userCookie = updated.flatMap(_.userId).map(uid => userCookieConfig.asMeta(uid.asString))
           yield (userCookie, result))
 
   // ─── AnswerProfiling ──────────────────────────────────────────────────────
@@ -223,11 +220,13 @@ final class SurveyRoutes(
     val parsed = userCookie.flatMap(user.Id.fromString)
     (parsed, portalParams) match
       case (Some(uid), Some(_)) =>
-        userLookup.existsById(uid).map:
-          case true  =>
-            SessionEndpoint.OnMissing.CreateForUser(userAgent, defaultLocale, portalParams, uid)
-          case false =>
-            SessionEndpoint.OnMissing.Create(userAgent, defaultLocale, portalParams)
+        userLookup
+          .existsById(uid)
+          .map:
+            case true =>
+              SessionEndpoint.OnMissing.CreateForUser(userAgent, defaultLocale, portalParams, uid)
+            case false =>
+              SessionEndpoint.OnMissing.Create(userAgent, defaultLocale, portalParams)
       case _ =>
         ZIO.succeed(SessionEndpoint.OnMissing.Create(userAgent, defaultLocale, portalParams))
 
@@ -247,22 +246,23 @@ final class SurveyRoutes(
         // Build portalParams only when both clientMac AND click_id are present (both required by
         // the UniFi captive-portal redirect contract). If either is missing on a CREATE flow,
         // session resolution falls through to ApiError.SessionMissing.
-        val portalParams = (clientMac, clickId) match
-          case (Some(mac), Some(cid)) if cid.nonEmpty =>
-            Some(
-              CaptivePortalParams(
-                mac,
-                apMac.getOrElse(""),
-                redirectUrl.getOrElse(""),
-                ssid.getOrElse(""),
-                cid))
-          case _ =>
-            None
+        val portalParams =
+          (clientMac, clickId) match
+            case (Some(mac), Some(cid)) if cid.nonEmpty =>
+              Some(
+                CaptivePortalParams(
+                  mac,
+                  apMac.getOrElse(""),
+                  redirectUrl.getOrElse(""),
+                  ssid.getOrElse(""),
+                  cid))
+            case _ =>
+              None
         for
-          _          <- softValidateApMac(apMac, clientMac)
-          onMissing  <- resolveOnMissing(userCookie, userAgent, portalParams)
-          session    <- SessionEndpoint.resolveSession(sessionCookie, onMissing)
-          _          <- SessionContext.set(session)
+          _         <- softValidateApMac(apMac, clientMac)
+          onMissing <- resolveOnMissing(userCookie, userAgent, portalParams)
+          session   <- SessionEndpoint.resolveSession(sessionCookie, onMissing)
+          _         <- SessionContext.set(session)
         yield session
     .get
     .in("api" / "status")
@@ -272,8 +272,9 @@ final class SurveyRoutes(
         Clock
           .instant
           .flatMap: now =>
-            val isExpired = session.phase == whitelabel.captal.core.application.Phase.Authorized &&
-              session.accessExpiresAt.exists(_.isBefore(now))
+            val isExpired =
+              session.phase == whitelabel.captal.core.application.Phase.Authorized &&
+                session.accessExpiresAt.exists(_.isBefore(now))
             if isExpired then
               // Reset the session: phase → Welcome, clear userId and current* fields. The user
               // record and the cross-location `captal_user` cookie stay so the next visit skips

@@ -9,11 +9,7 @@ import io.circe.{Decoder, Encoder}
 import whitelabel.captal.core.Op.{convertError, convertEvent}
 import whitelabel.captal.core.application.IdentificationSurveyType.given
 import whitelabel.captal.core.application.conversions.given
-import whitelabel.captal.core.application.{
-  FallbackPhase,
-  IdentificationSurveyType,
-  NextStep
-}
+import whitelabel.captal.core.application.{FallbackPhase, IdentificationSurveyType, NextStep}
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository}
 import whitelabel.captal.core.survey.question.codecs.given
 import whitelabel.captal.core.survey.question.{FullyQualifiedQuestionId, QuestionToAnswer}
@@ -37,10 +33,8 @@ object ProvideNextIdentificationSurveyHandler:
   def apply[F[_]: Monad](
       surveyRepo: SurveyRepository[F],
       userRepo: UserRepository[F],
-      fallback: FallbackPhase): Handler.Aux[
-    F,
-    ProvideNextIdentificationSurveyCommand.type,
-    Response] =
+      fallback: FallbackPhase)
+      : Handler.Aux[F, ProvideNextIdentificationSurveyCommand.type, Response] =
     new Handler[F, ProvideNextIdentificationSurveyCommand.type]:
       type Result = Response
 

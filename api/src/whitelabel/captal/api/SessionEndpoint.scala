@@ -71,8 +71,7 @@ object SessionEndpoint:
       case None =>
         ZIO.fail(ApiError.SessionMissing)
 
-  private def fromOnMissing(
-      onMissing: OnMissing): ZIO[SessionService, ApiError, SessionData] =
+  private def fromOnMissing(onMissing: OnMissing): ZIO[SessionService, ApiError, SessionData] =
     onMissing match
       case OnMissing.Fail =>
         ZIO.fail(ApiError.SessionMissing)
