@@ -31,8 +31,10 @@ object UserRepositoryQuill:
   // Query that returns the (surveyId, questionId) pairs the user has answered
   inline def findAnsweredQuestionsByUserQuery = quote: (userIdParam: user.Id) =>
     for
-      a <- query[AnswerRow] if a.userId == userIdParam
-      q <- query[QuestionRow] if q.id == a.questionId
+      a <- query[AnswerRow]
+      if a.userId == userIdParam
+      q <- query[QuestionRow]
+      if q.id == a.questionId
     yield (q.surveyId, q.id)
 
   def apply(quill: QuillSqlite, ctx: SessionContext): UserRepository[Task] =
@@ -108,7 +110,8 @@ object UserRepositoryQuill:
       def findReadyUser(): Task[Option[User[State.Ready]]] = ctx
         .getOrFail
         .flatMap: sessionData =>
-          if sessionData.phase != Phase.Ready then ZIO.none
+          if sessionData.phase != Phase.Ready then
+            ZIO.none
           else
             sessionData.userId match
               case None =>

@@ -10,13 +10,13 @@ import zio.*
 
 /** Self-update the CLI jar from the public S3 release bucket.
   *
-  * Reads `<base-url>/version.txt`, compares against the running version, and if different
-  * downloads `<base-url>/captal.jar` to the running jar's path. The wrapper scripts
-  * (`captal` shell, `captal.bat`) just `java -jar captal.jar` so the next invocation
-  * picks up the new jar automatically.
+  * Reads `<base-url>/version.txt`, compares against the running version, and if different downloads
+  * `<base-url>/captal.jar` to the running jar's path. The wrapper scripts (`captal` shell,
+  * `captal.bat`) just `java -jar captal.jar` so the next invocation picks up the new jar
+  * automatically.
   *
-  * Uses anonymous HTTP fetch — no AWS credentials needed. The bucket must allow public
-  * read on the `latest` and `v...` prefixes (via Terraform module `cli-releases`).
+  * Uses anonymous HTTP fetch — no AWS credentials needed. The bucket must allow public read on the
+  * `latest` and `v...` prefixes (via Terraform module `cli-releases`).
   */
 object UpdateCommand:
 
@@ -27,7 +27,7 @@ object UpdateCommand:
       jarPath       <- locateRunningJar
       remoteVersion <- httpGetString(s"$normalized/version.txt")
       _             <- Output.info(s"Current: v$currentVersion   Latest: v$remoteVersion")
-      _ <-
+      _             <-
         if remoteVersion == currentVersion then
           Output.success("Already up to date")
         else
@@ -65,8 +65,7 @@ object UpdateCommand:
         conn.disconnect()
         throw new RuntimeException(s"HTTP $code from $url")
       val body =
-        try
-          new String(conn.getInputStream.readAllBytes(), StandardCharsets.UTF_8).trim
+        try new String(conn.getInputStream.readAllBytes(), StandardCharsets.UTF_8).trim
         finally conn.disconnect()
       body
     .mapError(e => CliError.BuildFailed(s"GET $url: ${e.getMessage}"))
@@ -94,7 +93,8 @@ object UpdateCommand:
         finally
           out.close()
           in.close()
-      finally conn.disconnect()
+      finally
+        conn.disconnect()
     .mapError(e => CliError.BuildFailed(s"download $url: ${e.getMessage}"))
 
   // ─── Download new jar; swap is deferred to the wrapper script ───────────────

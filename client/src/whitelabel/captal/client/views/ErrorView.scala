@@ -23,14 +23,15 @@ object ErrorView:
       div(
         cls := "error-content",
         div(cls := "error-icon", "⚠"),
-        h1(cls := "error-title", child.text <-- I18nClient.i18n.map(_.error.title)),
+        h1(cls  := "error-title", child.text <-- I18nClient.i18n.map(_.error.title)),
         p(
           cls := "error-message",
-          child.text <-- AppState
-            .error
-            .combineWith(I18nClient.i18n)
-            .map: (err, i18n) =>
-              messageFor(err, i18n))
+          child.text <--
+            AppState
+              .error
+              .combineWith(I18nClient.i18n)
+              .map: (err, i18n) =>
+                messageFor(err, i18n))
       )
     ),
     footer = div(
@@ -39,8 +40,7 @@ object ErrorView:
         child.text <-- I18nClient.i18n.map(_.error.retry),
         onClick --> { _ =>
           retry()
-        })
-    )
+        }))
   )
 
   /** All API errors map to `error.generic` for now. Future iterations can switch on ApiError
@@ -49,8 +49,8 @@ object ErrorView:
   private def messageFor(error: Option[ApiError], i18n: I18n): String = i18n.error.generic
 
   /** Retry: clear the error, re-run the boot status check, let the router sync to whatever phase
-    * the server reports. If status fails again, ErrorHandler.escalate kicks in and we stay on
-    * this page with the new error.
+    * the server reports. If status fails again, ErrorHandler.escalate kicks in and we stay on this
+    * page with the new error.
     */
   private def retry(): Unit =
     AppState.clearError()

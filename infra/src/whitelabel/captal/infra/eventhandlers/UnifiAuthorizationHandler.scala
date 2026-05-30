@@ -10,8 +10,8 @@ import zio.http.*
 import zio.http.netty.NettyConfig
 
 /** Event handler that listens for [[whitelabel.captal.core.user.Event.UserFinishedProcess]] and
-  * calls the UniFi Controller's `authorize-guest` endpoint to grant internet access to the
-  * client's MAC for the configured duration.
+  * calls the UniFi Controller's `authorize-guest` endpoint to grant internet access to the client's
+  * MAC for the configured duration.
   *
   * Lives outside the transactional event handler chain (composed via `.andThen` after the
   * transaction commits) so HTTP failures don't roll back DB writes.
@@ -27,32 +27,33 @@ object UnifiAuthorizationHandler:
 
   /** HTTP client layer that trusts ALL TLS certs and (optionally) routes via an HTTP proxy.
     *
-    * UniFi Controllers ship with self-signed certs by default and the connection to them goes via
-    * a private overlay (Tailscale), so transport security is provided by the overlay rather than
-    * the cert. In zio-http 3.x, `ClientSSLConfig.Default` is implemented with
-    * `InsecureTrustManagerFactory.INSTANCE` — i.e. trust-all. We set `ssl = Some(Default)` to
-    * force HTTPS connections through that path (when `ssl = None`, Netty uses the JDK default
-    * trust store which rejects self-signed).
+    * UniFi Controllers ship with self-signed certs by default and the connection to them goes via a
+    * private overlay (Tailscale), so transport security is provided by the overlay rather than the
+    * cert. In zio-http 3.x, `ClientSSLConfig.Default` is implemented with
+    * `InsecureTrustManagerFactory.INSTANCE` — i.e. trust-all. We set `ssl = Some(Default)` to force
+    * HTTPS connections through that path (when `ssl = None`, Netty uses the JDK default trust store
+    * which rejects self-signed).
     *
     * The optional `proxyUrl` parameter is needed in production deploys where the API runs on ECS
-    * Fargate and reaches the on-premise UCG via `tinyproxy (ECS daemon) → Tailscale subnet
-    * router (VM) → LAN`. In local/test, leave it `None` for direct connection.
+    * Fargate and reaches the on-premise UCG via `tinyproxy (ECS daemon) → Tailscale subnet router
+    * (VM) → LAN`. In local/test, leave it `None` for direct connection.
     */
   def trustAllClientLayer(proxyUrl: Option[String]): ZLayer[Any, Throwable, Client] =
     val configLayer: ZLayer[Any, Throwable, ZClient.Config] = ZLayer.fromZIO:
-      val proxyOpt: ZIO[Any, Throwable, Option[Proxy]] = proxyUrl match
-        case None =>
-          ZIO.none
-        case Some(raw) =>
-          ZIO
-            .fromEither(URL.decode(raw))
-            .mapError(e => new RuntimeException(s"Invalid UNIFI_PROXY_URL '$raw': ${e.getMessage}"))
-            .map(u => Some(Proxy(u)))
+      val proxyOpt: ZIO[Any, Throwable, Option[Proxy]] =
+        proxyUrl match
+          case None =>
+            ZIO.none
+          case Some(raw) =>
+            ZIO
+              .fromEither(URL.decode(raw))
+              .mapError(e =>
+                new RuntimeException(s"Invalid UNIFI_PROXY_URL '$raw': ${e.getMessage}"))
+              .map(u => Some(Proxy(u)))
       proxyOpt.map: proxy =>
         ZClient.Config.default.copy(ssl = Some(ClientSSLConfig.Default), proxy = proxy)
-    (configLayer ++
-      ZLayer.succeed(NettyConfig.defaultWithFastShutdown) ++
-      DnsResolver.default) >>> ZClient.live
+    (configLayer ++ ZLayer.succeed(NettyConfig.defaultWithFastShutdown) ++ DnsResolver.default) >>>
+      ZClient.live
 
   def apply(
       unifi: Option[UnifiAccess],
@@ -75,19 +76,25 @@ object UnifiAuthorizationHandler:
                   "UniFi authorize: no config for current location — skipping authorization")
               case Some(unifiCfg) =>
                 for
-                  session   <- ctx.getOrFail
+                  session <- ctx.getOrFail
                   expiresAt = occurredAt.plusSeconds(unifiCfg.defaultDurationMinutes * 60L)
-                  result    <- callAuthorizeGuest(client, unifiCfg, session.clientMac).either
-                  _ <-
+                  result <- callAuthorizeGuest(client, unifiCfg, session.clientMac).either
+                  _      <-
                     result match
                       case Left(error) =>
                         ZIO.logError(
-                          s"UniFi authorize failed for session ${session.sessionId.asString}: ${error.getMessage}")
+                          s"UniFi authorize failed for session ${session
+                              .sessionId
+                              .asString}: ${error.getMessage}")
                       case Right(_) =>
                         sessionService.setAuthorized(session.sessionId, expiresAt) *>
                           ZIO.logInfo(
-                            s"UniFi authorized session ${session.sessionId.asString} until $expiresAt")
+                            s"UniFi authorized session ${session
+                                .sessionId
+                                .asString} until $expiresAt")
                 yield ()
+        end match
+      end handle
 
   private def callAuthorizeGuest(
       client: Client,
@@ -100,12 +107,13 @@ object UnifiAuthorizationHandler:
         "api"
     val urlStr = s"https://${unifi.host}:${unifi.port}/$basePath/s/${unifi.site}/cmd/stamgr"
     val macNormalized = clientMac.toLowerCase.replace("-", ":")
-    val bodyJson = Json
-      .obj(
-        "cmd"     -> Json.fromString("authorize-guest"),
-        "mac"     -> Json.fromString(macNormalized),
-        "minutes" -> Json.fromInt(unifi.defaultDurationMinutes))
-      .noSpaces
+    val bodyJson =
+      Json
+        .obj(
+          "cmd"     -> Json.fromString("authorize-guest"),
+          "mac"     -> Json.fromString(macNormalized),
+          "minutes" -> Json.fromInt(unifi.defaultDurationMinutes))
+        .noSpaces
 
     for
       url <- ZIO
@@ -116,7 +124,7 @@ object UnifiAuthorizationHandler:
         .addHeader(Header.ContentType(MediaType.application.json))
         .addHeader("X-API-KEY", unifi.apiToken)
       response <- client.batched(request)
-      _ <-
+      _        <-
         if response.status.code < 200 || response.status.code >= 300 then
           response
             .body
@@ -126,4 +134,5 @@ object UnifiAuthorizationHandler:
         else
           ZIO.unit
     yield ()
+  end callAuthorizeGuest
 end UnifiAuthorizationHandler

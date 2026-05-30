@@ -72,8 +72,7 @@ object IdentificationQuestionView:
                 onClick --> { _ =>
                   submitAnswer(survey)
                 }
-              )
-    )
+              ))
   )
 
   private def questionsContent(survey: NextIdentificationSurvey): HtmlElement = div(

@@ -33,9 +33,7 @@ final class FinishRoutes(sessionEndpoint: SessionEndpoint):
 
   val finishRoute: ZServerEndpoint[SessionContext & SessionService & FinishFlowType, Any] =
     sessionEndpoint
-      .secured(
-        onMissingSession = SessionEndpoint.OnMissing.Fail,
-        allowedPhases = Seq(Phase.Ready))
+      .secured(onMissingSession = SessionEndpoint.OnMissing.Fail, allowedPhases = Seq(Phase.Ready))
       .post
       .in("api" / "finish")
       .out(jsonBody[StatusResponse])
@@ -44,7 +42,7 @@ final class FinishRoutes(sessionEndpoint: SessionEndpoint):
           for
             flow <- ZIO.service[FinishFlowType]
             now  <- Clock.instant
-            _ <- flow
+            _    <- flow
               .execute(FinishCommand(now))
               .catchAllCause: cause =>
                 val error =

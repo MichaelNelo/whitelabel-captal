@@ -30,13 +30,13 @@ import zio.interop.catz.*
 object TestLayers:
   // ─── Phase pipeline (mirrors Main.scala) ──────────────────────────────────────
 
-  private val nextAfterIdentification: NextStep   = NextStep(Phase.AdvertiserVideo)
-  private val nextAfterVideo: NextStep            = NextStep(Phase.AdvertiserVideoSurvey)
+  private val nextAfterIdentification: NextStep = NextStep(Phase.AdvertiserVideo)
+  private val nextAfterVideo: NextStep = NextStep(Phase.AdvertiserVideoSurvey)
   private val nextAfterAdvertiserSurvey: NextStep = NextStep(Phase.Ready)
 
-  private val fallbackFromIdentification: FallbackPhase    = FallbackPhase(Phase.AdvertiserVideo)
-  private val fallbackFromVideo: FallbackPhase             = FallbackPhase(Phase.Ready)
-  private val fallbackFromAdvertiserSurvey: FallbackPhase  = FallbackPhase(Phase.Ready)
+  private val fallbackFromIdentification: FallbackPhase = FallbackPhase(Phase.AdvertiserVideo)
+  private val fallbackFromVideo: FallbackPhase = FallbackPhase(Phase.Ready)
+  private val fallbackFromAdvertiserSurvey: FallbackPhase = FallbackPhase(Phase.Ready)
 
   private val testConfig = ConfigFactory.load("test.conf")
 
@@ -60,26 +60,23 @@ object TestLayers:
   private val eventHandlerLayer: ZLayer[
     QuillSqlite & SessionContext & CurrentLocation & SessionService & zio.http.Client,
     Nothing,
-    EventHandler[Task, Event]] = ZLayer
-    .fromFunction:
-      (
-          quill: QuillSqlite,
-          ctx: SessionContext,
-          currentLocation: CurrentLocation,
-          sessionService: SessionService,
-          client: zio.http.Client) =>
-        val dbHandler = EventLogHandler(ctx)
-          .andThen(AnswerPersistenceHandler(ctx))
-          .andThen(UserPersistenceHandler(ctx))
-          .andThen(
-            SessionPhaseHandler(ctx, nextAfterIdentification.phase, nextAfterVideo.phase))
-          .andThen(SessionSurveyHandler(ctx))
-          .andThen(SessionVideoHandler(ctx))
-          .andThen(SurveyProgressHandler())
-        val transactional = TransactionalEventHandler(dbHandler, quill)
-        val unifiAuth =
-          UnifiAuthorizationHandler(currentLocation.unifi, ctx, sessionService, client)
-        transactional.andThen(unifiAuth)
+    EventHandler[Task, Event]] = ZLayer.fromFunction:
+    (
+        quill: QuillSqlite,
+        ctx: SessionContext,
+        currentLocation: CurrentLocation,
+        sessionService: SessionService,
+        client: zio.http.Client) =>
+      val dbHandler = EventLogHandler(ctx)
+        .andThen(AnswerPersistenceHandler(ctx))
+        .andThen(UserPersistenceHandler(ctx))
+        .andThen(SessionPhaseHandler(ctx, nextAfterIdentification.phase, nextAfterVideo.phase))
+        .andThen(SessionSurveyHandler(ctx))
+        .andThen(SessionVideoHandler(ctx))
+        .andThen(SurveyProgressHandler())
+      val transactional = TransactionalEventHandler(dbHandler, quill)
+      val unifiAuth = UnifiAuthorizationHandler(currentLocation.unifi, ctx, sessionService, client)
+      transactional.andThen(unifiAuth)
 
   private val answerEmailFlowLayer: ZLayer[SurveyRepository[
     Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, AnswerEmailCommand, NextStep]] =
@@ -95,9 +92,7 @@ object TestLayers:
         surveyRepo: SurveyRepository[Task],
         userRepo: UserRepository[Task],
         eventHandler: EventHandler[Task, Event]) =>
-      Flow(
-        AnswerProfilingHandler(surveyRepo, userRepo, nextAfterIdentification),
-        eventHandler)
+      Flow(AnswerProfilingHandler(surveyRepo, userRepo, nextAfterIdentification), eventHandler)
 
   private val answerLocationFlowLayer: ZLayer[
     SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
@@ -107,9 +102,7 @@ object TestLayers:
         surveyRepo: SurveyRepository[Task],
         userRepo: UserRepository[Task],
         eventHandler: EventHandler[Task, Event]) =>
-      Flow(
-        AnswerLocationHandler(surveyRepo, userRepo, nextAfterIdentification),
-        eventHandler)
+      Flow(AnswerLocationHandler(surveyRepo, userRepo, nextAfterIdentification), eventHandler)
 
   private val nextSurveyFlowLayer: ZLayer[
     SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
@@ -159,9 +152,7 @@ object TestLayers:
         surveyRepo: SurveyRepository[Task],
         userRepo: UserRepository[Task],
         eventHandler: EventHandler[Task, Event]) =>
-      Flow(
-        AnswerAdvertiserHandler(surveyRepo, userRepo, nextAfterAdvertiserSurvey),
-        eventHandler)
+      Flow(AnswerAdvertiserHandler(surveyRepo, userRepo, nextAfterAdvertiserSurvey), eventHandler)
 
   private val markVideoWatchedFlowLayer: ZLayer[
     VideoRepository[Task] & SessionContext & EventHandler[Task, Event],
@@ -186,11 +177,9 @@ object TestLayers:
             _ <- eventHandler.handle(events)
           yield value
 
-  private val finishFlowLayer: ZLayer[
-    UserRepository[Task] & EventHandler[Task, Event],
-    Nothing,
-    Flow.Aux[Task, FinishCommand, Unit]] = ZLayer.fromFunction:
-    (userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
+  private val finishFlowLayer: ZLayer[UserRepository[
+    Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, FinishCommand, Unit]] = ZLayer
+    .fromFunction: (userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
       Flow(FinishHandler(userRepo), eventHandler)
 
   val quill: ZLayer[Any, Throwable, QuillSqlite] = dataSourceLayer >>> quillLayer
