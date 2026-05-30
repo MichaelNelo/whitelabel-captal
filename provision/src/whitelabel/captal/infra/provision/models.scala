@@ -16,13 +16,16 @@ final case class LocationYaml(
 object LocationYaml:
   given Decoder[LocationYaml] = deriveDecoder
 
-/** UniFi Controller access config for guest authorization. */
+/** UniFi Controller access config for guest authorization (Integration v1 API).
+  *
+  * `siteId` is the UUID returned by `GET /proxy/network/integration/v1/sites` on the controller.
+  * The legacy site name ("default") does NOT work — the operator must look it up once and copy.
+  */
 final case class UnifiYaml(
     host: String,
     apiToken: String,
     port: Option[Int] = None,
-    site: Option[String] = None,
-    unifiOs: Option[Boolean] = None,
+    siteId: Option[String] = None,
     defaultDurationMinutes: Option[Int] = None)
 object UnifiYaml:
   given Decoder[UnifiYaml] = deriveDecoder
