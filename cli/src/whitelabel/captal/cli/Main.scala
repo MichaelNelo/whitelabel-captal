@@ -1,6 +1,7 @@
 package whitelabel.captal.cli
 
 import whitelabel.captal.cli.commands.*
+import whitelabel.captal.cli.migrations.{CliState, Migrations, SemVer, YamlOp}
 import zio.*
 import zio.cli.*
 
@@ -15,6 +16,7 @@ enum CaptalCommand:
   case PromoAdd(slug: String, file: String)
   case SkillsUpdate
   case Update(baseUrl: String)
+  case Migrate(dryRun: Boolean, yes: Boolean)
 
 object Main extends ZIOCliDefault:
 
@@ -114,10 +116,21 @@ object Main extends ZIOCliDefault:
         "Self-update the CLI jar from the public release URL (default: latest from captal-cli-releases-dev). Compares <url>/version.txt against the running version and downloads <url>/captal.jar if newer. No AWS credentials needed."))
     .map(url => CaptalCommand.Update(url))
 
+  // ─── migrate (schema migrations) ──────────────────────────────────────────
+
+  private val migrate: Command[CaptalCommand] = Command(
+    "migrate",
+    Options.boolean("dry-run") ++ Options.boolean("yes").alias("y"),
+    Args.none)
+    .withHelp(
+      HelpDoc.p(
+        "Apply schema migrations to project YAMLs (e.g. locations/*/location.yaml). Idempotent — safe to re-run. --dry-run shows changes without writing; --yes skips the comments-will-be-lost prompt (CI-friendly). Use git to recover from mistakes."))
+    .map((dryRun, yes) => CaptalCommand.Migrate(dryRun, yes))
+
   // ─── root ─────────────────────────────────────────────────────────────────
 
   private val captal: Command[CaptalCommand] = Command("captal", Options.none, Args.none)
-    .subcommands(init, shared, locations, video, skills, update)
+    .subcommands(init, shared, locations, video, skills, update, migrate)
 
   val cliApp: CliApp[Any, Any, CaptalCommand] =
     CliApp.make(
@@ -131,7 +144,7 @@ object Main extends ZIOCliDefault:
         (
           cmd match
             case CaptalCommand.Init(claude) =>
-              InitCommand.run(claude)
+              InitCommand.run(claude, cliVersion)
 
             case CaptalCommand.SharedPush =>
               SharedPushCommand.run.provide(CaptalConfig.layer, AwsLayers.ecs, AwsLayers.ecr)
@@ -186,6 +199,9 @@ object Main extends ZIOCliDefault:
 
             case CaptalCommand.Update(baseUrl) =>
               UpdateCommand.run(cliVersion, baseUrl)
+
+            case CaptalCommand.Migrate(dryRun, yes) =>
+              MigrateCommand.run(dryRun, yes)
         ).as(cmd)
 
       program.tapError:
@@ -196,4 +212,41 @@ object Main extends ZIOCliDefault:
         case e =>
           Output.error(e.toString)
     }
+
+  /** Override the ZIOAppDefault entrypoint so we can wrap `cliApp.run` with the schema-migration
+    * warning hook: load state.json → run user's command → print warning if any migrations are
+    * pending → update state.json with the current CLI version.
+    *
+    * The state-file IO is best-effort (uses `.ignore`/`.orElseSucceed`) so a busted state file
+    * never blocks the actual command. The warning fires only when pending migrations contain at
+    * least one Delete/Rename op — Add-only migrations are silent since `Add` typically introduces
+    * optional fields the operator may legitimately want absent.
+    */
+  override def run: ZIO[zio.ZIOAppArgs, Any, Any] =
+    val current = SemVer.parseOrZero(cliVersion)
+    for
+      args     <- ZIO.service[zio.ZIOAppArgs].map(_.getArgs.toList)
+      state    <- CliState.load
+      pending   = Migrations.pendingSince(state.lastSeenCliVersion, current).filter(needsWarning)
+      result   <- cliApp.run(args).either
+      _        <- ZIO.when(pending.nonEmpty)(printPendingWarning(pending))
+      _        <- CliState.save(CliState(current))
+      out      <- ZIO.fromEither(result)
+    yield out
+
+  /** True iff this migration contains at least one Delete/Rename op — Add-only ones don't fire the
+    * warning (they're typically optional defaults).
+    */
+  private def needsWarning(m: whitelabel.captal.cli.migrations.Migration): Boolean =
+    m.ops.exists:
+      case _: YamlOp.Add => false
+      case _             => true
+
+  private def printPendingWarning(
+      pending: IndexedSeq[whitelabel.captal.cli.migrations.Migration]): UIO[Unit] =
+    Output.warn(
+      s"${pending.size} schema migration(s) pending — your YAMLs may be out of date:") *>
+      ZIO.foreachDiscard(pending): m =>
+        Output.detail(s"  ${m.version} — ${m.description}")
+      *> Output.info("Run `captal migrate` to apply them. Use `--dry-run` to preview first.")
 end Main
