@@ -458,6 +458,9 @@ java -jar "%SCRIPT_DIR%captal.jar" %*
     println(s"[installLocal] captal installed to $target")
     println(s"[installLocal] ensure $target is on your PATH")
 
+  object test extends ScalaTests with TestModule.Utest with ScalafmtModule with ScalafixModule:
+    def mvnDeps = Seq(mvn"com.lihaoyi::utest:0.8.9")
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Client: JS only (Laminar app)
 // ─────────────────────────────────────────────────────────────────────────────
