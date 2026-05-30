@@ -30,6 +30,18 @@ object Migrations:
       description = "Move ap_mac into unifi block + add optional redirectUrl",
       fileGlob = "locations/*/location.yaml",
       ops = List(YamlOp.Rename(YamlPath("ap_mac"), YamlPath("unifi.apMac")))
+    ),
+    Migration(
+      version = SemVer(2, 2, 0),
+      description = "Move AWS-specific config blocks (images/s3/ecs/alb/cloudfront) under aws:",
+      fileGlob = "shared/captal.yaml",
+      ops = List(
+        YamlOp.Rename(YamlPath("images"), YamlPath("aws.images")),
+        YamlOp.Rename(YamlPath("s3"), YamlPath("aws.s3")),
+        YamlOp.Rename(YamlPath("ecs"), YamlPath("aws.ecs")),
+        YamlOp.Rename(YamlPath("alb"), YamlPath("aws.alb")),
+        YamlOp.Rename(YamlPath("cloudfront"), YamlPath("aws.cloudfront"))
+      )
     )
   )
 
