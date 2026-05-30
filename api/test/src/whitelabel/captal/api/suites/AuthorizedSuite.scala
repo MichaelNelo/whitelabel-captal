@@ -15,40 +15,36 @@ object AuthorizedSuite:
       .suite("Authorized phase + access expiration")(
         test("Status returns Authorized + accessExpiresAt when session is authorized"):
           for
-            backend      <- testBackend
-            cookie       <- createSession(backend)
-            sessionId    = user.SessionId.unsafe(cookie)
-            now          <- Clock.instant
+            backend <- testBackend
+            cookie  <- createSession(backend)
+            sessionId = user.SessionId.unsafe(cookie)
+            now <- Clock.instant
             futureExpiry = now.plusSeconds(3600)
-            _            <- TestFixtures.setSessionAuthorized(sessionId, futureExpiry)
-            statusResp   <- getStatus(backend, Some(cookie))
+            _          <- TestFixtures.setSessionAuthorized(sessionId, futureExpiry)
+            statusResp <- getStatus(backend, Some(cookie))
           yield
-            val body            = parse(statusResp.body).toOption.get
-            val phase           = body.hcursor.downField("phase").as[String].toOption.getOrElse("")
+            val body = parse(statusResp.body).toOption.get
+            val phase = body.hcursor.downField("phase").as[String].toOption.getOrElse("")
             val accessExpiresAt = body
               .hcursor
               .downField("accessExpiresAt")
               .focus
               .getOrElse(io.circe.Json.Null)
-            assertTrue(
-              statusResp.code.isSuccess,
-              phase == "authorized",
-              !accessExpiresAt.isNull
-            )
+            assertTrue(statusResp.code.isSuccess, phase == "authorized", !accessExpiresAt.isNull)
         ,
         test("Status resets session to Welcome when accessExpiresAt is in the past"):
           for
-            backend    <- testBackend
-            cookie     <- createSession(backend)
-            sessionId  = user.SessionId.unsafe(cookie)
-            now        <- Clock.instant
+            backend <- testBackend
+            cookie  <- createSession(backend)
+            sessionId = user.SessionId.unsafe(cookie)
+            now <- Clock.instant
             pastExpiry = now.minusSeconds(60)
             _          <- TestFixtures.setSessionAuthorized(sessionId, pastExpiry)
             statusResp <- getStatus(backend, Some(cookie))
             dbState    <- TestFixtures.queryDbState
           yield
-            val body            = parse(statusResp.body).toOption.get
-            val phase           = body.hcursor.downField("phase").as[String].toOption.getOrElse("")
+            val body = parse(statusResp.body).toOption.get
+            val phase = body.hcursor.downField("phase").as[String].toOption.getOrElse("")
             val accessExpiresAt = body
               .hcursor
               .downField("accessExpiresAt")
@@ -71,13 +67,13 @@ object AuthorizedSuite:
             backend <- testBackend
             cookie  <- createSession(backend)
             sessionId = user.SessionId.unsafe(cookie)
-            _ <- getNextSurvey(backend, cookie)
-            _ <- postEmailAnswer(backend, cookie, "finish-skip@example.com")
-            _ <- getNextVideo(backend, cookie)
-            _ <- postMarkVideoWatched(backend, cookie, 15, completed = true)
-            _ <- getNextAdvertiserSurvey(backend, cookie)
-            _ <- postAdvertiserAnswer(backend, cookie, fixture.optionIds.head.head.asString)
-            _ <- postFinish(backend, cookie)
+            _       <- getNextSurvey(backend, cookie)
+            _       <- postEmailAnswer(backend, cookie, "finish-skip@example.com")
+            _       <- getNextVideo(backend, cookie)
+            _       <- postMarkVideoWatched(backend, cookie, 15, completed = true)
+            _       <- getNextAdvertiserSurvey(backend, cookie)
+            _       <- postAdvertiserAnswer(backend, cookie, fixture.optionIds.head.head.asString)
+            _       <- postFinish(backend, cookie)
             dbState <- TestFixtures.queryDbState
           yield
             // No UnifiAccess in test layer (CurrentLocation.empty) — handler logs and skips.
@@ -85,7 +81,6 @@ object AuthorizedSuite:
             val sessionAfter = dbState.sessions.find(_.id == sessionId)
             assertTrue(
               sessionAfter.exists(_.phase == Phase.Ready),
-              sessionAfter.exists(_.accessExpiresAt.isEmpty)
-            )
+              sessionAfter.exists(_.accessExpiresAt.isEmpty))
       )
 end AuthorizedSuite

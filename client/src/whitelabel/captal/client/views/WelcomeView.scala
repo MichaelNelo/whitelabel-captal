@@ -3,7 +3,6 @@ package whitelabel.captal.client.views
 import java.time.Instant
 
 import scala.concurrent.ExecutionContext.Implicits.global
-import scala.concurrent.duration.DurationInt
 
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.i18n.I18nClient
@@ -93,15 +92,15 @@ object WelcomeView:
     val tickStream = EventStream.periodic(1000).startWith(0L)
     div(
       cls := "welcome-view",
-      h1(
-        cls := "welcome-title",
-        child.text <-- I18nClient.i18n.map(_.welcome.authorized.title)),
+      h1(cls := "welcome-title", child.text <-- I18nClient.i18n.map(_.welcome.authorized.title)),
       p(
         cls := "welcome-subtitle countdown",
-        child.text <-- tickStream.map: _ =>
-          formatRemaining(expiresAt)),
+        child.text <--
+          tickStream.map: _ =>
+            formatRemaining(expiresAt)),
       tickStream --> { _ =>
-        if java.time.Instant.now().isAfter(expiresAt) then refreshStatusAfterExpiration()
+        if java.time.Instant.now().isAfter(expiresAt) then
+          refreshStatusAfterExpiration()
       }
     )
 
@@ -111,7 +110,7 @@ object WelcomeView:
     val now = java.time.Instant.now()
     val seconds = math.max(0L, java.time.Duration.between(now, expiresAt).getSeconds)
     val minutes = seconds / 60
-    val secs    = seconds % 60
+    val secs = seconds % 60
     f"$minutes%02d:$secs%02d"
 
   private def refreshStatusAfterExpiration(): Unit = Runtime.run:
@@ -130,16 +129,18 @@ object WelcomeView:
     styleAttr := s"animation-delay: ${index * 0.1}s",
     span(cls := "step-text", child.text <-- textSignal))
 
-  /** Fetch the list of available locales for the dropdown. The session-creation `/api/status`
-    * call already happened once at boot in `Main.syncPhaseOnLoad` — locale + phase sync live
-    * there. This view only needs the locales list.
+  /** Fetch the list of available locales for the dropdown. The session-creation `/api/status` call
+    * already happened once at boot in `Main.syncPhaseOnLoad` — locale + phase sync live there. This
+    * view only needs the locales list.
     */
   private def loadLocales(): Unit = Runtime.run:
-    ApiClient.getLocales().map:
-      case Right(locales) if locales.nonEmpty =>
-        availableLocales.set(locales)
-      case _ =>
-        ()
+    ApiClient
+      .getLocales()
+      .map:
+        case Right(locales) if locales.nonEmpty =>
+          availableLocales.set(locales)
+        case _ =>
+          ()
 
   private def setLocaleOnServer(locale: String): Unit = Runtime.run:
     ApiClient.setLocale(locale)

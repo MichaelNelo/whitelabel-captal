@@ -1,9 +1,9 @@
 package whitelabel.captal.infra
 
 /** UniFi Controller access derived from a [[LocationRow]]. Defaults are applied here so that
-  * `port`, `site`, `unifiOs` and `defaultDurationMinutes` always have concrete values in code,
-  * even when the operator left them implicit in YAML. The DB column may be NULL — meaning "use
-  * the project-wide default" — while this case class always carries the resolved value.
+  * `port`, `site`, `unifiOs` and `defaultDurationMinutes` always have concrete values in code, even
+  * when the operator left them implicit in YAML. The DB column may be NULL — meaning "use the
+  * project-wide default" — while this case class always carries the resolved value.
   */
 final case class UnifiAccess(
     host: String,
@@ -30,5 +30,6 @@ object UnifiAccess:
       port = row.unifiPort.getOrElse(DefaultPort),
       site = row.unifiSite.getOrElse(DefaultSite),
       unifiOs = row.unifiUseOs.map(_ != 0).getOrElse(DefaultUnifiOs),
-      defaultDurationMinutes = row.unifiDurationMinutes.getOrElse(DefaultDurationMinutes))
+      defaultDurationMinutes = row.unifiDurationMinutes.getOrElse(DefaultDurationMinutes)
+    )
 end UnifiAccess

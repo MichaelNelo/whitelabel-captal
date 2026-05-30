@@ -173,8 +173,8 @@ object ProvisioningSuite:
             advertisers    <- queryAdvertisers
             manifestAfter  <- queryManifest
           yield
-            val introVideoId = IdGenerator.videoId(locationSlug, "acme", "acme-intro")
-            val promoVideoId = IdGenerator.promoVideoId(locationSlug, "welcome")
+            IdGenerator.videoId(locationSlug, "acme", "acme-intro")
+            IdGenerator.promoVideoId(locationSlug, "welcome")
 
             assertTrue(
               // Before: 2 active videos
@@ -229,11 +229,11 @@ object ProvisioningSuite:
         ,
         test("provision clears UniFi columns when the block is removed"):
           for
-            _              <- TestFixtures.clearAllData
-            _              <- provisionAll("shared", "basic")
+            _               <- TestFixtures.clearAllData
+            _               <- provisionAll("shared", "basic")
             locationsBefore <- queryLocations
-            _              <- provisionAll("shared", "reduced")
-            locationsAfter <- queryLocations
+            _               <- provisionAll("shared", "reduced")
+            locationsAfter  <- queryLocations
           yield assertTrue(
             locationsBefore.head.unifiHost.contains("192.168.1.1"),
             locationsBefore.head.unifiApiToken.contains("test-token"),

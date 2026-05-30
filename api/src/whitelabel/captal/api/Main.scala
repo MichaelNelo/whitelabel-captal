@@ -15,9 +15,6 @@ import whitelabel.captal.core.application.{
   Phase
 }
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository, VideoRepository}
-import whitelabel.captal.infra.{RqliteDataSource, UnifiAccess}
-import whitelabel.captal.infra.provision.ProvisionService
-import whitelabel.captal.infra.services.{LocaleService, LocaleServiceQuill, LocationService}
 import whitelabel.captal.infra.eventhandlers.{
   AnswerPersistenceHandler,
   DbEventHandler,
@@ -30,13 +27,16 @@ import whitelabel.captal.infra.eventhandlers.{
   UnifiAuthorizationHandler,
   UserPersistenceHandler
 }
+import whitelabel.captal.infra.provision.ProvisionService
 import whitelabel.captal.infra.repositories.{
   SurveyRepositoryQuill,
   UserRepositoryQuill,
   VideoRepositoryQuill
 }
 import whitelabel.captal.infra.schema.QuillSqlite
+import whitelabel.captal.infra.services.{LocaleService, LocaleServiceQuill, LocationService}
 import whitelabel.captal.infra.session.{SessionContext, SessionService}
+import whitelabel.captal.infra.{RqliteDataSource, UnifiAccess}
 import zio.*
 import zio.http.*
 import zio.interop.catz.*
@@ -75,12 +75,12 @@ object Main extends ZIOAppDefault:
   //     no resource (survey/video) is available for the current location, so
   //     the user falls back to the next stop in the pipeline.
 
-  private val nextAfterIdentification: NextStep    = NextStep(Phase.AdvertiserVideo)
-  private val nextAfterVideo: NextStep             = NextStep(Phase.AdvertiserVideoSurvey)
-  private val nextAfterAdvertiserSurvey: NextStep  = NextStep(Phase.Ready)
+  private val nextAfterIdentification: NextStep = NextStep(Phase.AdvertiserVideo)
+  private val nextAfterVideo: NextStep = NextStep(Phase.AdvertiserVideoSurvey)
+  private val nextAfterAdvertiserSurvey: NextStep = NextStep(Phase.Ready)
 
   private val fallbackFromIdentification: FallbackPhase = FallbackPhase(Phase.AdvertiserVideo)
-  private val fallbackFromVideo: FallbackPhase          = FallbackPhase(Phase.Ready)
+  private val fallbackFromVideo: FallbackPhase = FallbackPhase(Phase.Ready)
   private val fallbackFromAdvertiserSurvey: FallbackPhase = FallbackPhase(Phase.Ready)
 
   // ─── Location-aware layers ────────────────────────────────────────────────────
@@ -118,27 +118,24 @@ object Main extends ZIOAppDefault:
   private val eventHandlerLayer: ZLayer[
     QuillSqlite & SessionContext & CurrentLocation & SessionService & Client,
     Nothing,
-    EventHandler[Task, Event]] = ZLayer
-    .fromFunction:
-      (
-          quill: QuillSqlite,
-          ctx: SessionContext,
-          currentLocation: CurrentLocation,
-          sessionService: SessionService,
-          client: Client) =>
-        val dbHandler = EventLogHandler(ctx)
-          .andThen(AnswerPersistenceHandler(ctx))
-          .andThen(UserPersistenceHandler(ctx))
-          .andThen(
-            SessionPhaseHandler(ctx, nextAfterIdentification.phase, nextAfterVideo.phase))
-          .andThen(SessionSurveyHandler(ctx))
-          .andThen(SessionVideoHandler(ctx))
-          .andThen(SurveyProgressHandler())
-        val transactional = TransactionalEventHandler(dbHandler, quill)
-        val unifiAuth =
-          UnifiAuthorizationHandler(currentLocation.unifi, ctx, sessionService, client)
-        // unifiAuth corre POST-commit; cualquier fallo HTTP no impacta el chain transaccional.
-        transactional.andThen(unifiAuth)
+    EventHandler[Task, Event]] = ZLayer.fromFunction:
+    (
+        quill: QuillSqlite,
+        ctx: SessionContext,
+        currentLocation: CurrentLocation,
+        sessionService: SessionService,
+        client: Client) =>
+      val dbHandler = EventLogHandler(ctx)
+        .andThen(AnswerPersistenceHandler(ctx))
+        .andThen(UserPersistenceHandler(ctx))
+        .andThen(SessionPhaseHandler(ctx, nextAfterIdentification.phase, nextAfterVideo.phase))
+        .andThen(SessionSurveyHandler(ctx))
+        .andThen(SessionVideoHandler(ctx))
+        .andThen(SurveyProgressHandler())
+      val transactional = TransactionalEventHandler(dbHandler, quill)
+      val unifiAuth = UnifiAuthorizationHandler(currentLocation.unifi, ctx, sessionService, client)
+      // unifiAuth corre POST-commit; cualquier fallo HTTP no impacta el chain transaccional.
+      transactional.andThen(unifiAuth)
 
   private val answerEmailFlowLayer: ZLayer[SurveyRepository[
     Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, AnswerEmailCommand, NextStep]] =
@@ -154,9 +151,7 @@ object Main extends ZIOAppDefault:
         surveyRepo: SurveyRepository[Task],
         userRepo: UserRepository[Task],
         eventHandler: EventHandler[Task, Event]) =>
-      Flow(
-        AnswerProfilingHandler(surveyRepo, userRepo, nextAfterIdentification),
-        eventHandler)
+      Flow(AnswerProfilingHandler(surveyRepo, userRepo, nextAfterIdentification), eventHandler)
 
   private val answerLocationFlowLayer: ZLayer[
     SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
@@ -166,9 +161,7 @@ object Main extends ZIOAppDefault:
         surveyRepo: SurveyRepository[Task],
         userRepo: UserRepository[Task],
         eventHandler: EventHandler[Task, Event]) =>
-      Flow(
-        AnswerLocationHandler(surveyRepo, userRepo, nextAfterIdentification),
-        eventHandler)
+      Flow(AnswerLocationHandler(surveyRepo, userRepo, nextAfterIdentification), eventHandler)
 
   private val nextSurveyFlowLayer: ZLayer[
     SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
@@ -218,15 +211,11 @@ object Main extends ZIOAppDefault:
         surveyRepo: SurveyRepository[Task],
         userRepo: UserRepository[Task],
         eventHandler: EventHandler[Task, Event]) =>
-      Flow(
-        AnswerAdvertiserHandler(surveyRepo, userRepo, nextAfterAdvertiserSurvey),
-        eventHandler)
+      Flow(AnswerAdvertiserHandler(surveyRepo, userRepo, nextAfterAdvertiserSurvey), eventHandler)
 
-  private val finishFlowLayer: ZLayer[
-    UserRepository[Task] & EventHandler[Task, Event],
-    Nothing,
-    Flow.Aux[Task, FinishCommand, Unit]] = ZLayer.fromFunction:
-    (userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
+  private val finishFlowLayer: ZLayer[UserRepository[
+    Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, FinishCommand, Unit]] = ZLayer
+    .fromFunction: (userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
       Flow(FinishHandler(userRepo), eventHandler)
 
   private val markVideoWatchedFlowLayer: ZLayer[

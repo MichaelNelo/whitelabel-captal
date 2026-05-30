@@ -460,9 +460,10 @@ object ProvisionService:
           val (locationSlug, videoSlug) = (parts(0), parts(1))
           for
             advertisers <- EntityWriter.listActiveAdvertisers(quill)
-            _ <- ZIO.foreachDiscard(advertisers): adv =>
-              val candidate = IdGenerator.videoId(locationSlug, adv.id, videoSlug)
-              EntityWriter.deactivateVideo(quill)(candidate)
+            _           <-
+              ZIO.foreachDiscard(advertisers): adv =>
+                val candidate = IdGenerator.videoId(locationSlug, adv.id, videoSlug)
+                EntityWriter.deactivateVideo(quill)(candidate)
           yield ()
         else
           ZIO.unit
