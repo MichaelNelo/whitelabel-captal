@@ -13,7 +13,6 @@ object EntityWriter:
       id: String,
       slug: String,
       name: String,
-      apMac: Option[String] = None,
       unifi: Option[UnifiYaml] = None): Task[Unit] =
     import quill.*
     val now = java.time.Instant.now.toString
@@ -24,24 +23,26 @@ object EntityWriter:
       1,
       now,
       now,
-      apMac,
+      unifiApMac = unifi.flatMap(_.apMac),
       unifiHost = unifi.map(_.host),
       unifiPort = unifi.flatMap(_.port),
       unifiSiteId = unifi.flatMap(_.siteId),
       unifiApiToken = unifi.map(_.apiToken),
-      unifiDurationMinutes = unifi.flatMap(_.defaultDurationMinutes)
+      unifiDurationMinutes = unifi.flatMap(_.defaultDurationMinutes),
+      unifiRedirectUrl = unifi.flatMap(_.redirectUrl)
     )
     run(
       query[LocationRow]
         .insertValue(lift(row))
         .onConflictUpdate(_.id)(
           (t, e) => t.name                 -> e.name,
-          (t, e) => t.apMac                -> e.apMac,
+          (t, e) => t.unifiApMac           -> e.unifiApMac,
           (t, e) => t.unifiHost            -> e.unifiHost,
           (t, e) => t.unifiPort            -> e.unifiPort,
           (t, e) => t.unifiSiteId          -> e.unifiSiteId,
           (t, e) => t.unifiApiToken        -> e.unifiApiToken,
           (t, e) => t.unifiDurationMinutes -> e.unifiDurationMinutes,
+          (t, e) => t.unifiRedirectUrl     -> e.unifiRedirectUrl,
           (t, _) => t.isActive             -> lift(1),
           (t, _) => t.updatedAt            -> lift(now)
         )).unit
