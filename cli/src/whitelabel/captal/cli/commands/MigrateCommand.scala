@@ -67,11 +67,11 @@ object MigrateCommand:
       filesWithComments = plan.filter(fp => YamlIo.hasComments(fp.path)).map(_.path)
       _ <- ZIO.when(filesWithComments.nonEmpty && !yes && !dryRun):
         Output.warn(
-          s"Comments will be lost in ${filesWithComments.size} file(s) — the YAML round-trip doesn't preserve them.") *>
+          s"Comments will be lost in ${filesWithComments.size} file(s) - the YAML round-trip doesn't preserve them.") *>
           confirm("Continue?")
       _ <- ZIO.when(!dryRun)(applyChanges(plan))
       _ <-
-        if dryRun then Output.info("Dry run — no files were modified.")
+        if dryRun then Output.info("Dry run - no files were modified.")
         else
           // Migration succeeded → clear .captal/state.json so the warning hook stops firing.
           CliState.clear *> Output.success(s"Migrated ${plan.size} file(s).")

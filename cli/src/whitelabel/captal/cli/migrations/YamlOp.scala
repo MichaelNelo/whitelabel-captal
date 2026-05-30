@@ -28,5 +28,5 @@ object YamlOp:
     def describe: String = op match
       case Add(p, v)     => s"add ${p.render} = ${v.noSpaces}"
       case Delete(p)     => s"delete ${p.render}"
-      case Rename(f, t)  => s"rename ${f.render} → ${t.render}"
+      case Rename(f, t)  => s"rename ${f.render} -> ${t.render}"
 end YamlOp

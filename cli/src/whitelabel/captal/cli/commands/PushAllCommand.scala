@@ -35,7 +35,7 @@ object PushAllCommand:
     .attempt:
       if !Files.exists(LocationsDir) then
         throw new RuntimeException(
-          s"$LocationsDir/ not found in cwd — run from your captal project root")
+          s"$LocationsDir/ not found in cwd - run from your captal project root")
       val children = Files.list(LocationsDir).iterator().asScala.toList
       val slugs =
         children
@@ -45,7 +45,7 @@ object PushAllCommand:
           .sorted
       if slugs.isEmpty then
         throw new RuntimeException(
-          s"No locations found in $LocationsDir/ — add at least one with `captal locations add <slug>`")
+          s"No locations found in $LocationsDir/ - add at least one with `captal locations add <slug>`")
       slugs
     .mapError(e => CliError.ConfigError(e.getMessage))
 end PushAllCommand

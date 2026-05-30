@@ -16,13 +16,16 @@ object Output:
   def step(n: Int, total: Int, msg: String): UIO[Unit] =
     Console.printLine(s"$Bold$Cyan[$n/$total]$Reset $msg").orDie
 
-  def success(msg: String): UIO[Unit] = Console.printLine(s"$Green✓$Reset $msg").orDie
+  // ASCII glyphs — rendered correctly in cmd.exe / PowerShell without UTF-8 codepage tweaks.
+  // The previous Unicode versions (✓ ✗ ⚠ ℹ) showed as `?` on Windows consoles with the default
+  // codepage (CP437/CP1252). ASCII versions are uglier but readable everywhere.
+  def success(msg: String): UIO[Unit] = Console.printLine(s"$Green[OK]$Reset $msg").orDie
 
-  def error(msg: String): UIO[Unit] = Console.printLine(s"$Red✗$Reset $msg").orDie
+  def error(msg: String): UIO[Unit] = Console.printLine(s"$Red[X]$Reset $msg").orDie
 
-  def warn(msg: String): UIO[Unit] = Console.printLine(s"$Yellow⚠$Reset $msg").orDie
+  def warn(msg: String): UIO[Unit] = Console.printLine(s"$Yellow[!]$Reset $msg").orDie
 
-  def info(msg: String): UIO[Unit] = Console.printLine(s"${Blue}ℹ$Reset $msg").orDie
+  def info(msg: String): UIO[Unit] = Console.printLine(s"${Blue}[i]$Reset $msg").orDie
 
   def detail(msg: String): UIO[Unit] = Console.printLine(s"  $Dim$msg$Reset").orDie
 

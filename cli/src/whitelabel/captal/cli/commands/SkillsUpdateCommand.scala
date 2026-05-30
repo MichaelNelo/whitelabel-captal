@@ -33,7 +33,7 @@ object SkillsUpdateCommand:
       _ <- ZIO.foreachDiscard(added)(t => Output.success(s"Added ${t.path}"))
       _ <- ZIO.foreachDiscard(updated)(t => Output.detail(s"Updated ${t.path}"))
       _ <- Output.info(
-        s"Done — added ${added.size}, updated ${updated
+        s"Done - added ${added.size}, updated ${updated
             .size}. Existing skill files were overwritten.")
     yield ()
   end run
