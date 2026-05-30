@@ -17,6 +17,13 @@ import zio.interop.catz.*
 
 object TestFixtures:
   private val testConfig = ConfigFactory.load("test.conf")
+  // TODO: disable Flyway's ResourceNameValidator in the E2E test config. With
+  // the default settings, fly4s walks every migration filename and runs the
+  // validator (logs flood with `Validating V11__...sql` lines and there's a
+  // ~5s pause per file in some environments). The test fixture doesn't need
+  // the strict naming check — turn it off via Fly4sConfig once fly4s exposes
+  // the flag, or by setting `validateMigrationNaming = false` on the Flyway
+  // builder directly.
   private val fly4sConfig = Fly4sConfig
     .default
     .copy(
