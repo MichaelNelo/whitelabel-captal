@@ -34,9 +34,18 @@ Deploying a location uploads assets to S3, creates/updates an ECS service, and c
 ## Configuration in location.yaml
 ```yaml
 name: "Location Name"
-ap_mac: "AA:BB:CC:DD:EE:FF"     # MAC of the access point
 desiredCount: 2                   # optional, overrides ecs.desiredCount from captal.yaml
+unifi:                            # required for UniFi-managed locations (Integration v1 API)
+  host: "192.168.1.1"
+  apiToken: "<API_KEY>"
+  apMac: "AA:BB:CC:DD:EE:FF"      # AP MAC — used by the dispatcher Lambda for slug lookup
+  siteId: "<UUID>"                # discover via GET /proxy/network/integration/v1/sites
+  port: 443                       # optional (default 443)
+  defaultDurationMinutes: 1440    # optional (default 24h)
+  redirectUrl: ""                 # optional override of the dispatcher's redirect target
 ```
+
+See `yaml-reference` and `add-location` skills for the full schema, including how to obtain the `siteId` and `apMac`.
 
 ## What happens on re-deploy
 - Assets are overwritten in S3
