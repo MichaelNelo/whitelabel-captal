@@ -11,7 +11,7 @@ version: 1.0.0
 Commands produce **events** (in `core/`); events are processed by **two kinds of handlers** (in `infra/eventhandlers/`):
 
 1. **Transactional** (`DbEventHandler`): run inside a single Quill transaction (`TransactionalEventHandler`). Pure functions of `(Event, SessionContext, Quill) → Task[Unit]`. Use for DB writes that must commit atomically with the rest of the chain.
-2. **Post-commit** (`EventHandler[Task, Event]`): composed via `.andThen` **after** `TransactionalEventHandler` in `Main.eventHandlerLayer`. Run only if the transaction committed. Use for external side-effects (HTTP calls, queue publishes) that should not roll back DB writes on failure. Example: `UnifiAuthorizationHandler` (UniFi `authorize-guest`).
+2. **Post-commit** (`EventHandler[Task, Event]`): composed via `.andThen` **after** `TransactionalEventHandler` in `Main.eventHandlerLayer`. Run only if the transaction committed. Use for external side-effects (HTTP calls, queue publishes) that should not roll back DB writes on failure. Example: `UnifiAuthorizationHandler` (UniFi Integration v1 two-step lookup + `AUTHORIZE_GUEST_ACCESS`).
 
 Each command's handler returns `Op[Event...]` which contains the events to dispatch. After the handler returns, `Flow.execute` runs the events through the registered chain of handlers.
 
@@ -125,4 +125,4 @@ Two layers of test:
 - ❌ Calling external APIs from a `DbEventHandler` — slow HTTP inside a DB transaction → connection-pool starvation. Move to a post-commit `EventHandler[Task, Event]` (pattern: `UnifiAuthorizationHandler`).
 - ❌ Throwing exceptions from a transactional `handle` — return a failing `Task` so the rollback happens cleanly. For post-commit handlers, catch with `.either` and log; never let a side-effect failure crash the request.
 - ❌ Emitting an event without a corresponding handler — silent no-op, debugging nightmare.
-- ❌ Post-commit handler that re-emits events expecting the chain to re-run — there's no replay; design idempotency at the side-effect level (e.g., UniFi `authorize-guest` is idempotent by MAC).
+- ❌ Post-commit handler that re-emits events expecting the chain to re-run — there's no replay; design idempotency at the side-effect level (e.g., the UniFi Integration v1 `AUTHORIZE_GUEST_ACCESS` action is idempotent by clientId for the same window).

@@ -151,8 +151,7 @@ final case class LocationRow(
     apMac: Option[String],
     unifiHost: Option[String] = None,
     unifiPort: Option[Int] = None,
-    unifiSite: Option[String] = None,
-    unifiUseOs: Option[Int] = None,
+    unifiSiteId: Option[String] = None,
     unifiApiToken: Option[String] = None,
     unifiDurationMinutes: Option[Int] = None)
 
