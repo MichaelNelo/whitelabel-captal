@@ -10,6 +10,7 @@ enum CaptalCommand:
   case LocationsAdd(slug: String)
   case LocationsPush(slug: String)
   case LocationsPushAll
+  case LocationsDeprovision(slug: String, yes: Boolean)
   case VideoAdd(slug: String, advertiser: String, file: String)
   case PromoAdd(slug: String, file: String)
   case SkillsUpdate
@@ -57,10 +58,18 @@ object Main extends ZIOCliDefault:
       HelpDoc.p(
         "Deploy ALL locations under locations/<slug>/ in sequence. Useful after bumping the API base image version in shared/captal.yaml."))
     .map(_ => CaptalCommand.LocationsPushAll)
+  private val locationsDeprovision: Command[CaptalCommand] = Command(
+    "deprovision",
+    Options.boolean("yes").alias("y"),
+    slugArg)
+    .withHelp(
+      HelpDoc.p(
+        "Tear down AWS infrastructure for a location (ECS service, ALB rule + target group, task defs, log group, ECR image tags, S3 assets, CloudFront cache). The local locations/<slug>/ directory is kept so the same slug can be re-provisioned with `push`. Pass --yes to skip the confirmation prompt."))
+    .map((yes, slug) => CaptalCommand.LocationsDeprovision(slug, yes))
 
   private val locations: Command[CaptalCommand] = Command("locations", Options.none, Args.none)
     .withHelp(HelpDoc.p("Manage locations"))
-    .subcommands(locationsAdd, locationsPush, locationsPushAll)
+    .subcommands(locationsAdd, locationsPush, locationsDeprovision)
 
   // ─── video ────────────────────────────────────────────────────────────────
 
@@ -147,6 +156,18 @@ object Main extends ZIOCliDefault:
             case CaptalCommand.LocationsPushAll =>
               PushAllCommand
                 .run
+                .provide(
+                  CaptalConfig.layer,
+                  AwsLayers.s3,
+                  AwsLayers.ecs,
+                  AwsLayers.elbv2,
+                  AwsLayers.ecr,
+                  AwsLayers.cloudfront,
+                  AwsLayers.cloudwatchLogs)
+
+            case CaptalCommand.LocationsDeprovision(slug, yes) =>
+              DeprovisionCommand
+                .run(slug, yes)
                 .provide(
                   CaptalConfig.layer,
                   AwsLayers.s3,
