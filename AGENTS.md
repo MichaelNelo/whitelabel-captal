@@ -234,128 +234,94 @@ Dos pares con semánticas distintas pero acopladas:
 
 ### Configuración
 
-**Per-location** (en `location.yaml` → columns en `locations`):
+**Per-location** (en `location.yaml` → columns `unifi_*` en `locations`):
 ```yaml
 unifi:
-  host: "192.168.1.1"           # IP/hostname del Controller
-  apiToken: "YOUR_API_KEY"      # Settings → Integrations
-  port: 8443                    # Opcional (default 8443)
-  site: "default"               # Opcional
-  unifiOs: true                 # Opcional (default true para UDM/Dream Machine)
+  host: "192.168.1.1"           # IP/hostname del UCG en la LAN
+  apiToken: "YOUR_API_KEY"      # Settings → Control Plane → Integrations
+  apMac: "AA:BB:CC:DD:EE:FF"    # MAC del AP — usado por el dispatcher Lambda
+                                # para resolver el slug desde la GA static IP
+  port: 443                     # Opcional (default 443 — Integration v1 vive bajo HTTPS estándar)
+  siteId: "00000000-0000-..."   # UUID del site (NO el nombre "default"). Discover:
+                                # curl https://<ucg>/proxy/network/integration/v1/sites \
+                                #   -H "X-API-KEY:<token>" -k
   defaultDurationMinutes: 1440  # Opcional (default 24h)
+  redirectUrl: ""               # Opcional. Override del destino del dispatcher Lambda.
+                                # Si está set, el Lambda 302 a esa URL en vez de
+                                # <cloudfront>/<slug>/, preservando los params del UCG.
+                                # Use case: location con portal SPA externo (no captal).
 ```
 
 **Infra-shared** (en `shared/captal.yaml` → env-var `UNIFI_PROXY_URL` en la task ECS):
 ```yaml
 unifi:
-  proxyUrl: "http://tinyproxy.captal-dev.local:8888"
+  proxyUrl: "http://tailscale-proxy.captal.local:1055"
   # Vacío → conexión directa (sólo local dev o API en misma LAN del UCG).
 ```
 
-El proxy es necesario en deploy porque ECS Fargate no tiene visibilidad directa a la LAN del cliente. La cadena en producción es **tinyproxy (ECS daemon) → Tailscale subnet router (VM) → LAN → UCG**. `trustAllClientLayer` en `UnifiAuthorizationHandler` configura zio-http con `ClientSSLConfig.Default` (trust-all para self-signed) + `Proxy(url)` cuando hay `proxyUrl`.
+El proxy es necesario en deploy porque ECS Fargate no tiene visibilidad directa a la LAN del cliente. La cadena en producción es **API task → Tailscale proxy (Fargate userspace) → tailnet → Tailscale subnet router (VM on-prem) → LAN cliente → UCG**. `trustAllClientLayer` en `UnifiAuthorizationHandler` configura zio-http con `ClientSSLConfig.Default` (trust-all para self-signed) + `Proxy(url)` cuando hay `proxyUrl`.
 
-### UniFi Controller API — endpoints relevantes
+### UniFi Network Integration v1 API — endpoints relevantes
 
-UniFi expone una **REST API** vía HTTPS al puerto 8443 (Controller) o 443 (Network Application en UniFi OS). Auth: login session-based (cookie `unifises` + `csrf_token`).
+Desde captal v2.0.0 usamos la **Integration v1 API** del UniFi Network Application (no la legacy `/api/s/<site>/cmd/stamgr`). Base URL para deploys on-prem (UCG, UDM):
+
+```
+https://<ucg-host>:<port>/proxy/network/integration/v1
+```
+
+Port típicamente `443` (UCG Ultra y UniFi OS). Auth: header `X-API-KEY` con un token generado en **Settings → Control Plane → Integrations → Create API Key**.
+
+> **Importante**: `api.ui.com` es para Site Manager (cloud); on-prem va siempre por `/proxy/network/integration/v1/` contra el host del UCG.
 
 #### Autenticación
 
 ```http
-POST https://<controller>:8443/api/login
-Content-Type: application/json
-
-{ "username": "captal-portal", "password": "<secret>", "remember": true }
+GET https://<ucg-host>:443/proxy/network/integration/v1/sites
+X-API-KEY: <token>
 ```
 
-Response: cookie `unifises=...` + header `x-csrf-token: ...`. Reusar para todas las requests subsecuentes hasta expirar.
+Response: `{"data": [{"id": "<uuid>", "internalReference": "default", ...}]}` — anotar el `id` del site de interés (es un UUID, **no** el nombre `"default"`). Ese UUID es lo que va en `location.yaml: unifi.siteId`.
 
-UniFi OS variant (newer):
-```http
-POST https://<controller>/api/auth/login
-```
-Returns JWT-like token in `X-CSRF-Token` header + session cookies.
+#### Authorize a guest (flow de dos pasos)
 
-#### Authorize a guest (otorgar acceso)
+1. **Lookup del clientId por MAC**:
+   ```http
+   GET https://<ucg>/proxy/network/integration/v1/sites/<siteId>/clients?filter=macAddress.eq('aa:bb:cc:dd:ee:ff')
+   X-API-KEY: <token>
+   ```
+   Response: `{"data": [{"id": "<clientId>", "macAddress": "...", ...}]}` — extraer `id`.
 
-Endpoint clave para captive-portal flow:
+2. **POST de la action de autorización**:
+   ```http
+   POST https://<ucg>/proxy/network/integration/v1/sites/<siteId>/clients/<clientId>/actions
+   X-API-KEY: <token>
+   Content-Type: application/json
 
-```http
-POST https://<controller>:8443/api/s/<site>/cmd/stamgr
-Cookie: unifises=...
-X-CSRF-Token: ...
-Content-Type: application/json
+   {
+     "action": "AUTHORIZE_GUEST_ACCESS",
+     "timeLimitMinutes": 1440,
+     "dataUsageLimitMBytes": 500,        // optional
+     "rxRateLimitKbps": 100,             // optional
+     "txRateLimitKbps": 100              // optional
+   }
+   ```
+   Response 2xx → device autorizado por `timeLimitMinutes` minutos.
 
-{
-  "cmd": "authorize-guest",
-  "mac": "aa:bb:cc:dd:ee:ff",
-  "minutes": 1440,
-  "up": 5000,        // optional: upload limit kbps
-  "down": 20000,     // optional: download limit kbps
-  "bytes": 5242880,  // optional: total bytes cap
-  "ap_mac": "11:22:33:44:55:66"  // optional: scope to specific AP
-}
-```
-
-Response: `{"meta":{"rc":"ok"}, "data":[]}`. Once authorized, the client's MAC is whitelisted on the AP for the specified duration.
-
-#### Unauthorize a guest (forzar logout)
-
-```http
-POST https://<controller>:8443/api/s/<site>/cmd/stamgr
-{ "cmd": "unauthorize-guest", "mac": "aa:bb:cc:dd:ee:ff" }
-```
-
-#### List currently-authorized guests
-
-```http
-GET https://<controller>:8443/api/s/<site>/stat/guest
-```
-
-Returns guests with: `mac`, `ap_mac`, `authorized_by`, `start`, `end`, `duration` (seconds), `bytes_total`, `tx_bytes`, `rx_bytes`.
-
-Útil para dashboards / reconciliación: "¿el cliente con click_id X efectivamente fue autorizado?".
-
-#### Get a specific guest's session
-
-```http
-GET https://<controller>:8443/api/s/<site>/stat/user/<mac>
-```
-
-Returns: `bytes_total`, `connect_time` (seconds connected), `last_seen`, `network`, `essid`, plus device fingerprinting.
-
-Bueno para mostrar al usuario "llevás 23 minutos navegando" si quisiéramos.
-
-#### List active clients on an AP
-
-```http
-GET https://<controller>:8443/api/s/<site>/stat/sta
-```
-
-Returns ALL connected clients with state (`authorized`, `noted`, `is_guest`, etc.). Filter client-side por `ap_mac`.
-
-#### Disconnect a client (kick)
-
-```http
-POST https://<controller>:8443/api/s/<site>/cmd/stamgr
-{ "cmd": "kick-sta", "mac": "aa:bb:cc:dd:ee:ff" }
-```
-
-Forces reconnect — útil para forzar re-autenticación.
+El `UnifiAuthorizationHandler` (`infra/eventhandlers/UnifiAuthorizationHandler.scala`) implementa exactamente este flow.
 
 ### Caveats conocidos
 
-- **CSRF token expiración**: las sesiones del Controller expiran tras inactividad (~24h). El cliente debe re-loguear automáticamente al recibir 401.
-- **TLS self-signed**: la mayoría de Controllers usan cert auto-firmado. El cliente HTTP debe configurarse para confiar (o terminar TLS en un proxy intermedio).
-- **Rate limits**: el Controller no documenta límites pero puede tirar 503 bajo carga. Implementar retry con backoff.
-- **MAC normalization**: UniFi normaliza a lowercase con `:`. El SPA / cliente puede mandar uppercase con `-`. Normalizar en el `UnifiService` antes de llamar.
-- **Multi-controller setups**: algunas locations grandes tienen un Controller dedicado. El `UnifiConfig` puede ser per-location (en `location.yaml`) en lugar de global.
-- **Webhooks UniFi**: el Controller puede ser configurado para llamar a un webhook on guest-events (authorize, deauthorize, disconnect). Alternativa al polling — menos código a futuro.
+- **siteId es UUID**, no nombre**: la doc usa `{siteId}` ambiguamente. En la práctica el endpoint sólo acepta el UUID retornado por `GET /sites`. Si pegás `"default"` recibís 404.
+- **TLS self-signed**: los UCG usan cert auto-firmado. El zio-http Client en `trustAllClientLayer` usa `ClientSSLConfig.Default` (trust-all). En prod la conexión va por el túnel Tailscale, así que la seguridad de transporte la provee el overlay.
+- **Lookup fallido (404)**: el device tiene que estar conectado al guest network (pre-auth state) para aparecer en `GET /clients`. Si todavía no se asoció o el ESSID no es el correcto, el filter devuelve `data: []`. El handler loggea ERROR y deja la session en `Phase.Ready` para reintento.
+- **MAC normalization**: UniFi normaliza a lowercase con `:`. El handler hace `clientMac.toLowerCase.replace("-", ":")` antes de armar el filter.
+- **API key scope**: el token se asocia al admin que lo creó. Si el admin se da de baja, el token revoca. Rotar manualmente.
+- **Legacy `/api/s/<site>/cmd/stamgr`**: deprecado, no usar. Funcionaba pero requería login session + CSRF token + manejo de cookies.
 
 ### Referencias
 
-- UniFi Controller API (no oficial, mantenida por la comunidad): https://ubntwiki.com/products/software/unifi-controller/api
-- Python SDK como referencia: https://github.com/Art-of-WiFi/UniFi-API-client
-- Guía de captive portal authentication oficial: https://help.ui.com/hc/en-us/articles/115000166827
+- Ubiquiti docs (External Hotspot API): https://help.ui.com/hc/en-us/articles/31228198640023
+- Ubiquiti docs (Network Integration API): https://help.ui.com/hc/en-us/articles/30076656117655
 
 ---
 
@@ -1059,13 +1025,38 @@ CLI implementado con zio-cli en el modulo `cli/`. Permite inicializar proyectos,
 
 ```bash
 captal init [--claude]                          # Crea shared/, locations/, .agents/skills/
+                                                # + .captal/state.json (CLI version actual)
                                                 # --claude tambien crea symlink .claude/skills
 captal shared push                              # Deploy de recursos shared via ECS task
 captal locations add <slug>                     # Crea locations/<slug>/ desde template
 captal locations push <slug>                    # Deploy de location (S3 + ECS + ALB rule)
+captal locations push all                       # Itera push sobre cada locations/<slug>/
+                                                # ("all" es slug sentinel — no es subcomando)
+captal locations deprovision <slug> [-y|--yes]  # Tear-down de la infra AWS de la location
+                                                # (ALB rule, ECS service, task defs, target group,
+                                                # log group, ECR image tags, S3 assets, CF cache).
+                                                # locations/<slug>/ local NO se toca.
+captal migrate [--dry-run] [-y|--yes]           # Aplica schema migrations a los YAMLs del
+                                                # proyecto (DSL declarativo, idempotente).
+                                                # Ver "Sistema de migrations de schema" abajo.
 captal video add <slug> <advertiser> <file>     # Sube video a S3 + crea video.yaml
 captal video add-promo <slug> <file>            # Sube promo a S3 + crea promo.yaml
+captal update [--url <url>]                     # Self-update del jar desde S3 releases
 ```
+
+### Sistema de migrations de schema (desde CLI v2.1.0)
+
+Cada breaking change del modelo de provision se registra como una entry en `cli/src/.../migrations/Migration.scala::Migrations.all` con primitivas declarativas:
+
+- **`Add(path, value)`**: setea field si falta (no clobbers overrides)
+- **`Delete(path)`**: borra field si existe
+- **`Rename(from, to)`**: mueve value entre paths (no transforma)
+
+Las paths usan **`YamlPath`** (opaque type con validación compile-time via `compiletime.ops.string.Matches`): `YamlPath("unifi.siteId")` compila, `YamlPath("a..b")` falla compilación con `error("Invalid YamlPath...")`. Para inputs dinámicos: `YamlPath.parse("...")` retorna Either.
+
+Tras cada invocación de cualquier `captal`, un hook en `Main.scala::run` compara la CLI version corriente con la `lastSeenCliVersion` del `.captal/state.json`. Migrations cuya `version` esté en `(lastSeen, current]` se reportan como pending (sólo cuentan `Delete` y `Rename` — `Add` es silencioso porque típicamente es opcional). El warning sugiere correr `captal migrate`.
+
+**Para agregar una migration nueva**: editar `Migrations.all` y agregar al final una `Migration` con la `version: SemVer` del próximo release que rompe el schema. Skill: `bump-cli-version` (ver sección abajo).
 
 ### Configuracion
 
@@ -1581,9 +1572,17 @@ Si tras redeploy de rqlite (o force-deploy del API) las queries devuelven 500 / 
 
 ### Versiones publicadas en ECR / S3
 
-- **API**: `captal-api-dev:v1.0.0` → `v1.1.0` (cookie isolation + soft-validate + cross-location user) → `v1.2.0` (= v1.1.0 + soft-delete wiring) → `v1.3.0` (= v1.2.0 + click_id pendiente push como v1.4.0).
-- **Provision**: `captal-provision-dev:v1.0.0` → `v1.3.0` (con el soft-delete wiring).
-- **CLI**: `1.0.0` → `1.1.x` (ALB rule fix, target group settings) → `1.2.0` (modify TG settings via push) → `1.3.x` (video CloudFront URL fix, brand-icon path fix, skills nuevas) → `1.4.0` (rolloutApiBase, revertida) → `1.5.0` (self-update + skills update) → `1.5.1` (HTTP fetch publico) → `1.5.2` (ECR auth antes de build) → `1.5.3` (wrapper-based JAR swap para Windows) → `1.5.4` (skills add-video/add-survey TODO note) → `1.6.3`. Publicada en `s3://captal-cli-releases-dev/latest/` y `v<version>/`.
+- **API**: `captal-api-dev:v1.0.0` → `v1.1.0` (cookie isolation + soft-validate + cross-location user) → `v1.2.0` (= v1.1.0 + soft-delete wiring) → `v1.3.0` (= v1.2.0 + click_id pendiente push como v1.4.0) → `v1.6.0` (UnifiAuthorizationHandler stack: handler post-commit + /api/finish StatusResponse + proxy config) → `v2.0.0` (UniFi Integration v1 API: siteId UUID, two-step lookup+authorize, drop unifiOs) → `v2.1.0` (ap_mac moved into unifi block + redirectUrl override).
+- **Provision**: `captal-provision-dev:v1.0.0` → `v1.3.0` (con el soft-delete wiring). Co-pushed con API en v2.0.0+ via `images.api` referenciado en `shared/captal.yaml`.
+- **CLI**: `1.0.0` → `1.6.4` (varias rondas: ALB rule fix, target group settings, video CloudFront URL fix, self-update, skills, click_id) → `1.7.0` (deprovision command + push refactor) → `1.7.1` (push-all merged into push 'all' sentinel) → `2.0.1` (UniFi Integration v1 schema break: site→siteId, drop unifiOs) → `2.1.0` (ap_mac→unifi.apMac + redirectUrl + **sistema de migrations declarativo** con YamlPath compile-time validated + auto-warning hook + `captal migrate` command).
+- **rqlite custom image**: `captal-rqlite:1.0.0` → `1.0.4` (peers.json single-node recovery + DNS-based identity + continue_on_failure auto-restore + entrypoint v4 nuclear-clean migration). El módulo TF de rqlite usa `var.rqlite_image_tag` (no más `:latest`) — bump explícito por cada cambio al entrypoint o Dockerfile.
+
+### Infrastructure changes (whitelabel-captal-infrastructure repo)
+
+- **Tailscale proxy module** (`modules/tailscale-proxy/`): ECS Fargate userspace Tailscale daemon exposing HTTP CONNECT proxy on port 1055. Routes API → tailnet → on-prem UCG. Auth key minted automáticamente vía `tailscale/tailscale` TF provider; creds via env vars `TAILSCALE_API_KEY` + `TAILSCALE_TAILNET`.
+- **Global Accelerator + Portal Dispatcher** (`modules/global-accelerator/` + `modules/portal-dispatcher/`): 2 IPv4 anycast estáticas en frente del ALB (UniFi External Portal sólo acepta IPv4). El Lambda dispatcher (Python en VPC) recibe los hits del UCG en `/guest/s/*`, lookup del slug via `SELECT slug, unifi_redirect_url FROM locations WHERE unifi_ap_mac = ?` contra rqlite, y 302 al CloudFront destino. Gatable con `enable_global_accelerator` (default true).
+- **rqlite single-node hardening**: V18 migration de DB (siteId rename + drop unifiOs), V19 (ap_mac → unifi_ap_mac + add unifi_redirect_url). Entrypoint v4 nuclear-clean (wipea raft.db, rsnapshots/, db.sqlite3* en primer boot via sentinel). peers.json escrito on-boot para forzar membership = DNS identity. `continue_on_failure: true` en auto-restore para que un backup S3 faltante no crashee el cluster.
+- **Multi-node deployment percentages** (`modules/rqlite/main.tf`): cálculo automático de `deployment_minimum_healthy_percent` y `deployment_maximum_percent` a partir de `var.desired_count` (Raft quorum-aware: para N=5, min=60%, max=120% — siempre mantiene quorum durante rolling deploys). Single-node mantiene 0/100 stop-then-start.
 
 ---
 
