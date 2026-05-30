@@ -17,10 +17,12 @@ enum CaptalCommand:
   case SkillsUpdate
   case Update(baseUrl: String)
   case Migrate(dryRun: Boolean, yes: Boolean)
+  case InfraInit
+  case InfraUpdate
 
 object Main extends ZIOCliDefault:
 
-  private val cliVersion = "2.1.1"
+  private val cliVersion = "2.2.1"
   private val slugArg = Args.text("slug")
 
   // ─── init ─────────────────────────────────────────────────────────────────
@@ -127,10 +129,28 @@ object Main extends ZIOCliDefault:
         "Apply schema migrations to project YAMLs (e.g. locations/*/location.yaml). Idempotent - safe to re-run. --dry-run shows changes without writing; --yes skips the comments-will-be-lost prompt (CI-friendly). Use git to recover from mistakes."))
     .map((dryRun, yes) => CaptalCommand.Migrate(dryRun, yes))
 
+  // ─── infra (embedded Terraform bundle) ────────────────────────────────────
+
+  private val infraInit: Command[CaptalCommand] = Command("init", Options.none, Args.none)
+    .withHelp(
+      HelpDoc.p(
+        "Create infrastructure/aws/ in the project root by extracting the AWS Terraform bundle from this CLI. Existing files are skipped. After running, customize backend.tf + your environments/<env>/terraform.tfvars per your AWS account, then `tofu init && tofu apply`."))
+    .map(_ => CaptalCommand.InfraInit)
+
+  private val infraUpdate: Command[CaptalCommand] = Command("update", Options.none, Args.none)
+    .withHelp(
+      HelpDoc.p(
+        "Add any infrastructure files bundled with this CLI version that are missing from infrastructure/aws/. Existing files are left alone (operator customizations preserved). Same idempotent skip-if-exists semantics as `captal skills update`."))
+    .map(_ => CaptalCommand.InfraUpdate)
+
+  private val infra: Command[CaptalCommand] = Command("infra", Options.none, Args.none)
+    .withHelp(HelpDoc.p("Manage the embedded provider infrastructure bundle (currently AWS only; future providers will live under infrastructure/<provider>/)"))
+    .subcommands(infraInit, infraUpdate)
+
   // ─── root ─────────────────────────────────────────────────────────────────
 
   private val captal: Command[CaptalCommand] = Command("captal", Options.none, Args.none)
-    .subcommands(init, shared, locations, video, skills, update, migrate)
+    .subcommands(init, shared, locations, video, skills, update, migrate, infra)
 
   val cliApp: CliApp[Any, Any, CaptalCommand] =
     CliApp.make(
@@ -202,6 +222,9 @@ object Main extends ZIOCliDefault:
 
             case CaptalCommand.Migrate(dryRun, yes) =>
               MigrateCommand.run(dryRun, yes)
+
+            case CaptalCommand.InfraInit   => InfraCommand.init
+            case CaptalCommand.InfraUpdate => InfraCommand.update
         ).as(cmd)
 
       program.tapError:
