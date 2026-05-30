@@ -290,9 +290,17 @@ object api extends BaseModule:
     private val rqliteTestPort = 4011
     private val rqliteContainerName = "rqlite-test"
 
+    // Task.Input runs on every invocation (not cached on inputs like Task), so
+    // each `mill api.test` re-verifies that the Docker container is actually
+    // alive and starts it if missing. Plain `Task` would cache the URL and
+    // never re-check, which silently fails when the operator removes the
+    // container between runs (we hit exactly that footgun before — symptoms:
+    // tests hang on "HTTP POST error: (-1) [http://localhost:4011/...]").
+    def rqliteTestUrl: T[String] = Task.Input:
+      ensureRqlite(rqliteContainerName, rqliteTestPort)
+
     override def forkEnv: T[Map[String, String]] = Task:
-      val url = ensureRqlite(rqliteContainerName, rqliteTestPort)
-      super.forkEnv() ++ Map("TEST_DB_URL" -> url)
+      super.forkEnv() ++ Map("TEST_DB_URL" -> rqliteTestUrl())
 
     def stopRqlite() = Task.Command:
       os.proc("docker", "rm", "-f", rqliteContainerName).call(check = false)
