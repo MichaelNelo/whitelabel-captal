@@ -47,17 +47,15 @@ object Main extends ZIOCliDefault:
     .map(CaptalCommand.LocationsAdd(_))
 
   private val locationsPush: Command[CaptalCommand] = Command("push", Options.none, slugArg)
-    .withHelp(HelpDoc.p("Deploy location to AWS (S3 + ECS + ALB)"))
-    .map(CaptalCommand.LocationsPush(_))
-
-  private val locationsPushAll: Command[CaptalCommand] = Command(
-    "push-all",
-    Options.none,
-    Args.none)
     .withHelp(
       HelpDoc.p(
-        "Deploy ALL locations under locations/<slug>/ in sequence. Useful after bumping the API base image version in shared/captal.yaml."))
-    .map(_ => CaptalCommand.LocationsPushAll)
+        "Deploy a location to AWS (S3 + ECS + ALB). Pass a specific slug, or the literal 'all' to deploy every location under locations/ in sequence (useful after bumping the API base image in shared/captal.yaml)."))
+    .map:
+      case "all" =>
+        CaptalCommand.LocationsPushAll
+      case slug =>
+        CaptalCommand.LocationsPush(slug)
+
   private val locationsDeprovision: Command[CaptalCommand] = Command(
     "deprovision",
     Options.boolean("yes").alias("y"),
