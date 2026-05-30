@@ -1,7 +1,7 @@
 ---
 name: bump-cli-version
-description: Use when releasing a new version of the captal CLI to the public S3 bucket. Covers version bump, publish, and operator update flow. Triggers on "bump cli", "release cli", "publish cli", "subir cli", "publicar captal".
-version: 1.0.0
+description: Use when releasing a new version of the captal CLI to the public S3 bucket. Covers version bump, publish, operator update flow, and (since 2.1.0) the schema-migration registry. Triggers on "bump cli", "release cli", "publish cli", "subir cli", "publicar captal".
+version: 1.1.0
 ---
 
 # Release a new captal CLI version
@@ -39,7 +39,35 @@ Bump SemVer:
 private val cliVersion = "X.Y.Z"
 ```
 
-`cliVersion` is read by `captal --version`, by `UpdateCommand` for comparison, and embedded in the bash/bat wrappers' `version.txt`.
+`cliVersion` is read by `captal --version`, by `UpdateCommand` for comparison, embedded in the bash/bat wrappers' `version.txt`, AND used by the schema-migration warning hook (see step 1b).
+
+### 1b. If this release breaks the provision schema — register a migration
+
+When the release renames, removes, or changes the semantics of a YAML field that operators write (e.g. `location.yaml`, `shared/captal.yaml`), append a `Migration` entry to `cli/src/whitelabel/captal/cli/migrations/Migration.scala::Migrations.all`:
+
+```scala
+Migration(
+  version = SemVer(X, Y, Z),
+  description = "<one-line summary>",
+  fileGlob = "locations/*/location.yaml",  // or other pattern
+  ops = List(
+    YamlOp.Rename(YamlPath("unifi.site"), YamlPath("unifi.siteId")),
+    YamlOp.Delete(YamlPath("unifi.unifiOs"))
+  )
+)
+```
+
+Rules:
+- **APPEND only** — never modify or remove earlier entries. They're idempotent and harmless on already-migrated files.
+- The `version` must match the release tag (`X.Y.Z` in step 1) so the warning hook fires for operators upgrading from a prior version.
+- Paths use the `YamlPath` opaque type with **compile-time validation** via `compiletime.ops.string.Matches`. Malformed literals like `YamlPath("a..b")` fail compilation.
+- `Add` ops are silent in the warning hook (operators see them only when running `captal migrate`). `Delete` and `Rename` fire warnings.
+- After adding the migration, run `./mill cli.test` — the test suite in `cli/test/.../migrations/MigrationsSpec.scala` should still pass (or extend it if the new ops cover novel patterns).
+
+The operator's experience after upgrading:
+- Their first invocation of any `captal` command after `captal update` shows a warning listing pending migrations.
+- They run `captal migrate --dry-run` to preview, then `captal migrate` (or `--yes` for CI) to apply.
+- `.captal/state.json` is updated automatically — the warning won't repeat.
 
 ### 2. Publish
 
