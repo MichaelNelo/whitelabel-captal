@@ -148,12 +148,13 @@ final case class LocationRow(
     isActive: Int,
     createdAt: String,
     updatedAt: String,
-    apMac: Option[String],
+    unifiApMac: Option[String],
     unifiHost: Option[String] = None,
     unifiPort: Option[Int] = None,
     unifiSiteId: Option[String] = None,
     unifiApiToken: Option[String] = None,
-    unifiDurationMinutes: Option[Int] = None)
+    unifiDurationMinutes: Option[Int] = None,
+    unifiRedirectUrl: Option[String] = None)
 
 final case class ProvisionManifestRow(
     entityKey: String,

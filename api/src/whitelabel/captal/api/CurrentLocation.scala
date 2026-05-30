@@ -8,7 +8,7 @@ import zio.*
   * `LOCATION_SLUG` env var → DB lookup. Empty when there is no slug (dev/standalone mode).
   *
   * Used to soft-validate inbound captive-portal headers (e.g. compare `X-Ap-Mac` with the
-  * provisioned `location.ap_mac`) without requiring a per-request DB query.
+  * provisioned `unifi.apMac`) without requiring a per-request DB query.
   */
 final case class CurrentLocation(
     id: Option[String],
@@ -32,5 +32,9 @@ object CurrentLocation:
             .serviceWithZIO[LocationService](_.findBySlug(s))
             .someOrFail(LocationService.LocationNotFound(s))
             .map: row =>
-              CurrentLocation(Some(row.id), Some(row.slug), row.apMac, UnifiAccess.fromRow(row))
+              CurrentLocation(
+                Some(row.id),
+                Some(row.slug),
+                row.unifiApMac,
+                UnifiAccess.fromRow(row))
 end CurrentLocation
