@@ -30,15 +30,6 @@ end VideoRoutes
 final class VideoRoutes(sessionEndpoint: SessionEndpoint):
   import VideoRoutes.*
 
-  private def toApiError(error: Throwable): UIO[ApiError] =
-    error match
-      case Flow.HandlerError(errors) =>
-        ZIO.succeed(ApiError.fromAppErrors(errors))
-      case SessionContext.NotSet =>
-        ZIO.succeed(ApiError.SessionMissing)
-      case other =>
-        ZIO.logErrorCause("Internal error", Cause.fail(other)).as(ApiError.fromThrowable(other))
-
   val nextVideoRoute: ZServerEndpoint[SessionContext & SessionService & NextVideoFlowType, Any] =
     sessionEndpoint
       .secured(
@@ -62,7 +53,7 @@ final class VideoRoutes(sessionEndpoint: SessionEndpoint):
                       e
                     case Right(c) =>
                       new Exception(s"Defect: ${c.prettyPrint}")
-                toApiError(error).flatMap(ZIO.fail(_))
+                ApiErrors.failWith(error)
             // Update phase when no video is available
             _ <-
               response match
@@ -103,7 +94,7 @@ final class VideoRoutes(sessionEndpoint: SessionEndpoint):
                       e
                     case Right(c) =>
                       new Exception(s"Defect: ${c.prettyPrint}")
-                toApiError(error).flatMap(ZIO.fail(_))
+                ApiErrors.failWith(error)
           yield result
 
   def routes: List[ZServerEndpoint[FullEnv, Any]] = List(

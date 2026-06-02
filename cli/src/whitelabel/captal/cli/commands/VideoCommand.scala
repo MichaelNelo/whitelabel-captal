@@ -83,16 +83,17 @@ object VideoCommand:
   // Helpers
   // ─────────────────────────────────────────────────────────────────────────────
 
-  private def validateVideoFile(path: String): IO[CliError, Path] = ZIO
-    .attempt(Paths.get(path))
-    .mapError(_ => CliError.InvalidVideoPath(path))
-    .flatMap: p =>
-      if !Files.exists(p) then
-        ZIO.fail(CliError.InvalidVideoPath(s"file not found: $path"))
-      else if !Files.isRegularFile(p) then
-        ZIO.fail(CliError.InvalidVideoPath(s"not a file: $path"))
-      else
-        ZIO.succeed(p)
+  private def validateVideoFile(path: String): IO[CliError, Path] =
+    for
+      p <- ZIO.attempt(Paths.get(path)).mapError(_ => CliError.InvalidVideoPath(path))
+      _ <-
+        if !Files.exists(p) then
+          ZIO.fail(CliError.InvalidVideoPath(s"file not found: $path"))
+        else if !Files.isRegularFile(p) then
+          ZIO.fail(CliError.InvalidVideoPath(s"not a file: $path"))
+        else
+          ZIO.unit
+    yield p
 
   private def upload(bucket: String, key: String, file: Path): ZIO[S3Client, CliError, Unit] =
     ZIO

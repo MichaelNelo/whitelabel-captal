@@ -277,11 +277,13 @@ object Main extends ZIOCliDefault:
     * N → save state with the conflict list cached for subsequent invocations.
     */
   private def promptApplyNow(conflicts: List[String], current: SemVer): UIO[Unit] =
-    Output.warn(
-      s"${conflicts.size} file(s) need schema migrations - your YAMLs may be out of date:") *>
-      ZIO.foreachDiscard(conflicts)(p => Output.detail(s"  - $p")) *>
-      Console.print("Apply now? [Y/n]: ").orDie *>
-      Console.readLine.orDie.flatMap: answer =>
+    for
+      _      <- Output.warn(
+        s"${conflicts.size} file(s) need schema migrations - your YAMLs may be out of date:")
+      _      <- ZIO.foreachDiscard(conflicts)(p => Output.detail(s"  - $p"))
+      _      <- Console.print("Apply now? [Y/n]: ").orDie
+      answer <- Console.readLine.orDie
+      _      <-
         if answer.trim.isEmpty || answer.trim.toLowerCase.startsWith("y") then
           MigrateCommand
             .run(dryRun = false, yes = true)
@@ -289,6 +291,7 @@ object Main extends ZIOCliDefault:
         else
           CliState.save(CliState(current, conflicts)) *>
             Output.info("Skipped. Run `captal migrate` later to apply.")
+    yield ()
 
   /** Re-scan ONLY the cached files. If the list empties, delete state.json. Otherwise update it
     * and emit a warning.

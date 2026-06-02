@@ -8,7 +8,7 @@ import cats.syntax.functor.*
 import whitelabel.captal.core
 import whitelabel.captal.core.Op.{convertError, convertEvent}
 import whitelabel.captal.core.application.conversions.given
-import whitelabel.captal.core.application.{Error, Event, NextStep}
+import whitelabel.captal.core.application.{Error, NextStep}
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository}
 import whitelabel.captal.core.survey.question.AnswerValue
 import whitelabel.captal.core.user.ops.*
@@ -23,21 +23,23 @@ object AnswerLocationHandler:
     new Handler[F, AnswerLocationCommand]:
       type Result = NextStep
 
-      def handle(cmd: AnswerLocationCommand) = userRepo
-        .findAnswering()
-        .flatMap:
-          case None =>
-            Monad[F].pure(core.Op.fail[Event, Error, NextStep](Error.UserNotIdentified))
-          case Some(user) =>
-            surveyRepo
-              .findWithLocationQuestion(user.state.surveyId, user.state.questionId)
-              .map:
-                case None =>
-                  core.Op.fail(Error.NoSurveyAssigned)
-                case Some(survey) =>
-                  user
-                    .answerLocation(survey, cmd.answer, cmd.occurredAt)
-                    .convertEvent
-                    .convertError
-                    .as(nextStep)
+      def handle(cmd: AnswerLocationCommand) =
+        for
+          userOpt   <- userRepo.findAnswering()
+          surveyOpt <- userOpt match
+            case Some(user) =>
+              surveyRepo.findWithLocationQuestion(user.state.surveyId, user.state.questionId)
+            case None =>
+              Monad[F].pure(None)
+        yield (userOpt, surveyOpt) match
+          case (None, _) =>
+            core.Op.fail(Error.UserNotIdentified)
+          case (Some(_), None) =>
+            core.Op.fail(Error.NoSurveyAssigned)
+          case (Some(user), Some(survey)) =>
+            user
+              .answerLocation(survey, cmd.answer, cmd.occurredAt)
+              .convertEvent
+              .convertError
+              .as(nextStep)
 end AnswerLocationHandler
