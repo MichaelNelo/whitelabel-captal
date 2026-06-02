@@ -206,5 +206,64 @@ object PhaseValidationSuite:
             _        <- TestFixtures.updateSessionPhase(user.SessionId.unsafe(cookie), Phase.Ready)
             response <- getStatus(backend, Some(cookie))
           yield assertTrue(response.code.isSuccess, response.body.contains("ready"))
+        ,
+        // ─────────────────────────────────────────────────────────────────────────
+        // Authorized phase: action endpoints must reject so a finished user can't
+        // re-trigger the flow. /api/status keeps working so the SPA can poll for
+        // access expiration.
+        // ─────────────────────────────────────────────────────────────────────────
+        test("Authorized phase rejects all action endpoints but keeps /status polling open"):
+          for
+            _        <- TestFixtures.seedEmailSurvey
+            _        <- TestFixtures.seedProfilingSurvey
+            _        <- TestFixtures.seedLocationSurvey
+            backend  <- testBackend
+            cookie   <- createSession(backend)
+            _        <- TestFixtures.updateSessionPhase(user.SessionId.unsafe(cookie), Phase.Authorized)
+            // Status — must still work (polling open)
+            statusResp <- getStatus(backend, Some(cookie))
+            // Action endpoints — all must reject with wrong_phase + "Authorized"
+            nextSurveyResp <- getNextSurvey(backend, cookie)
+            emailResp      <- postEmailAnswer(backend, cookie, "x@example.com")
+            profilingResp  <- postProfilingAnswer(backend, cookie, "any-option")
+            locationResp   <- postLocationAnswer(backend, cookie, "any-option")
+            nextVideoResp  <- getNextVideo(backend, cookie)
+            watchedResp    <- postMarkVideoWatched(backend, cookie, 10, completed = true)
+            nextAdvResp    <- getNextAdvertiserSurvey(backend, cookie)
+            advAnswerResp  <- postAdvertiserAnswer(backend, cookie, "any-option")
+            finishResp     <- postFinish(backend, cookie)
+          yield assertTrue(
+            // /status — open
+            statusResp.code.isSuccess,
+            statusResp.body.contains("authorized"),
+            // Each action — 400 wrong_phase mentioning current phase Authorized
+            nextSurveyResp.code.code == 400,
+            nextSurveyResp.body.contains("wrong_phase"),
+            nextSurveyResp.body.contains("Authorized"),
+            emailResp.code.code == 400,
+            emailResp.body.contains("wrong_phase"),
+            emailResp.body.contains("Authorized"),
+            profilingResp.code.code == 400,
+            profilingResp.body.contains("wrong_phase"),
+            profilingResp.body.contains("Authorized"),
+            locationResp.code.code == 400,
+            locationResp.body.contains("wrong_phase"),
+            locationResp.body.contains("Authorized"),
+            nextVideoResp.code.code == 400,
+            nextVideoResp.body.contains("wrong_phase"),
+            nextVideoResp.body.contains("Authorized"),
+            watchedResp.code.code == 400,
+            watchedResp.body.contains("wrong_phase"),
+            watchedResp.body.contains("Authorized"),
+            nextAdvResp.code.code == 400,
+            nextAdvResp.body.contains("wrong_phase"),
+            nextAdvResp.body.contains("Authorized"),
+            advAnswerResp.code.code == 400,
+            advAnswerResp.body.contains("wrong_phase"),
+            advAnswerResp.body.contains("Authorized"),
+            finishResp.code.code == 400,
+            finishResp.body.contains("wrong_phase"),
+            finishResp.body.contains("Authorized")
+          )
       )
 end PhaseValidationSuite
