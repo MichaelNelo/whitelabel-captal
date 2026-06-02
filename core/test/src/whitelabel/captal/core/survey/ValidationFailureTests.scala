@@ -44,7 +44,7 @@ object ValidationFailureTests extends TestSuite:
     val question = makeQuestion(questionType, commonRules)
     val user = makeUser()
     val survey = makeEmailSurvey(question)
-    Op.run(user.answerEmail(survey, value, Instant.now)).void
+    Op.run(user.answerEmail(survey, value, Instant.EPOCH)).void
 
   private def failsWith[E <: Error](
       questionType: QuestionType,

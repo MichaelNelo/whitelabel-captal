@@ -1,7 +1,5 @@
 package whitelabel.captal.api
 
-import java.time.Instant
-
 import sttp.tapir.json.circe.*
 import sttp.tapir.ztapir.*
 import whitelabel.captal.core.application.commands.*
@@ -57,8 +55,9 @@ final class AdvertiserSurveyRoutes(sessionEndpoint: SessionEndpoint):
             case Some(videoId) =>
               for
                 flow     <- ZIO.service[NextAdvertiserSurveyFlowType]
+                now      <- Clock.instant
                 response <- flow
-                  .execute(ProvideNextAdvertiserSurveyCommand(videoId))
+                  .execute(ProvideNextAdvertiserSurveyCommand(videoId, now))
                   .map(AdvertiserSurveyResponse.from)
                   .catchAllCause: cause =>
                     val error =
@@ -97,7 +96,8 @@ final class AdvertiserSurveyRoutes(sessionEndpoint: SessionEndpoint):
             case Some(videoId) =>
               for
                 answerFlow <- ZIO.service[AnswerAdvertiserFlowType]
-                cmd = AnswerAdvertiserCommand(answer = request.answer, occurredAt = Instant.now)
+                now <- Clock.instant
+                cmd = AnswerAdvertiserCommand(answer = request.answer, occurredAt = now)
                 _ <- answerFlow
                   .execute(cmd)
                   .catchAllCause: cause =>

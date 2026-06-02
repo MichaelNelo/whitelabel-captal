@@ -1,6 +1,5 @@
 package whitelabel.captal.infra.eventhandlers
 
-import java.time.Instant
 import java.util.UUID
 
 import io.getquill.*
@@ -24,7 +23,7 @@ object SurveyProgressHandler:
         val updates = events.flatMap(extractProgressUpdate)
         ZIO.foreachDiscard(updates): update =>
           for
-            now         <- ZIO.succeed(Instant.now.toString)
+            now         <- Clock.instant.map(_.toString)
             existingOpt <-
               run(
                 SurveyService.findByUserAndSurveyQuery(lift(update.userId), lift(update.surveyId)))

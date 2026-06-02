@@ -79,7 +79,7 @@ object PushCommand:
       locationDir = LocationsDir.resolve(slug)
       locationYaml <- readLocationYaml(locationDir)
       desiredCount = locationYaml.desiredCount.getOrElse(config.aws.ecs.desiredCount)
-      tag          = s"$slug-${timestampTag()}"
+      tag          <- timestampTag.map(t => s"$slug-$t")
 
       _ <- Output.header(s"Deploying location '$slug'")
 
@@ -109,14 +109,15 @@ object PushCommand:
       _ <- Output.success(s"Deployment complete for '$slug'")
     yield ()
 
-  private def timestampTag(): String =
-    val fmt = java
-      .time
-      .format
-      .DateTimeFormatter
-      .ofPattern("yyyyMMdd'T'HHmmss")
-      .withZone(java.time.ZoneOffset.UTC)
-    fmt.format(java.time.Instant.now())
+  private def timestampTag: UIO[String] =
+    Clock.instant.map: now =>
+      val fmt = java
+        .time
+        .format
+        .DateTimeFormatter
+        .ofPattern("yyyyMMdd'T'HHmmss")
+        .withZone(java.time.ZoneOffset.UTC)
+      fmt.format(now)
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Location YAML
@@ -516,23 +517,24 @@ object PushCommand:
   // ─────────────────────────────────────────────────────────────────────────────
 
   private def invalidateCdn(slug: String): ZIO[CaptalConfig & CloudFrontClient, CliError, Unit] =
-    aws("CloudFront createInvalidation"):
-      ZIO.serviceWithZIO[CloudFrontClient]: cf =>
-        ZIO.serviceWithZIO[CaptalConfig]: config =>
-          ZIO.attemptBlocking:
-            cf.createInvalidation(
-              CreateInvalidationRequest
-                .builder()
-                .distributionId(config.aws.cloudfront.distributionId)
-                .invalidationBatch(
-                  InvalidationBatch
-                    .builder()
-                    .callerReference(java.time.Instant.now().toString)
-                    .paths(CfPaths.builder().items(s"/$slug/*").quantity(1).build())
-                    .build())
-                .build())
-    .flatMap: _ =>
-      Output.detail(s"CloudFront invalidation requested for /$slug/*")
+    Clock.instant.flatMap: now =>
+      aws("CloudFront createInvalidation"):
+        ZIO.serviceWithZIO[CloudFrontClient]: cf =>
+          ZIO.serviceWithZIO[CaptalConfig]: config =>
+            ZIO.attemptBlocking:
+              cf.createInvalidation(
+                CreateInvalidationRequest
+                  .builder()
+                  .distributionId(config.aws.cloudfront.distributionId)
+                  .invalidationBatch(
+                    InvalidationBatch
+                      .builder()
+                      .callerReference(now.toString)
+                      .paths(CfPaths.builder().items(s"/$slug/*").quantity(1).build())
+                      .build())
+                  .build())
+      .flatMap: _ =>
+        Output.detail(s"CloudFront invalidation requested for /$slug/*")
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Helpers

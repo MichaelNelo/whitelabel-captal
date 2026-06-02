@@ -133,83 +133,84 @@ object SessionService:
           locale: String,
           phase: Phase,
           portalParams: CaptivePortalParams): Task[SessionData] =
-        val sessionId = user.SessionId.generate
-        val deviceId = user.DeviceId.fromUserAgent(userAgent)
-        val now = java.time.Instant.now.toString
+        Clock.instant.flatMap: instant =>
+          val sessionId = user.SessionId.generate
+          val deviceId = user.DeviceId.fromUserAgent(userAgent)
+          val now = instant.toString
 
-        // Upsert device record
-        val deviceRow = DeviceRow(
-          id = deviceId,
-          userAgent = userAgent,
-          createdAt = now,
-          updatedAt = now)
+          // Upsert device record
+          val deviceRow = DeviceRow(
+            id = deviceId,
+            userAgent = userAgent,
+            createdAt = now,
+            updatedAt = now)
 
-        val upsertDevice = run(
-          query[DeviceRow]
-            .insertValue(lift(deviceRow))
-            .onConflictUpdate(_.id)(
-              (t, e) => t.userAgent -> e.userAgent,
-              (t, _) => t.updatedAt -> lift(now)))
+          val upsertDevice = run(
+            query[DeviceRow]
+              .insertValue(lift(deviceRow))
+              .onConflictUpdate(_.id)(
+                (t, e) => t.userAgent -> e.userAgent,
+                (t, _) => t.updatedAt -> lift(now)))
 
-        // Create session
-        val sessionRow = SessionRow(
-          id = sessionId,
-          userId = None,
-          deviceId = deviceId,
-          locale = locale,
-          phase = phase,
-          currentSurveyId = None,
-          currentQuestionId = None,
-          currentVideoId = None,
-          lastPromoVideoId = None,
-          currentAdvertiserId = None,
-          locationId = locationId,
-          createdAt = now,
-          clientMac = portalParams.clientMac,
-          apMac = portalParams.apMac,
-          redirectUrl = portalParams.redirectUrl,
-          ssid = portalParams.ssid,
-          clickId = portalParams.clickId
-        )
+          // Create session
+          val sessionRow = SessionRow(
+            id = sessionId,
+            userId = None,
+            deviceId = deviceId,
+            locale = locale,
+            phase = phase,
+            currentSurveyId = None,
+            currentQuestionId = None,
+            currentVideoId = None,
+            lastPromoVideoId = None,
+            currentAdvertiserId = None,
+            locationId = locationId,
+            createdAt = now,
+            clientMac = portalParams.clientMac,
+            apMac = portalParams.apMac,
+            redirectUrl = portalParams.redirectUrl,
+            ssid = portalParams.ssid,
+            clickId = portalParams.clickId
+          )
 
-        val insertSession = run(
-          query[SessionRow].insert(
-            _.id                  -> lift(sessionRow.id),
-            _.userId              -> lift(sessionRow.userId),
-            _.deviceId            -> lift(sessionRow.deviceId),
-            _.locale              -> lift(sessionRow.locale),
-            _.phase               -> lift(sessionRow.phase),
-            _.currentSurveyId     -> lift(sessionRow.currentSurveyId),
-            _.currentQuestionId   -> lift(sessionRow.currentQuestionId),
-            _.currentVideoId      -> lift(sessionRow.currentVideoId),
-            _.lastPromoVideoId    -> lift(sessionRow.lastPromoVideoId),
-            _.currentAdvertiserId -> lift(sessionRow.currentAdvertiserId),
-            _.locationId          -> lift(sessionRow.locationId),
-            _.createdAt           -> lift(sessionRow.createdAt),
-            _.clientMac           -> lift(sessionRow.clientMac),
-            _.apMac               -> lift(sessionRow.apMac),
-            _.redirectUrl         -> lift(sessionRow.redirectUrl),
-            _.ssid                -> lift(sessionRow.ssid),
-            _.clickId             -> lift(sessionRow.clickId)
-          ))
-
-        (upsertDevice *> insertSession).orDie *>
-          ZIO.succeed(
-            SessionData(
-              sessionId,
-              None,
-              locale,
-              phase,
-              None,
-              None,
-              None,
-              locationId = locationId,
-              clientMac = portalParams.clientMac,
-              apMac = portalParams.apMac,
-              redirectUrl = portalParams.redirectUrl,
-              ssid = portalParams.ssid,
-              clickId = portalParams.clickId
+          val insertSession = run(
+            query[SessionRow].insert(
+              _.id                  -> lift(sessionRow.id),
+              _.userId              -> lift(sessionRow.userId),
+              _.deviceId            -> lift(sessionRow.deviceId),
+              _.locale              -> lift(sessionRow.locale),
+              _.phase               -> lift(sessionRow.phase),
+              _.currentSurveyId     -> lift(sessionRow.currentSurveyId),
+              _.currentQuestionId   -> lift(sessionRow.currentQuestionId),
+              _.currentVideoId      -> lift(sessionRow.currentVideoId),
+              _.lastPromoVideoId    -> lift(sessionRow.lastPromoVideoId),
+              _.currentAdvertiserId -> lift(sessionRow.currentAdvertiserId),
+              _.locationId          -> lift(sessionRow.locationId),
+              _.createdAt           -> lift(sessionRow.createdAt),
+              _.clientMac           -> lift(sessionRow.clientMac),
+              _.apMac               -> lift(sessionRow.apMac),
+              _.redirectUrl         -> lift(sessionRow.redirectUrl),
+              _.ssid                -> lift(sessionRow.ssid),
+              _.clickId             -> lift(sessionRow.clickId)
             ))
+
+          (upsertDevice *> insertSession).orDie *>
+            ZIO.succeed(
+              SessionData(
+                sessionId,
+                None,
+                locale,
+                phase,
+                None,
+                None,
+                None,
+                locationId = locationId,
+                clientMac = portalParams.clientMac,
+                apMac = portalParams.apMac,
+                redirectUrl = portalParams.redirectUrl,
+                ssid = portalParams.ssid,
+                clickId = portalParams.clickId
+              ))
       end create
 
       def createForUser(
@@ -218,81 +219,82 @@ object SessionService:
           phase: Phase,
           portalParams: CaptivePortalParams,
           userId: user.Id): Task[SessionData] =
-        val sessionId = user.SessionId.generate
-        val deviceId = user.DeviceId.fromUserAgent(userAgent)
-        val now = java.time.Instant.now.toString
+        Clock.instant.flatMap: instant =>
+          val sessionId = user.SessionId.generate
+          val deviceId = user.DeviceId.fromUserAgent(userAgent)
+          val now = instant.toString
 
-        val deviceRow = DeviceRow(
-          id = deviceId,
-          userAgent = userAgent,
-          createdAt = now,
-          updatedAt = now)
+          val deviceRow = DeviceRow(
+            id = deviceId,
+            userAgent = userAgent,
+            createdAt = now,
+            updatedAt = now)
 
-        val upsertDevice = run(
-          query[DeviceRow]
-            .insertValue(lift(deviceRow))
-            .onConflictUpdate(_.id)(
-              (t, e) => t.userAgent -> e.userAgent,
-              (t, _) => t.updatedAt -> lift(now)))
+          val upsertDevice = run(
+            query[DeviceRow]
+              .insertValue(lift(deviceRow))
+              .onConflictUpdate(_.id)(
+                (t, e) => t.userAgent -> e.userAgent,
+                (t, _) => t.updatedAt -> lift(now)))
 
-        val sessionRow = SessionRow(
-          id = sessionId,
-          userId = Some(userId),
-          deviceId = deviceId,
-          locale = locale,
-          phase = phase,
-          currentSurveyId = None,
-          currentQuestionId = None,
-          currentVideoId = None,
-          lastPromoVideoId = None,
-          currentAdvertiserId = None,
-          locationId = locationId,
-          createdAt = now,
-          clientMac = portalParams.clientMac,
-          apMac = portalParams.apMac,
-          redirectUrl = portalParams.redirectUrl,
-          ssid = portalParams.ssid,
-          clickId = portalParams.clickId
-        )
+          val sessionRow = SessionRow(
+            id = sessionId,
+            userId = Some(userId),
+            deviceId = deviceId,
+            locale = locale,
+            phase = phase,
+            currentSurveyId = None,
+            currentQuestionId = None,
+            currentVideoId = None,
+            lastPromoVideoId = None,
+            currentAdvertiserId = None,
+            locationId = locationId,
+            createdAt = now,
+            clientMac = portalParams.clientMac,
+            apMac = portalParams.apMac,
+            redirectUrl = portalParams.redirectUrl,
+            ssid = portalParams.ssid,
+            clickId = portalParams.clickId
+          )
 
-        val insertSession = run(
-          query[SessionRow].insert(
-            _.id                  -> lift(sessionRow.id),
-            _.userId              -> lift(sessionRow.userId),
-            _.deviceId            -> lift(sessionRow.deviceId),
-            _.locale              -> lift(sessionRow.locale),
-            _.phase               -> lift(sessionRow.phase),
-            _.currentSurveyId     -> lift(sessionRow.currentSurveyId),
-            _.currentQuestionId   -> lift(sessionRow.currentQuestionId),
-            _.currentVideoId      -> lift(sessionRow.currentVideoId),
-            _.lastPromoVideoId    -> lift(sessionRow.lastPromoVideoId),
-            _.currentAdvertiserId -> lift(sessionRow.currentAdvertiserId),
-            _.locationId          -> lift(sessionRow.locationId),
-            _.createdAt           -> lift(sessionRow.createdAt),
-            _.clientMac           -> lift(sessionRow.clientMac),
-            _.apMac               -> lift(sessionRow.apMac),
-            _.redirectUrl         -> lift(sessionRow.redirectUrl),
-            _.ssid                -> lift(sessionRow.ssid),
-            _.clickId             -> lift(sessionRow.clickId)
-          ))
-
-        (upsertDevice *> insertSession).orDie *>
-          ZIO.succeed(
-            SessionData(
-              sessionId,
-              Some(userId),
-              locale,
-              phase,
-              None,
-              None,
-              None,
-              locationId = locationId,
-              clientMac = portalParams.clientMac,
-              apMac = portalParams.apMac,
-              redirectUrl = portalParams.redirectUrl,
-              ssid = portalParams.ssid,
-              clickId = portalParams.clickId
+          val insertSession = run(
+            query[SessionRow].insert(
+              _.id                  -> lift(sessionRow.id),
+              _.userId              -> lift(sessionRow.userId),
+              _.deviceId            -> lift(sessionRow.deviceId),
+              _.locale              -> lift(sessionRow.locale),
+              _.phase               -> lift(sessionRow.phase),
+              _.currentSurveyId     -> lift(sessionRow.currentSurveyId),
+              _.currentQuestionId   -> lift(sessionRow.currentQuestionId),
+              _.currentVideoId      -> lift(sessionRow.currentVideoId),
+              _.lastPromoVideoId    -> lift(sessionRow.lastPromoVideoId),
+              _.currentAdvertiserId -> lift(sessionRow.currentAdvertiserId),
+              _.locationId          -> lift(sessionRow.locationId),
+              _.createdAt           -> lift(sessionRow.createdAt),
+              _.clientMac           -> lift(sessionRow.clientMac),
+              _.apMac               -> lift(sessionRow.apMac),
+              _.redirectUrl         -> lift(sessionRow.redirectUrl),
+              _.ssid                -> lift(sessionRow.ssid),
+              _.clickId             -> lift(sessionRow.clickId)
             ))
+
+          (upsertDevice *> insertSession).orDie *>
+            ZIO.succeed(
+              SessionData(
+                sessionId,
+                Some(userId),
+                locale,
+                phase,
+                None,
+                None,
+                None,
+                locationId = locationId,
+                clientMac = portalParams.clientMac,
+                apMac = portalParams.apMac,
+                redirectUrl = portalParams.redirectUrl,
+                ssid = portalParams.ssid,
+                clickId = portalParams.clickId
+              ))
       end createForUser
 
       def setCurrentQuestion(

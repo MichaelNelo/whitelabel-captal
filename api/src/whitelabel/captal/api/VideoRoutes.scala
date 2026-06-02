@@ -1,7 +1,5 @@
 package whitelabel.captal.api
 
-import java.time.Instant
-
 import sttp.tapir.json.circe.*
 import sttp.tapir.ztapir.*
 import whitelabel.captal.core.application.commands.*
@@ -20,7 +18,7 @@ import zio.*
 
 object VideoRoutes:
 
-  type NextVideoFlowType = Flow.Aux[Task, ProvideNextVideoCommand.type, NextVideo | NextStep]
+  type NextVideoFlowType = Flow.Aux[Task, ProvideNextVideoCommand, NextVideo | NextStep]
   type MarkVideoWatchedFlowType = Flow.Aux[Task, MarkVideoWatchedCommand, NextStep]
 
   type FullEnv = SessionContext & SessionService & NextVideoFlowType & MarkVideoWatchedFlowType
@@ -53,8 +51,9 @@ final class VideoRoutes(sessionEndpoint: SessionEndpoint):
         _ =>
           for
             flow     <- ZIO.service[NextVideoFlowType]
+            now      <- Clock.instant
             response <- flow
-              .execute(ProvideNextVideoCommand)
+              .execute(ProvideNextVideoCommand(now))
               .map(VideoResponse.from)
               .catchAllCause: cause =>
                 val error =
@@ -89,10 +88,11 @@ final class VideoRoutes(sessionEndpoint: SessionEndpoint):
         request =>
           for
             flow <- ZIO.service[MarkVideoWatchedFlowType]
+            now  <- Clock.instant
             cmd = MarkVideoWatchedCommand(
               durationWatched = request.durationWatched,
               completed = request.completed,
-              occurredAt = Instant.now)
+              occurredAt = now)
             result <- flow
               .execute(cmd)
               .map((step: NextStep) => VideoWatchedResponse(Phase.toDbString(step.phase)))
