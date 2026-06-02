@@ -27,6 +27,8 @@ aws:
       - "{{security_group}}"
     executionRoleArn: "{{execution_role_arn}}"
     # taskRoleArn: ""              # optional
+    # assignPublicIp: true         # default true (public subnets). Set false when
+    #                              # `subnets` above are private + NAT Gateway.
 
   alb:
     listenerArn: "{{alb_listener_arn}}"

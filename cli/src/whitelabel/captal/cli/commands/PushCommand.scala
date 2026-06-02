@@ -329,7 +329,8 @@ object PushCommand:
         .builder()
         .subnets(config.aws.ecs.subnets*)
         .securityGroups(config.aws.ecs.securityGroups*)
-        .assignPublicIp(AssignPublicIp.ENABLED)
+        .assignPublicIp(
+          if config.aws.ecs.assignPublicIp then AssignPublicIp.ENABLED else AssignPublicIp.DISABLED)
         .build())
     .build()
 
