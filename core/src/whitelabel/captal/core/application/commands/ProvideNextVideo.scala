@@ -14,7 +14,7 @@ import whitelabel.captal.core.user.ops.*
 import whitelabel.captal.core.video.VideoToWatch
 import whitelabel.captal.core.{Op as CoreOp, video}
 
-case object ProvideNextVideoCommand
+final case class ProvideNextVideoCommand(occurredAt: Instant)
 
 final case class NextVideo(
     videoUrl: String,
@@ -38,21 +38,22 @@ object ProvideNextVideoHandler:
   def apply[F[_]: Monad](
       videoRepo: VideoRepository[F],
       userRepo: UserRepository[F],
-      fallback: FallbackPhase): Handler.Aux[F, ProvideNextVideoCommand.type, Response] =
-    new Handler[F, ProvideNextVideoCommand.type]:
+      fallback: FallbackPhase): Handler.Aux[F, ProvideNextVideoCommand, Response] =
+    new Handler[F, ProvideNextVideoCommand]:
       type Result = Response
 
-      def handle(cmd: ProvideNextVideoCommand.type) =
+      def handle(cmd: ProvideNextVideoCommand) =
         for
           userOpt  <- userRepo.findWithEmail()
           videoOpt <- videoRepo.findNextForUser(
             userOpt.map(_.id),
             None
           ) // TODO: get lastPromoVideoId from session
-          result <- handleVideoResult(userOpt, videoOpt)
+          result <- handleVideoResult(cmd, userOpt, videoOpt)
         yield result
 
       private def handleVideoResult(
+          cmd: ProvideNextVideoCommand,
           userOpt: Option[
             whitelabel.captal.core.user.User[whitelabel.captal.core.user.State.WithEmail]],
           videoOpt: Option[VideoToWatch]) =
@@ -67,7 +68,7 @@ object ProvideNextVideoHandler:
                       videoToWatch.id,
                       videoToWatch.advertiserId,
                       videoToWatch.videoType,
-                      Instant.now)
+                      cmd.occurredAt)
                     .convertEvent
                     .convertError
                     .as(NextVideo.fromVideoToWatch(videoToWatch): Response))

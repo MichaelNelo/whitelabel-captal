@@ -16,7 +16,7 @@ import whitelabel.captal.core.survey.question.{FullyQualifiedQuestionId, Questio
 import whitelabel.captal.core.user.ops.*
 import whitelabel.captal.core.{Op as CoreOp, survey}
 
-case object ProvideNextIdentificationSurveyCommand
+final case class ProvideNextIdentificationSurveyCommand(occurredAt: Instant)
 
 final case class NextIdentificationSurvey(
     surveyId: survey.Id,
@@ -34,37 +34,39 @@ object ProvideNextIdentificationSurveyHandler:
       surveyRepo: SurveyRepository[F],
       userRepo: UserRepository[F],
       fallback: FallbackPhase)
-      : Handler.Aux[F, ProvideNextIdentificationSurveyCommand.type, Response] =
-    new Handler[F, ProvideNextIdentificationSurveyCommand.type]:
+      : Handler.Aux[F, ProvideNextIdentificationSurveyCommand, Response] =
+    new Handler[F, ProvideNextIdentificationSurveyCommand]:
       type Result = Response
 
-      def handle(cmd: ProvideNextIdentificationSurveyCommand.type) =
+      def handle(cmd: ProvideNextIdentificationSurveyCommand) =
         for
           nextOpt <- surveyRepo.findNextIdentificationSurvey()
-          result  <- handleSurveyResult(nextOpt)
+          result  <- handleSurveyResult(cmd, nextOpt)
         yield result
 
-      private def handleSurveyResult(nextOpt: Option[NextIdentificationSurvey]) =
+      private def handleSurveyResult(
+          cmd: ProvideNextIdentificationSurveyCommand,
+          nextOpt: Option[NextIdentificationSurvey]) =
         for userOpt <- userRepo.findWithEmail()
         yield (userOpt, nextOpt) match
           case (None, Some(next)) =>
             val nextQuestion = Some(FullyQualifiedQuestionId(next.surveyId, next.question.id))
-            createGuest(nextQuestion, Instant.now).convertEvent.convertError.as(next: Response)
+            createGuest(nextQuestion, cmd.occurredAt).convertEvent.convertError.as(next: Response)
           case (None, None) =>
-            createGuest(None, Instant.now)
+            createGuest(None, cmd.occurredAt)
               .convertEvent
               .convertError
               .as(NextStep(fallback.phase): Response)
           case (Some(existingUser), Some(next)) =>
             val nextQuestion = Some(FullyQualifiedQuestionId(next.surveyId, next.question.id))
             existingUser
-              .assignSurvey(nextQuestion, fallback.phase, Instant.now)
+              .assignSurvey(nextQuestion, fallback.phase, cmd.occurredAt)
               .convertEvent
               .convertError
               .as(next: Response)
           case (Some(existingUser), None) =>
             existingUser
-              .assignSurvey(None, fallback.phase, Instant.now)
+              .assignSurvey(None, fallback.phase, cmd.occurredAt)
               .convertEvent
               .convertError
               .as(NextStep(fallback.phase): Response)

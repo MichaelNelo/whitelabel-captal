@@ -1,7 +1,5 @@
 package whitelabel.captal.infra.eventhandlers
 
-import java.time.Instant
-
 import io.getquill.*
 import whitelabel.captal.core.application.Event
 import whitelabel.captal.core.infrastructure.SessionData
@@ -41,6 +39,7 @@ object UserPersistenceHandler:
         if userEvents.nonEmpty then
           for
             sessionData <- ctx.getOrFail
+            instant     <- Clock.instant
             _           <-
               ZIO.foreachDiscard(userEvents): event =>
                 for
@@ -56,7 +55,7 @@ object UserPersistenceHandler:
                       case Some(_) =>
                         ZIO.unit
                       case None =>
-                        val userRow = toUserRow(event, sessionData)
+                        val userRow = toUserRow(event, sessionData, instant.toString)
                         run(insertUserQuery(liftQuery(List(userRow)))).unit
                   _ <- run(
                     updateSessionUserQuery(lift(sessionData.sessionId), lift(resolvedUserId)))
@@ -68,8 +67,10 @@ object UserPersistenceHandler:
         end if
       end handle
 
-  private def toUserRow(event: UserEvent.UserCreated, sessionData: SessionData): UserRow =
-    val now = Instant.now.toString
+  private def toUserRow(
+      event: UserEvent.UserCreated,
+      sessionData: SessionData,
+      now: String): UserRow =
     UserRow(
       id = event.userId,
       email = Some(event.email),

@@ -15,51 +15,53 @@ object EntityWriter:
       name: String,
       unifi: Option[UnifiYaml] = None): Task[Unit] =
     import quill.*
-    val now = java.time.Instant.now.toString
-    val row = LocationRow(
-      id,
-      slug,
-      name,
-      1,
-      now,
-      now,
-      unifiApMac = unifi.flatMap(_.apMac),
-      unifiHost = unifi.map(_.host),
-      unifiPort = unifi.flatMap(_.port),
-      unifiSiteId = unifi.flatMap(_.siteId),
-      unifiApiToken = unifi.map(_.apiToken),
-      unifiDurationMinutes = unifi.flatMap(_.defaultDurationMinutes),
-      unifiRedirectUrl = unifi.flatMap(_.redirectUrl)
-    )
-    run(
-      query[LocationRow]
-        .insertValue(lift(row))
-        .onConflictUpdate(_.id)(
-          (t, e) => t.name                 -> e.name,
-          (t, e) => t.unifiApMac           -> e.unifiApMac,
-          (t, e) => t.unifiHost            -> e.unifiHost,
-          (t, e) => t.unifiPort            -> e.unifiPort,
-          (t, e) => t.unifiSiteId          -> e.unifiSiteId,
-          (t, e) => t.unifiApiToken        -> e.unifiApiToken,
-          (t, e) => t.unifiDurationMinutes -> e.unifiDurationMinutes,
-          (t, e) => t.unifiRedirectUrl     -> e.unifiRedirectUrl,
-          (t, _) => t.isActive             -> lift(1),
-          (t, _) => t.updatedAt            -> lift(now)
-        )).unit
+    Clock.instant.flatMap: instant =>
+      val now = instant.toString
+      val row = LocationRow(
+        id,
+        slug,
+        name,
+        1,
+        now,
+        now,
+        unifiApMac = unifi.flatMap(_.apMac),
+        unifiHost = unifi.map(_.host),
+        unifiPort = unifi.flatMap(_.port),
+        unifiSiteId = unifi.flatMap(_.siteId),
+        unifiApiToken = unifi.map(_.apiToken),
+        unifiDurationMinutes = unifi.flatMap(_.defaultDurationMinutes),
+        unifiRedirectUrl = unifi.flatMap(_.redirectUrl)
+      )
+      run(
+        query[LocationRow]
+          .insertValue(lift(row))
+          .onConflictUpdate(_.id)(
+            (t, e) => t.name                 -> e.name,
+            (t, e) => t.unifiApMac           -> e.unifiApMac,
+            (t, e) => t.unifiHost            -> e.unifiHost,
+            (t, e) => t.unifiPort            -> e.unifiPort,
+            (t, e) => t.unifiSiteId          -> e.unifiSiteId,
+            (t, e) => t.unifiApiToken        -> e.unifiApiToken,
+            (t, e) => t.unifiDurationMinutes -> e.unifiDurationMinutes,
+            (t, e) => t.unifiRedirectUrl     -> e.unifiRedirectUrl,
+            (t, _) => t.isActive             -> lift(1),
+            (t, _) => t.updatedAt            -> lift(now)
+          )).unit
   end upsertLocation
 
   def upsertAdvertiser(quill: QuillSqlite)(id: String, name: String, priority: Int): Task[Unit] =
     import quill.*
-    val now = java.time.Instant.now.toString
-    val row = AdvertiserRow(id, name, priority, 1, now, now)
-    run(
-      query[AdvertiserRow]
-        .insertValue(lift(row))
-        .onConflictUpdate(_.id)(
-          (t, e) => t.name      -> e.name,
-          (t, e) => t.priority  -> e.priority,
-          (t, _) => t.isActive  -> lift(1),
-          (t, _) => t.updatedAt -> lift(now))).unit
+    Clock.instant.flatMap: instant =>
+      val now = instant.toString
+      val row = AdvertiserRow(id, name, priority, 1, now, now)
+      run(
+        query[AdvertiserRow]
+          .insertValue(lift(row))
+          .onConflictUpdate(_.id)(
+            (t, e) => t.name      -> e.name,
+            (t, e) => t.priority  -> e.priority,
+            (t, _) => t.isActive  -> lift(1),
+            (t, _) => t.updatedAt -> lift(now))).unit
 
   def upsertVideo(quill: QuillSqlite)(
       id: String,
@@ -74,36 +76,37 @@ object EntityWriter:
       priority: Int,
       productCampaignId: Option[String]): Task[Unit] =
     import quill.*
-    val now = java.time.Instant.now.toString
-    val row = AdvertiserVideoRow(
-      whitelabel.captal.core.video.Id.unsafe(id),
-      advertiserId,
-      videoType,
-      videoUrl,
-      durationSeconds,
-      minWatchSeconds,
-      showCountdown,
-      noRepeatSeconds,
-      locationId,
-      1,
-      priority,
-      now,
-      now,
-      productCampaignId
-    )
-    run(
-      query[AdvertiserVideoRow]
-        .insertValue(lift(row))
-        .onConflictUpdate(_.id)(
-          (t, e) => t.videoUrl          -> e.videoUrl,
-          (t, e) => t.durationSeconds   -> e.durationSeconds,
-          (t, e) => t.minWatchSeconds   -> e.minWatchSeconds,
-          (t, e) => t.showCountdown     -> e.showCountdown,
-          (t, e) => t.priority          -> e.priority,
-          (t, e) => t.productCampaignId -> e.productCampaignId,
-          (t, _) => t.isActive          -> lift(1),
-          (t, _) => t.updatedAt         -> lift(now)
-        )).unit
+    Clock.instant.flatMap: instant =>
+      val now = instant.toString
+      val row = AdvertiserVideoRow(
+        whitelabel.captal.core.video.Id.unsafe(id),
+        advertiserId,
+        videoType,
+        videoUrl,
+        durationSeconds,
+        minWatchSeconds,
+        showCountdown,
+        noRepeatSeconds,
+        locationId,
+        1,
+        priority,
+        now,
+        now,
+        productCampaignId
+      )
+      run(
+        query[AdvertiserVideoRow]
+          .insertValue(lift(row))
+          .onConflictUpdate(_.id)(
+            (t, e) => t.videoUrl          -> e.videoUrl,
+            (t, e) => t.durationSeconds   -> e.durationSeconds,
+            (t, e) => t.minWatchSeconds   -> e.minWatchSeconds,
+            (t, e) => t.showCountdown     -> e.showCountdown,
+            (t, e) => t.priority          -> e.priority,
+            (t, e) => t.productCampaignId -> e.productCampaignId,
+            (t, _) => t.isActive          -> lift(1),
+            (t, _) => t.updatedAt         -> lift(now)
+          )).unit
   end upsertVideo
 
   def upsertSurvey(quill: QuillSqlite)(
@@ -114,20 +117,21 @@ object EntityWriter:
       locationId: Option[String],
       name: Option[String] = None): Task[Unit] =
     import quill.*
-    val now = java.time.Instant.now.toString
-    val row = SurveyRow(
-      whitelabel.captal.core.survey.Id.unsafe(id),
-      category,
-      advertiserId,
-      videoId,
-      locationId,
-      1,
-      now,
-      name)
-    run(
-      query[SurveyRow]
-        .insertValue(lift(row))
-        .onConflictUpdate(_.id)((t, _) => t.isActive -> lift(1), (t, e) => t.name -> e.name)).unit
+    Clock.instant.flatMap: instant =>
+      val now = instant.toString
+      val row = SurveyRow(
+        whitelabel.captal.core.survey.Id.unsafe(id),
+        category,
+        advertiserId,
+        videoId,
+        locationId,
+        1,
+        now,
+        name)
+      run(
+        query[SurveyRow]
+          .insertValue(lift(row))
+          .onConflictUpdate(_.id)((t, _) => t.isActive -> lift(1), (t, e) => t.name -> e.name)).unit
   end upsertSurvey
 
   def upsertQuestion(quill: QuillSqlite)(
@@ -139,24 +143,25 @@ object EntityWriter:
       hierarchyLevel: Option[String],
       isRequired: Int): Task[Unit] =
     import quill.*
-    val now = java.time.Instant.now.toString
-    val row = QuestionRow(
-      whitelabel.captal.core.survey.question.Id.unsafe(id),
-      whitelabel.captal.core.survey.Id.unsafe(surveyId),
-      questionType,
-      pointsAwarded,
-      displayOrder,
-      hierarchyLevel,
-      isRequired,
-      now
-    )
-    run(
-      query[QuestionRow]
-        .insertValue(lift(row))
-        .onConflictUpdate(_.id)(
-          (t, e) => t.questionType  -> e.questionType,
-          (t, e) => t.pointsAwarded -> e.pointsAwarded,
-          (t, e) => t.displayOrder  -> e.displayOrder)).unit
+    Clock.instant.flatMap: instant =>
+      val now = instant.toString
+      val row = QuestionRow(
+        whitelabel.captal.core.survey.question.Id.unsafe(id),
+        whitelabel.captal.core.survey.Id.unsafe(surveyId),
+        questionType,
+        pointsAwarded,
+        displayOrder,
+        hierarchyLevel,
+        isRequired,
+        now
+      )
+      run(
+        query[QuestionRow]
+          .insertValue(lift(row))
+          .onConflictUpdate(_.id)(
+            (t, e) => t.questionType  -> e.questionType,
+            (t, e) => t.pointsAwarded -> e.pointsAwarded,
+            (t, e) => t.displayOrder  -> e.displayOrder)).unit
   end upsertQuestion
 
   def upsertQuestionOption(
@@ -198,23 +203,25 @@ object EntityWriter:
       category: String = "backend",
       locationId: Option[String] = None): Task[Unit] =
     import quill.*
-    val now = java.time.Instant.now.toString
-    val row = LocalizedTextRow(id, entityId, locale, value, category, now, now, locationId)
-    run(
-      query[LocalizedTextRow]
-        .insertValue(lift(row))
-        .onConflictUpdate(_.id)((t, e) => t.value -> e.value, (t, _) => t.updatedAt -> lift(now)))
-      .unit
+    Clock.instant.flatMap: instant =>
+      val now = instant.toString
+      val row = LocalizedTextRow(id, entityId, locale, value, category, now, now, locationId)
+      run(
+        query[LocalizedTextRow]
+          .insertValue(lift(row))
+          .onConflictUpdate(_.id)((t, e) => t.value -> e.value, (t, _) => t.updatedAt -> lift(now)))
+        .unit
 
   /** Soft-delete a video by setting is_active = 0 */
   def deactivateVideo(quill: QuillSqlite)(id: String): Task[Unit] =
     import quill.*
-    val now = java.time.Instant.now.toString
-    val videoId = whitelabel.captal.core.video.Id.unsafe(id)
-    run(
-      query[AdvertiserVideoRow]
-        .filter(_.id == lift(videoId))
-        .update(_.isActive -> 0, _.updatedAt -> lift(now))).unit
+    Clock.instant.flatMap: instant =>
+      val now = instant.toString
+      val videoId = whitelabel.captal.core.video.Id.unsafe(id)
+      run(
+        query[AdvertiserVideoRow]
+          .filter(_.id == lift(videoId))
+          .update(_.isActive -> 0, _.updatedAt -> lift(now))).unit
 
   /** Soft-delete a survey by setting is_active = 0 */
   def deactivateSurvey(quill: QuillSqlite)(id: String): Task[Unit] =
@@ -225,11 +232,12 @@ object EntityWriter:
   /** Soft-delete an advertiser by setting is_active = 0 */
   def deactivateAdvertiser(quill: QuillSqlite)(id: String): Task[Unit] =
     import quill.*
-    val now = java.time.Instant.now.toString
-    run(
-      query[AdvertiserRow]
-        .filter(_.id == lift(id))
-        .update(_.isActive -> 0, _.updatedAt -> lift(now))).unit
+    Clock.instant.flatMap: instant =>
+      val now = instant.toString
+      run(
+        query[AdvertiserRow]
+          .filter(_.id == lift(id))
+          .update(_.isActive -> 0, _.updatedAt -> lift(now))).unit
 
   /** List all active advertisers — used by softDeleteEntity to brute-force the videoId computation
     * when removing a `video:` entity (the advertiser slug isn't stored in the manifest entity key,
@@ -261,14 +269,15 @@ object EntityWriter:
       locationId: Option[String],
       contentHash: String): Task[Unit] =
     import quill.*
-    val now = java.time.Instant.now.toString
-    val row = ProvisionManifestRow(entityKey, locationId, contentHash, now)
-    run(
-      query[ProvisionManifestRow]
-        .insertValue(lift(row))
-        .onConflictUpdate(_.entityKey)(
-          (t, e) => t.contentHash   -> e.contentHash,
-          (t, _) => t.provisionedAt -> lift(now))).unit
+    Clock.instant.flatMap: instant =>
+      val now = instant.toString
+      val row = ProvisionManifestRow(entityKey, locationId, contentHash, now)
+      run(
+        query[ProvisionManifestRow]
+          .insertValue(lift(row))
+          .onConflictUpdate(_.entityKey)(
+            (t, e) => t.contentHash   -> e.contentHash,
+            (t, _) => t.provisionedAt -> lift(now))).unit
 
   /** Remove a provision manifest entry */
   def deleteManifest(quill: QuillSqlite)(entityKey: String): Task[Unit] =

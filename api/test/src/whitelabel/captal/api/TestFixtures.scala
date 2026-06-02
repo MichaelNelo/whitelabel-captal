@@ -16,6 +16,14 @@ import zio.*
 import zio.interop.catz.*
 
 object TestFixtures:
+  // Deterministic timestamp matching what ZIOSpecDefault's TestClock returns by default
+  // (Instant.EPOCH). Using a literal here keeps the seed helpers pure-data without
+  // requiring each one to be wrapped in `Clock.instant.flatMap`. If a test ever needs
+  // control over time, it can call TestClock.setTime / TestClock.adjust before invoking
+  // the fixture (the seeded rows are static, but downstream code-under-test reads from
+  // Clock.instant which the test can advance).
+  private val FixedNow: String = java.time.Instant.EPOCH.toString
+
   private val testConfig = ConfigFactory.load("test.conf")
   // TODO: disable Flyway's ResourceNameValidator in the E2E test config. With
   // the default settings, fly4s walks every migration filename and runs the
@@ -82,7 +90,7 @@ object TestFixtures:
     ZIO.serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
       val surveyId = survey.Id.generate
-      val now = java.time.Instant.now.toString
+      val now = FixedNow
       val surveyRow = SurveyRow(
         id = surveyId,
         category = "profiling",
@@ -131,7 +139,7 @@ object TestFixtures:
       import quill.*
       val surveyId = survey.Id.generate
       val questionId = survey.question.Id.generate
-      val now = java.time.Instant.now.toString
+      val now = FixedNow
       val surveyRow = SurveyRow(
         id = surveyId,
         category = category,
@@ -168,7 +176,7 @@ object TestFixtures:
       options: List[String]): ZIO[QuillSqlite, Throwable, List[survey.question.OptionId]] = ZIO
     .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
-      val now = java.time.Instant.now.toString
+      val now = FixedNow
       val optionsWithText = options
         .zipWithIndex
         .map: (text, idx) =>
@@ -217,7 +225,7 @@ object TestFixtures:
     import quill.*
     val userId = user.Id.generate
     val userEmail = user.Email.unsafeFrom(email)
-    val now = java.time.Instant.now.toString
+    val now = FixedNow
     val userRow = UserRow(
       id = userId,
       email = Some(userEmail),
@@ -229,7 +237,7 @@ object TestFixtures:
   def markSurveyCompleted(userId: user.Id, surveyId: survey.Id): ZIO[QuillSqlite, Throwable, Unit] =
     ZIO.serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
-      val now = java.time.Instant.now.toString
+      val now = FixedNow
       val progressRow = UserSurveyProgressRow(
         id = UUID.randomUUID.toString,
         userId = userId,
@@ -247,7 +255,7 @@ object TestFixtures:
       answerValue: String): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]:
     quill =>
       import quill.*
-      val now = java.time.Instant.now.toString
+      val now = FixedNow
       val answerRow = AnswerRow(
         id = UUID.randomUUID.toString,
         userId = userId,
@@ -338,7 +346,7 @@ object TestFixtures:
   def seedLocales(locales: List[String]): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[
     QuillSqlite]: quill =>
     import quill.*
-    val now = java.time.Instant.now.toString
+    val now = FixedNow
     val rows = locales.map: locale =>
       LocalizedTextRow(
         id = UUID.randomUUID.toString,
@@ -360,7 +368,7 @@ object TestFixtures:
 
   def seedNoiseData: ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*
-    val now = java.time.Instant.now.toString
+    val now = FixedNow
 
     // Create multiple unrelated users
     val noiseUsers = (1 to 5).map: i =>
@@ -493,7 +501,7 @@ object TestFixtures:
       durationSeconds: Int = 15)
       : ZIO[QuillSqlite, Throwable, VideoFixture] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*
-    val now = java.time.Instant.now.toString
+    val now = FixedNow
     val advertiserId = UUID.randomUUID.toString
     val videoId = video.Id.generate
 
@@ -544,7 +552,7 @@ object TestFixtures:
       priority: Int = 1)
       : ZIO[QuillSqlite, Throwable, VideoFixture] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*
-    val now = java.time.Instant.now.toString
+    val now = FixedNow
     val videoId = video.Id.generate
 
     val videoRow = AdvertiserVideoRow(
@@ -640,7 +648,7 @@ object TestFixtures:
       questionCount: Int = 2): ZIO[QuillSqlite, Throwable, AdvertiserVideoSurveyFixture] = ZIO
     .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
-      val now = java.time.Instant.now.toString
+      val now = FixedNow
       val advertiserId = UUID.randomUUID.toString
       val videoId = video.Id.generate
       val surveyId = survey.Id.generate

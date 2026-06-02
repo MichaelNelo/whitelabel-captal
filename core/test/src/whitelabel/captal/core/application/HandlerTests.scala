@@ -16,6 +16,11 @@ private val testNextStep = NextStep(Phase.Ready)
 
 object HandlerTests extends TestSuite:
 
+  // Core commands take `occurredAt` as data (CQRS — handlers are pure). Tests pass a
+  // fixed Instant for determinism. No Clock to inject here — utest + cats.Id, not ZIO.
+  private val FixedNow: Instant = Instant.EPOCH
+
+
   // Simple mock implementations using cats.Id
   private def makeRadioQuestion(optionId: OptionId): QuestionToAnswer = QuestionToAnswer(
     id = survey.question.Id.generate,
@@ -103,7 +108,7 @@ object HandlerTests extends TestSuite:
         val handler = AnswerEmailHandler(surveyRepo, testNextStep)
         val cmd = AnswerEmailCommand(
           answer = AnswerValue.Text("user@example.com"),
-          occurredAt = Instant.now)
+          occurredAt = FixedNow)
         val result = Op.run(handler.handle(cmd))
         result match
           case Left(errs) =>
@@ -125,7 +130,7 @@ object HandlerTests extends TestSuite:
         val handler = AnswerEmailHandler(surveyRepo, testNextStep)
         val cmd = AnswerEmailCommand(
           answer = AnswerValue.SingleChoice(optionId),
-          occurredAt = Instant.now)
+          occurredAt = FixedNow)
         val result = Op.run(handler.handle(cmd))
         result match
           case Left(errs) =>
@@ -146,7 +151,7 @@ object HandlerTests extends TestSuite:
         val handler = AnswerEmailHandler(surveyRepo, testNextStep)
         val cmd = AnswerEmailCommand(
           answer = AnswerValue.Text("not-an-email"),
-          occurredAt = Instant.now)
+          occurredAt = FixedNow)
         val result = Op.run(handler.handle(cmd))
         result match
           case Left(errs) =>
@@ -167,7 +172,7 @@ object HandlerTests extends TestSuite:
         val handler = AnswerEmailHandler(surveyRepo, testNextStep)
         val cmd = AnswerEmailCommand(
           answer = AnswerValue.Text("user@example.com"),
-          occurredAt = Instant.now)
+          occurredAt = FixedNow)
         val result = Op.run(handler.handle(cmd))
         assert(result.isRight)
         val (events, nextStep) = result.toOption.get
@@ -184,7 +189,7 @@ object HandlerTests extends TestSuite:
         val handler = AnswerProfilingHandler(surveyRepo, userRepo, testNextStep)
         val cmd = AnswerProfilingCommand(
           answer = AnswerValue.SingleChoice(optionId),
-          occurredAt = Instant.now)
+          occurredAt = FixedNow)
         val result = Op.run(handler.handle(cmd))
         result match
           case Left(errs) =>
@@ -208,7 +213,7 @@ object HandlerTests extends TestSuite:
         val handler = AnswerProfilingHandler(surveyRepo, userRepo, testNextStep)
         val cmd = AnswerProfilingCommand(
           answer = AnswerValue.SingleChoice(optionId),
-          occurredAt = Instant.now)
+          occurredAt = FixedNow)
         val result = Op.run(handler.handle(cmd))
         assert(result.isRight)
         val (events, nextStep) = result.toOption.get
@@ -225,7 +230,7 @@ object HandlerTests extends TestSuite:
         val handler = AnswerLocationHandler(surveyRepo, userRepo, testNextStep)
         val cmd = AnswerLocationCommand(
           answer = AnswerValue.SingleChoice(optionId),
-          occurredAt = Instant.now)
+          occurredAt = FixedNow)
         val result = Op.run(handler.handle(cmd))
         result match
           case Left(errs) =>
@@ -249,7 +254,7 @@ object HandlerTests extends TestSuite:
         val handler = AnswerLocationHandler(surveyRepo, userRepo, testNextStep)
         val cmd = AnswerLocationCommand(
           answer = AnswerValue.SingleChoice(optionId),
-          occurredAt = Instant.now)
+          occurredAt = FixedNow)
         val result = Op.run(handler.handle(cmd))
         assert(result.isRight)
         val (events, nextStep) = result.toOption.get

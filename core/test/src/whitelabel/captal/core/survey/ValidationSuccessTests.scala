@@ -34,7 +34,7 @@ object ValidationSuccessTests extends TestSuite:
     val question = makeQuestion(questionType, commonRules)
     val user = makeUser()
     val survey = makeEmailSurvey(question)
-    val result = Op.run(user.answerEmail(survey, value, Instant.now))
+    val result = Op.run(user.answerEmail(survey, value, Instant.EPOCH))
     result.isRight
   private def validateReturnsNoErrors(
       questionType: QuestionType,
@@ -43,7 +43,7 @@ object ValidationSuccessTests extends TestSuite:
     val question = makeQuestion(questionType, commonRules)
     val user = makeUser()
     val survey = makeEmailSurvey(question)
-    val result = Op.run(user.answerEmail(survey, value, Instant.now))
+    val result = Op.run(user.answerEmail(survey, value, Instant.EPOCH))
     result match
       case Right((events, _)) =>
         events.nonEmpty // answerEmail emits an event on success
