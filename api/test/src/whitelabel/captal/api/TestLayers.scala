@@ -58,15 +58,14 @@ object TestLayers:
   private val videoRepoLayer = VideoRepositoryQuill.layer
 
   private val eventHandlerLayer: ZLayer[
-    QuillSqlite & SessionContext & CurrentLocation & SessionService & zio.http.Client,
+    QuillSqlite & SessionContext & SessionService & TestUnifiAutoAuthorizeHandler.Active,
     Nothing,
     EventHandler[Task, Event]] = ZLayer.fromFunction:
     (
         quill: QuillSqlite,
         ctx: SessionContext,
-        currentLocation: CurrentLocation,
         sessionService: SessionService,
-        client: zio.http.Client) =>
+        active: TestUnifiAutoAuthorizeHandler.Active) =>
       val dbHandler = EventLogHandler(ctx)
         .andThen(AnswerPersistenceHandler(ctx))
         .andThen(UserPersistenceHandler(ctx))
@@ -75,7 +74,7 @@ object TestLayers:
         .andThen(SessionVideoHandler(ctx))
         .andThen(SurveyProgressHandler())
       val transactional = TransactionalEventHandler(dbHandler, quill)
-      val unifiAuth = UnifiAuthorizationHandler(currentLocation.unifi, ctx, sessionService, client)
+      val unifiAuth = TestUnifiAutoAuthorizeHandler(active, ctx, sessionService)
       transactional.andThen(unifiAuth)
 
   private val answerEmailFlowLayer: ZLayer[SurveyRepository[
@@ -198,7 +197,8 @@ object TestLayers:
       VideoRoutes.MarkVideoWatchedFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType & QuillSqlite &
       SessionCookieConfig & CurrentLocation & UserCookieConfig & UserLookup & SessionEndpoint &
-      SurveyRoutes & LocaleRoutes & VideoRoutes & AdvertiserSurveyRoutes & FinishRoutes
+      SurveyRoutes & LocaleRoutes & VideoRoutes & AdvertiserSurveyRoutes & FinishRoutes &
+      TestUnifiAutoAuthorizeHandler.Active
 
   val testEnv: ZLayer[Any, Throwable, TestEnv] = ZLayer.make[TestEnv](
     SessionContext.make,
@@ -209,7 +209,7 @@ object TestLayers:
     surveyRepoLayer,
     userRepoLayer,
     videoRepoLayer,
-    UnifiAuthorizationHandler.trustAllClientLayer(None),
+    TestUnifiAutoAuthorizeHandler.activeLayer,
     eventHandlerLayer,
     answerEmailFlowLayer,
     answerProfilingFlowLayer,

@@ -150,6 +150,17 @@ object TestHelpers:
     .response(asStringAlways)
     .send(backend)
 
+  def postLocationAnswer(
+      backend: SttpBackend[Task, Any],
+      sessionCookie: String,
+      optionId: String) = basicRequest
+    .post(uri"http://test/api/survey/location")
+    .cookie("captal_session", sessionCookie)
+    .body(s"""{"answer":{"type":"single","value":"$optionId"}}""")
+    .contentType("application/json")
+    .response(asStringAlways)
+    .send(backend)
+
   // Video helpers
   def getNextVideo(backend: SttpBackend[Task, Any], sessionCookie: String) = basicRequest
     .get(uri"http://test/api/video/next")
