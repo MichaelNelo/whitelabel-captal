@@ -54,7 +54,8 @@ object CaptalConfig:
       subnets: List[String],
       securityGroups: List[String],
       executionRoleArn: String,
-      taskRoleArn: Option[String] = None)
+      taskRoleArn: Option[String] = None,
+      assignPublicIp: Boolean = true)
   object Ecs:
     given Decoder[Ecs] = deriveDecoder
 
