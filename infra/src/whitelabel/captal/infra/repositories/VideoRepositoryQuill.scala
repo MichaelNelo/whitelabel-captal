@@ -144,25 +144,30 @@ object VideoRepositoryQuill:
           locale: String): Task[Option[VideoToWatch]] =
         lastPromoVideoId match
           case Some(lastId) =>
-            run(query[AdvertiserVideoRow].filter(_.id == lift(lastId)))
-              .map(_.headOption)
-              .flatMap:
-                case Some(currentVideo) =>
-                  findNextPromoAfter(currentVideo.priority, currentVideo.createdAt)
-                case None =>
-                  run(firstPromoQuery)
-              .flatMap: result =>
-                if result.isEmpty then
-                  run(firstPromoQuery)
-                else
-                  ZIO.succeed(result)
-              .flatMap: finalResult =>
-                finalResult.headOption match
-                  case Some(row) =>
-                    fetchLocalizedTexts(row, locale).map(Some(_))
-                  case None =>
-                    ZIO.none
-              .orDie
+            val program =
+              for
+                currentOpt <- run(query[AdvertiserVideoRow].filter(_.id == lift(lastId)))
+                  .map(_.headOption)
+                candidates <-
+                  currentOpt match
+                    case Some(currentVideo) =>
+                      findNextPromoAfter(currentVideo.priority, currentVideo.createdAt)
+                    case None =>
+                      run(firstPromoQuery)
+                // Fallback to first promo when the cursor walked off the end
+                finalRows <-
+                  if candidates.isEmpty then
+                    run(firstPromoQuery)
+                  else
+                    ZIO.succeed(candidates)
+                result <-
+                  finalRows.headOption match
+                    case Some(row) =>
+                      fetchLocalizedTexts(row, locale).map(Some(_))
+                    case None =>
+                      ZIO.none
+              yield result
+            program.orDie
 
           case None =>
             run(firstPromoQuery)

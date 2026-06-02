@@ -101,23 +101,24 @@ object DockerImageBuilder:
     List("docker", "push", tag),
     s"docker push $tag")
 
-  private def ecrLogin(repo: String): ZIO[EcrClient, CliError, Unit] = ZIO
-    .serviceWithZIO[EcrClient]: ecr =>
-      ZIO
-        .attemptBlocking:
-          val token = ecr.getAuthorizationToken().authorizationData().get(0)
-          val decoded = new String(Base64.getDecoder.decode(token.authorizationToken()))
-          val parts = decoded.split(":", 2)
-          if parts.length != 2 then
-            throw new RuntimeException("Malformed ECR authorization token")
-          val registry = repo.split("/").head
-          (registry, parts(0), parts(1))
-        .mapError(e => CliError.AwsError("ECR getAuthorizationToken", e))
-    .flatMap: (registry, user, password) =>
-      execWithStdin(
+  private def ecrLogin(repo: String): ZIO[EcrClient, CliError, Unit] =
+    for
+      (registry, user, password) <- ZIO.serviceWithZIO[EcrClient]: ecr =>
+        ZIO
+          .attemptBlocking:
+            val token = ecr.getAuthorizationToken().authorizationData().get(0)
+            val decoded = new String(Base64.getDecoder.decode(token.authorizationToken()))
+            val parts = decoded.split(":", 2)
+            if parts.length != 2 then
+              throw new RuntimeException("Malformed ECR authorization token")
+            val registry = repo.split("/").head
+            (registry, parts(0), parts(1))
+          .mapError(e => CliError.AwsError("ECR getAuthorizationToken", e))
+      _ <- execWithStdin(
         List("docker", "login", "--username", user, "--password-stdin", registry),
         password,
         "docker login")
+    yield ()
 
   private def exec(cmd: List[String], operation: String): IO[CliError, Unit] =
     ZIO

@@ -22,15 +22,6 @@ end FinishRoutes
 final class FinishRoutes(sessionEndpoint: SessionEndpoint):
   import FinishRoutes.*
 
-  private def toApiError(error: Throwable): UIO[ApiError] =
-    error match
-      case Flow.HandlerError(errors) =>
-        ZIO.succeed(ApiError.fromAppErrors(errors))
-      case SessionContext.NotSet =>
-        ZIO.succeed(ApiError.SessionMissing)
-      case other =>
-        ZIO.logErrorCause("Internal error", Cause.fail(other)).as(ApiError.fromThrowable(other))
-
   val finishRoute: ZServerEndpoint[SessionContext & SessionService & FinishFlowType, Any] =
     sessionEndpoint
       .secured(onMissingSession = SessionEndpoint.OnMissing.Fail, allowedPhases = Seq(Phase.Ready))
@@ -51,7 +42,7 @@ final class FinishRoutes(sessionEndpoint: SessionEndpoint):
                       e
                     case Right(c) =>
                       new Exception(s"Defect: ${c.prettyPrint}")
-                toApiError(error).flatMap(ZIO.fail(_))
+                ApiErrors.failWith(error)
             // Post-commit: UnifiAuthorizationHandler already ran here. Re-read the
             // session to surface phase + accessExpiresAt (Some(...) iff UniFi succeeded).
             fresh <- ZIO

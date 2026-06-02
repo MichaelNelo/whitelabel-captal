@@ -77,19 +77,22 @@ object MigrateCommand:
           CliState.clear *> Output.success(s"Migrated ${plan.size} file(s).")
     yield ()
 
-  private def applyChanges(plan: List[FilePlan]): ZIO[Any, CliError, Unit] = ZIO
-    .foreachDiscard(plan): fp =>
-      ZIO
-        .attemptBlocking:
-          YamlIo.read(fp.path).flatMap: json =>
-            val (next, _) = MigrationRunner.applyOps(json, fp.ops)
-            YamlIo.write(fp.path, next)
-        .mapError(t =>
-          CliError.ConfigError(s"Failed to migrate ${fp.path}: ${t.getMessage}"))
-        .flatMap:
-          case Right(_) => ZIO.unit
-          case Left(t)  => ZIO.fail(CliError.ConfigError(
-              s"Failed to write ${fp.path}: ${t.getMessage}"))
+  private def applyChanges(plan: List[FilePlan]): ZIO[Any, CliError, Unit] =
+    ZIO.foreachDiscard(plan): fp =>
+      for
+        result <- ZIO
+          .attemptBlocking:
+            YamlIo.read(fp.path).flatMap: json =>
+              val (next, _) = MigrationRunner.applyOps(json, fp.ops)
+              YamlIo.write(fp.path, next)
+          .mapError(t =>
+            CliError.ConfigError(s"Failed to migrate ${fp.path}: ${t.getMessage}"))
+        _ <- result match
+          case Right(_) =>
+            ZIO.unit
+          case Left(t) =>
+            ZIO.fail(CliError.ConfigError(s"Failed to write ${fp.path}: ${t.getMessage}"))
+      yield ()
 
   private def confirm(question: String): ZIO[Any, CliError, Unit] =
     for

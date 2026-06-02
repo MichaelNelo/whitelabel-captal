@@ -133,27 +133,23 @@ object SessionService:
           locale: String,
           phase: Phase,
           portalParams: CaptivePortalParams): Task[SessionData] =
-        Clock.instant.flatMap: instant =>
-          val sessionId = user.SessionId.generate
-          val deviceId = user.DeviceId.fromUserAgent(userAgent)
-          val now = instant.toString
-
-          // Upsert device record
-          val deviceRow = DeviceRow(
+        for
+          instant <- Clock.instant
+          now       = instant.toString
+          sessionId = user.SessionId.generate
+          deviceId  = user.DeviceId.fromUserAgent(userAgent)
+          deviceRow = DeviceRow(
             id = deviceId,
             userAgent = userAgent,
             createdAt = now,
             updatedAt = now)
-
-          val upsertDevice = run(
+          _ <- run(
             query[DeviceRow]
               .insertValue(lift(deviceRow))
               .onConflictUpdate(_.id)(
                 (t, e) => t.userAgent -> e.userAgent,
-                (t, _) => t.updatedAt -> lift(now)))
-
-          // Create session
-          val sessionRow = SessionRow(
+                (t, _) => t.updatedAt -> lift(now))).orDie
+          sessionRow = SessionRow(
             id = sessionId,
             userId = None,
             deviceId = deviceId,
@@ -172,8 +168,7 @@ object SessionService:
             ssid = portalParams.ssid,
             clickId = portalParams.clickId
           )
-
-          val insertSession = run(
+          _ <- run(
             query[SessionRow].insert(
               _.id                  -> lift(sessionRow.id),
               _.userId              -> lift(sessionRow.userId),
@@ -192,25 +187,22 @@ object SessionService:
               _.redirectUrl         -> lift(sessionRow.redirectUrl),
               _.ssid                -> lift(sessionRow.ssid),
               _.clickId             -> lift(sessionRow.clickId)
-            ))
-
-          (upsertDevice *> insertSession).orDie *>
-            ZIO.succeed(
-              SessionData(
-                sessionId,
-                None,
-                locale,
-                phase,
-                None,
-                None,
-                None,
-                locationId = locationId,
-                clientMac = portalParams.clientMac,
-                apMac = portalParams.apMac,
-                redirectUrl = portalParams.redirectUrl,
-                ssid = portalParams.ssid,
-                clickId = portalParams.clickId
-              ))
+            )).orDie
+        yield SessionData(
+          sessionId,
+          None,
+          locale,
+          phase,
+          None,
+          None,
+          None,
+          locationId = locationId,
+          clientMac = portalParams.clientMac,
+          apMac = portalParams.apMac,
+          redirectUrl = portalParams.redirectUrl,
+          ssid = portalParams.ssid,
+          clickId = portalParams.clickId
+        )
       end create
 
       def createForUser(
@@ -219,25 +211,23 @@ object SessionService:
           phase: Phase,
           portalParams: CaptivePortalParams,
           userId: user.Id): Task[SessionData] =
-        Clock.instant.flatMap: instant =>
-          val sessionId = user.SessionId.generate
-          val deviceId = user.DeviceId.fromUserAgent(userAgent)
-          val now = instant.toString
-
-          val deviceRow = DeviceRow(
+        for
+          instant <- Clock.instant
+          now       = instant.toString
+          sessionId = user.SessionId.generate
+          deviceId  = user.DeviceId.fromUserAgent(userAgent)
+          deviceRow = DeviceRow(
             id = deviceId,
             userAgent = userAgent,
             createdAt = now,
             updatedAt = now)
-
-          val upsertDevice = run(
+          _ <- run(
             query[DeviceRow]
               .insertValue(lift(deviceRow))
               .onConflictUpdate(_.id)(
                 (t, e) => t.userAgent -> e.userAgent,
-                (t, _) => t.updatedAt -> lift(now)))
-
-          val sessionRow = SessionRow(
+                (t, _) => t.updatedAt -> lift(now))).orDie
+          sessionRow = SessionRow(
             id = sessionId,
             userId = Some(userId),
             deviceId = deviceId,
@@ -256,8 +246,7 @@ object SessionService:
             ssid = portalParams.ssid,
             clickId = portalParams.clickId
           )
-
-          val insertSession = run(
+          _ <- run(
             query[SessionRow].insert(
               _.id                  -> lift(sessionRow.id),
               _.userId              -> lift(sessionRow.userId),
@@ -276,25 +265,22 @@ object SessionService:
               _.redirectUrl         -> lift(sessionRow.redirectUrl),
               _.ssid                -> lift(sessionRow.ssid),
               _.clickId             -> lift(sessionRow.clickId)
-            ))
-
-          (upsertDevice *> insertSession).orDie *>
-            ZIO.succeed(
-              SessionData(
-                sessionId,
-                Some(userId),
-                locale,
-                phase,
-                None,
-                None,
-                None,
-                locationId = locationId,
-                clientMac = portalParams.clientMac,
-                apMac = portalParams.apMac,
-                redirectUrl = portalParams.redirectUrl,
-                ssid = portalParams.ssid,
-                clickId = portalParams.clickId
-              ))
+            )).orDie
+        yield SessionData(
+          sessionId,
+          Some(userId),
+          locale,
+          phase,
+          None,
+          None,
+          None,
+          locationId = locationId,
+          clientMac = portalParams.clientMac,
+          apMac = portalParams.apMac,
+          redirectUrl = portalParams.redirectUrl,
+          ssid = portalParams.ssid,
+          clickId = portalParams.clickId
+        )
       end createForUser
 
       def setCurrentQuestion(

@@ -29,15 +29,6 @@ end AdvertiserSurveyRoutes
 final class AdvertiserSurveyRoutes(sessionEndpoint: SessionEndpoint):
   import AdvertiserSurveyRoutes.*
 
-  private def toApiError(error: Throwable): UIO[ApiError] =
-    error match
-      case Flow.HandlerError(errors) =>
-        ZIO.succeed(ApiError.fromAppErrors(errors))
-      case SessionContext.NotSet =>
-        ZIO.succeed(ApiError.SessionMissing)
-      case other =>
-        ZIO.logErrorCause("Internal error", Cause.fail(other)).as(ApiError.fromThrowable(other))
-
   val nextAdvertiserSurveyRoute
       : ZServerEndpoint[SessionContext & SessionService & NextAdvertiserSurveyFlowType, Any] =
     sessionEndpoint
@@ -66,7 +57,7 @@ final class AdvertiserSurveyRoutes(sessionEndpoint: SessionEndpoint):
                           e
                         case Right(c) =>
                           new Exception(s"Defect: ${c.prettyPrint}")
-                    toApiError(error).flatMap(ZIO.fail(_))
+                    ApiErrors.failWith(error)
                 // Update phase when transitioning away from AdvertiserVideoSurvey
                 _ <-
                   response match
@@ -107,7 +98,7 @@ final class AdvertiserSurveyRoutes(sessionEndpoint: SessionEndpoint):
                           e
                         case Right(c) =>
                           new Exception(s"Defect: ${c.prettyPrint}")
-                    toApiError(error).flatMap(ZIO.fail(_))
+                    ApiErrors.failWith(error)
                 // One question per video — go to Ready after answering
                 _ <- ZIO
                   .serviceWithZIO[SessionService](_.setPhase(session.sessionId, Phase.Ready))
