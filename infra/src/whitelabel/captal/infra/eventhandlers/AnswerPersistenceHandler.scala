@@ -1,6 +1,5 @@
 package whitelabel.captal.infra.eventhandlers
 
-import java.time.Instant
 import java.util.UUID
 
 import io.circe.syntax.*
@@ -36,7 +35,8 @@ object AnswerPersistenceHandler:
         import quill.*
         for
           sessionData <- ctx.getOrFail
-          answers = events.flatMap(toAnswerRow(_, sessionData.sessionId))
+          instant     <- Clock.instant
+          answers = events.flatMap(toAnswerRow(_, sessionData.sessionId, instant.toString))
           _ <-
             if answers.nonEmpty then
               run(insertAnswersQuery(liftQuery(answers))).unit.orDie
@@ -44,17 +44,22 @@ object AnswerPersistenceHandler:
               ZIO.unit
         yield ()
 
-  private def toAnswerRow(event: Event, sessionId: user.SessionId): Option[AnswerRow] =
+  private def toAnswerRow(
+      event: Event,
+      sessionId: user.SessionId,
+      now: String): Option[AnswerRow] =
     event match
       case Event.Survey(SurveyEvent.QuestionAnswered(_, questionEvent)) =>
-        Some(questionEventToRow(questionEvent, sessionId))
+        Some(questionEventToRow(questionEvent, sessionId, now))
       case Event.User(_) =>
         None
       case Event.Video(_) =>
         None
 
-  private def questionEventToRow(event: QuestionEvent, sessionId: user.SessionId): AnswerRow =
-    val now = Instant.now.toString
+  private def questionEventToRow(
+      event: QuestionEvent,
+      sessionId: user.SessionId,
+      now: String): AnswerRow =
     event match
       case QuestionEvent.EmailQuestionAnswered(userId, _, questionId, answer, occurredAt) =>
         AnswerRow(

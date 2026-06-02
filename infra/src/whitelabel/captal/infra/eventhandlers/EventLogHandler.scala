@@ -25,7 +25,8 @@ object EventLogHandler:
         import quill.*
         for
           sessionData <- ctx.getOrFail
-          now  = Instant.now.toString
+          instant     <- Clock.instant
+          now  = instant.toString
           rows = events.flatMap: event =>
             toEventLogRow(
               event,

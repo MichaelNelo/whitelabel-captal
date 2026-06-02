@@ -379,23 +379,24 @@ object DeprovisionCommand:
   // ─────────────────────────────────────────────────────────────────────────────
 
   private def invalidateCdn(slug: String): ZIO[CaptalConfig & CloudFrontClient, CliError, Unit] =
-    aws("CloudFront createInvalidation"):
-      ZIO.serviceWithZIO[CloudFrontClient]: cf =>
-        ZIO.serviceWithZIO[CaptalConfig]: config =>
-          ZIO.attemptBlocking:
-            cf.createInvalidation(
-              CreateInvalidationRequest
-                .builder()
-                .distributionId(config.aws.cloudfront.distributionId)
-                .invalidationBatch(
-                  InvalidationBatch
-                    .builder()
-                    .callerReference(java.time.Instant.now().toString)
-                    .paths(CfPaths.builder().items(s"/$slug/*").quantity(1).build())
-                    .build())
-                .build())
-    .flatMap: _ =>
-      Output.detail(s"CloudFront invalidation requested for /$slug/*")
+    Clock.instant.flatMap: now =>
+      aws("CloudFront createInvalidation"):
+        ZIO.serviceWithZIO[CloudFrontClient]: cf =>
+          ZIO.serviceWithZIO[CaptalConfig]: config =>
+            ZIO.attemptBlocking:
+              cf.createInvalidation(
+                CreateInvalidationRequest
+                  .builder()
+                  .distributionId(config.aws.cloudfront.distributionId)
+                  .invalidationBatch(
+                    InvalidationBatch
+                      .builder()
+                      .callerReference(now.toString)
+                      .paths(CfPaths.builder().items(s"/$slug/*").quantity(1).build())
+                      .build())
+                  .build())
+      .flatMap: _ =>
+        Output.detail(s"CloudFront invalidation requested for /$slug/*")
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Helpers

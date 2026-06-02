@@ -1,7 +1,5 @@
 package whitelabel.captal.api
 
-import java.time.Instant
-
 import sttp.tapir.json.circe.*
 import sttp.tapir.ztapir.*
 import whitelabel.captal.core.application.commands.*
@@ -22,7 +20,7 @@ object SurveyRoutes:
   type AnswerLocationFlowType = Flow.Aux[Task, AnswerLocationCommand, NextStep]
   type NextSurveyFlowType = Flow.Aux[
     Task,
-    ProvideNextIdentificationSurveyCommand.type,
+    ProvideNextIdentificationSurveyCommand,
     NextIdentificationSurvey | NextStep]
 
   type FullEnv =
@@ -69,8 +67,9 @@ final class SurveyRoutes(
         request =>
           for
             answerFlow <- ZIO.service[AnswerEmailFlowType]
+            now        <- Clock.instant
             result     <- answerFlow
-              .execute(AnswerEmailCommand(request.answer, Instant.now))
+              .execute(AnswerEmailCommand(request.answer, now))
               .map(SurveyResponse.from)
               .catchAllCause: cause =>
                 val error =
@@ -102,7 +101,8 @@ final class SurveyRoutes(
         request =>
           for
             answerFlow <- ZIO.service[AnswerProfilingFlowType]
-            cmd = AnswerProfilingCommand(answer = request.answer, occurredAt = Instant.now)
+            now <- Clock.instant
+            cmd = AnswerProfilingCommand(answer = request.answer, occurredAt = now)
             result <- answerFlow
               .execute(cmd)
               .map(SurveyResponse.from)
@@ -132,7 +132,8 @@ final class SurveyRoutes(
         request =>
           for
             answerFlow <- ZIO.service[AnswerLocationFlowType]
-            cmd = AnswerLocationCommand(answer = request.answer, occurredAt = Instant.now)
+            now <- Clock.instant
+            cmd = AnswerLocationCommand(answer = request.answer, occurredAt = now)
             result <- answerFlow
               .execute(cmd)
               .map(SurveyResponse.from)
@@ -169,8 +170,9 @@ final class SurveyRoutes(
               else
                 ZIO.unit
             flow   <- ZIO.service[NextSurveyFlowType]
+            now    <- Clock.instant
             result <- flow
-              .execute(ProvideNextIdentificationSurveyCommand)
+              .execute(ProvideNextIdentificationSurveyCommand(now))
               .map(SurveyResponse.from)
               .catchAllCause: cause =>
                 val error =

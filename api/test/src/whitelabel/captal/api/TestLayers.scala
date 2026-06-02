@@ -109,7 +109,7 @@ object TestLayers:
     Nothing,
     Flow.Aux[
       Task,
-      ProvideNextIdentificationSurveyCommand.type,
+      ProvideNextIdentificationSurveyCommand,
       ProvideNextIdentificationSurveyHandler.Response]
   ] = ZLayer.fromFunction:
     (
@@ -123,7 +123,7 @@ object TestLayers:
   private val nextVideoFlowLayer: ZLayer[
     VideoRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
     Nothing,
-    Flow.Aux[Task, ProvideNextVideoCommand.type, ProvideNextVideoHandler.Response]
+    Flow.Aux[Task, ProvideNextVideoCommand, ProvideNextVideoHandler.Response]
   ] = ZLayer.fromFunction:
     (
         videoRepo: VideoRepository[Task],

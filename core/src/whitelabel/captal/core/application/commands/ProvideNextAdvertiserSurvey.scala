@@ -15,7 +15,7 @@ import whitelabel.captal.core.survey.question.{FullyQualifiedQuestionId, Questio
 import whitelabel.captal.core.user.Event as UserEvent
 import whitelabel.captal.core.{Op as CoreOp, survey, video}
 
-final case class ProvideNextAdvertiserSurveyCommand(videoId: video.Id)
+final case class ProvideNextAdvertiserSurveyCommand(videoId: video.Id, occurredAt: Instant)
 
 final case class NextAdvertiserSurvey(
     surveyId: survey.Id,
@@ -47,7 +47,7 @@ object ProvideNextAdvertiserSurveyHandler:
               user.id,
               next.advertiserId,
               question,
-              Instant.now)
+              cmd.occurredAt)
             CoreOp
               .emit[whitelabel.captal.core.user.Event, whitelabel.captal.core.user.Error](event)
               .convertEvent
