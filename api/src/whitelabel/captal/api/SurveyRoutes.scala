@@ -42,15 +42,6 @@ final class SurveyRoutes(
     userLookup: UserLookup):
   import SurveyRoutes.*
 
-  private def toApiError(error: Throwable): UIO[ApiError] =
-    error match
-      case Flow.HandlerError(errors) =>
-        ZIO.succeed(ApiError.fromAppErrors(errors))
-      case SessionContext.NotSet =>
-        ZIO.succeed(ApiError.SessionMissing)
-      case other =>
-        ZIO.logErrorCause("Internal error", Cause.fail(other)).as(ApiError.fromThrowable(other))
-
   // ─── AnswerEmail ──────────────────────────────────────────────────────────
 
   val answerEmailRoute
@@ -78,7 +69,7 @@ final class SurveyRoutes(
                       e
                     case Right(c) =>
                       new Exception(s"Defect: ${c.prettyPrint}")
-                toApiError(error).flatMap(ZIO.fail(_))
+                ApiErrors.failWith(error)
             // After flow, SessionContext is updated with the resolved userId by
             // UserPersistenceHandler. Read it to set the cross-location user cookie.
             updated <- SessionContext.get
@@ -113,7 +104,7 @@ final class SurveyRoutes(
                       e
                     case Right(c) =>
                       new Exception(s"Defect: ${c.prettyPrint}")
-                toApiError(error).flatMap(ZIO.fail(_))
+                ApiErrors.failWith(error)
           yield result
 
   // ─── AnswerLocation ───────────────────────────────────────────────────────
@@ -144,7 +135,7 @@ final class SurveyRoutes(
                       e
                     case Right(c) =>
                       new Exception(s"Defect: ${c.prettyPrint}")
-                toApiError(error).flatMap(ZIO.fail(_))
+                ApiErrors.failWith(error)
           yield result
 
   // ─── NextSurvey ───────────────────────────────────────────────────────────
@@ -181,7 +172,7 @@ final class SurveyRoutes(
                       e
                     case Right(c) =>
                       new Exception(s"Defect: ${c.prettyPrint}")
-                toApiError(error).flatMap(ZIO.fail(_))
+                ApiErrors.failWith(error)
           yield result
 
   // ─── Status (sets the session cookie) ─────────────────────────────────────

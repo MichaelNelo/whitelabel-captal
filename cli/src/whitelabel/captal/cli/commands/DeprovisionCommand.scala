@@ -379,8 +379,9 @@ object DeprovisionCommand:
   // ─────────────────────────────────────────────────────────────────────────────
 
   private def invalidateCdn(slug: String): ZIO[CaptalConfig & CloudFrontClient, CliError, Unit] =
-    Clock.instant.flatMap: now =>
-      aws("CloudFront createInvalidation"):
+    for
+      now <- Clock.instant
+      _   <- aws("CloudFront createInvalidation"):
         ZIO.serviceWithZIO[CloudFrontClient]: cf =>
           ZIO.serviceWithZIO[CaptalConfig]: config =>
             ZIO.attemptBlocking:
@@ -395,8 +396,8 @@ object DeprovisionCommand:
                       .paths(CfPaths.builder().items(s"/$slug/*").quantity(1).build())
                       .build())
                   .build())
-      .flatMap: _ =>
-        Output.detail(s"CloudFront invalidation requested for /$slug/*")
+      _   <- Output.detail(s"CloudFront invalidation requested for /$slug/*")
+    yield ()
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Helpers

@@ -43,9 +43,10 @@ object SessionVideoHandler:
           videoVisualizations = events.flatMap(extractVideoVisualization)
           _ <-
             ZIO.foreachDiscard(videoVisualizations): viz =>
-              Clock.instant.flatMap: instant =>
-                val now = instant.toString
-                val viewRow = VideoViewRow(
+              for
+                instant <- Clock.instant
+                now = instant.toString
+                viewRow = VideoViewRow(
                   id = UUID.randomUUID.toString,
                   sessionId = viz.sessionId,
                   userId = viz.userId,
@@ -60,21 +61,20 @@ object SessionVideoHandler:
                   viewedAt = viz.occurredAt.toString,
                   createdAt = now
                 )
-                for
-                  // Insert video view
-                  _ <- run(query[VideoViewRow].insertValue(lift(viewRow))).orDie
-                  // Don't clear currentVideoId — it's needed during AdvertiserVideoSurvey phase
-                  // It will be overwritten when a new video is assigned
-                  // Update last propaganda video if applicable
-                  _ <-
-                    if viz.videoType == VideoType.Promo then
-                      run(
-                        SessionService.updateLastPromoVideoQuery(
-                          lift(sessionData.sessionId),
-                          lift(viz.videoId))).orDie
-                    else
-                      ZIO.unit
-                yield ()
+                // Insert video view
+                _ <- run(query[VideoViewRow].insertValue(lift(viewRow))).orDie
+                // Don't clear currentVideoId — it's needed during AdvertiserVideoSurvey phase
+                // It will be overwritten when a new video is assigned
+                // Update last propaganda video if applicable
+                _ <-
+                  if viz.videoType == VideoType.Promo then
+                    run(
+                      SessionService.updateLastPromoVideoQuery(
+                        lift(sessionData.sessionId),
+                        lift(viz.videoId))).orDie
+                  else
+                    ZIO.unit
+              yield ()
         yield ()
         end for
       end handle
