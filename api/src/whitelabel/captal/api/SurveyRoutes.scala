@@ -173,6 +173,20 @@ final class SurveyRoutes(
                     case Right(c) =>
                       new Exception(s"Defect: ${c.prettyPrint}")
                 ApiErrors.failWith(error)
+            // Mirror nextVideoRoute: when the response carries a NextStep, propagate the
+            // phase transition to the session so the SPA's follow-up request doesn't fail
+            // with wrong_phase. The session-phase-handler only reacts to domain events that
+            // imply progress (IdentificationCompleted, etc.); a fallback NextStep with no
+            // identification work (e.g. no surveys seeded for the location) emits no such
+            // event, so the route owns this transition.
+            _ <-
+              result match
+                case SurveyResponse.Step(step) =>
+                  ZIO
+                    .serviceWithZIO[SessionService](_.setPhase(session.sessionId, step.phase))
+                    .mapError(ApiError.fromThrowable)
+                case _ =>
+                  ZIO.unit
           yield result
 
   // ─── Status (sets the session cookie) ─────────────────────────────────────
