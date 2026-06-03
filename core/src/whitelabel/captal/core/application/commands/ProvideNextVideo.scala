@@ -8,7 +8,7 @@ import cats.syntax.functor.*
 import io.circe.{Decoder, Encoder}
 import whitelabel.captal.core.Op.{convertError, convertEvent}
 import whitelabel.captal.core.application.conversions.given
-import whitelabel.captal.core.application.{FallbackPhase, NextStep}
+import whitelabel.captal.core.application.{Error, FallbackPhase, NextStep}
 import whitelabel.captal.core.infrastructure.{UserRepository, VideoRepository}
 import whitelabel.captal.core.user.ops.*
 import whitelabel.captal.core.video.VideoToWatch
@@ -76,6 +76,9 @@ object ProvideNextVideoHandler:
                 // No video available — redirect to the fallback phase
                 Monad[F].pure(CoreOp.pure(NextStep(fallback.phase): Response))
           case None =>
-            // User not identified, shouldn't happen in this phase but handle gracefully
-            Monad[F].pure(CoreOp.pure(NextStep(fallback.phase): Response))
+            // Reaching AdvertiserVideo without a verified email means identification was
+            // either skipped (no surveys seeded) or short-circuited. Surface the condition
+            // so the SPA can recover, instead of silently sending the user to Ready.
+            Monad[F].pure(CoreOp.fail[whitelabel.captal.core.application.Event, Error, Response](
+              Error.UserNotIdentified))
 end ProvideNextVideoHandler
