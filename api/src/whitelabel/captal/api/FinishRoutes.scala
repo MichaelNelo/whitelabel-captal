@@ -49,7 +49,11 @@ final class FinishRoutes(sessionEndpoint: SessionEndpoint):
               .serviceWithZIO[SessionService](_.findById(session.sessionId))
               .mapError(ApiError.fromThrowable)
               .someOrFail(ApiError.SessionMissing)
-          yield StatusResponse(fresh.phase, fresh.locale, fresh.accessExpiresAt)
+          yield StatusResponse(
+            fresh.phase,
+            fresh.locale,
+            fresh.accessExpiresAt,
+            Option(fresh.redirectUrl).filter(_.nonEmpty))
 
   def routes: List[ZServerEndpoint[FullEnv, Any]] = List(finishRoute.widen[FullEnv])
 

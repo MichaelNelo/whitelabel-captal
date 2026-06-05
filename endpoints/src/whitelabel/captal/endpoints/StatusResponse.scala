@@ -11,7 +11,8 @@ import whitelabel.captal.endpoints.schemas.given
 final case class StatusResponse(
     phase: Phase,
     locale: String,
-    accessExpiresAt: Option[Instant] = None)
+    accessExpiresAt: Option[Instant] = None,
+    redirectUrl: Option[String] = None)
 
 object StatusResponse:
   given Encoder[StatusResponse] = deriveEncoder
