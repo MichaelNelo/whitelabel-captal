@@ -1554,6 +1554,75 @@ body {
   animation: checkPulse 0.5s ease-out;
 }
 
+/* Authorized-mode countdown: title sits in normal flow (right below the icon, like every
+   other view). The wrapper takes the remaining viewport and flex-centers the card so the
+   countdown lands visually in the middle of the page. */
+.welcome-countdown-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40vh;
+  margin-top: var(--space-xl);
+}
+
+.welcome-countdown-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(8px);
+  border-radius: var(--radius-lg);
+  padding: var(--space-xl) var(--space-2xl);
+  margin: var(--space-xl) auto 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 220px;
+}
+
+.welcome-countdown {
+  font-size: 56px;
+  font-weight: var(--font-weight-bold);
+  color: var(--text-inverse);
+  margin: 0;
+  /* tabular-nums keeps the mm:ss columns from jittering each tick. */
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  line-height: 1.1;
+}
+
+.welcome-countdown-label {
+  font-size: var(--font-size-sm);
+  color: var(--text-inverse);
+  opacity: 0.85;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: var(--space-sm) 0 0;
+}
+
+/* Ready view: title at the top (normal flow, below the brand icon), then a centered
+   wrapper holds a large spinner with the subtitle message right underneath.
+   Mirrors the countdown layout but without a card — the spinner IS the focal point. */
+.ready-loader-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 40vh;
+  margin-top: var(--space-xl);
+}
+
+/* The default `.spinner` is sized at --icon-size-md (48px) and has `margin: 0 auto var(--space-xl)`
+   for use inline. Inside `.ready-loader-wrapper` we want a bigger, prominent spinner with no
+   bottom-margin: the flex column + gap handles spacing between spinner and message. */
+.spinner.spinner--large {
+  width: var(--icon-size-lg);
+  height: var(--icon-size-lg);
+  margin: 0 0 var(--space-md);
+}
+
+.ready-loader-wrapper .ready-subtitle {
+  /* Override the default ready-subtitle margin so it sits tight under the spinner. */
+  margin: 0;
+}
+
 @keyframes checkPulse {
   0% { transform: translate(-50%, -50%) scale(1); }
   50% { transform: translate(-50%, -50%) scale(1.2); }
