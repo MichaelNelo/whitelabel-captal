@@ -54,14 +54,23 @@ object ReadyView:
   def render: HtmlElement = Layout(
     content = div(
       cls := "ready-view",
+      // Title sits in normal flow right below the brand icon, matching the other views.
       h1(
         cls       := "ready-title",
         styleAttr := "animation-delay: 1000ms",
         child.text <-- I18nClient.i18n.map(_.ready.title)),
-      p(
-        cls       := "ready-subtitle",
-        styleAttr := "animation-delay: 1200ms",
-        child.text <-- I18nClient.i18n.map(_.ready.subtitle)),
+      // Spinner + subtitle stacked, centered on the remaining viewport (mirrors the
+      // welcome-countdown-wrapper layout but without a card background). The spinner is
+      // always mounted while ReadyView is alive; on /api/finish success the router
+      // unmounts (either to redirect away or to Welcome/Authorized).
+      div(
+        cls := "ready-loader-wrapper",
+        div(cls := "spinner spinner--large"),
+        p(
+          cls       := "ready-subtitle",
+          styleAttr := "animation-delay: 1200ms",
+          child.text <-- I18nClient.i18n.map(_.ready.subtitle))
+      ),
       onMountCallback { _ =>
         callFinish()
       }
