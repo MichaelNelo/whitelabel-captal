@@ -36,5 +36,13 @@ ENV SERVER_DEV_ENDPOINTS=${SERVER_DEV_ENDPOINTS}
 ENV SERVER_HOST=0.0.0.0
 ENV SERVER_PORT=8080
 
+# DNS cache TTL tuning for Fargate + ECS Service Discovery.
+# JDK 21 default: positive lookups cached 30s, negatives 10s. When the rqlite task
+# rotates (Fargate redeploy, OOM kill) it gets a new IP and the JDBC HttpClient
+# stays pinned to the old one until the JVM re-resolves. Pushing positive TTL down
+# to 5s + disabling negative caching makes the API self-heal within ~5s of an IP
+# change instead of stalling on cached lookups.
+ENV JAVA_TOOL_OPTIONS="-Xss4m -Dnetworkaddress.cache.ttl=5 -Dnetworkaddress.cache.negative.ttl=0"
+
 CMD java -cp api.jar whitelabel.captal.infra.Migrate && \
     java -jar api.jar
