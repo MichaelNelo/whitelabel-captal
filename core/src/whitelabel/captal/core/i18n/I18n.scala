@@ -31,7 +31,7 @@ object I18n:
       given Decoder[Button] = deriveDecoder[Button]
       given Encoder[Button] = deriveEncoder[Button]
 
-    final case class Authorized(title: String)
+    final case class Authorized(title: String, remaining: String)
     object Authorized:
       given Decoder[Authorized] = deriveDecoder[Authorized]
       given Encoder[Authorized] = deriveEncoder[Authorized]
