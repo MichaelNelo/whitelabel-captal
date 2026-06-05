@@ -1,11 +1,8 @@
 package whitelabel.captal.client.views
 
 import scala.concurrent.ExecutionContext.Implicits.global
-import scala.scalajs.js
-import scala.util.Try
 
 import com.raquo.laminar.api.L.*
-import org.scalajs.dom
 import whitelabel.captal.client.i18n.I18nClient
 import whitelabel.captal.client.{ApiClient, AppState, BuildInfo, ErrorHandler, Router, Runtime}
 import whitelabel.captal.core.application.Phase
@@ -21,20 +18,19 @@ object ReadyView:
     * IMPORTANT: do NOT toggle `AppState.setNavigating` here. Doing so flips the App-level child
     * between navigationLoader and ReadyView, which unmounts then re-mounts this view, firing
     * `onMountCallback` again — producing an infinite `/api/finish` loop whenever UniFi keeps
-    * returning Ready (e.g. UCG unreachable). The view's own title/subtitle stay visible while
-    * the request is in flight.
+    * returning Ready (e.g. UCG unreachable). The view's own title/subtitle stay visible while the
+    * request is in flight.
     */
-  private def callFinish(): Unit =
-    Runtime.run:
-      ApiClient
-        .finish()
-        .map:
-          case Right(status) =>
-            AppState.setPhase(status.phase)
-            AppState.setAccessExpiresAt(status.accessExpiresAt)
-            // Round-trip canonicalization: the URL may have travelled through CloudFront,
-          case Left(err) =>
-            ErrorHandler.escalate(err)
+  private def callFinish(): Unit = Runtime.run:
+    ApiClient
+      .finish()
+      .map:
+        case Right(status) =>
+          AppState.setPhase(status.phase)
+          AppState.setAccessExpiresAt(status.accessExpiresAt)
+          Router.syncWithPhase(status.phase)
+        case Left(err) =>
+          ErrorHandler.escalate(err)
 
   private def resetPhase(): Unit =
     isResetting.set(true)
@@ -62,7 +58,7 @@ object ReadyView:
       // Spinner + subtitle stacked, centered on the remaining viewport (mirrors the
       // welcome-countdown-wrapper layout but without a card background). The spinner is
       // always mounted while ReadyView is alive; on /api/finish success the router
-      // unmounts (either to redirect away or to Welcome/Authorized).
+      // unmounts this view and renders Welcome/Authorized.
       div(
         cls := "ready-loader-wrapper",
         div(cls := "spinner spinner--large"),
