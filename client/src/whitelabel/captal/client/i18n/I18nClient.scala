@@ -15,7 +15,7 @@ object I18nClient:
       steps = I18n.Welcome.Steps("", "", ""),
       button = I18n.Welcome.Button("", ""),
       selectLanguage = "",
-      authorized = I18n.Welcome.Authorized("")),
+      authorized = I18n.Welcome.Authorized("", "")),
     ready = I18n.Ready("", "", ""),
     loading = I18n.Loading(""),
     error = I18n.Error("", "", ""),
