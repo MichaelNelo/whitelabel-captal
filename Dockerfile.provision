@@ -23,3 +23,7 @@ WORKDIR /app
 COPY --from=builder /app/out/infra/assembly.dest/out.jar infra.jar
 
 RUN mkdir -p /etc/captal
+
+# Match Dockerfile.api: lower the JVM DNS cache TTL so the provision task
+# re-resolves rqlite.captal.local quickly when its IP rotates.
+ENV JAVA_TOOL_OPTIONS="-Xss4m -Dnetworkaddress.cache.ttl=5 -Dnetworkaddress.cache.negative.ttl=0"
