@@ -299,7 +299,11 @@ final class SurveyRoutes(
             else
               ZIO.succeed(
                 Some(cookieConfig.asMeta(session.sessionId.asString)),
-                StatusResponse(session.phase, session.locale, session.accessExpiresAt))
+                StatusResponse(
+                  session.phase,
+                  session.locale,
+                  session.accessExpiresAt,
+                  Option(session.redirectUrl).filter(_.nonEmpty)))
 
   // ─── Aggregate ────────────────────────────────────────────────────────────
 

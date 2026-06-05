@@ -33,8 +33,29 @@ object ReadyView:
             AppState.setPhase(status.phase)
             AppState.setAccessExpiresAt(status.accessExpiresAt)
             // Round-trip canonicalization: the URL may have travelled through CloudFront,
+            // an HTTP header, and the DB. If any hop left it with mixed encoding (e.g.
+            // `http://host%2Fpath`), `location.assign` rejects it. decodeURIComponent here
+            // is the last line of defense before the browser parses the URL.
+            val safeRedirect = status
+              .redirectUrl
+              .map(safeDecodeURIComponent)
+              .filter(isSafeRedirect)
+            if status.phase == Phase.Authorized && safeRedirect.isDefined then
+              dom.window.location.assign(safeRedirect.get)
+            else
+              Router.syncWithPhase(status.phase)
           case Left(err) =>
             ErrorHandler.escalate(err)
+
+  /** `session.redirect_url` originates from the UniFi captive-portal `url=` query parameter, which
+    * is attacker-influenceable (rogue AP could inject `javascript:` or other schemes). Restrict
+    * navigation to HTTP(S) absolute URLs so the worst case is a redirect to a benign page.
+    */
+  private def isSafeRedirect(url: String): Boolean =
+    url.startsWith("http://") || url.startsWith("https://")
+
+  private def safeDecodeURIComponent(value: String): String =
+    Try(js.URIUtils.decodeURIComponent(value)).getOrElse(value)
 
   private def resetPhase(): Unit =
     isResetting.set(true)
