@@ -43,7 +43,9 @@ object LocaleService:
             start = get("welcome.button.start"),
             connecting = get("welcome.button.connecting")),
         selectLanguage = get("welcome.selectLanguage"),
-        authorized = I18n.Welcome.Authorized(title = get("welcome.authorized.title"))
+        authorized = I18n.Welcome.Authorized(
+          title = get("welcome.authorized.title"),
+          remaining = get("welcome.authorized.remaining"))
       ),
       ready = I18n.Ready(
         title = get("ready.title"),

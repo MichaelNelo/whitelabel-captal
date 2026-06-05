@@ -92,12 +92,24 @@ object WelcomeView:
     val tickStream = EventStream.periodic(1000).startWith(0L)
     div(
       cls := "welcome-view",
+      // Title sits in normal flow right below the brand icon, matching the layout of every
+      // other view (Welcome, Ready, etc.). The card itself is centered on the remaining
+      // viewport via the wrapper below.
       h1(cls := "welcome-title", child.text <-- I18nClient.i18n.map(_.welcome.authorized.title)),
-      p(
-        cls := "welcome-subtitle countdown",
-        child.text <--
-          tickStream.map: _ =>
-            formatRemaining(expiresAt)),
+      div(
+        cls := "welcome-countdown-wrapper",
+        div(
+          cls := "welcome-countdown-card",
+          p(
+            cls := "welcome-countdown",
+            child.text <--
+              tickStream.map: _ =>
+                formatRemaining(expiresAt)),
+          p(
+            cls := "welcome-countdown-label",
+            child.text <-- I18nClient.i18n.map(_.welcome.authorized.remaining))
+        )
+      ),
       tickStream --> { _ =>
         if java.time.Instant.now().isAfter(expiresAt) then
           refreshStatusAfterExpiration()
