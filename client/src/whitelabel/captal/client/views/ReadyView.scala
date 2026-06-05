@@ -1,8 +1,11 @@
 package whitelabel.captal.client.views
 
 import scala.concurrent.ExecutionContext.Implicits.global
+import scala.scalajs.js
+import scala.util.Try
 
 import com.raquo.laminar.api.L.*
+import org.scalajs.dom
 import whitelabel.captal.client.i18n.I18nClient
 import whitelabel.captal.client.{ApiClient, AppState, BuildInfo, ErrorHandler, Router, Runtime}
 import whitelabel.captal.core.application.Phase
@@ -10,13 +13,18 @@ import whitelabel.captal.core.application.Phase
 object ReadyView:
   private val isResetting: Var[Boolean] = Var(false)
 
-  /** Triggered on every mount. If UniFi succeeded → response has phase=Authorized and a defined
+  /** Triggered on mount. If UniFi succeeded → response has phase=Authorized and a defined
     * accessExpiresAt; the router will switch to WelcomeView in Authorized mode (countdown). If
     * UniFi failed or no config → phase stays Ready, accessExpiresAt = None and we remain on /ready
     * (a reload re-mounts → retries). Server-side `findReadyUser` is idempotent.
+    *
+    * IMPORTANT: do NOT toggle `AppState.setNavigating` here. Doing so flips the App-level child
+    * between navigationLoader and ReadyView, which unmounts then re-mounts this view, firing
+    * `onMountCallback` again — producing an infinite `/api/finish` loop whenever UniFi keeps
+    * returning Ready (e.g. UCG unreachable). The view's own title/subtitle stay visible while
+    * the request is in flight.
     */
   private def callFinish(): Unit =
-    AppState.setNavigating(true)
     Runtime.run:
       ApiClient
         .finish()
@@ -24,10 +32,8 @@ object ReadyView:
           case Right(status) =>
             AppState.setPhase(status.phase)
             AppState.setAccessExpiresAt(status.accessExpiresAt)
-            Router.syncWithPhase(status.phase)
-            AppState.setNavigating(false)
+            // Round-trip canonicalization: the URL may have travelled through CloudFront,
           case Left(err) =>
-            AppState.setNavigating(false)
             ErrorHandler.escalate(err)
 
   private def resetPhase(): Unit =
