@@ -108,7 +108,12 @@ object UnifiAuthorizationHandler:
     * action. Both calls share the same X-API-KEY auth header.
     */
   private def authorizeGuest(client: Client, unifi: UnifiAccess, clientMac: String): Task[Unit] =
-    val base = s"https://${unifi.host}:${unifi.port}/proxy/network/integration/v1"
+    // IPv6 hosts (e.g. Tailscale ULA fd7a:115c:...) must be bracketed in URLs per RFC 3986.
+    // Without brackets the `:` of the address mixes with the port separator and zio-http
+    // rejects the URL with "Invalid URL". Detect IPv6 by the presence of a colon (IPv4 and
+    // DNS names never contain one) and wrap accordingly.
+    val hostFmt = if unifi.host.contains(":") then s"[${unifi.host}]" else unifi.host
+    val base = s"https://$hostFmt:${unifi.port}/proxy/network/integration/v1"
     val macNormalized = clientMac.toLowerCase.replace("-", ":")
     for
       clientId <- findClientId(client, base, unifi.siteId, unifi.apiToken, macNormalized)
