@@ -20,7 +20,7 @@ The phase is persisted on `sessions.phase`, advanced by `SessionPhaseHandler`, v
 - `Ready` = "the survey is done, waiting for UniFi to authorize the guest".
 - `Authorized` = "UniFi authorized the guest; the session's `accessExpiresAt` is set".
 - The `Ready → Authorized` transition is made **only** by `UnifiAuthorizationHandler`, post-commit (not by `SessionPhaseHandler`). If UniFi fails, the session stays in `Ready` and `/api/finish` can be retried.
-- `Phase.Authorized` maps to `Page.Welcome` on the client (`WelcomeView` shows the countdown when the phase is `Authorized` and `accessExpiresAt` is set), not to `Page.Ready`.
+- `Phase.Authorized` maps to `Page.Welcome` on the client (`WelcomeView` shows the countdown when the phase is `Authorized` and `secondsRemaining` is set), not to `Page.Ready`.
 
 ## Steps
 

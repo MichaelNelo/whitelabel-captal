@@ -59,4 +59,14 @@ object AppState:
   private val accessExpiresAtVar: Var[Option[Instant]] = Var(None)
   val accessExpiresAt: Signal[Option[Instant]] = accessExpiresAtVar.signal
   def setAccessExpiresAt(t: Option[Instant]): Unit = accessExpiresAtVar.set(t)
+
+  /** Seconds left of the granted access, as computed by the server.
+    *
+    * Kept separate from [[accessExpiresAt]] on purpose: the countdown is driven off this plain
+    * counter instead of subtracting from an absolute instant, so it never depends on the device
+    * clock. A captive-portal client has had no internet yet and may not have synced NTP.
+    */
+  private val secondsRemainingVar: Var[Option[Long]] = Var(None)
+  val secondsRemaining: Signal[Option[Long]] = secondsRemainingVar.signal
+  def setSecondsRemaining(s: Option[Long]): Unit = secondsRemainingVar.set(s)
 end AppState

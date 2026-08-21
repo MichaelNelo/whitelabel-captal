@@ -92,7 +92,7 @@ final class SurveyRoutes(
         request =>
           for
             answerFlow <- ZIO.service[AnswerProfilingFlowType]
-            now <- Clock.instant
+            now        <- Clock.instant
             cmd = AnswerProfilingCommand(answer = request.answer, occurredAt = now)
             result <- answerFlow
               .execute(cmd)
@@ -123,7 +123,7 @@ final class SurveyRoutes(
         request =>
           for
             answerFlow <- ZIO.service[AnswerLocationFlowType]
-            now <- Clock.instant
+            now        <- Clock.instant
             cmd = AnswerLocationCommand(answer = request.answer, occurredAt = now)
             result <- answerFlow
               .execute(cmd)
@@ -303,7 +303,11 @@ final class SurveyRoutes(
                   session.phase,
                   session.locale,
                   session.accessExpiresAt,
-                  Option(session.redirectUrl).filter(_.nonEmpty)))
+                  Option(session.redirectUrl).filter(_.nonEmpty),
+                  StatusResponse.secondsRemainingFrom(session.accessExpiresAt, now)
+                )
+              )
+            end if
 
   // ─── Aggregate ────────────────────────────────────────────────────────────
 

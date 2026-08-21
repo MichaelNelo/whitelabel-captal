@@ -31,7 +31,18 @@ object AuthorizedSuite:
               .downField("accessExpiresAt")
               .focus
               .getOrElse(io.circe.Json.Null)
-            assertTrue(statusResp.code.isSuccess, phase == "authorized", !accessExpiresAt.isNull)
+            val secondsRemaining = body
+              .hcursor
+              .downField("secondsRemaining")
+              .as[Long]
+              .toOption
+            assertTrue(
+              statusResp.code.isSuccess,
+              phase == "authorized",
+              !accessExpiresAt.isNull,
+              // Server-computed, so the client's countdown never touches the device clock.
+              secondsRemaining.exists(s => s > 0 && s <= 3600)
+            )
         ,
         test("Status resets session to Welcome when accessExpiresAt is in the past"):
           for

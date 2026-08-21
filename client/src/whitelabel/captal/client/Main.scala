@@ -53,12 +53,11 @@ object App:
 
   /** Extract captive portal params from the UniFi redirect URL.
     *
-    * The `url` param (and any other value that survives a UniFi → CloudFront round-trip)
-    * can arrive partially percent-encoded — e.g. `http://host%2Fpath` — when an upstream
-    * URL-encoded the value once and `URLSearchParams.get` only undoes one layer. We
-    * conservatively `decodeURIComponent` each value before forwarding it as an HTTP
-    * header so the server stores a canonical URL and `location.assign` later doesn't
-    * choke on mixed-encoding forms.
+    * The `url` param (and any other value that survives a UniFi → CloudFront round-trip) can arrive
+    * partially percent-encoded — e.g. `http://host%2Fpath` — when an upstream URL-encoded the value
+    * once and `URLSearchParams.get` only undoes one layer. We conservatively `decodeURIComponent`
+    * each value before forwarding it as an HTTP header so the server stores a canonical URL and
+    * `location.assign` later doesn't choke on mixed-encoding forms.
     */
   private def parseCaptivePortalHeaders(): Map[String, String] =
     val params = new dom.URLSearchParams(dom.window.location.search)
@@ -69,15 +68,16 @@ object App:
       "ssid"     -> "X-Ssid",
       "click_id" -> "X-Click-Id")
       .flatMap: (urlParam, headerName) =>
-        Option(params.get(urlParam)).filter(_.nonEmpty).map(value =>
-          headerName -> safeDecodeURIComponent(value))
+        Option(params.get(urlParam))
+          .filter(_.nonEmpty)
+          .map(value => headerName -> safeDecodeURIComponent(value))
       .toMap
 
-  /** decodeURIComponent throws on malformed sequences. We never want a captive-portal
-    * value to break boot; on decode failure, fall back to the raw value.
+  /** decodeURIComponent throws on malformed sequences. We never want a captive-portal value to
+    * break boot; on decode failure, fall back to the raw value.
     */
-  private def safeDecodeURIComponent(value: String): String =
-    Try(js.URIUtils.decodeURIComponent(value)).getOrElse(value)
+  private def safeDecodeURIComponent(value: String): String = Try(
+    js.URIUtils.decodeURIComponent(value)).getOrElse(value)
 
   /** Check the server-side phase and redirect if the current URL doesn't match. This ensures users
     * entering via direct URLs (e.g., /question, /final) are redirected to the correct phase.
@@ -91,6 +91,7 @@ object App:
           case Right(status) =>
             i18n.I18nClient.setLocale(status.locale)
             AppState.setAccessExpiresAt(status.accessExpiresAt)
+            AppState.setSecondsRemaining(status.secondsRemaining)
             AppState.setPhase(status.phase)
             Router.syncWithPhase(status.phase)
           case Left(err) =>

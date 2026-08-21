@@ -1,8 +1,7 @@
 package whitelabel.captal.client.views
 
-import java.time.Instant
-
 import scala.concurrent.ExecutionContext.Implicits.global
+import scala.scalajs.js
 
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.i18n.I18nClient
@@ -20,10 +19,10 @@ object WelcomeView:
       child <--
         AppState
           .phase
-          .combineWith(AppState.accessExpiresAt)
+          .combineWith(AppState.secondsRemaining)
           .map:
-            case (Some(Phase.Authorized), Some(expiresAt)) =>
-              authorizedContent(expiresAt)
+            case (Some(Phase.Authorized), Some(secondsRemaining)) =>
+              authorizedContent(secondsRemaining)
             case _ =>
               welcomeContent),
     footer = div(
@@ -84,11 +83,23 @@ object WelcomeView:
     )
   )
 
-  /** Authorized view: shows a countdown until `expiresAt`. Once the deadline is reached, polls
-    * `/api/status`; the server resets the session and we render the normal Welcome again.
+  /** Authorized view: counts down the seconds the server reported and, when they run out, asks
+    * `/api/status` once — by then the scheduler has already reset the session server-side, so the
+    * response carries the Welcome phase and the router re-renders.
+    *
+    * No absolute time is used anywhere: the counter is seeded from `secondsRemaining` and
+    * decremented locally, and the deadline is a single `setTimeout`. The device clock never enters
+    * the picture, which matters because a captive-portal client has had no internet yet and may not
+    * have synced NTP.
+    *
+    * Losing the timer is harmless. If the tab is closed or discarded, `Main.syncPhaseOnLoad` calls
+    * `/api/status` on the next load and gets the right phase; if it fires late (background
+    * throttling, suspended device) the answer is the same. If it somehow fires early, the response
+    * still says Authorized and the countdown is simply re-seeded.
     */
-  private def authorizedContent(expiresAt: Instant): HtmlElement =
-    // Tick every second to refresh the countdown label.
+  private def authorizedContent(remainingSeconds: Long): HtmlElement =
+    val remaining: Var[Long] = Var(remainingSeconds)
+    // Ticks only repaint the label — they never decide when access ends.
     val tickStream = EventStream.periodic(1000).startWith(0L)
     div(
       cls := "welcome-view",
@@ -100,30 +111,29 @@ object WelcomeView:
         cls := "welcome-countdown-wrapper",
         div(
           cls := "welcome-countdown-card",
-          p(
-            cls := "welcome-countdown",
-            child.text <--
-              tickStream.map: _ =>
-                formatRemaining(expiresAt)),
+          p(cls := "welcome-countdown", child.text <-- remaining.signal.map(formatRemaining)),
           p(
             cls := "welcome-countdown-label",
             child.text <-- I18nClient.i18n.map(_.welcome.authorized.remaining))
         )
       ),
       tickStream --> { _ =>
-        if java.time.Instant.now().isAfter(expiresAt) then
-          refreshStatusAfterExpiration()
-      }
+        remaining.update(s => math.max(0L, s - 1))
+      },
+      onMountCallback(_ => scheduleExpiry(remainingSeconds))
     )
+  end authorizedContent
 
   private def authorizedFooter: HtmlElement = div()
 
-  private def formatRemaining(expiresAt: Instant): String =
-    val now = java.time.Instant.now()
-    val seconds = math.max(0L, java.time.Duration.between(now, expiresAt).getSeconds)
-    val minutes = seconds / 60
-    val secs = seconds % 60
-    f"$minutes%02d:$secs%02d"
+  /** `setTimeout` stores its delay in a signed 32-bit int; anything above this overflows and fires
+    * immediately, so the delay is clamped.
+    */
+  private val MaxTimeoutMillis: Long = 2147483647L
+
+  private def scheduleExpiry(secondsRemaining: Long): Unit =
+    val delayMillis = math.min(math.max(0L, secondsRemaining) * 1000L, MaxTimeoutMillis)
+    js.timers.setTimeout(delayMillis.toDouble)(refreshStatusAfterExpiration())
 
   private def refreshStatusAfterExpiration(): Unit = Runtime.run:
     ApiClient
@@ -131,10 +141,19 @@ object WelcomeView:
       .map:
         case Right(status) =>
           AppState.setAccessExpiresAt(status.accessExpiresAt)
+          AppState.setSecondsRemaining(status.secondsRemaining)
           AppState.setPhase(status.phase)
           Router.syncWithPhase(status.phase)
+          // Fired early (imprecise timer): re-arm with the value the server just reported.
+          if status.phase == Phase.Authorized then
+            status.secondsRemaining.foreach(scheduleExpiry)
         case Left(err) =>
           ErrorHandler.escalate(err)
+
+  private def formatRemaining(seconds: Long): String =
+    val minutes = seconds / 60
+    val secs = seconds % 60
+    f"$minutes%02d:$secs%02d"
 
   private def step(textSignal: Signal[String], index: Int): HtmlElement = div(
     cls       := "step",

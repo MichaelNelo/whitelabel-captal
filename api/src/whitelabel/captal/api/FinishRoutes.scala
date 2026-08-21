@@ -43,7 +43,7 @@ final class FinishRoutes(sessionEndpoint: SessionEndpoint):
                     case Right(c) =>
                       new Exception(s"Defect: ${c.prettyPrint}")
                 ApiErrors.failWith(error)
-            // Post-commit: UnifiAuthorizationHandler already ran here. Re-read the
+            // Post-commit: UnifiAccessHandler already ran here. Re-read the
             // session to surface phase + accessExpiresAt (Some(...) iff UniFi succeeded).
             fresh <- ZIO
               .serviceWithZIO[SessionService](_.findById(session.sessionId))
@@ -53,7 +53,9 @@ final class FinishRoutes(sessionEndpoint: SessionEndpoint):
             fresh.phase,
             fresh.locale,
             fresh.accessExpiresAt,
-            Option(fresh.redirectUrl).filter(_.nonEmpty))
+            Option(fresh.redirectUrl).filter(_.nonEmpty),
+            StatusResponse.secondsRemainingFrom(fresh.accessExpiresAt, now)
+          )
 
   def routes: List[ZServerEndpoint[FullEnv, Any]] = List(finishRoute.widen[FullEnv])
 
