@@ -20,7 +20,6 @@ object HandlerTests extends TestSuite:
   // fixed Instant for determinism. No Clock to inject here — utest + cats.Id, not ZIO.
   private val FixedNow: Instant = Instant.EPOCH
 
-
   // Simple mock implementations using cats.Id
   private def makeRadioQuestion(optionId: OptionId): QuestionToAnswer = QuestionToAnswer(
     id = survey.question.Id.generate,
@@ -97,6 +96,7 @@ object HandlerTests extends TestSuite:
       def findWatchingVideo() = None
       def findAnsweringVideoSurvey() = None
       def findReadyUser() = None
+      def findAuthorizedUser() = None
 
   given Parallel[Id] = Parallel.identity[Id]
 

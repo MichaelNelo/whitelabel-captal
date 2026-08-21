@@ -14,7 +14,7 @@ import whitelabel.captal.core.application.{
   Phase
 }
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository, VideoRepository}
-import whitelabel.captal.infra.RqliteDataSource
+import whitelabel.captal.infra.{RqliteDataSource, UnifiAccess}
 import whitelabel.captal.infra.eventhandlers.*
 import whitelabel.captal.infra.repositories.{
   SurveyRepositoryQuill,
@@ -23,7 +23,7 @@ import whitelabel.captal.infra.repositories.{
 }
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.services.LocaleService
-import whitelabel.captal.infra.session.{SessionContext, SessionService}
+import whitelabel.captal.infra.session.{JobQueue, JobRunner, SessionContext, SessionService}
 import zio.*
 import zio.interop.catz.*
 
@@ -58,24 +58,38 @@ object TestLayers:
   private val videoRepoLayer = VideoRepositoryQuill.layer
 
   private val eventHandlerLayer: ZLayer[
-    QuillSqlite & SessionContext & SessionService & TestUnifiAutoAuthorizeHandler.Active,
+    QuillSqlite & SessionContext & SessionService & CurrentLocation & TestUnifiClient & JobQueue,
     Nothing,
     EventHandler[Task, Event]] = ZLayer.fromFunction:
     (
         quill: QuillSqlite,
         ctx: SessionContext,
         sessionService: SessionService,
-        active: TestUnifiAutoAuthorizeHandler.Active) =>
+        currentLocation: CurrentLocation,
+        unifiClient: TestUnifiClient,
+        jobQueue: JobQueue) =>
       val dbHandler = EventLogHandler(ctx)
         .andThen(AnswerPersistenceHandler(ctx))
         .andThen(UserPersistenceHandler(ctx))
         .andThen(SessionPhaseHandler(ctx, nextAfterIdentification.phase, nextAfterVideo.phase))
         .andThen(SessionSurveyHandler(ctx))
         .andThen(SessionVideoHandler(ctx))
+        .andThen(SessionExpirationHandler(ctx))
         .andThen(SurveyProgressHandler())
       val transactional = TransactionalEventHandler(dbHandler, quill)
-      val unifiAuth = TestUnifiAutoAuthorizeHandler(active, ctx, sessionService)
-      transactional.andThen(unifiAuth)
+      // The production handler, with its HTTP transport swapped for TestUnifiClient.
+      val unifiAccess = UnifiAccessHandler(
+        currentLocation.unifi,
+        ctx,
+        sessionService,
+        unifiClient,
+        jobQueue)
+      transactional.andThen(unifiAccess)
+
+  private val expireAccessFlowLayer: ZLayer[UserRepository[
+    Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, ExpireAccessCommand, Unit]] = ZLayer
+    .fromFunction: (userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
+      Flow(ExpireAccessHandler(userRepo), eventHandler)
 
   private val answerEmailFlowLayer: ZLayer[SurveyRepository[
     Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, AnswerEmailCommand, NextStep]] =
@@ -122,13 +136,13 @@ object TestLayers:
   private val nextVideoFlowLayer: ZLayer[
     VideoRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
     Nothing,
-    Flow.Aux[Task, ProvideNextVideoCommand, ProvideNextVideoHandler.Response]
-  ] = ZLayer.fromFunction:
-    (
-        videoRepo: VideoRepository[Task],
-        userRepo: UserRepository[Task],
-        eventHandler: EventHandler[Task, Event]) =>
-      Flow(ProvideNextVideoHandler(videoRepo, userRepo, fallbackFromVideo), eventHandler)
+    Flow.Aux[Task, ProvideNextVideoCommand, ProvideNextVideoHandler.Response]] = ZLayer
+    .fromFunction:
+      (
+          videoRepo: VideoRepository[Task],
+          userRepo: UserRepository[Task],
+          eventHandler: EventHandler[Task, Event]) =>
+        Flow(ProvideNextVideoHandler(videoRepo, userRepo, fallbackFromVideo), eventHandler)
 
   private val nextAdvertiserSurveyFlowLayer: ZLayer[
     SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
@@ -187,8 +201,28 @@ object TestLayers:
   private val sessionCookieConfigLayer: ULayer[SessionCookieConfig] = ZLayer.succeed(
     SessionCookieConfig.fromSlug(None))
 
-  // Tests run without an associated location row, so CurrentLocation is empty.
-  private val currentLocationLayer: ULayer[CurrentLocation] = ZLayer.succeed(CurrentLocation.empty)
+  /** Tests have no location row, but they do need UniFi config so `UnifiAccessHandler` walks the
+    * real path. `TestUnifiClient` intercepts the transport, so these values never reach the
+    * network.
+    *
+    * `defaultDurationMinutes = 0` makes `expiresAt == occurredAt`: the expiration is already due at
+    * the very instant access is granted, so the scheduler processes it as soon as it starts. This
+    * avoids advancing the `TestClock`, whose plumbing conflicts with `provideShared`, and does not
+    * affect the other tests because the test clock is frozen and `/api/status` checks with
+    * `isBefore(now)`.
+    */
+  private val currentLocationLayer: ULayer[CurrentLocation] = ZLayer.succeed(
+    CurrentLocation(
+      None,
+      None,
+      None,
+      Some(
+        UnifiAccess(
+          host = "unifi.test",
+          apiToken = "test-token",
+          port = 443,
+          siteId = "test-site",
+          defaultDurationMinutes = 0))))
 
   type TestEnv =
     SessionContext & SessionService & LocaleService & SurveyRoutes.AnswerEmailFlowType &
@@ -198,7 +232,7 @@ object TestLayers:
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType & QuillSqlite &
       SessionCookieConfig & CurrentLocation & UserCookieConfig & UserLookup & SessionEndpoint &
       SurveyRoutes & LocaleRoutes & VideoRoutes & AdvertiserSurveyRoutes & FinishRoutes &
-      TestUnifiAutoAuthorizeHandler.Active
+      TestUnifiClient & JobQueue & JobRunner.ExpireFlow & JobRunner
 
   val testEnv: ZLayer[Any, Throwable, TestEnv] = ZLayer.make[TestEnv](
     SessionContext.make,
@@ -209,7 +243,10 @@ object TestLayers:
     surveyRepoLayer,
     userRepoLayer,
     videoRepoLayer,
-    TestUnifiAutoAuthorizeHandler.activeLayer,
+    TestUnifiClient.layer,
+    JobQueue.layer,
+    expireAccessFlowLayer,
+    JobRunner.layer,
     eventHandlerLayer,
     answerEmailFlowLayer,
     answerProfilingFlowLayer,

@@ -30,4 +30,11 @@ enum Event:
       videoId: Option[video.Id],
       answeredQuestionIds: List[FullyQualifiedQuestionId],
       occurredAt: Instant)
+
+  /** The access granted after `UserFinishedProcess` has reached its `accessExpiresAt`.
+    *
+    * A genuine domain event: it is what forces the user back through the flow, which is the
+    * business model. Emitted by the expiration scheduler, not by a request.
+    */
+  case AccessExpired(userId: Id, occurredAt: Instant)
 end Event

@@ -50,6 +50,13 @@ trait SessionService:
     * is kept so the cookie continues to resolve.
     */
   def resetForExpiration(sessionId: user.SessionId): Task[Unit]
+
+  /** Sessions of this location that are `Authorized` with an `accessExpiresAt` set.
+    *
+    * Only used at startup, to re-seed the expiration scheduler — its state lives in memory and does
+    * not survive a task redeploy. Deadlines already in the past fire immediately.
+    */
+  def findPendingExpirations(): Task[List[(user.SessionId, java.time.Instant)]]
 end SessionService
 
 object SessionService:
@@ -108,6 +115,18 @@ object SessionService:
         .filter(_.id == sessionIdParam)
         .update(_.phase -> phaseParam, _.accessExpiresAt -> Some(expiresAtParam))
 
+  /** Authorized sessions of this location that still have a pending expiration.
+    *
+    * `location_id` comes from the instance — each ECS task serves a single location — so there is
+    * no cross-location lookup.
+    */
+  inline def pendingExpirationsQuery = quote:
+    (locationIdParam: Option[String], phaseParam: Phase) =>
+      query[SessionRow]
+        .filter(s =>
+          s.locationId == locationIdParam && s.phase == phaseParam && s.accessExpiresAt.isDefined)
+        .map(s => (s.id, s.accessExpiresAt))
+
   inline def resetForExpirationQuery = quote: (sessionIdParam: user.SessionId, phaseParam: Phase) =>
     query[SessionRow]
       .filter(_.id == sessionIdParam)
@@ -143,12 +162,13 @@ object SessionService:
             userAgent = userAgent,
             createdAt = now,
             updatedAt = now)
-          _ <- run(
-            query[DeviceRow]
-              .insertValue(lift(deviceRow))
-              .onConflictUpdate(_.id)(
-                (t, e) => t.userAgent -> e.userAgent,
-                (t, _) => t.updatedAt -> lift(now))).orDie
+          _ <-
+            run(
+              query[DeviceRow]
+                .insertValue(lift(deviceRow))
+                .onConflictUpdate(_.id)(
+                  (t, e) => t.userAgent -> e.userAgent,
+                  (t, _) => t.updatedAt -> lift(now))).orDie
           sessionRow = SessionRow(
             id = sessionId,
             userId = None,
@@ -168,26 +188,27 @@ object SessionService:
             ssid = portalParams.ssid,
             clickId = portalParams.clickId
           )
-          _ <- run(
-            query[SessionRow].insert(
-              _.id                  -> lift(sessionRow.id),
-              _.userId              -> lift(sessionRow.userId),
-              _.deviceId            -> lift(sessionRow.deviceId),
-              _.locale              -> lift(sessionRow.locale),
-              _.phase               -> lift(sessionRow.phase),
-              _.currentSurveyId     -> lift(sessionRow.currentSurveyId),
-              _.currentQuestionId   -> lift(sessionRow.currentQuestionId),
-              _.currentVideoId      -> lift(sessionRow.currentVideoId),
-              _.lastPromoVideoId    -> lift(sessionRow.lastPromoVideoId),
-              _.currentAdvertiserId -> lift(sessionRow.currentAdvertiserId),
-              _.locationId          -> lift(sessionRow.locationId),
-              _.createdAt           -> lift(sessionRow.createdAt),
-              _.clientMac           -> lift(sessionRow.clientMac),
-              _.apMac               -> lift(sessionRow.apMac),
-              _.redirectUrl         -> lift(sessionRow.redirectUrl),
-              _.ssid                -> lift(sessionRow.ssid),
-              _.clickId             -> lift(sessionRow.clickId)
-            )).orDie
+          _ <-
+            run(
+              query[SessionRow].insert(
+                _.id                  -> lift(sessionRow.id),
+                _.userId              -> lift(sessionRow.userId),
+                _.deviceId            -> lift(sessionRow.deviceId),
+                _.locale              -> lift(sessionRow.locale),
+                _.phase               -> lift(sessionRow.phase),
+                _.currentSurveyId     -> lift(sessionRow.currentSurveyId),
+                _.currentQuestionId   -> lift(sessionRow.currentQuestionId),
+                _.currentVideoId      -> lift(sessionRow.currentVideoId),
+                _.lastPromoVideoId    -> lift(sessionRow.lastPromoVideoId),
+                _.currentAdvertiserId -> lift(sessionRow.currentAdvertiserId),
+                _.locationId          -> lift(sessionRow.locationId),
+                _.createdAt           -> lift(sessionRow.createdAt),
+                _.clientMac           -> lift(sessionRow.clientMac),
+                _.apMac               -> lift(sessionRow.apMac),
+                _.redirectUrl         -> lift(sessionRow.redirectUrl),
+                _.ssid                -> lift(sessionRow.ssid),
+                _.clickId             -> lift(sessionRow.clickId)
+              )).orDie
         yield SessionData(
           sessionId,
           None,
@@ -221,12 +242,13 @@ object SessionService:
             userAgent = userAgent,
             createdAt = now,
             updatedAt = now)
-          _ <- run(
-            query[DeviceRow]
-              .insertValue(lift(deviceRow))
-              .onConflictUpdate(_.id)(
-                (t, e) => t.userAgent -> e.userAgent,
-                (t, _) => t.updatedAt -> lift(now))).orDie
+          _ <-
+            run(
+              query[DeviceRow]
+                .insertValue(lift(deviceRow))
+                .onConflictUpdate(_.id)(
+                  (t, e) => t.userAgent -> e.userAgent,
+                  (t, _) => t.updatedAt -> lift(now))).orDie
           sessionRow = SessionRow(
             id = sessionId,
             userId = Some(userId),
@@ -246,26 +268,27 @@ object SessionService:
             ssid = portalParams.ssid,
             clickId = portalParams.clickId
           )
-          _ <- run(
-            query[SessionRow].insert(
-              _.id                  -> lift(sessionRow.id),
-              _.userId              -> lift(sessionRow.userId),
-              _.deviceId            -> lift(sessionRow.deviceId),
-              _.locale              -> lift(sessionRow.locale),
-              _.phase               -> lift(sessionRow.phase),
-              _.currentSurveyId     -> lift(sessionRow.currentSurveyId),
-              _.currentQuestionId   -> lift(sessionRow.currentQuestionId),
-              _.currentVideoId      -> lift(sessionRow.currentVideoId),
-              _.lastPromoVideoId    -> lift(sessionRow.lastPromoVideoId),
-              _.currentAdvertiserId -> lift(sessionRow.currentAdvertiserId),
-              _.locationId          -> lift(sessionRow.locationId),
-              _.createdAt           -> lift(sessionRow.createdAt),
-              _.clientMac           -> lift(sessionRow.clientMac),
-              _.apMac               -> lift(sessionRow.apMac),
-              _.redirectUrl         -> lift(sessionRow.redirectUrl),
-              _.ssid                -> lift(sessionRow.ssid),
-              _.clickId             -> lift(sessionRow.clickId)
-            )).orDie
+          _ <-
+            run(
+              query[SessionRow].insert(
+                _.id                  -> lift(sessionRow.id),
+                _.userId              -> lift(sessionRow.userId),
+                _.deviceId            -> lift(sessionRow.deviceId),
+                _.locale              -> lift(sessionRow.locale),
+                _.phase               -> lift(sessionRow.phase),
+                _.currentSurveyId     -> lift(sessionRow.currentSurveyId),
+                _.currentQuestionId   -> lift(sessionRow.currentQuestionId),
+                _.currentVideoId      -> lift(sessionRow.currentVideoId),
+                _.lastPromoVideoId    -> lift(sessionRow.lastPromoVideoId),
+                _.currentAdvertiserId -> lift(sessionRow.currentAdvertiserId),
+                _.locationId          -> lift(sessionRow.locationId),
+                _.createdAt           -> lift(sessionRow.createdAt),
+                _.clientMac           -> lift(sessionRow.clientMac),
+                _.apMac               -> lift(sessionRow.apMac),
+                _.redirectUrl         -> lift(sessionRow.redirectUrl),
+                _.ssid                -> lift(sessionRow.ssid),
+                _.clickId             -> lift(sessionRow.clickId)
+              )).orDie
         yield SessionData(
           sessionId,
           Some(userId),
@@ -308,6 +331,15 @@ object SessionService:
 
       def resetForExpiration(sessionId: user.SessionId): Task[Unit] =
         run(resetForExpirationQuery(lift(sessionId), lift(Phase.Welcome))).unit.orDie
+
+      def findPendingExpirations(): Task[List[(user.SessionId, java.time.Instant)]] =
+        run(pendingExpirationsQuery(lift(locationId), lift(Phase.Authorized)))
+          .map: rows =>
+            rows
+              .toList
+              .flatMap: (sessionId, expiresAt) =>
+                expiresAt.map(raw => sessionId -> java.time.Instant.parse(raw))
+          .orDie
 
   private def toSessionData(row: SessionRow): SessionData =
     val currentQuestion =
