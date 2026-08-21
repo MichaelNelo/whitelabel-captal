@@ -77,7 +77,7 @@ Layout actual del repo (paths relativos a la raíz):
 │       │   ├── EventLogHandler, AnswerPersistenceHandler, UserPersistenceHandler
 │       │   ├── SessionPhaseHandler, SessionSurveyHandler, SessionVideoHandler
 │       │   ├── SurveyProgressHandler, TransactionalEventHandler
-│       │   ├── UnifiAuthorizationHandler    # post-commit: calls UniFi authorize-guest
+│       │   ├── UnifiAccessHandler    # post-commit: calls UniFi authorize-guest
 │       ├── repositories/                # SurveyRepositoryQuill, UserRepositoryQuill, VideoRepositoryQuill
 │       ├── services/                    # LocationService, LocaleService
 │       ├── session/                     # SessionService, SessionContext, CaptivePortalParams
@@ -187,7 +187,7 @@ Cosas que NUNCA deben violarse — usadas como checklist mental al editar:
 
 ## UniFi integration — captive portal interaction
 
-> **Estado**: integración implementada end-to-end. El handler post-commit `UnifiAuthorizationHandler` (`infra/eventhandlers/`) llama al UCG cuando se emite `UserEvent.UserFinishedProcess`, y on success setea `session.phase = Authorized` + `accessExpiresAt`. Si UniFi falla, el session queda en `Phase.Ready` y la próxima llamada a `/api/finish` reintenta seamless.
+> **Estado**: integración implementada end-to-end. El handler post-commit `UnifiAccessHandler` (`infra/eventhandlers/`) llama al UCG cuando se emite `UserEvent.UserFinishedProcess`, y on success setea `session.phase = Authorized` + `accessExpiresAt`. Si UniFi falla, el session queda en `Phase.Ready` y la próxima llamada a `/api/finish` reintenta seamless.
 
 ### Modelo del flujo completo
 
@@ -204,7 +204,7 @@ Cosas que NUNCA deben violarse — usadas como checklist mental al editar:
     ↓
 [ReadyView.onMount → POST /api/finish → emite UserFinishedProcess]
     ↓
-[Post-commit: UnifiAuthorizationHandler llama UniFi authorize-guest vía HTTPS]
+[Post-commit: UnifiAccessHandler llama UniFi authorize-guest vía HTTPS]
     ↓
    ┌── UniFi 2xx ──────────────────────────────────────────────────┐
    ↓                                                                ↓
@@ -212,10 +212,21 @@ Cosas que NUNCA deben violarse — usadas como checklist mental al editar:
 [Response: phase=Authorized + accessExpiresAt]         [Response: phase=Ready + None]
    ↓                                                                ↓
 [Cliente Router.syncWithPhase(Authorized)]             [Queda en /ready; reload re-monta → retry]
-[WelcomeView en modo Authorized con countdown]
+[WelcomeView countdown desde secondsRemaining + 1 setTimeout]
+[UnifiAccessHandler encola ScheduledAt(expiresAt, ExpireAccess(sessionId)) en JobQueue]
    ↓
-[accessExpiresAt vence → cliente sigue connected hasta UniFi expire de su lado]
-[En reload posterior: /api/status detecta accessExpiresAt past → resetForExpiration → phase=Welcome]
+[JobRunner · fiber scheduler: espera hasta el deadline → publica a la cola `due`]
+   ↓
+[JobRunner · fiber worker: ctx.locally(session) → Flow[ExpireAccessCommand]]
+   ↓
+[ExpireAccessHandler → findAuthorizedUser → user.expire → emite AccessExpired]
+   ├─ SessionExpirationHandler (transaccional) → resetForExpiration → phase=Welcome
+   ├─ EventLogHandler → fila "user.access_expired"
+   └─ UnifiAccessHandler (post-commit) → UNAUTHORIZE_GUEST_ACCESS → el UCG desconecta
+   ↓
+[El corte ocurre aunque el usuario haya cerrado la pestaña — no depende del cliente]
+[/api/status conserva su rama isExpired como red de seguridad (scheduler caído, task recién
+ reiniciada antes de rehidratar, o location sin config de UniFi)]
 ```
 
 ### Modelo Phase / State
@@ -224,11 +235,15 @@ Dos pares con semánticas distintas pero acopladas:
 
 - **Session `Phase` (server state)**:
   - `Ready` = "user terminó el survey flow, esperando UniFi". Pocos ms o más si UniFi falla.
-  - `Authorized` = "UniFi confirmó el voucher; `accessExpiresAt` poblado". Transición la hace **sólo** `UnifiAuthorizationHandler` post-commit. Si UniFi no está configurado o falla, la sesión nunca llega a `Authorized` — diseño intencional para soportar retry.
+  - `Authorized` = "UniFi confirmó el voucher; `accessExpiresAt` poblado". Transición la hace **sólo** `UnifiAccessHandler` post-commit. Si UniFi no está configurado o falla, la sesión nunca llega a `Authorized` — diseño intencional para soportar retry.
 
 - **User aggregate `State` (in-memory type-state)**:
   - `State.Ready(redirectUrl, watchedVideoId, answeredQuestionIds)` — proyectado desde DB cuando `session.phase == Ready`. Único estado que `UserRepository.findReadyUser` retorna.
-  - `State.Authorized(...)` — ephemeral: sólo existe en memoria como el retorno tipado del `finish` op (`User[State.Ready] → User[State.Authorized] + emite UserFinishedProcess`). No hay `findAuthorizedUser` en el repo, porque para cuando session.phase=Authorized el flow ya está cerrado.
+  - `State.Authorized(...)` — proyectado desde DB cuando `session.phase == Authorized`, vía `UserRepository.findAuthorizedUser`. Es a la vez el retorno tipado del `finish` op (`User[State.Ready] → User[State.Authorized] + emite UserFinishedProcess`) y la entrada del `expire` op (`User[State.Authorized] → emite AccessExpired`), que ejecuta el `JobRunner` al vencer el acceso.
+
+> **Cambió respecto de versiones previas de este doc**: `State.Authorized` ya no es ephemeral y `findAuthorizedUser` sí existe. Dejó de serlo cuando se agregó un evento de ciclo de vida *después* de `Authorized` — el vencimiento —, que necesita proyectar ese estado desde la tabla.
+
+`expire` **no devuelve estado destino**. El type-state de `User` modela dónde estás dentro de un flujo activo, y el vencimiento lo termina en vez de moverte a otro paso. En particular **no** se vuelve a `State.Guest`: la fila en `users` persiste con su email y respuestas, y la cookie `captal_user` sigue apuntando al usuario, así que en la próxima visita `ProvideNextIdentificationSurveyHandler` lo encuentra vía `findWithEmail` y saltea lo ya respondido. `State.Guest` es de escritura únicamente — sólo lo produce `createGuest`, siempre con un `Id.generate` fresco.
 
 **Patrón retry-by-design**: como session.phase queda en `Ready` hasta que UniFi succeed, `findReadyUser` sigue retornando el user, y un nuevo POST `/api/finish` re-ejecuta `finish` → re-emite el evento → handler reintenta. El `ReadyView` del cliente lo aprovecha: re-mount = retry automático (idempotente porque UniFi `authorize-guest` es idempotente por MAC).
 
@@ -259,7 +274,7 @@ unifi:
   # Vacío → conexión directa (sólo local dev o API en misma LAN del UCG).
 ```
 
-El proxy es necesario en deploy porque ECS Fargate no tiene visibilidad directa a la LAN del cliente. La cadena en producción es **API task → Tailscale proxy (Fargate userspace) → tailnet → Tailscale subnet router (VM on-prem) → LAN cliente → UCG**. `trustAllClientLayer` en `UnifiAuthorizationHandler` configura zio-http con `ClientSSLConfig.Default` (trust-all para self-signed) + `Proxy(url)` cuando hay `proxyUrl`.
+El proxy es necesario en deploy porque ECS Fargate no tiene visibilidad directa a la LAN del cliente. La cadena en producción es **API task → Tailscale proxy (Fargate userspace) → tailnet → Tailscale subnet router (VM on-prem) → LAN cliente → UCG**. `trustAllClientLayer` en `UnifiAccessHandler` configura zio-http con `ClientSSLConfig.Default` (trust-all para self-signed) + `Proxy(url)` cuando hay `proxyUrl`.
 
 ### UniFi Network Integration v1 API — endpoints relevantes
 
@@ -307,7 +322,25 @@ Response: `{"data": [{"id": "<uuid>", "internalReference": "default", ...}]}` �
    ```
    Response 2xx → device autorizado por `timeLimitMinutes` minutos.
 
-El `UnifiAuthorizationHandler` (`infra/eventhandlers/UnifiAuthorizationHandler.scala`) implementa exactamente este flow.
+#### Revoke guest access
+
+**No existe una acción `DISCONNECT` / `KICK` / `FORCE_RECONNECT` para clients.** Verificado contra el OpenAPI 3.1.0 que sirve el propio UCG en `https://<ucg>/proxy/network/api-docs/integration.json` (UniFi Network 10.6.97): el schema `Client action request` está discriminado por `action` y su mapping admite **exactamente dos** valores — `AUTHORIZE_GUEST_ACCESS` y `UNAUTHORIZE_GUEST_ACCESS`.
+
+No hace falta un disconnect aparte porque ya está incluido; el schema lo describe como *"Unauthorizes network access **and disconnects** a guest client"*. Mismo lookup previo de `clientId` por MAC, mismo path, mismos headers — sólo cambia el body, que es únicamente el discriminador:
+
+```http
+POST https://<ucg>:443/proxy/network/integration/v1/sites/<siteId>/clients/<clientId>/actions
+X-API-KEY: <token>
+Content-Type: application/json
+
+{"action": "UNAUTHORIZE_GUEST_ACCESS"}
+```
+
+Response 200 con `revokedAuthorization` (required): `authorizationMethod`, `authorizedAt`, `expiresAt`, `usage`, rate limits.
+
+Dato colateral: el authorize *"cancels existing active authorization (if exists), creates a new one with new limits and resets guest traffic counters"* — o sea que el retry-by-design de `/api/finish` es idempotente por diseño de la API, no por casualidad.
+
+`UnifiClient` (`infra/UnifiClient.scala`) implementa ambos flows; `UnifiAccessHandler` (`infra/eventhandlers/`) es sólo el adaptador de eventos.
 
 ### Caveats conocidos
 
@@ -333,6 +366,7 @@ El `UnifiAuthorizationHandler` (`infra/eventhandlers/UnifiAuthorizationHandler.s
 | Agregar Phase | `core/.../application/phase.scala` + `infra/.../eventhandlers/SessionPhaseHandler.scala` + `client/.../Router.scala` (`Page` enum + `phaseToPage`) + nueva view. Skill: `add-phase`. |
 | Migración DB | `infra/resources/db/migration/V<n>__*.sql` + `infra/.../rows.scala` (campo) + `EntityWriter` (insert + upsert) + `ProvisionService` (pasar el value). Skill: `add-migration`. |
 | Nuevo evento + handler | `core/.../<aggregate>/Event.scala` + `infra/.../eventhandlers/<Name>Handler.scala` + `.andThen` en `Main.eventHandlerLayer` Y `TestLayers.eventHandlerLayer`. Skill: `add-event-handler`. |
+| Trabajo programado con deadline | `infra/.../session/JobScheduler.scala`: agregar un `case` a `ScheduledJob` y su rama en `JobRunner.execute`. El payload debe ser **datos, no un efecto** — la rehidratación de arranque reconstruye las tareas leyendo la DB, y un closure no se puede reconstruir desde una fila. |
 | Nueva entidad provisionable | `provision/.../models.scala` (YAML) + `infra/.../rows.scala` + migration + `EntityWriter` + `ProvisionService.{provisionX, scanDisk, provisionEntity, softDeleteEntity}` |
 | Wire un AWS service en CLI | `cli/.../AwsLayers.scala` + agregar al `.provide(...)` en `cli/Main.scala` |
 | Nueva skill | Crear `.agents/skills/<name>/SKILL.md` (dev) o `cli/resources/templates/skills/<name>/SKILL.md` (operator); registrar en `cli/.../Catalog.scala` si es operator |
@@ -383,7 +417,7 @@ El `UnifiAuthorizationHandler` (`infra/eventhandlers/UnifiAuthorizationHandler.s
 - **Despliegue producción vivo**: dev environment con CloudFront + ALB en coexistencia (production.captal.centauroads.com -> CloudFront, staging.* -> ALB Lambda CDN)
 - **Imagenes derivadas baked-in**: CLI construye y pushea imagenes con provision data via docker build local
 - **CloudFront SPA**: distribution con SPA fallback CloudFront Function + base href dinamico para soportar slug-aware paths
-- **Integración UniFi (authorize-guest)**: `UnifiAuthorizationHandler` post-commit en `infra/eventhandlers/` llama al UCG con trust-all SSL + proxy opcional, idempotente, con retry-by-design (session.phase queda en Ready si UniFi falla → próximo `/api/finish` reintenta)
+- **Integración UniFi (authorize-guest)**: `UnifiAccessHandler` post-commit en `infra/eventhandlers/` llama al UCG con trust-all SSL + proxy opcional, idempotente, con retry-by-design (session.phase queda en Ready si UniFi falla → próximo `/api/finish` reintenta)
 - **Fase Authorized**: nueva fase + `accessExpiresAt` en sessions, `WelcomeView` muestra countdown, `/api/status` resetea fase al expirar (`resetForExpiration`)
 - **HTTP proxy support**: `UNIFI_PROXY_URL` env var en el API server, configurado via CLI (`shared/captal.yaml: unifi.proxyUrl`) — habilita acceso al UCG on-prem vía tinyproxy + Tailscale en deploys cloud
 - **`/api/finish` endpoint**: emite `UserFinishedProcess`, retorna `StatusResponse` post-commit con `accessExpiresAt` para que el cliente no necesite round-trip extra a `/api/status`
@@ -797,7 +831,7 @@ enum Phase:
   case Authorized              // UniFi confirmó voucher; accessExpiresAt poblado
 ```
 
-`Ready → Authorized` solo lo transiciona `UnifiAuthorizationHandler` post-commit (no `SessionPhaseHandler`). Si UniFi falla / no está configurado, la sesión queda en `Ready` permitiendo retry vía nueva llamada a `/api/finish`.
+`Ready → Authorized` solo lo transiciona `UnifiAccessHandler` post-commit (no `SessionPhaseHandler`). Si UniFi falla / no está configurado, la sesión queda en `Ready` permitiendo retry vía nueva llamada a `/api/finish`.
 
 ### IdentificationSurveyType
 
@@ -879,6 +913,7 @@ enum Event:
   case VideoVisualized(userId, videoId, durationWatched, completed, occurredAt)
   case VideoSurveyAssigned(userId, advertiserId, question, occurredAt)
   case UserFinishedProcess(userId, videoId, answeredQuestionIds, occurredAt)
+  case AccessExpired(userId, occurredAt)
 ```
 
 ---
@@ -896,12 +931,13 @@ enum Event:
 | `SessionSurveyHandler` | Actualiza survey/question actual en session |
 | `SessionVideoHandler` | Actualiza `currentVideoId` y `currentAdvertiserId` en session |
 | `SurveyProgressHandler` | Actualiza progreso del survey, marca completado |
+| `SessionExpirationHandler` | Reacciona a `AccessExpired` → `resetForExpirationQuery` (un UPDATE: phase=Welcome + limpia userId/current*/accessExpiresAt) |
 
 **Post-commit** (`EventHandler[Task, Event]`, compuesto con `.andThen` después del `TransactionalEventHandler`; fallos no rollbackean DB):
 
 | Handler | Funcion |
 |---------|---------|
-| `UnifiAuthorizationHandler` | Listen `UserFinishedProcess` → HTTPS al UCG con `cmd=authorize-guest` → on 2xx llama `sessionService.setAuthorized(sessionId, expiresAt)` (transición Ready→Authorized). HTTP failures: log + skip; session queda en Ready para retry. |
+| `UnifiAccessHandler` | Simétrico en los dos extremos del ciclo. `UserFinishedProcess` → `AUTHORIZE_GUEST_ACCESS`; on 2xx llama `sessionService.setAuthorized` (Ready→Authorized) **y encola el vencimiento en `JobQueue`**. `AccessExpired` → `UNAUTHORIZE_GUEST_ACCESS` (que además desconecta); no escribe la sesión, eso ya lo hizo `SessionExpirationHandler`. HTTP failures en ambas ramas: log + skip. |
 
 ---
 
@@ -913,6 +949,7 @@ enum Event:
 | `AnswerProfilingHandler` | `AnswerProfilingCommand` | `NextStep` | `SurveyRepository`, `UserRepository`, `nextStep` |
 | `AnswerLocationHandler` | `AnswerLocationCommand` | `NextStep` | `SurveyRepository`, `UserRepository`, `nextStep` |
 | `ProvideNextIdentificationSurveyHandler` | `ProvideNextIdentificationSurveyCommand` | `NextIdentificationSurvey \| NextStep` | `SurveyRepository`, `UserRepository`, `terminalPhase` |
+| `ExpireAccessHandler` | `ExpireAccessCommand` | `Unit` | `UserRepository` (vía `findAuthorizedUser`). Lo ejecuta el `JobRunner`, no un endpoint. Ante `None` es no-op silencioso — la tarea quedó obsoleta porque el usuario se re-autorizó. |
 
 **Nota:** Los handlers de respuesta ahora requieren un `NextStep` que indica la fase siguiente tras completar la accion.
 
@@ -945,7 +982,7 @@ enum Event:
 |----------|--------|------|---------|----------|
 | Finish | POST | `/api/finish` | - | `StatusResponse` (post-commit: phase=Authorized + accessExpiresAt si UniFi succeed; Ready + None si falló/no-config) |
 
-`/api/finish` emite `UserEvent.UserFinishedProcess` y deja que `UnifiAuthorizationHandler` post-commit llame al UCG. Tras el commit, se re-lee `sessionService.findById` para devolver el snapshot actualizado en la response (evita un round-trip extra a `/api/status`).
+`/api/finish` emite `UserEvent.UserFinishedProcess` y deja que `UnifiAccessHandler` post-commit llame al UCG. Tras el commit, se re-lee `sessionService.findById` para devolver el snapshot actualizado en la response (evita un round-trip extra a `/api/status`).
 
 ### Locale/i18n Endpoints
 
@@ -1246,7 +1283,6 @@ inline given MappedEncoding[String, user.Id] = MappedEncoding(user.Id.unsafe)
 ./mill __.test
 ./mill core.test
 ./mill api.test                 # Incluye E2E + ProvisioningSuite
-./mill infra.test
 ./mill cli.test
 
 # Formatear / scalafix
@@ -1278,8 +1314,10 @@ ENVIRONMENT=dev ./mill client.bundle
 ### Pruebas E2E en UI usando Playwright
 Implementar tests E2E del cliente web (Welcome → IdentificationQuestion → Video → AdvertiserSurvey → Ready → Authorized) usando Playwright MCP.
 
-### Tests para UnifiAuthorizationHandler
-Mock del UCG con zio-http test server; cubrir happy-path (2xx → setAuthorized), 4xx/5xx (sin transición + retry funciona), timeout, no-config.
+### Unit test de `UnifiClient`
+Viable desde que la lógica HTTP se extrajo del handler: levantar un server zio-http en puerto 0 y usar `UnifiClient.live(client, scheme = "http")`. Cubrir authorize (path, encoding del `filter`, `X-API-KEY`, body con `timeLimitMinutes`), revoke (`action` correcto y **sin** `timeLimitMinutes`), `{"data":[]}` → "no client found", no-2xx en GET y en POST, más asserts puros sobre el bracketing IPv6 de `baseUrl` y `normalizeMac`.
+
+Ojo: **no existe módulo `infra.test`** — `build.mill` sólo define `object test` bajo `core`, `api` y `cli`. O va en `api/test/` como `ZIOSpecDefault` standalone (fuera de `E2ETests.spec`, que hace `provideShared` y necesita rqlite), o hay que agregar el submódulo al build.
 
 ---
 
@@ -1572,7 +1610,7 @@ Si tras redeploy de rqlite (o force-deploy del API) las queries devuelven 500 / 
 
 ### Versiones publicadas en ECR / S3
 
-- **API**: `captal-api-dev:v1.0.0` → `v1.1.0` (cookie isolation + soft-validate + cross-location user) → `v1.2.0` (= v1.1.0 + soft-delete wiring) → `v1.3.0` (= v1.2.0 + click_id pendiente push como v1.4.0) → `v1.6.0` (UnifiAuthorizationHandler stack: handler post-commit + /api/finish StatusResponse + proxy config) → `v2.0.0` (UniFi Integration v1 API: siteId UUID, two-step lookup+authorize, drop unifiOs) → `v2.1.0` (ap_mac moved into unifi block + redirectUrl override).
+- **API**: `captal-api-dev:v1.0.0` → `v1.1.0` (cookie isolation + soft-validate + cross-location user) → `v1.2.0` (= v1.1.0 + soft-delete wiring) → `v1.3.0` (= v1.2.0 + click_id pendiente push como v1.4.0) → `v1.6.0` (UnifiAccessHandler stack: handler post-commit + /api/finish StatusResponse + proxy config) → `v2.0.0` (UniFi Integration v1 API: siteId UUID, two-step lookup+authorize, drop unifiOs) → `v2.1.0` (ap_mac moved into unifi block + redirectUrl override).
 - **Provision**: `captal-provision-dev:v1.0.0` → `v1.3.0` (con el soft-delete wiring). Co-pushed con API en v2.0.0+ via `images.api` referenciado en `shared/captal.yaml`.
 - **CLI**: `1.0.0` → `1.6.4` (varias rondas: ALB rule fix, target group settings, video CloudFront URL fix, self-update, skills, click_id) → `1.7.0` (deprovision command + push refactor) → `1.7.1` (push-all merged into push 'all' sentinel) → `2.0.1` (UniFi Integration v1 schema break: site→siteId, drop unifiOs) → `2.1.0` (ap_mac→unifi.apMac + redirectUrl + **sistema de migrations declarativo** con YamlPath compile-time validated + auto-warning hook + `captal migrate` command).
 - **rqlite custom image**: `captal-rqlite:1.0.0` → `1.0.4` (peers.json single-node recovery + DNS-based identity + continue_on_failure auto-restore + entrypoint v4 nuclear-clean migration). El módulo TF de rqlite usa `var.rqlite_image_tag` (no más `:latest`) — bump explícito por cada cambio al entrypoint o Dockerfile.
