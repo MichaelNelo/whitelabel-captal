@@ -13,3 +13,14 @@ out/
 
 # Generated index.html (copied from index.dev.html or index.prod.html)
 client/index.html
+
+# Devenv
+.devenv*
+devenv.local.nix
+devenv.local.yaml
+
+# direnv
+.direnv
+
+# pre-commit
+.pre-commit-config.yaml
