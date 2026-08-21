@@ -44,10 +44,7 @@ object AnswerPersistenceHandler:
               ZIO.unit
         yield ()
 
-  private def toAnswerRow(
-      event: Event,
-      sessionId: user.SessionId,
-      now: String): Option[AnswerRow] =
+  private def toAnswerRow(event: Event, sessionId: user.SessionId, now: String): Option[AnswerRow] =
     event match
       case Event.Survey(SurveyEvent.QuestionAnswered(_, questionEvent)) =>
         Some(questionEventToRow(questionEvent, sessionId, now))

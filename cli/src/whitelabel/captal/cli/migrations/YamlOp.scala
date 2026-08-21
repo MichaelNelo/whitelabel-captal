@@ -3,8 +3,7 @@ package whitelabel.captal.cli.migrations
 import io.circe.Json
 
 /** Primitive operations applied to a parsed YAML (modeled as `io.circe.Json`). Each op is
-  * idempotent — re-applying after success is a no-op — so the migrate command can be safely
-  * re-run.
+  * idempotent — re-applying after success is a no-op — so the migrate command can be safely re-run.
   */
 enum YamlOp:
   /** Set the field at `path` to `value` if it's currently missing. No-op when the path is already
@@ -25,8 +24,12 @@ enum YamlOp:
 object YamlOp:
   extension (op: YamlOp)
     /** Human-readable summary for the migrate command's plan output. */
-    def describe: String = op match
-      case Add(p, v)     => s"add ${p.render} = ${v.noSpaces}"
-      case Delete(p)     => s"delete ${p.render}"
-      case Rename(f, t)  => s"rename ${f.render} -> ${t.render}"
+    def describe: String =
+      op match
+        case Add(p, v) =>
+          s"add ${p.render} = ${v.noSpaces}"
+        case Delete(p) =>
+          s"delete ${p.render}"
+        case Rename(f, t) =>
+          s"rename ${f.render} -> ${t.render}"
 end YamlOp

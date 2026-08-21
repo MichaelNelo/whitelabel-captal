@@ -79,6 +79,7 @@ object ProvideNextVideoHandler:
             // Reaching AdvertiserVideo without a verified email means identification was
             // either skipped (no surveys seeded) or short-circuited. Surface the condition
             // so the SPA can recover, instead of silently sending the user to Ready.
-            Monad[F].pure(CoreOp.fail[whitelabel.captal.core.application.Event, Error, Response](
-              Error.UserNotIdentified))
+            Monad[F].pure(
+              CoreOp.fail[whitelabel.captal.core.application.Event, Error, Response](
+                Error.UserNotIdentified))
 end ProvideNextVideoHandler

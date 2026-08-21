@@ -25,7 +25,7 @@ object Output:
 
   def warn(msg: String): UIO[Unit] = Console.printLine(s"$Yellow[!]$Reset $msg").orDie
 
-  def info(msg: String): UIO[Unit] = Console.printLine(s"${Blue}[i]$Reset $msg").orDie
+  def info(msg: String): UIO[Unit] = Console.printLine(s"$Blue[i]$Reset $msg").orDie
 
   def detail(msg: String): UIO[Unit] = Console.printLine(s"  $Dim$msg$Reset").orDie
 

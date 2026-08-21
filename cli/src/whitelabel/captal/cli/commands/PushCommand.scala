@@ -79,7 +79,7 @@ object PushCommand:
       locationDir = LocationsDir.resolve(slug)
       locationYaml <- readLocationYaml(locationDir)
       desiredCount = locationYaml.desiredCount.getOrElse(config.aws.ecs.desiredCount)
-      tag          <- timestampTag.map(t => s"$slug-$t")
+      tag <- timestampTag.map(t => s"$slug-$t")
 
       _ <- Output.header(s"Deploying location '$slug'")
 
@@ -92,7 +92,8 @@ object PushCommand:
         repo = config.aws.images.locations,
         tag = tag,
         contextDir = locationDir,
-        dockerfileResource = "templates/dockerfiles/Dockerfile.locations")
+        dockerfileResource = "templates/dockerfiles/Dockerfile.locations"
+      )
 
       _     <- Output.step(3, 5, "Configuring ALB rule...")
       tgArn <- ensureTargetGroup(s"captal-$slug", slug, config)
@@ -109,8 +110,9 @@ object PushCommand:
       _ <- Output.success(s"Deployment complete for '$slug'")
     yield ()
 
-  private def timestampTag: UIO[String] =
-    Clock.instant.map: now =>
+  private def timestampTag: UIO[String] = Clock
+    .instant
+    .map: now =>
       val fmt = java
         .time
         .format
@@ -331,7 +333,10 @@ object PushCommand:
         .subnets(config.aws.ecs.subnets*)
         .securityGroups(config.aws.ecs.securityGroups*)
         .assignPublicIp(
-          if config.aws.ecs.assignPublicIp then AssignPublicIp.ENABLED else AssignPublicIp.DISABLED)
+          if config.aws.ecs.assignPublicIp then
+            AssignPublicIp.ENABLED
+          else
+            AssignPublicIp.DISABLED)
         .build())
     .build()
 
@@ -519,22 +524,23 @@ object PushCommand:
   private def invalidateCdn(slug: String): ZIO[CaptalConfig & CloudFrontClient, CliError, Unit] =
     for
       now <- Clock.instant
-      _   <- aws("CloudFront createInvalidation"):
-        ZIO.serviceWithZIO[CloudFrontClient]: cf =>
-          ZIO.serviceWithZIO[CaptalConfig]: config =>
-            ZIO.attemptBlocking:
-              cf.createInvalidation(
-                CreateInvalidationRequest
-                  .builder()
-                  .distributionId(config.aws.cloudfront.distributionId)
-                  .invalidationBatch(
-                    InvalidationBatch
-                      .builder()
-                      .callerReference(now.toString)
-                      .paths(CfPaths.builder().items(s"/$slug/*").quantity(1).build())
-                      .build())
-                  .build())
-      _   <- Output.detail(s"CloudFront invalidation requested for /$slug/*")
+      _   <-
+        aws("CloudFront createInvalidation"):
+          ZIO.serviceWithZIO[CloudFrontClient]: cf =>
+            ZIO.serviceWithZIO[CaptalConfig]: config =>
+              ZIO.attemptBlocking:
+                cf.createInvalidation(
+                  CreateInvalidationRequest
+                    .builder()
+                    .distributionId(config.aws.cloudfront.distributionId)
+                    .invalidationBatch(
+                      InvalidationBatch
+                        .builder()
+                        .callerReference(now.toString)
+                        .paths(CfPaths.builder().items(s"/$slug/*").quantity(1).build())
+                        .build())
+                    .build())
+      _ <- Output.detail(s"CloudFront invalidation requested for /$slug/*")
     yield ()
 
   // ─────────────────────────────────────────────────────────────────────────────

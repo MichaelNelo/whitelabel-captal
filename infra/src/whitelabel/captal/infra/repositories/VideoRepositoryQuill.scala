@@ -146,8 +146,8 @@ object VideoRepositoryQuill:
           case Some(lastId) =>
             val program =
               for
-                currentOpt <- run(query[AdvertiserVideoRow].filter(_.id == lift(lastId)))
-                  .map(_.headOption)
+                currentOpt <- run(query[AdvertiserVideoRow].filter(_.id == lift(lastId))).map(
+                  _.headOption)
                 candidates <-
                   currentOpt match
                     case Some(currentVideo) =>

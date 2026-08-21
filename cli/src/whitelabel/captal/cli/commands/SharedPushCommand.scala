@@ -38,7 +38,7 @@ object SharedPushCommand:
     for
       _ <- Output.header("Deploying shared resources")
 
-      tag <- timestampTag
+      tag    <- timestampTag
       config <- ZIO.service[CaptalConfig]
 
       _        <- Output.step(1, 3, "Building shared provision image...")
@@ -62,7 +62,7 @@ object SharedPushCommand:
   private def timestampTag: UIO[String] =
     for
       clock <- ZIO.clock
-      now <- clock.instant
+      now   <- clock.instant
       fmt = java
         .time
         .format
@@ -78,7 +78,6 @@ object SharedPushCommand:
       arn    <-
         aws("ECS registerTaskDefinition"):
           ZIO.serviceWithZIO[EcsClient]: ecs =>
-          
             ZIO.attemptBlocking:
               val container = ContainerDefinition
                 .builder()
@@ -134,8 +133,10 @@ object SharedPushCommand:
             .subnets(config.aws.ecs.subnets*)
             .securityGroups(config.aws.ecs.securityGroups*)
             .assignPublicIp(
-              if config.aws.ecs.assignPublicIp then AssignPublicIp.ENABLED
-              else AssignPublicIp.DISABLED)
+              if config.aws.ecs.assignPublicIp then
+                AssignPublicIp.ENABLED
+              else
+                AssignPublicIp.DISABLED)
             .build())
         .build()
       taskArn <-

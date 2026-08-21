@@ -45,7 +45,7 @@ object SessionVideoHandler:
             ZIO.foreachDiscard(videoVisualizations): viz =>
               for
                 instant <- Clock.instant
-                now = instant.toString
+                now     = instant.toString
                 viewRow = VideoViewRow(
                   id = UUID.randomUUID.toString,
                   sessionId = viz.sessionId,

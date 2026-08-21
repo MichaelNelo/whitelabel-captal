@@ -9,8 +9,8 @@ import zio.*
   *
   * Replaces a `private def toApiError` that was duplicated byte-for-byte across `SurveyRoutes`,
   * `VideoRoutes`, `AdvertiserSurveyRoutes` and `FinishRoutes`. The `failWith` helper folds the
-  * common `toApiError(error).flatMap(ZIO.fail(_))` pattern that appeared in every
-  * `.catchAllCause` block.
+  * common `toApiError(error).flatMap(ZIO.fail(_))` pattern that appeared in every `.catchAllCause`
+  * block.
   */
 object ApiErrors:
 
@@ -27,7 +27,6 @@ object ApiErrors:
         ZIO.logErrorCause("Internal error", Cause.fail(other)).as(ApiError.fromThrowable(other))
 
   /** Translate + fail in one shot. Used by `.catchAllCause` blocks. */
-  def failWith(error: Throwable): IO[ApiError, Nothing] =
-    toApiError(error).flatMap(ZIO.fail(_))
+  def failWith(error: Throwable): IO[ApiError, Nothing] = toApiError(error).flatMap(ZIO.fail(_))
 
 end ApiErrors
