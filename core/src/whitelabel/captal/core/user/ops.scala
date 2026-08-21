@@ -137,7 +137,7 @@ object ops:
       *
       * El `User[State.Authorized]` resultante es un valor ephemeral (sólo en memoria) — la
       * proyección desde DB sigue siendo `State.Ready` mientras `session.phase = Ready`. Una vez que
-      * `UnifiAuthorizationHandler` (post-commit) confirma con el Controller, `session.phase` pasa a
+      * `UnifiAccessHandler` (post-commit) confirma con el Controller, `session.phase` pasa a
       * Authorized y el ciclo cierra.
       *
       * Si UniFi falla, `session.phase` queda en Ready y `findReadyUser` sigue devolviendo el user —
@@ -154,5 +154,25 @@ object ops:
         user.state.answeredQuestionIds,
         now)
       Op.emit(event, authorized)
+  end extension
+
+  extension (user: User[State.Authorized])
+    /** End of the granted access: emits AccessExpired.
+      *
+      * Returns no destination state. `User`'s type-state models where you are inside an *active*
+      * flow, and expiring does not move you to another step — it ends the flow. In particular it
+      * does NOT go back to `State.Guest`: the `users` row still exists with its email and answers,
+      * and the `captal_user` cookie still points at it, so on the next visit
+      * `ProvideNextIdentificationSurveyHandler` finds the user via `findWithEmail` and skips what
+      * was already answered. The re-entry state is re-derived there, not carried from here.
+      *
+      * The receiver typed as `User[State.Authorized]` is the guarantee that matters: expiring
+      * someone who is not authorized is impossible.
+      */
+    def expire(now: Instant): UserOp[Event.AccessExpired] =
+      // The annotation is required: applying an enum case constructor infers the parent type
+      // (`Event`), and the return value here has to keep the case's own type.
+      val event: Event.AccessExpired = Event.AccessExpired(user.id, now)
+      Op.emit(event, event)
   end extension
 end ops

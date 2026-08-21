@@ -19,12 +19,13 @@ import whitelabel.captal.infra.eventhandlers.{
   AnswerPersistenceHandler,
   DbEventHandler,
   EventLogHandler,
+  SessionExpirationHandler,
   SessionPhaseHandler,
   SessionSurveyHandler,
   SessionVideoHandler,
   SurveyProgressHandler,
   TransactionalEventHandler,
-  UnifiAuthorizationHandler,
+  UnifiAccessHandler,
   UserPersistenceHandler
 }
 import whitelabel.captal.infra.provision.ProvisionService
@@ -35,8 +36,8 @@ import whitelabel.captal.infra.repositories.{
 }
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.services.{LocaleService, LocaleServiceQuill, LocationService}
-import whitelabel.captal.infra.session.{SessionContext, SessionService}
-import whitelabel.captal.infra.{RqliteDataSource, UnifiAccess}
+import whitelabel.captal.infra.session.{JobQueue, JobRunner, SessionContext, SessionService}
+import whitelabel.captal.infra.{RqliteDataSource, UnifiAccess, UnifiClient}
 import zio.*
 import zio.http.*
 import zio.interop.catz.*
@@ -116,7 +117,7 @@ object Main extends ZIOAppDefault:
   // ─── Event handling & flows ───────────────────────────────────────────────────
 
   private val eventHandlerLayer: ZLayer[
-    QuillSqlite & SessionContext & CurrentLocation & SessionService & Client,
+    QuillSqlite & SessionContext & CurrentLocation & SessionService & UnifiClient & JobQueue,
     Nothing,
     EventHandler[Task, Event]] = ZLayer.fromFunction:
     (
@@ -124,18 +125,25 @@ object Main extends ZIOAppDefault:
         ctx: SessionContext,
         currentLocation: CurrentLocation,
         sessionService: SessionService,
-        client: Client) =>
+        unifiClient: UnifiClient,
+        jobQueue: JobQueue) =>
       val dbHandler = EventLogHandler(ctx)
         .andThen(AnswerPersistenceHandler(ctx))
         .andThen(UserPersistenceHandler(ctx))
         .andThen(SessionPhaseHandler(ctx, nextAfterIdentification.phase, nextAfterVideo.phase))
         .andThen(SessionSurveyHandler(ctx))
         .andThen(SessionVideoHandler(ctx))
+        .andThen(SessionExpirationHandler(ctx))
         .andThen(SurveyProgressHandler())
       val transactional = TransactionalEventHandler(dbHandler, quill)
-      val unifiAuth = UnifiAuthorizationHandler(currentLocation.unifi, ctx, sessionService, client)
-      // unifiAuth corre POST-commit; cualquier fallo HTTP no impacta el chain transaccional.
-      transactional.andThen(unifiAuth)
+      val unifiAccess = UnifiAccessHandler(
+        currentLocation.unifi,
+        ctx,
+        sessionService,
+        unifiClient,
+        jobQueue)
+      // unifiAccess corre POST-commit; cualquier fallo HTTP no impacta el chain transaccional.
+      transactional.andThen(unifiAccess)
 
   private val answerEmailFlowLayer: ZLayer[SurveyRepository[
     Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, AnswerEmailCommand, NextStep]] =
@@ -182,13 +190,13 @@ object Main extends ZIOAppDefault:
   private val nextVideoFlowLayer: ZLayer[
     VideoRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
     Nothing,
-    Flow.Aux[Task, ProvideNextVideoCommand, ProvideNextVideoHandler.Response]
-  ] = ZLayer.fromFunction:
-    (
-        videoRepo: VideoRepository[Task],
-        userRepo: UserRepository[Task],
-        eventHandler: EventHandler[Task, Event]) =>
-      Flow(ProvideNextVideoHandler(videoRepo, userRepo, fallbackFromVideo), eventHandler)
+    Flow.Aux[Task, ProvideNextVideoCommand, ProvideNextVideoHandler.Response]] = ZLayer
+    .fromFunction:
+      (
+          videoRepo: VideoRepository[Task],
+          userRepo: UserRepository[Task],
+          eventHandler: EventHandler[Task, Event]) =>
+        Flow(ProvideNextVideoHandler(videoRepo, userRepo, fallbackFromVideo), eventHandler)
 
   private val nextAdvertiserSurveyFlowLayer: ZLayer[
     SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
@@ -217,6 +225,15 @@ object Main extends ZIOAppDefault:
     Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, FinishCommand, Unit]] = ZLayer
     .fromFunction: (userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
       Flow(FinishHandler(userRepo), eventHandler)
+
+  /** Counterpart of [[finishFlowLayer]]: executed by the `JobRunner` when an access expires, not by
+    * an endpoint. It depends on `eventHandlerLayer` — which is why the scheduler is split into
+    * `JobQueue` (producer, no dependencies) and `JobRunner` (consumer), keeping the graph acyclic.
+    */
+  private val expireAccessFlowLayer: ZLayer[UserRepository[
+    Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, ExpireAccessCommand, Unit]] = ZLayer
+    .fromFunction: (userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
+      Flow(ExpireAccessHandler(userRepo), eventHandler)
 
   private val markVideoWatchedFlowLayer: ZLayer[
     VideoRepository[Task] & SessionContext & EventHandler[Task, Event],
@@ -247,9 +264,9 @@ object Main extends ZIOAppDefault:
 
   // ─── UniFi HTTP client (trust-all + optional proxy) ───────────────────────────
 
-  private val unifiClientLayer: ZLayer[ServerSettings, Throwable, Client] = ZLayer
+  private val unifiHttpClientLayer: ZLayer[ServerSettings, Throwable, Client] = ZLayer
     .service[ServerSettings]
-    .flatMap(env => UnifiAuthorizationHandler.trustAllClientLayer(env.get.unifiProxyUrl))
+    .flatMap(env => UnifiClient.trustAllClientLayer(env.get.unifiProxyUrl))
 
   // ─── Current location snapshot (for soft-validation of AP MAC, etc.) ──────────
 
@@ -433,8 +450,11 @@ object Main extends ZIOAppDefault:
             ZIO.logInfo("No PROVISION_DIR configured, skipping provisioning")
     yield LocationService(quill)
 
-  private val appLayers: ZLayer[ServerSettings, Throwable, FullEnv & Server.Config] = ZLayer
-    .makeSome[ServerSettings, FullEnv & Server.Config](
+  /** `JobRunner` sits outside `FullEnv` on purpose: it is consumed by `run` to start the scheduler
+    * fibers, not by the endpoints, so it has no business in the routes' environment.
+    */
+  private val appLayers: ZLayer[ServerSettings, Throwable, FullEnv & Server.Config & JobRunner] =
+    ZLayer.makeSome[ServerSettings, FullEnv & Server.Config & JobRunner](
       SessionContext.make,
       RqliteDataSource.layer,
       Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase),
@@ -454,7 +474,8 @@ object Main extends ZIOAppDefault:
       SurveyRepositoryQuill.layer,
       UserRepositoryQuill.layer,
       VideoRepositoryQuill.layer,
-      unifiClientLayer,
+      unifiHttpClientLayer,
+      UnifiClient.layer,
       eventHandlerLayer,
       answerEmailFlowLayer,
       answerProfilingFlowLayer,
@@ -465,6 +486,9 @@ object Main extends ZIOAppDefault:
       nextAdvertiserSurveyFlowLayer,
       answerAdvertiserFlowLayer,
       finishFlowLayer,
+      expireAccessFlowLayer,
+      JobQueue.layer,
+      JobRunner.layer,
       ZLayer.fromFunction((s: ServerSettings) => s.config)
     )
 
@@ -473,10 +497,19 @@ object Main extends ZIOAppDefault:
   override val run: ZIO[Any, Throwable, Nothing] =
     val program =
       for
-        settings               <- ZIO.service[ServerSettings]
-        surveyRoutes           <- ZIO.service[SurveyRoutes]
-        localeRoutes           <- ZIO.service[LocaleRoutes]
-        videoRoutes            <- ZIO.service[VideoRoutes]
+        settings  <- ZIO.service[ServerSettings]
+        jobRunner <- ZIO.service[JobRunner]
+        // A dedicated Scope for the scheduler fibers, provided narrowly instead of wrapping all
+        // of `program` in `ZIO.scoped`. Wrapping it forces the compiler to re-infer `R`, and in
+        // that reconstruction the `Flow.Aux` types (structural refinements) collapse into an
+        // unsatisfiable intersection: the ZLayer macro then fails asking for services that are
+        // already provided. The scope is deliberately never closed — the fibers live as long as
+        // the application does.
+        schedulerScope <- Scope.make
+        _              <- jobRunner.start.provideEnvironment(ZEnvironment[Scope](schedulerScope))
+        surveyRoutes   <- ZIO.service[SurveyRoutes]
+        localeRoutes   <- ZIO.service[LocaleRoutes]
+        videoRoutes    <- ZIO.service[VideoRoutes]
         advertiserSurveyRoutes <- ZIO.service[AdvertiserSurveyRoutes]
         finishRoutes           <- ZIO.service[FinishRoutes]
         cookieConfig           <- ZIO.service[SessionCookieConfig]

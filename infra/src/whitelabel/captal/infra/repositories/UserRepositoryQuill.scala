@@ -107,6 +107,37 @@ object UserRepositoryQuill:
             case None =>
               ZIO.none
 
+      def findAuthorizedUser(): Task[Option[User[State.Authorized]]] = ctx
+        .getOrFail
+        .flatMap: sessionData =>
+          if sessionData.phase != Phase.Authorized then
+            ZIO.none
+          else
+            sessionData.userId match
+              case None =>
+                ZIO.none
+              case Some(userId) =>
+                run(findWithEmailByIdQuery(lift(userId)))
+                  .map(_.headOption)
+                  .orDie
+                  .flatMap:
+                    case None =>
+                      ZIO.none
+                    case Some(_) =>
+                      run(findAnsweredQuestionsByUserQuery(lift(userId)))
+                        .map: rows =>
+                          val answeredQuestionIds = rows.map { case (sid, qid) =>
+                            FullyQualifiedQuestionId(sid, qid)
+                          }
+                          Some(
+                            User[State.Authorized](
+                              userId,
+                              State.Authorized(
+                                sessionData.redirectUrl,
+                                sessionData.currentVideoId,
+                                answeredQuestionIds)))
+                        .orDie
+
       def findReadyUser(): Task[Option[User[State.Ready]]] = ctx
         .getOrFail
         .flatMap: sessionData =>

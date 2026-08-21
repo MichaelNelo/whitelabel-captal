@@ -155,6 +155,14 @@ object EventLogHandler:
               "occurredAt" -> Json.fromString(occurredAt.toString)
             ),
             occurredAt))
+      case UserEvent.AccessExpired(userId, occurredAt) =>
+        Some(
+          (
+            "user.access_expired",
+            Json.obj(
+              "userId"     -> Json.fromString(userId.asString),
+              "occurredAt" -> Json.fromString(occurredAt.toString)),
+            occurredAt))
 
   private def extractSurveyEvent(event: SurveyEvent): Option[(String, Json, Instant)] =
     event match
