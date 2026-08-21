@@ -6,9 +6,9 @@ import scala.compiletime.testing.{typeCheckErrors, typeChecks}
 import utest.*
 
 /** Tests for the schema-migration DSL. The most interesting part is [[yamlPath]], which uses
-  * `scala.compiletime.testing` to assert that malformed literals **fail compilation** — the
-  * runtime invariants alone wouldn't catch a regression that downgraded compile-time validation
-  * to runtime validation.
+  * `scala.compiletime.testing` to assert that malformed literals **fail compilation** — the runtime
+  * invariants alone wouldn't catch a regression that downgraded compile-time validation to runtime
+  * validation.
   */
 object MigrationsSpec extends TestSuite:
 
@@ -25,10 +25,10 @@ object MigrationsSpec extends TestSuite:
 
       // Negative cases — `typeChecks` returns false for source strings that DON'T compile.
       // If we ever regress and these start compiling, the assertions flip the test red.
-      assert(!typeChecks("""YamlPath("")"""))            // empty
-      assert(!typeChecks("""YamlPath("a..b")"""))        // empty segment
-      assert(!typeChecks("""YamlPath(".unifi")"""))      // leading dot
-      assert(!typeChecks("""YamlPath("unifi.")"""))      // trailing dot
+      assert(!typeChecks("""YamlPath("")"""))       // empty
+      assert(!typeChecks("""YamlPath("a..b")"""))   // empty segment
+      assert(!typeChecks("""YamlPath(".unifi")""")) // leading dot
+      assert(!typeChecks("""YamlPath("unifi.")""")) // trailing dot
 
       // Sanity: the error message mentions YamlPath. Useful as a smoke test for the message
       // surfaced to operators when they typo a hardcoded path in Migrations.all.
@@ -48,7 +48,7 @@ object MigrationsSpec extends TestSuite:
       val ord = summon[Ordering[SemVer]]
       assert(ord.lt(SemVer(2, 0, 0), SemVer(2, 0, 1)))
       assert(ord.lt(SemVer(2, 0, 1), SemVer(2, 1, 0)))
-      assert(ord.lt(SemVer(2, 1, 0), SemVer(10, 0, 0)))   // would fail if compared as strings
+      assert(ord.lt(SemVer(2, 1, 0), SemVer(10, 0, 0))) // would fail if compared as strings
       assert(SemVer.parseOrZero("garbage") == SemVer.zero)
       assert(SemVer.parse("2.0.1") == Right(SemVer(2, 0, 1)))
     }
@@ -70,7 +70,8 @@ object MigrationsSpec extends TestSuite:
     }
 
     test("MigrationRunner.applyOps — rename + delete + add") - {
-      val src = """
+      val src =
+        """
         |name: Test
         |ap_mac: AA:BB
         |unifi:
@@ -102,7 +103,8 @@ object MigrationsSpec extends TestSuite:
     }
 
     test("MigrationRunner.applyOps — idempotent on already-migrated YAML") - {
-      val migrated = """
+      val migrated =
+        """
         |name: Test
         |unifi:
         |  host: 192.168.1.1
@@ -122,35 +124,43 @@ object MigrationsSpec extends TestSuite:
     }
 
     test("MigrationRunner.pendingOps — Add is pending only when path missing") - {
-      val json = yamlParser
-        .parse("""
+      val json =
+        yamlParser
+          .parse("""
           |unifi:
           |  host: x
           |""".stripMargin)
-        .toOption
-        .get
+          .toOption
+          .get
 
       val ops = List(
-        YamlOp.Add(YamlPath("unifi.port"), Json.fromInt(443)),         // missing → pending
-        YamlOp.Add(YamlPath("unifi.host"), Json.fromString("y")),      // present → not pending
-        YamlOp.Delete(YamlPath("unifi.nope")),                         // missing → not pending
+        YamlOp.Add(YamlPath("unifi.port"), Json.fromInt(443)),          // missing → pending
+        YamlOp.Add(YamlPath("unifi.host"), Json.fromString("y")),       // present → not pending
+        YamlOp.Delete(YamlPath("unifi.nope")),                          // missing → not pending
         YamlOp.Rename(YamlPath("unifi.host"), YamlPath("unifi.target")) // present → pending
       )
 
       val pending = MigrationRunner.pendingOps(json, ops)
       assert(pending.size == 2)
-      assert(pending.exists {
-        case YamlOp.Add(p, _) => p.render == "unifi.port"
-        case _                => false
-      })
-      assert(pending.exists {
-        case YamlOp.Rename(f, _) => f.render == "unifi.host"
-        case _                   => false
-      })
+      assert(
+        pending.exists {
+          case YamlOp.Add(p, _) =>
+            p.render == "unifi.port"
+          case _ =>
+            false
+        })
+      assert(
+        pending.exists {
+          case YamlOp.Rename(f, _) =>
+            f.render == "unifi.host"
+          case _ =>
+            false
+        })
     }
 
     test("Migration v2.2.0 — aws: block refactor on shared/captal.yaml") - {
-      val src = """
+      val src =
+        """
         |aws:
         |  region: us-east-1
         |images:
@@ -199,28 +209,42 @@ object MigrationsSpec extends TestSuite:
         System.setProperty("user.dir", tmp.toString)
 
         // Initial state — no file yet → load returns default (SemVer.zero, Nil).
-        val loaded0 = zio.Unsafe.unsafe(implicit u => zio.Runtime.default.unsafe.run(CliState.load).getOrThrow())
+        val loaded0 = zio
+          .Unsafe
+          .unsafe(implicit u => zio.Runtime.default.unsafe.run(CliState.load).getOrThrow())
         assert(loaded0 == CliState.default)
 
         // Save a non-default state, then load it back.
         val s1 = CliState(SemVer(2, 1, 0), List("locations/a.yaml", "locations/b.yaml"))
-        zio.Unsafe.unsafe(implicit u => zio.Runtime.default.unsafe.run(CliState.save(s1)).getOrThrow())
-        val loaded1 = zio.Unsafe.unsafe(implicit u => zio.Runtime.default.unsafe.run(CliState.load).getOrThrow())
+        zio
+          .Unsafe
+          .unsafe(implicit u => zio.Runtime.default.unsafe.run(CliState.save(s1)).getOrThrow())
+        val loaded1 = zio
+          .Unsafe
+          .unsafe(implicit u => zio.Runtime.default.unsafe.run(CliState.load).getOrThrow())
         assert(loaded1 == s1)
 
         // Clear deletes the file → load returns default again.
         zio.Unsafe.unsafe(implicit u => zio.Runtime.default.unsafe.run(CliState.clear).getOrThrow())
-        val loaded2 = zio.Unsafe.unsafe(implicit u => zio.Runtime.default.unsafe.run(CliState.load).getOrThrow())
+        val loaded2 = zio
+          .Unsafe
+          .unsafe(implicit u => zio.Runtime.default.unsafe.run(CliState.load).getOrThrow())
         assert(loaded2 == CliState.default)
         assert(!java.nio.file.Files.exists(tmp.resolve(".captal/state.json")))
       finally
         System.setProperty("user.dir", originalUserDir)
         // Best-effort cleanup of the temp tree.
-        scala.util.Try {
-          java.nio.file.Files
-            .walk(tmp)
-            .sorted(java.util.Comparator.reverseOrder())
-            .forEach(p => java.nio.file.Files.deleteIfExists(p))
-        }
+        scala
+          .util
+          .Try {
+            java
+              .nio
+              .file
+              .Files
+              .walk(tmp)
+              .sorted(java.util.Comparator.reverseOrder())
+              .forEach(p => java.nio.file.Files.deleteIfExists(p))
+          }
+      end try
     }
 end MigrationsSpec

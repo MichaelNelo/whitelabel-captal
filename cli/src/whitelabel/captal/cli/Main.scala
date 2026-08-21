@@ -144,7 +144,9 @@ object Main extends ZIOCliDefault:
     .map(_ => CaptalCommand.InfraUpdate)
 
   private val infra: Command[CaptalCommand] = Command("infra", Options.none, Args.none)
-    .withHelp(HelpDoc.p("Manage the embedded provider infrastructure bundle (currently AWS only; future providers will live under infrastructure/<provider>/)"))
+    .withHelp(
+      HelpDoc.p(
+        "Manage the embedded provider infrastructure bundle (currently AWS only; future providers will live under infrastructure/<provider>/)"))
     .subcommands(infraInit, infraUpdate)
 
   // ─── root ─────────────────────────────────────────────────────────────────
@@ -223,8 +225,10 @@ object Main extends ZIOCliDefault:
             case CaptalCommand.Migrate(dryRun, yes) =>
               MigrateCommand.run(dryRun, yes)
 
-            case CaptalCommand.InfraInit   => InfraCommand.init
-            case CaptalCommand.InfraUpdate => InfraCommand.update
+            case CaptalCommand.InfraInit =>
+              InfraCommand.init
+            case CaptalCommand.InfraUpdate =>
+              InfraCommand.update
         ).as(cmd)
 
       program.tapError:
@@ -241,12 +245,12 @@ object Main extends ZIOCliDefault:
     *
     *   - **First run post-update** (`state.version != currentCliVersion`): full project scan via
     *     [[MigrationScanner.fullScan]]. If conflicts are found, prompt the operator. Y → apply
-    *     migrations inline (via [[MigrateCommand]]) then continue with the user's command. N →
-    *     save the conflict list to state.json for cheap re-scans next time. Either way, the
-    *     user's original command still runs afterwards.
+    *     migrations inline (via [[MigrateCommand]]) then continue with the user's command. N → save
+    *     the conflict list to state.json for cheap re-scans next time. Either way, the user's
+    *     original command still runs afterwards.
     *   - **Subsequent run** (`state.version == current`): re-scan ONLY the cached `pendingFiles`.
-    *     If some have been fixed manually, drop them from the list. If the list empties, delete
-    *     the state file (self-cleanup). Otherwise, emit a warning before running the command.
+    *     If some have been fixed manually, drop them from the list. If the list empties, delete the
+    *     state file (self-cleanup). Otherwise, emit a warning before running the command.
     *
     * State-file IO is best-effort (`.ignore` / `.orElseSucceed`) so a busted state file never
     * blocks the actual command.
@@ -256,9 +260,11 @@ object Main extends ZIOCliDefault:
     for
       args  <- ZIO.service[zio.ZIOAppArgs].map(_.getArgs.toList)
       state <- CliState.load
-      _ <-
-        if state.version != current then onFirstRunPostUpdate(current)
-        else onSubsequentRun(state, current)
+      _     <-
+        if state.version != current then
+          onFirstRunPostUpdate(current)
+        else
+          onSubsequentRun(state, current)
       out <- cliApp.run(args)
     yield out
 
@@ -268,40 +274,42 @@ object Main extends ZIOCliDefault:
   private def onFirstRunPostUpdate(current: SemVer): UIO[Unit] =
     for
       conflicts <- MigrationScanner.fullScan
-      _ <-
-        if conflicts.isEmpty then CliState.save(CliState(current, Nil))
-        else promptApplyNow(conflicts, current)
+      _         <-
+        if conflicts.isEmpty then
+          CliState.save(CliState(current, Nil))
+        else
+          promptApplyNow(conflicts, current)
     yield ()
 
-  /** Interactive y/N. Default (empty answer) → Y. Y → run migrate inline + clear state.
-    * N → save state with the conflict list cached for subsequent invocations.
+  /** Interactive y/N. Default (empty answer) → Y. Y → run migrate inline + clear state. N → save
+    * state with the conflict list cached for subsequent invocations.
     */
   private def promptApplyNow(conflicts: List[String], current: SemVer): UIO[Unit] =
     for
-      _      <- Output.warn(
+      _ <- Output.warn(
         s"${conflicts.size} file(s) need schema migrations - your YAMLs may be out of date:")
       _      <- ZIO.foreachDiscard(conflicts)(p => Output.detail(s"  - $p"))
       _      <- Console.print("Apply now? [Y/n]: ").orDie
       answer <- Console.readLine.orDie
       _      <-
         if answer.trim.isEmpty || answer.trim.toLowerCase.startsWith("y") then
-          MigrateCommand
-            .run(dryRun = false, yes = true)
-            .catchAll(e => Output.error(e.message)) *> CliState.clear
+          MigrateCommand.run(dryRun = false, yes = true).catchAll(e => Output.error(e.message)) *>
+            CliState.clear
         else
           CliState.save(CliState(current, conflicts)) *>
             Output.info("Skipped. Run `captal migrate` later to apply.")
     yield ()
 
-  /** Re-scan ONLY the cached files. If the list empties, delete state.json. Otherwise update it
-    * and emit a warning.
+  /** Re-scan ONLY the cached files. If the list empties, delete state.json. Otherwise update it and
+    * emit a warning.
     */
   private def onSubsequentRun(state: CliState, current: SemVer): UIO[Unit] =
-    if state.pendingFiles.isEmpty then ZIO.unit
+    if state.pendingFiles.isEmpty then
+      ZIO.unit
     else
       for
         stillPending <- MigrationScanner.rescanFiles(state.pendingFiles)
-        _ <-
+        _            <-
           if stillPending.isEmpty then
             CliState.clear *> Output.success("All pending schema migrations resolved.")
           else

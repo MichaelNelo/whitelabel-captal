@@ -24,11 +24,12 @@ object AnswerProfilingHandler:
       def handle(cmd: AnswerProfilingCommand) =
         for
           userOpt   <- userRepo.findAnswering()
-          surveyOpt <- userOpt match
-            case Some(user) =>
-              surveyRepo.findWithProfilingQuestion(user.state.surveyId, user.state.questionId)
-            case None =>
-              F.pure(None)
+          surveyOpt <-
+            userOpt match
+              case Some(user) =>
+                surveyRepo.findWithProfilingQuestion(user.state.surveyId, user.state.questionId)
+              case None =>
+                F.pure(None)
         yield (userOpt, surveyOpt) match
           case (None, _) =>
             core.Op.fail(Error.UserNotIdentified)

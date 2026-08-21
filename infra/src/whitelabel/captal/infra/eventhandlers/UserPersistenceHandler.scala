@@ -70,11 +70,10 @@ object UserPersistenceHandler:
   private def toUserRow(
       event: UserEvent.UserCreated,
       sessionData: SessionData,
-      now: String): UserRow =
-    UserRow(
-      id = event.userId,
-      email = Some(event.email),
-      locale = sessionData.locale,
-      createdAt = event.occurredAt.toString,
-      updatedAt = now)
+      now: String): UserRow = UserRow(
+    id = event.userId,
+    email = Some(event.email),
+    locale = sessionData.locale,
+    createdAt = event.occurredAt.toString,
+    updatedAt = now)
 end UserPersistenceHandler

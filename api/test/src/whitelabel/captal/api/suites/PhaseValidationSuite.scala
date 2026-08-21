@@ -214,12 +214,12 @@ object PhaseValidationSuite:
         // ─────────────────────────────────────────────────────────────────────────
         test("Authorized phase rejects all action endpoints but keeps /status polling open"):
           for
-            _        <- TestFixtures.seedEmailSurvey
-            _        <- TestFixtures.seedProfilingSurvey
-            _        <- TestFixtures.seedLocationSurvey
-            backend  <- testBackend
-            cookie   <- createSession(backend)
-            _        <- TestFixtures.updateSessionPhase(user.SessionId.unsafe(cookie), Phase.Authorized)
+            _       <- TestFixtures.seedEmailSurvey
+            _       <- TestFixtures.seedProfilingSurvey
+            _       <- TestFixtures.seedLocationSurvey
+            backend <- testBackend
+            cookie  <- createSession(backend)
+            _ <- TestFixtures.updateSessionPhase(user.SessionId.unsafe(cookie), Phase.Authorized)
             // Status — must still work (polling open)
             statusResp <- getStatus(backend, Some(cookie))
             // Action endpoints — all must reject with wrong_phase + "Authorized"

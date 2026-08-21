@@ -26,11 +26,12 @@ object AnswerLocationHandler:
       def handle(cmd: AnswerLocationCommand) =
         for
           userOpt   <- userRepo.findAnswering()
-          surveyOpt <- userOpt match
-            case Some(user) =>
-              surveyRepo.findWithLocationQuestion(user.state.surveyId, user.state.questionId)
-            case None =>
-              Monad[F].pure(None)
+          surveyOpt <-
+            userOpt match
+              case Some(user) =>
+                surveyRepo.findWithLocationQuestion(user.state.surveyId, user.state.questionId)
+              case None =>
+                Monad[F].pure(None)
         yield (userOpt, surveyOpt) match
           case (None, _) =>
             core.Op.fail(Error.UserNotIdentified)

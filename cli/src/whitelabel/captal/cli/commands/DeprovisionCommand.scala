@@ -372,7 +372,8 @@ object DeprovisionCommand:
                 .lang
                 .System
                 .out
-                .println(s"  Deleted $totalDeleted object(s) from s3://${config.aws.s3.bucket}/$prefix")
+                .println(
+                  s"  Deleted $totalDeleted object(s) from s3://${config.aws.s3.bucket}/$prefix")
 
   // ─────────────────────────────────────────────────────────────────────────────
   // CloudFront: invalidate to clear cached responses for this slug
@@ -381,22 +382,23 @@ object DeprovisionCommand:
   private def invalidateCdn(slug: String): ZIO[CaptalConfig & CloudFrontClient, CliError, Unit] =
     for
       now <- Clock.instant
-      _   <- aws("CloudFront createInvalidation"):
-        ZIO.serviceWithZIO[CloudFrontClient]: cf =>
-          ZIO.serviceWithZIO[CaptalConfig]: config =>
-            ZIO.attemptBlocking:
-              cf.createInvalidation(
-                CreateInvalidationRequest
-                  .builder()
-                  .distributionId(config.aws.cloudfront.distributionId)
-                  .invalidationBatch(
-                    InvalidationBatch
-                      .builder()
-                      .callerReference(now.toString)
-                      .paths(CfPaths.builder().items(s"/$slug/*").quantity(1).build())
-                      .build())
-                  .build())
-      _   <- Output.detail(s"CloudFront invalidation requested for /$slug/*")
+      _   <-
+        aws("CloudFront createInvalidation"):
+          ZIO.serviceWithZIO[CloudFrontClient]: cf =>
+            ZIO.serviceWithZIO[CaptalConfig]: config =>
+              ZIO.attemptBlocking:
+                cf.createInvalidation(
+                  CreateInvalidationRequest
+                    .builder()
+                    .distributionId(config.aws.cloudfront.distributionId)
+                    .invalidationBatch(
+                      InvalidationBatch
+                        .builder()
+                        .callerReference(now.toString)
+                        .paths(CfPaths.builder().items(s"/$slug/*").quantity(1).build())
+                        .build())
+                    .build())
+      _ <- Output.detail(s"CloudFront invalidation requested for /$slug/*")
     yield ()
 
   // ─────────────────────────────────────────────────────────────────────────────

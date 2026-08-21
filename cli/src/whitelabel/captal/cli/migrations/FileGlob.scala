@@ -12,7 +12,8 @@ object FileGlob:
     * tree once; for typical captal projects (<100 files) this is sub-millisecond.
     */
   def resolve(pattern: String, root: Path): List[Path] =
-    if !Files.exists(root) then Nil
+    if !Files.exists(root) then
+      Nil
     else
       val matcher = FileSystems.getDefault.getPathMatcher(s"glob:$pattern")
       val stream = Files.walk(root)

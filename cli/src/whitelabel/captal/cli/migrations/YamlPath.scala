@@ -33,20 +33,22 @@ object YamlPath:
     * `Matches[S, Pattern.type]` reduces to `true`/`false` at the type level.
     */
   inline def apply[S <: Singleton & String](s: S): YamlPath =
-    inline if constValue[Matches[S, Pattern.type]] then Vector.from(s.split('.'))
+    inline if constValue[Matches[S, Pattern.type]] then
+      Vector.from(s.split('.'))
     else
       scala
         .compiletime
         .error(
-          "Invalid YamlPath: '" + constValue[S] +
-            "' (must be dot-separated non-empty segments)")
+          "Invalid YamlPath: '" + constValue[S] + "' (must be dot-separated non-empty segments)")
 
   /** Runtime parse for dynamic strings (e.g. read from CLI args, config files). For hardcoded
     * literals prefer [[apply]] so the validation runs at compile time.
     */
   def parse(raw: String): Either[String, YamlPath] =
-    if raw.matches(Pattern) then Right(Vector.from(raw.split('.')))
-    else Left(s"Invalid YamlPath: '$raw' (must be dot-separated non-empty segments)")
+    if raw.matches(Pattern) then
+      Right(Vector.from(raw.split('.')))
+    else
+      Left(s"Invalid YamlPath: '$raw' (must be dot-separated non-empty segments)")
 
   /** Build from a non-empty list of segments. No validation on segments themselves (the caller
     * promises they're well-formed). Useful for programmatic construction (e.g. when navigating a
@@ -55,11 +57,15 @@ object YamlPath:
   def of(segments: String*): YamlPath = Vector.from(segments)
 
   extension (p: YamlPath)
-    def parts: Vector[String]    = p
-    def head: String             = p.head
-    def tail: YamlPath           = p.drop(1)
-    def isRoot: Boolean          = p.size == 1
-    def render: String           = p.mkString(".")
-    def parent: Option[YamlPath] = if p.size <= 1 then None else Some(p.dropRight(1))
-    def leaf: String             = p.last
+    def parts: Vector[String] = p
+    def head: String = p.head
+    def tail: YamlPath = p.drop(1)
+    def isRoot: Boolean = p.size == 1
+    def render: String = p.mkString(".")
+    def parent: Option[YamlPath] =
+      if p.size <= 1 then
+        None
+      else
+        Some(p.dropRight(1))
+    def leaf: String = p.last
 end YamlPath

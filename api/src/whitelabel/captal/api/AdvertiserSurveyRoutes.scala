@@ -87,7 +87,7 @@ final class AdvertiserSurveyRoutes(sessionEndpoint: SessionEndpoint):
             case Some(videoId) =>
               for
                 answerFlow <- ZIO.service[AnswerAdvertiserFlowType]
-                now <- Clock.instant
+                now        <- Clock.instant
                 cmd = AnswerAdvertiserCommand(answer = request.answer, occurredAt = now)
                 _ <- answerFlow
                   .execute(cmd)

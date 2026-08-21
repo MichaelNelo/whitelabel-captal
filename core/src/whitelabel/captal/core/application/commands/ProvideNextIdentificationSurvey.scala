@@ -33,8 +33,7 @@ object ProvideNextIdentificationSurveyHandler:
   def apply[F[_]: Monad](
       surveyRepo: SurveyRepository[F],
       userRepo: UserRepository[F],
-      fallback: FallbackPhase)
-      : Handler.Aux[F, ProvideNextIdentificationSurveyCommand, Response] =
+      fallback: FallbackPhase): Handler.Aux[F, ProvideNextIdentificationSurveyCommand, Response] =
     new Handler[F, ProvideNextIdentificationSurveyCommand]:
       type Result = Response
 

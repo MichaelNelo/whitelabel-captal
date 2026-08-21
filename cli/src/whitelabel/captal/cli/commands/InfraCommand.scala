@@ -10,21 +10,20 @@ import scala.jdk.CollectionConverters.*
 import whitelabel.captal.cli.Output
 import zio.*
 
-/** `captal infra init` and `captal infra update` — extract the AWS infrastructure bundle
-  * embedded in this CLI JAR into `infrastructure/aws/` under cwd. Both have identical
-  * skip-if-exists semantics; only the framing differs (init = first-time, update = sync new
-  * files).
+/** `captal infra init` and `captal infra update` — extract the AWS infrastructure bundle embedded
+  * in this CLI JAR into `infrastructure/aws/` under cwd. Both have identical skip-if-exists
+  * semantics; only the framing differs (init = first-time, update = sync new files).
   *
   * The destination dir is keyed by provider (`aws/`), not by tool (`terraform/`), so future
   * provider bundles (e.g. `infrastructure/azure/` with Bicep) sit alongside without conflicts.
   *
   * Implementation notes:
   *   - Resources are read by enumerating the **JarFile** entries directly rather than via
-  *     `FileSystems.newFileSystem`. Mill's `assembly` task prepends a launcher shim (~483 bytes)
-  *     to the JAR, which trips up `ZipFileSystem`'s strict header validation with
+  *     `FileSystems.newFileSystem`. Mill's `assembly` task prepends a launcher shim (~483 bytes) to
+  *     the JAR, which trips up `ZipFileSystem`'s strict header validation with
   *     `ZipException: <hex>`. `JarFile` is lenient about leading bytes and handles this fine.
-  *   - For the dev workflow (`mill cli.run`), the classpath is filesystem-based not JAR. We
-  *     detect this and walk a directory instead.
+  *   - For the dev workflow (`mill cli.run`), the classpath is filesystem-based not JAR. We detect
+  *     this and walk a directory instead.
   */
 object InfraCommand:
 
@@ -38,20 +37,22 @@ object InfraCommand:
     for
       _      <- Output.header(s"$label infrastructure/aws/")
       files  <- listBundledResources
-      counts <- ZIO.foreach(files): (rel, bytes) =>
-        ZIO.attempt:
-          val target = InfraDir.resolve(rel)
-          if Files.exists(target) then (rel, false)
-          else
-            Files.createDirectories(target.getParent)
-            Files.write(target, bytes)
-            (rel, true)
-      added  = counts.count(_._2)
+      counts <-
+        ZIO.foreach(files): (rel, bytes) =>
+          ZIO.attempt:
+            val target = InfraDir.resolve(rel)
+            if Files.exists(target) then
+              (rel, false)
+            else
+              Files.createDirectories(target.getParent)
+              Files.write(target, bytes)
+              (rel, true)
+      added   = counts.count(_._2)
       skipped = counts.size - added
       _ <- Output.success(s"$label complete - added $added, skipped $skipped")
-      _ <- ZIO.when(added > 0)(
-        Output.info("Next: cd infrastructure/aws/ && tofu init && tofu apply -var-file=...")
-      )
+      _ <-
+        ZIO.when(added > 0)(
+          Output.info("Next: cd infrastructure/aws/ && tofu init && tofu apply -var-file=..."))
     yield ()
 
   /** Enumerate all classpath resources under [[ResourceRoot]] as `(relativePath, bytes)` pairs.
@@ -69,9 +70,11 @@ object InfraCommand:
           "Did you build with `./mill cli.syncInfrastructureBundle`?")
 
     rootUrl.getProtocol match
-      case "jar"  => listFromJar(rootUrl)
-      case "file" => listFromFilesystem(Paths.get(rootUrl.toURI))
-      case other  =>
+      case "jar" =>
+        listFromJar(rootUrl)
+      case "file" =>
+        listFromFilesystem(Paths.get(rootUrl.toURI))
+      case other =>
         throw new RuntimeException(s"Unsupported classpath URL protocol: $other ($rootUrl)")
 
   /** Open the JAR, iterate entries with prefix `ResourceRoot/`, return (relPath, bytes). */
@@ -89,7 +92,8 @@ object InfraCommand:
           val bytes = readAllBytes(jar.getInputStream(entry))
           (rel, bytes)
         .toList
-    finally jar.close()
+    finally
+      jar.close()
 
   private def listFromFilesystem(root: Path): List[(String, Array[Byte])] =
     val walker = Files.walk(root)

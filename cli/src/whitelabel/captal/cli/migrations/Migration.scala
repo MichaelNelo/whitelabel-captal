@@ -22,8 +22,7 @@ object Migrations:
       fileGlob = "locations/*/location.yaml",
       ops = List(
         YamlOp.Rename(YamlPath("unifi.site"), YamlPath("unifi.siteId")),
-        YamlOp.Delete(YamlPath("unifi.unifiOs"))
-      )
+        YamlOp.Delete(YamlPath("unifi.unifiOs")))
     ),
     Migration(
       version = SemVer(2, 1, 0),
@@ -59,8 +58,11 @@ object Migrations:
     val ord = summon[Ordering[SemVer]]
     val versions = all.map(_.version)
     // Insertion point of lastSeen — first migration strictly greater starts here.
-    val startIdx = versions.search(lastSeen) match
-      case Found(i)          => i + 1
-      case InsertionPoint(i) => i
+    val startIdx =
+      versions.search(lastSeen) match
+        case Found(i) =>
+          i + 1
+        case InsertionPoint(i) =>
+          i
     all.slice(startIdx, all.length).takeWhile(m => ord.lteq(m.version, currentCli))
 end Migrations
