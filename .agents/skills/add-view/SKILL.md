@@ -117,11 +117,11 @@ Detailed flow: skill `add-i18n-key`.
 
 ### 5. Tests
 
-There's no JS test runner in the project (just `./mill client.compile` for type-checking). Manual smoke test locally (see skill `run-locally`):
+There's no JS test runner in the project (just `mill client.compile` for type-checking). Manual smoke test locally (see skill `run-locally`):
 
 ```bash
-./mill clean client.generatedSources && ENVIRONMENT=dev ./mill client.bundle
-./mill api.dev --slug bonus-test --dir locations/bonus-test --shared-dir shared
+mill clean client.generatedSources && ENVIRONMENT=dev mill client.bundle
+mill api.dev --slug bonus-test --dir locations/bonus-test --shared-dir shared
 # Open http://localhost:8080/bonus/ and walk through
 ```
 

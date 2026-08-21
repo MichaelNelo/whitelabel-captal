@@ -155,9 +155,9 @@ This applies to images, scripts, stylesheets, links, anything with a URL.
 
 ## ENVIRONMENT toggle — `BuildInfo`
 
-`ENVIRONMENT=dev ./mill client.bundle` materializes `BuildInfo.isDevMode = true` at compile time. Used for dev-only UI (e.g. reset button on Ready page).
+`ENVIRONMENT=dev mill client.bundle` materializes `BuildInfo.isDevMode = true` at compile time. Used for dev-only UI (e.g. reset button on Ready page).
 
-**Caveat**: Mill caches `client.generatedSources`. If you toggle `ENVIRONMENT` between builds, run `./mill clean client.generatedSources` first or the cached BuildInfo wins.
+**Caveat**: Mill caches `client.generatedSources`. If you toggle `ENVIRONMENT` between builds, run `mill clean client.generatedSources` first or the cached BuildInfo wins.
 
 ```scala
 if BuildInfo.isDevMode then
@@ -223,9 +223,9 @@ Don't reinvent these in individual views.
 ## Build flow
 
 ```bash
-./mill clean client.generatedSources       # invalidate BuildInfo cache
-ENVIRONMENT=dev ./mill client.bundle       # produces out/client/bundle.dest/
-./mill client.publishS3 --bucket captal-dev-assets --prefix bundle   # uploads to S3
+mill clean client.generatedSources       # invalidate BuildInfo cache
+ENVIRONMENT=dev mill client.bundle       # produces out/client/bundle.dest/
+mill client.publishS3 --bucket captal-dev-assets --prefix bundle   # uploads to S3
 ```
 
 Skill `run-locally` covers the full local dev loop. Skill `bump-cli-version` doesn't apply here — bundle is per-deployment, not per-CLI-version.

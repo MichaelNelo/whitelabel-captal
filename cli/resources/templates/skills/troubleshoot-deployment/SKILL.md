@@ -168,8 +168,8 @@ The bundle was built without `ENVIRONMENT=dev` (BuildInfo.isDevMode is false, de
 ### Fix (project-side, not CLI)
 This is a project release flow concern. Re-bundle with:
 ```bash
-./mill clean client.generatedSources
-ENVIRONMENT=dev ./mill client.bundle
+mill clean client.generatedSources
+ENVIRONMENT=dev mill client.bundle
 # then re-upload bundle to s3://<bucket>/bundle/
 ```
 Then re-run `captal locations push <slug>` so the new bundle propagates to the location.

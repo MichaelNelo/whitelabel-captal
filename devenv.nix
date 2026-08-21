@@ -5,11 +5,11 @@
   # env.GREET = "devenv";
 
   # https://devenv.sh/packages/
-  packages = [ pkgs.coursier pkgs.sqlite pkgs.ffmpeg pkgs.jq pkgs.terraform pkgs.awscli2 ];
+  packages = [ pkgs.git pkgs.terraform pkgs.scalafmt pkgs.scalafix ];
 
   # https://devenv.sh/languages/
-  languages.java.enable = true;
-  languages.java.jdk.package = pkgs.jdk21;
+  languages.scala.enable = true;
+  languages.scala.mill.enable = true;
 
   # https://devenv.sh/processes/
   # processes.dev.exec = "${lib.getExe pkgs.watchexec} -n -- ls -la";
@@ -18,8 +18,9 @@
   # services.postgres.enable = true;
 
   # https://devenv.sh/scripts/
-  # The CLI assembly, built by `./mill cli.assembly`.
-  scripts.captal.exec = ''exec java -jar "$DEVENV_ROOT/out/cli/assembly.dest/out.jar" "$@"'';
+  # scripts.hello.exec = ''
+  #   echo hello from $GREET
+  # '';
 
   # https://devenv.sh/basics/
   # enterShell = ''

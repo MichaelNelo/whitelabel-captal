@@ -9,7 +9,7 @@ version: 1.0.0
 ## What you need running
 
 1. **rqlite container** (the DB)
-2. **API server** (`./mill api.dev` — runs `infra.Migrate` then HTTP server on 8080)
+2. **API server** (`mill api.dev` — runs `infra.Migrate` then HTTP server on 8080)
 3. **Client bundle** built and served (in dev mode the API serves it from the filesystem)
 4. **Provision data** under `<dir>/shared/` and `<dir>/locations/<slug>/`
 
@@ -31,8 +31,8 @@ Data persists in the container's filesystem; restart loses it (matches Fargate e
 ## Step 2 — Build the client bundle
 
 ```bash
-./mill clean client.generatedSources   # invalidate BuildInfo cache when toggling ENVIRONMENT
-ENVIRONMENT=dev ./mill client.bundle
+mill clean client.generatedSources   # invalidate BuildInfo cache when toggling ENVIRONMENT
+ENVIRONMENT=dev mill client.bundle
 ```
 
 `ENVIRONMENT=dev` flips `BuildInfo.isDevMode = true` which enables the `/api/dev/reset-phase` button on the Ready page. **Always `clean` before flipping** — Mill caches generated sources and won't re-run otherwise.
@@ -49,7 +49,7 @@ export SHARED_DIR=$PWD/shared
 export SERVER_DEV_MODE=true
 export SERVER_DEV_ENDPOINTS=true
 # export UNIFI_PROXY_URL="http://localhost:8888"  # optional: to test the handler through a local tinyproxy
-./mill api.dev
+mill api.dev
 ```
 
 **UniFi**: if the `location.yaml` has no `unifi` block (host + apiToken), `UnifiAuthorizationHandler` logs "no config" and skips — the session stays in `Phase.Ready` after `/api/finish`. To test the whole path, add valid credentials and keep the API on the same LAN as the UCG (or set `UNIFI_PROXY_URL` to a tinyproxy/Tailscale router that reaches the Controller).
@@ -57,7 +57,7 @@ export SERVER_DEV_ENDPOINTS=true
 Or via the helper task (defaults built in):
 
 ```bash
-./mill api.dev --slug cafe-centro --dir locations/cafe-centro --shared-dir shared
+mill api.dev --slug cafe-centro --dir locations/cafe-centro --shared-dir shared
 ```
 
 On startup the server:
@@ -98,17 +98,17 @@ Required params: `id` (X-Client-Mac), `click_id` (X-Click-Id). Missing either �
 ## Step 6 — Tests
 
 ```bash
-./mill api.test        # 47 suites, ~30s. Uses TapirStubInterpreter against test rqlite container.
-./mill core.test       # core domain tests
-./mill client.compile  # Scala.js compile check (no test runner for JS)
+mill api.test        # 47 suites, ~30s. Uses TapirStubInterpreter against test rqlite container.
+mill core.test       # core domain tests
+mill client.compile  # Scala.js compile check (no test runner for JS)
 ```
 
 Tests pull their own rqlite via `TestFixtures.migrate`. Make sure your dev rqlite is on a separate port if conflict: tests use port `4011` per `api/test/resources/test.conf` `database.jdbcUrl`.
 
 ## Hot-reload tips
 
-- Scala source change → `./mill api.dev` re-runs incremental compile + restart (Mill watches by default if you use `./mill -w api.dev`).
-- Client source change → `./mill -w client.bundle` to keep rebuilding. Refresh browser to reload.
+- Scala source change → `mill api.dev` re-runs incremental compile + restart (Mill watches by default if you use `mill -w api.dev`).
+- Client source change → `mill -w client.bundle` to keep rebuilding. Refresh browser to reload.
 - YAML provision change → restart the API (re-reads `PROVISION_DIR` on startup).
 
 ## Common issues
@@ -117,13 +117,13 @@ Tests pull their own rqlite via `TestFixtures.migrate`. Make sure your dev rqlit
 |----------------------------------------------------------|--------------------------------------------------------------------------------------------------|
 | `Connection refused` on `localhost:4001`                 | rqlite container not running. `docker ps                                                         |
 | `No result set returned` after restart                   | rqlite data wiped (ephemeral). Re-restart API to re-provision, or use `-v` volume mount.         |
-| Reset button doesn't appear on Ready page                | `ENVIRONMENT=dev` wasn't set OR Mill cached the BuildInfo. `./mill clean client.generatedSources && ENVIRONMENT=dev ./mill client.bundle`. |
+| Reset button doesn't appear on Ready page                | `ENVIRONMENT=dev` wasn't set OR Mill cached the BuildInfo. `mill clean client.generatedSources && ENVIRONMENT=dev mill client.bundle`. |
 | `[welcome.title]` literal shown in SPA                   | i18n YAMLs missing or location not provisioned. Check `LOCATION_SLUG` + `PROVISION_DIR` env.     |
 | `SessionMissing` on every request                        | Missing `id=` / `click_id=` query params (or X-Client-Mac/X-Click-Id headers in curl tests).     |
-| Click "Start" → infinite spinner                         | API likely returned 500. Tail `~/.cache/captal-dev.log` or terminal where `./mill api.dev` runs. |
+| Click "Start" → infinite spinner                         | API likely returned 500. Tail `~/.cache/captal-dev.log` or terminal where `mill api.dev` runs. |
 
 ## Anti-patterns
 
 - ❌ Sharing the local rqlite between dev and tests — tests `cleanOnValidationError` will wipe your data.
 - ❌ Editing `out/client/bundle.dest/*` directly — Mill regenerates on next bundle, your edits vanish.
-- ❌ Running `./mill client.bundle` without `ENVIRONMENT=dev` when testing dev features — you'll be debugging a production-build bug that doesn't exist in dev.
+- ❌ Running `mill client.bundle` without `ENVIRONMENT=dev` when testing dev features — you'll be debugging a production-build bug that doesn't exist in dev.

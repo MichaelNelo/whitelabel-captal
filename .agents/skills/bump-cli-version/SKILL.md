@@ -12,7 +12,7 @@ After any change in `cli/`, `provision/` (CLI depends on it), or skills under `c
 
 ## Pre-flight
 
-- `./mill cli.compile` clean.
+- `mill cli.compile` clean.
 - If the CLI uses new features from the API base, those base images should already be in ECR (operator may upgrade `images.api` before pushing). Loose coupling — not required.
 - Logged in to AWS (the publish task uses `aws s3 cp`).
 
@@ -62,7 +62,7 @@ Rules:
 - The `version` must match the release tag (`X.Y.Z` in step 1) so the warning hook fires for operators upgrading from a prior version.
 - Paths use the `YamlPath` opaque type with **compile-time validation** via `compiletime.ops.string.Matches`. Malformed literals like `YamlPath("a..b")` fail compilation.
 - `Add` ops are silent in the warning hook (operators see them only when running `captal migrate`). `Delete` and `Rename` fire warnings.
-- After adding the migration, run `./mill cli.test` — the test suite in `cli/test/.../migrations/MigrationsSpec.scala` should still pass (or extend it if the new ops cover novel patterns).
+- After adding the migration, run `mill cli.test` — the test suite in `cli/test/.../migrations/MigrationsSpec.scala` should still pass (or extend it if the new ops cover novel patterns).
 
 The operator's experience after upgrading:
 - Their first invocation of any `captal` command after `captal update` shows a warning listing pending migrations.
@@ -72,7 +72,7 @@ The operator's experience after upgrading:
 ### 2. Publish
 
 ```bash
-./mill cli.publishS3 --bucket captal-cli-releases-dev --version X.Y.Z
+mill cli.publishS3 --bucket captal-cli-releases-dev --version X.Y.Z
 ```
 
 This:

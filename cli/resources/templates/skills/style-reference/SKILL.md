@@ -448,10 +448,10 @@ For exact default values check `client/assets/styles.css:1-100` (`:root { ... }`
 
 ## Testing locally
 
-1. `./mill clean client.generatedSources`
-2. `ENVIRONMENT=dev ./mill client.bundle`
+1. `mill clean client.generatedSources`
+2. `ENVIRONMENT=dev mill client.bundle`
 3. Copy `locations/<slug>/assets/styles.css` to `out/client/bundle.dest/custom-styles.css`.
-4. `./mill api.dev --slug <slug> --dir locations/<slug> --shared-dir shared`.
+4. `mill api.dev --slug <slug> --dir locations/<slug> --shared-dir shared`.
 5. Open `http://localhost:8080/<slug>/`.
 
 For the deployed version, just run `captal locations push <slug>` (the file is gzipped + uploaded + CloudFront-invalidated automatically).

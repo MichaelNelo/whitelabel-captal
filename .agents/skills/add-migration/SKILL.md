@@ -53,17 +53,17 @@ If you added a column, update the `*Row` case class in `infra/src/whitelabel/cap
 
 ### 6. Test
 
-Add a row in `api/test/src/whitelabel/captal/api/TestFixtures.scala` that exercises the new column (insert + read back). Run `./mill api.test` — `TestFixtures.migrate` runs Flyway on the test rqlite container so a broken migration fails the suite immediately.
+Add a row in `api/test/src/whitelabel/captal/api/TestFixtures.scala` that exercises the new column (insert + read back). Run `mill api.test` — `TestFixtures.migrate` runs Flyway on the test rqlite container so a broken migration fails the suite immediately.
 
 ### 7. Deploy
 
 Rebuild both base images (the migrations are baked into the assembly classpath):
 
 ```bash
-./mill api.dockerBuild --repoUri <ecr>/captal-api-dev --tag vX.Y.Z
-./mill api.dockerPush  --repoUri <ecr>/captal-api-dev --tag vX.Y.Z
-./mill infra.dockerBuild --repoUri <ecr>/captal-provision-dev --tag vX.Y.Z
-./mill infra.dockerPush  --repoUri <ecr>/captal-provision-dev --tag vX.Y.Z
+mill api.dockerBuild --repoUri <ecr>/captal-api-dev --tag vX.Y.Z
+mill api.dockerPush  --repoUri <ecr>/captal-api-dev --tag vX.Y.Z
+mill infra.dockerBuild --repoUri <ecr>/captal-provision-dev --tag vX.Y.Z
+mill infra.dockerPush  --repoUri <ecr>/captal-provision-dev --tag vX.Y.Z
 ```
 
 Then operator bumps `shared/captal.yaml` images.api/provision → `captal shared push` (runs migration once) → `captal locations push-all` (each API task restart re-runs Flyway harmlessly — it's idempotent).

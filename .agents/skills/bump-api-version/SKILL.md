@@ -12,7 +12,7 @@ After any change in `core/`, `endpoints/`, `infra/`, `api/`, `provision/`, or `D
 
 ## Pre-flight
 
-- Tests pass: `./mill api.test` (currently 47 suites).
+- Tests pass: `mill api.test` (currently 47 suites).
 - Working tree is committed (you want the deployed bits to match a git SHA).
 - Logged into ECR: `aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 000000000000.dkr.ecr.us-east-1.amazonaws.com`.
 
@@ -36,15 +36,15 @@ Bump SemVer:
 
 ```bash
 TAG=vX.Y.Z
-./mill api.dockerBuild --repoUri 000000000000.dkr.ecr.us-east-1.amazonaws.com/captal-api-dev --tag $TAG
-./mill api.dockerPush  --repoUri 000000000000.dkr.ecr.us-east-1.amazonaws.com/captal-api-dev --tag $TAG
+mill api.dockerBuild --repoUri 000000000000.dkr.ecr.us-east-1.amazonaws.com/captal-api-dev --tag $TAG
+mill api.dockerPush  --repoUri 000000000000.dkr.ecr.us-east-1.amazonaws.com/captal-api-dev --tag $TAG
 ```
 
 ### 2. Build + push the Provision image (same tag)
 
 ```bash
-./mill infra.dockerBuild --repoUri 000000000000.dkr.ecr.us-east-1.amazonaws.com/captal-provision-dev --tag $TAG
-./mill infra.dockerPush  --repoUri 000000000000.dkr.ecr.us-east-1.amazonaws.com/captal-provision-dev --tag $TAG
+mill infra.dockerBuild --repoUri 000000000000.dkr.ecr.us-east-1.amazonaws.com/captal-provision-dev --tag $TAG
+mill infra.dockerPush  --repoUri 000000000000.dkr.ecr.us-east-1.amazonaws.com/captal-provision-dev --tag $TAG
 ```
 
 ### 3. Bump the project's `shared/captal.yaml`
@@ -117,7 +117,7 @@ The previous task definition revisions stay in ECS (not deleted on update), so y
 
 - **rqlite data loss**: Fargate ephemeral storage. If rqlite gets redeployed during this rollout (unlikely if you don't touch the `rqlite` module), follow `recover-data`.
 - **Cross-version cookie name**: if you change `SessionCookieConfig` semantics, old browsers may hold a cookie with the new server can't read. Plan for a deprecation window.
-- **Bundle is separate**: `client.bundle` + `client.publishS3` are NOT part of this flow. The client bundle is per-S3 deploy, not per-API version. If the client changed too, publish the bundle separately first (`./mill client.publishS3 --bucket captal-dev-assets --prefix bundle`).
+- **Bundle is separate**: `client.bundle` + `client.publishS3` are NOT part of this flow. The client bundle is per-S3 deploy, not per-API version. If the client changed too, publish the bundle separately first (`mill client.publishS3 --bucket captal-dev-assets --prefix bundle`).
 
 ## Anti-patterns
 

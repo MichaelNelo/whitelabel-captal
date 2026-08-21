@@ -141,12 +141,12 @@ The `.provide(...)` list must satisfy `FooCommand.Env`. If you forget a layer th
 ### 7. Test manually
 
 ```bash
-./mill cli.run foo cafe-centro
+mill cli.run foo cafe-centro
 ```
 
 Or build the assembly and invoke:
 ```bash
-./mill cli.assembly
+mill cli.assembly
 java -jar out/cli/assembly.dest/out.jar foo cafe-centro
 ```
 
