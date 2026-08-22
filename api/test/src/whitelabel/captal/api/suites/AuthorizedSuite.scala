@@ -31,11 +31,7 @@ object AuthorizedSuite:
               .downField("accessExpiresAt")
               .focus
               .getOrElse(io.circe.Json.Null)
-            val secondsRemaining = body
-              .hcursor
-              .downField("secondsRemaining")
-              .as[Long]
-              .toOption
+            val secondsRemaining = body.hcursor.downField("secondsRemaining").as[Long].toOption
             assertTrue(
               statusResp.code.isSuccess,
               phase == "authorized",
