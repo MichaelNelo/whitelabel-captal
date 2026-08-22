@@ -4,8 +4,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
 import io.circe.Json
-import io.circe.yaml.parser as yamlParser
-import io.circe.yaml.Printer as YamlPrinter
+import io.circe.yaml.{Printer as YamlPrinter, parser as yamlParser}
 
 /** Round-trip read/write for YAML files via circe-yaml.
   *

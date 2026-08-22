@@ -3,8 +3,8 @@ package whitelabel.captal.cli.migrations
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 
-import io.circe.{Decoder, Encoder}
 import io.circe.yaml.parser as yamlParser
+import io.circe.{Decoder, Encoder}
 import zio.*
 
 /** Per-project state at `.captal/state.json`. Drives the schema-migration warning hook in [[Main]]:

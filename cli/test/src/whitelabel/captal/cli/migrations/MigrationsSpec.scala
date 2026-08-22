@@ -1,8 +1,9 @@
 package whitelabel.captal.cli.migrations
 
+import scala.compiletime.testing.{typeCheckErrors, typeChecks}
+
 import io.circe.Json
 import io.circe.yaml.parser as yamlParser
-import scala.compiletime.testing.{typeCheckErrors, typeChecks}
 import utest.*
 
 /** Tests for the schema-migration DSL. The most interesting part is [[yamlPath]], which uses

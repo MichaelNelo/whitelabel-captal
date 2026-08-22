@@ -1,6 +1,7 @@
 package whitelabel.captal.cli.migrations
 
 import java.nio.file.{FileSystems, Files, Path, Paths}
+
 import scala.jdk.CollectionConverters.*
 
 /** Glob resolver for migration fileGlob patterns. Uses `java.nio.file.PathMatcher` with the
