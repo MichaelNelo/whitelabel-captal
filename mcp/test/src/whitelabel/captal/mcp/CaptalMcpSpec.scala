@@ -123,20 +123,21 @@ object CaptalMcpSpec extends ZIOSpecDefault:
               .description
               .exists(_.contains("i18n://required-keys")))
       ),
-      test("the style tools declare what they need"):
-        // Not exercised against S3 here: that would need a bucket and a distribution, and what is
-        // worth pinning is the contract — the write is scoped, the read is not, and both name the
-        // reference an operator has to read before rewriting a stylesheet.
+      test("the asset tools declare what they need"):
+        // Not exercised against S3 here: that would need a bucket and a distribution. What is worth
+        // pinning is the contract — writes are scoped, reads are not, and both stylesheet tools name
+        // the reference an operator has to read before rewriting one.
         assertTrue(
-          StyleTools.set.requiredScopes == Set(Auth.ContentWrite),
-          StyleTools.get.requiredScopes.isEmpty,
-          StyleTools
-            .set
+          List(AssetTools.setStyles, AssetTools.setIcon).forall(
+            _.requiredScopes == Set(Auth.ContentWrite)),
+          List(AssetTools.getStyles, AssetTools.getIcon).forall(_.requiredScopes.isEmpty),
+          AssetTools
+            .setStyles
             .definition
             .inputSchema
             .toString
             .contains("skill://style-reference/SKILL.md"),
-          StyleTools.set.definition.description.exists(_.contains("whole file"))
+          AssetTools.setStyles.definition.description.exists(_.contains("whole file"))
         )
     )
 end CaptalMcpSpec

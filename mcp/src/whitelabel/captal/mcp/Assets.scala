@@ -18,6 +18,16 @@ import software.amazon.awssdk.services.s3.model.{
 }
 import zio.*
 
+/** One asset a location can override, and how it has to be stored.
+  *
+  * The content type and encoding are not incidental: the SPA fetches these by fixed relative name,
+  * so a stylesheet served without `Content-Encoding: gzip` arrives as bytes the browser will not
+  * read, and an icon served as anything but `image/svg+xml` does not render.
+  */
+enum Asset(val fileName: String, val contentType: String, val gzipped: Boolean):
+  case Styles    extends Asset("custom-styles.css.gz", "text/css", true)
+  case BrandIcon extends Asset("brand-icon.svg", "image/svg+xml", false)
+
 /** S3 and CloudFront access for per-location assets.
   *
   * Credentials are never configured: the container runs with an ECS task role and the SDK's default
@@ -30,52 +40,61 @@ final case class AssetStore(
     s3: S3Client,
     cdn: CloudFrontClient):
 
-  /** The key the SPA asks for. `index.html` carries
-    * `<link rel="stylesheet" href="./custom-styles.css.gz" onerror="this.remove()">` and is served
-    * from `<slug>/`, so the object has to sit beside it under the same prefix.
+  /** The key the SPA asks for. Its `index.html` is served from under the slug and references these
+    * by relative name, so each object has to sit beside it under the same prefix.
     */
-  def stylesKey(slug: String): String = s"$slug/custom-styles.css.gz"
+  def key(slug: String, asset: Asset): String = s"$slug/${asset.fileName}"
 
-  def putStyles(slug: String, css: String): ZIO[Any, String, Int] =
-    val body = gzip(css.getBytes("UTF-8"))
+  def put(slug: String, asset: Asset, content: String): ZIO[Any, String, Int] =
+    val raw = content.getBytes("UTF-8")
+    val body =
+      if asset.gzipped then
+        gzip(raw)
+      else
+        raw
     ZIO
       .attemptBlocking:
-        s3.putObject(
-          PutObjectRequest
-            .builder()
-            .bucket(bucket)
-            .key(stylesKey(slug))
-            .contentType("text/css")
-            .contentEncoding("gzip")
-            .build(),
-          RequestBody.fromBytes(body))
-      .mapError(e => s"Could not write ${stylesKey(slug)}: ${e.getMessage}")
+        val request = PutObjectRequest
+          .builder()
+          .bucket(bucket)
+          .key(key(slug, asset))
+          .contentType(asset.contentType)
+        val withEncoding =
+          if asset.gzipped then
+            request.contentEncoding("gzip")
+          else
+            request
+        s3.putObject(withEncoding.build(), RequestBody.fromBytes(body))
+      .mapError(e => s"Could not write ${key(slug, asset)}: ${e.getMessage}")
       .as(body.length)
+  end put
 
-  def getStyles(slug: String): ZIO[Any, String, Option[String]] = ZIO
+  def get(slug: String, asset: Asset): ZIO[Any, String, Option[String]] = ZIO
     .attemptBlocking:
       val bytes = s3
-        .getObject(GetObjectRequest.builder().bucket(bucket).key(stylesKey(slug)).build())
+        .getObject(GetObjectRequest.builder().bucket(bucket).key(key(slug, asset)).build())
         .readAllBytes()
-      Some(gunzip(bytes))
+      Some(
+        if asset.gzipped then
+          gunzip(bytes)
+        else
+          new String(bytes, "UTF-8"))
     .catchSome { case _: NoSuchKeyException =>
       ZIO.none
     }
-    .mapError(e => s"Could not read ${stylesKey(slug)}: ${e.getMessage}")
+    .mapError(e => s"Could not read ${key(slug, asset)}: ${e.getMessage}")
 
-  /** Without this the edge keeps serving the previous stylesheet until the cache expires, so a
-    * write would look applied in the tool and be invisible in the portal.
+  /** Without this the edge keeps serving the previous file until the cache expires, so a write
+    * would look applied in the tool and be invisible in the portal.
     *
     * `captal locations push` does invalidate, but the whole `<slug>` prefix, because it has just
-    * synced the bundle. Writing one file does not need that reach, and more to the point does not
-    * need a deploy: the gain here is that changing a stylesheet stops being a redeploy.
+    * synced the bundle. Writing one file needs neither that reach nor the deploy.
     */
-  def invalidate(slug: String): ZIO[Any, String, String] = ZIO
+  def invalidate(slug: String, asset: Asset): ZIO[Any, String, String] = ZIO
     .attemptBlocking:
-      val path = s"/${stylesKey(slug)}"
       // A caller reference must be unique per request; the key plus the clock is enough, since two
       // invalidations of the same object in the same millisecond are indistinguishable anyway.
-      val reference = s"mcp-$slug-${java.lang.System.currentTimeMillis()}"
+      val reference = s"mcp-$slug-${asset.fileName}-${java.lang.System.currentTimeMillis()}"
       cdn
         .createInvalidation(
           CreateInvalidationRequest
@@ -85,12 +104,12 @@ final case class AssetStore(
               InvalidationBatch
                 .builder()
                 .callerReference(reference)
-                .paths(CfPaths.builder().quantity(1).items(path).build())
+                .paths(CfPaths.builder().quantity(1).items(s"/${key(slug, asset)}").build())
                 .build())
             .build())
         .invalidation()
         .id()
-    .mapError(e => s"Wrote the stylesheet but could not invalidate the CDN: ${e.getMessage}")
+    .mapError(e => s"Wrote ${asset.fileName} but could not invalidate the CDN: ${e.getMessage}")
 
   private def gzip(bytes: Array[Byte]): Array[Byte] =
     val out = new ByteArrayOutputStream()

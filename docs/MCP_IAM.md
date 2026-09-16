@@ -35,9 +35,9 @@ this document as part of the change rather than as follow-up.
 
 | Permission | Needed by | Why |
 |---|---|---|
-| `s3:PutObject` | `set_location_styles` | Writes `<slug>/custom-styles.css.gz` |
-| `s3:GetObject` | `get_location_styles` | Reads it back so an edit starts from what is deployed |
-| `cloudfront:CreateInvalidation` | `set_location_styles` | Without it the edge serves the previous stylesheet until the cache expires, and the write looks applied while being invisible |
+| `s3:PutObject` | `set_location_styles`, `set_location_icon` | Writes `<slug>/custom-styles.css.gz` and `<slug>/brand-icon.svg` |
+| `s3:GetObject` | `get_location_styles`, `get_location_icon` | Reads them back so an edit starts from what is deployed |
+| `cloudfront:CreateInvalidation` | both writes | Without it the edge serves the previous file until the cache expires, and the write looks applied while being invisible |
 
 `s3:ListBucket` is deliberately absent. Nothing enumerates the bucket — every key is derived from a
 slug the database already confirmed — and leaving it out means a bug in key construction fails
