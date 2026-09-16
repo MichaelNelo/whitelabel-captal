@@ -116,17 +116,19 @@ enum QuestionSpec:
   case date(rules: Option[List[RangeRuleIn]])
 
 object QuestionSpec:
-  given Schema[QuestionSpec] = DeriveSchema.gen
+  given schema: Schema[QuestionSpec] = DeriveSchema.gen
 
-  /** Declaration order, which is the order JsonSchemaGen emits the `oneOf` variants in. */
-  val caseIds: List[String] = List(
-    "radio",
-    "dropdown",
-    "checkbox",
-    "input",
-    "rating",
-    "numeric",
-    "date")
+  /** Read off the derived schema rather than transcribed, so adding or reordering a case above
+    * cannot leave this list disagreeing with it. `withDiscriminator` zips these positionally
+    * against the emitted `oneOf`, and both orders come from the same derivation.
+    */
+  val caseIds: List[String] =
+    schema match
+      case e: Schema.Enum[?] =>
+        e.cases.map(_.id).toList
+      case other =>
+        throw new IllegalStateException(
+          s"QuestionSpec no longer derives to an enum schema but to $other; the discriminator patch has nothing to attach to.")
 
 /** Survey and question tools.
   *

@@ -185,5 +185,38 @@ object CaptalMcpSpec extends ZIOSpecDefault:
         assertTrue(
           fromCreateQuestion == QuestionSpec.caseIds,
           fromCreateVideo == QuestionSpec.caseIds)
+      ,
+      test("the tag attached at each oneOf position is the one the codec emits there"):
+        // `withDiscriminator` zips caseIds positionally against the variants JsonSchemaGen emits,
+        // and nothing in the types says those two orders agree. If they ever drift, the arity check
+        // still passes and every variant is silently labelled as its neighbour — a schema that
+        // looks right and is not. This pins position to tag through the codec, which is the
+        // authority the decoder actually uses.
+        val samples = List(
+          QuestionSpec.radio(Nil),
+          QuestionSpec.dropdown(Nil),
+          QuestionSpec.checkbox(Nil, None),
+          QuestionSpec.input(None),
+          QuestionSpec.rating(None),
+          QuestionSpec.numeric(None),
+          QuestionSpec.date(None)
+        )
+        val encoder = zio.schema.codec.JsonCodec.jsonEncoder(QuestionSpec.schema)
+        val emitted = samples.map: sample =>
+          zio
+            .json
+            .ast
+            .Json
+            .decoder
+            .decodeJson(encoder.encodeJson(sample))
+            .toOption
+            .flatMap(_.asObject)
+            .flatMap(
+              _.fields
+                .collectFirst { case ("questionType", zio.json.ast.Json.Str(v)) =>
+                  v
+                })
+            .getOrElse("<no questionType>")
+        assertTrue(emitted == QuestionSpec.caseIds)
     )
 end CaptalMcpSpec
