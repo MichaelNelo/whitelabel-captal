@@ -585,7 +585,11 @@ object client extends BaseJSModule:
 object mcp extends BaseModule:
   def scalaVersion = "3.8.4"
   def moduleDeps = Seq(core, infra)
-  def mvnDeps = Seq(mvn"com.jamesward::zio-http-mcp:0.5.0")
+  def mvnDeps = Seq(
+    mvn"com.jamesward::zio-http-mcp:0.5.0",
+    mvn"software.amazon.awssdk:s3:2.29.51",
+    mvn"software.amazon.awssdk:cloudfront:2.29.51",
+    mvn"org.slf4j:slf4j-nop:1.7.36")
 
   /** Declared as a Task.Source so Mill both permits the read and reinvalidates the copy whenever a
     * skill changes.
