@@ -1,7 +1,7 @@
 ---
 name: add-survey
 description: Use this skill when adding or changing identification surveys (email, profiling, location) or advertiser surveys through the backoffice MCP server. Triggers on "add survey", "create survey", "new survey", "add question", "survey question".
-version: 2.0.0
+version: 2.1.0
 ---
 
 # Add a survey
@@ -21,18 +21,58 @@ already exists.
 4. `reorder_questions` if the order needs changing later. It takes every active question of the
    survey exactly once.
 
+## What to ask the operator, and what not to
+
+**Only the wording has to come from them.** The schema marks three fields required —
+`surveyId`, `questionType` and `text` — and everything else has a default or follows from the
+type. Do not ask about an optional field unless the operator raises it.
+
+| Field | Where it comes from |
+|---|---|
+| `text` | the operator; nothing else can supply it |
+| `questionType` | the shape of the answer being collected — infer it |
+| `options` | the operator, and only for `radio`, `checkbox`, `dropdown` |
+| `required` | defaults to true |
+| `points` | defaults to 10, which is what every existing question uses |
+| `displayOrder` | automatic; the question is appended last |
+| `description`, `placeholder` | omit unless asked for |
+| `hierarchyLevel` | only in a location survey, and only if the operator is building a hierarchy |
+
+A plain text question is one call with nothing but the wording:
+
+```json
+{"surveyId": "…", "questionType": "input",
+ "text": [{"locale": "es", "value": "¿En qué barrio vivís?"}]}
+```
+
 ## Question types
 
-| Type | Options | Rules |
+| Type | Options | Rules it accepts |
 |---|---|---|
-| `radio`, `checkbox`, `dropdown` | required | `checkbox` takes selection rules; `radio` and `dropdown` take none |
-| `input` | none | text rules: `min_length`, `max_length`, `pattern`, `email`, `url` |
-| `rating` | none | integer range: `min`, `max` |
-| `numeric` | none | numeric range |
-| `date` | none | date range |
+| `radio`, `dropdown` | required | none |
+| `checkbox` | required | `min_selections`, `max_selections` |
+| `input` | none | `min_length`, `max_length`, `pattern`, `email`, `url` |
+| `rating` | none | `min`, `max` — whole numbers |
+| `numeric` | none | `min`, `max` — numbers |
+| `date` | none | `min`, `max` — ISO dates, `yyyy-mm-dd` |
 
-A rule that does not match its question type is refused at the write. That check exists because the
-read path drops such a rule silently: it would sit in the table and never apply.
+## Validation rules
+
+Rules are named, not written as JSON. Give a `kind` and a `value`; the server builds the stored
+config, so its shape is always the one the portal can read.
+
+```json
+"rules": [{"kind": "min_length", "value": "3"},
+          {"kind": "pattern", "value": "^[A-Z].*"}]
+```
+
+`email` and `url` take no value. Everything else does, as text — the server parses it and rejects a
+`min_length` of `"abc"` or a date `min` that is not `yyyy-mm-dd`.
+
+Pairing a rule with a type that does not accept it is refused at the write, naming both. That check
+is the only thing standing between a wrong rule and silence: the read path decodes rules with
+`decode(config).toOption` and flat-maps, so one it cannot read is dropped at runtime with no error
+anywhere.
 
 ## Texts are per locale, and nothing audits them
 
