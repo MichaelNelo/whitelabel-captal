@@ -108,25 +108,39 @@ object SurveyToolsSpec extends ZIOSpecDefault:
     .Json
     .Obj(Chunk("text" -> textArr("en", label)))
 
-  /** Every field spelled out: the input schema has no optional fields, so a partial object would be
-    * rejected by the decoder rather than by the validation under test.
+  private def ruleJson(kind: String, value: Option[String] = None) = zio
+    .json
+    .ast
+    .Json
+    .Obj(Chunk("kind" -> str(kind)) ++ value.fold(Chunk.empty)(v => Chunk("value" -> str(v))))
+
+  /** Only the three fields the schema actually requires. Everything else is optional now, which is
+    * the point: an agent adding a plain text question supplies the wording and nothing else.
     */
   private def questionJson(
       surveyId: String,
       questionType: String,
       options: Chunk[zio.json.ast.Json] = Chunk.empty,
-      rules: Chunk[zio.json.ast.Json] = Chunk.empty) = json(
-    "surveyId"       -> str(surveyId),
-    "questionType"   -> str(questionType),
-    "text"           -> textArr("en", "A question"),
-    "description"    -> zio.json.ast.Json.Arr(Chunk.empty),
-    "placeholder"    -> zio.json.ast.Json.Arr(Chunk.empty),
-    "options"        -> zio.json.ast.Json.Arr(options),
-    "rules"          -> zio.json.ast.Json.Arr(rules),
-    "required"       -> zio.json.ast.Json.Bool(true),
-    "points"         -> zio.json.ast.Json.Num(10),
-    "hierarchyLevel" -> zio.json.ast.Json.Null
-  )
+      rules: Chunk[zio.json.ast.Json] = Chunk.empty) =
+    val base = Chunk(
+      "surveyId"     -> str(surveyId),
+      "questionType" -> str(questionType),
+      "text"         -> textArr("en", "A question"))
+    val extras =
+      (
+        if options.isEmpty then
+          Chunk.empty
+        else
+          Chunk("options" -> zio.json.ast.Json.Arr(options))
+      ) ++ (
+        if rules.isEmpty then
+          Chunk.empty
+        else
+          Chunk("rules" -> zio.json.ast.Json.Arr(rules))
+      )
+    Some(zio.json.ast.Json.Obj(base ++ extras))
+  end questionJson
+
   private val quillLayer =
     RqliteDataSource.layer >>> Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)
 
@@ -250,10 +264,10 @@ object SurveyToolsSpec extends ZIOSpecDefault:
               questionJson(
                 fixture.surveyId,
                 "input",
-                rules = Chunk(str("""{"type":"min_selections","value":2}"""))))
+                rules = Chunk(ruleJson("min_selections", Some("2")))))
         yield assertTrue(
           result.isError.contains(true),
-          textOf(result).contains("not a valid text rule"))
+          textOf(result).contains("does not accept a min_selections rule"))
       ,
       test("a matching rule is accepted"):
         for
@@ -264,7 +278,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
               questionJson(
                 fixture.surveyId,
                 "input",
-                rules = Chunk(str("""{"type":"min_length","value":3}"""))))
+                rules = Chunk(ruleJson("min_length", Some("3")))))
         yield assertTrue(!result.isError.contains(true))
       ,
       test("a radio question with no options is refused"):
@@ -286,25 +300,13 @@ object SurveyToolsSpec extends ZIOSpecDefault:
       test("a second active survey of the same category is refused"):
         for
           _      <- seed
-          result <- SurveyTools
-            .createSurvey
-            .call(
-              json(
-                "category" -> str("profiling"),
-                "name"     -> zio.json.ast.Json.Null,
-                "videoId"  -> zio.json.ast.Json.Null))
+          result <- SurveyTools.createSurvey.call(json("category" -> str("profiling")))
         yield assertTrue(result.isError.contains(true), textOf(result).contains("already exists"))
       ,
       test("an advertiser survey without a video is refused"):
         for
           _      <- seed
-          result <- SurveyTools
-            .createSurvey
-            .call(
-              json(
-                "category" -> str("advertiser"),
-                "name"     -> zio.json.ast.Json.Null,
-                "videoId"  -> zio.json.ast.Json.Null))
+          result <- SurveyTools.createSurvey.call(json("category" -> str("advertiser")))
         yield assertTrue(
           result.isError.contains(true),
           textOf(result).contains("needs the videoId"))
@@ -316,11 +318,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           _      <- seed
           result <- SurveyTools
             .createSurvey
-            .call(
-              json(
-                "category" -> str("advertiser"),
-                "name"     -> zio.json.ast.Json.Null,
-                "videoId"  -> str("no-such-video")))
+            .call(json("category" -> str("advertiser"), "videoId" -> str("no-such-video")))
         yield assertTrue(result.isError.contains(true), textOf(result).contains("No video with id"))
     ).provideShared(quillLayer, ZLayer.fromZIO(migrate.unit)) @@ TestAspect.sequential
 end SurveyToolsSpec
