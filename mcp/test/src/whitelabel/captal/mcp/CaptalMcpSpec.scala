@@ -92,7 +92,7 @@ object CaptalMcpSpec extends ZIOSpecDefault:
         test("the three i18n tools are registered with stable names"):
           assertTrue(
             I18nTools.all.map(_.name.value).sorted ==
-              List("i18n_status", "remove_translation", "set_translations"))
+              List("get_i18n_status", "remove_translation", "set_translations"))
         ,
         test("every tool carries a description and an object input schema"):
           val defs = I18nTools.all.map(_.definition)

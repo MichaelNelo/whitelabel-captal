@@ -124,7 +124,7 @@ object I18nTools:
     yield ()
     end for
 
-  val status: McpToolHandlerR[QuillSqlite] = McpTool("i18n_status")
+  val status: McpToolHandlerR[QuillSqlite] = McpTool("get_i18n_status")
     .description(
       "Translation coverage for a location: which required keys each locale is missing, and which stored keys are not part of the schema. Covers the portal interface only, not survey question wording. See skill://edit-i18n/SKILL.md.")
     .handle: (in: I18nStatusIn) =>
