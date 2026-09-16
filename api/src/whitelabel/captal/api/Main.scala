@@ -81,6 +81,11 @@ object Main extends ZIOAppDefault:
   private val nextAfterAdvertiserSurvey: NextStep = NextStep(Phase.Ready)
 
   private val fallbackFromIdentification: FallbackPhase = FallbackPhase(Phase.AdvertiserVideo)
+
+  /** No user and no identification survey means the deployment cannot identify anyone. Sending the
+    * visitor on to the video would hand out access for nothing, so the flow ends here instead.
+    */
+  private val unidentifiableFallback: FallbackPhase = FallbackPhase(Phase.Ready)
   private val fallbackFromVideo: FallbackPhase = FallbackPhase(Phase.Ready)
   private val fallbackFromAdvertiserSurvey: FallbackPhase = FallbackPhase(Phase.Ready)
 
@@ -184,7 +189,11 @@ object Main extends ZIOAppDefault:
         userRepo: UserRepository[Task],
         eventHandler: EventHandler[Task, Event]) =>
       Flow(
-        ProvideNextIdentificationSurveyHandler(surveyRepo, userRepo, fallbackFromIdentification),
+        ProvideNextIdentificationSurveyHandler(
+          surveyRepo,
+          userRepo,
+          fallbackFromIdentification,
+          unidentifiableFallback),
         eventHandler)
 
   private val nextVideoFlowLayer: ZLayer[

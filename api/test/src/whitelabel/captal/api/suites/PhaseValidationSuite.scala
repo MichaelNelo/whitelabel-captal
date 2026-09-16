@@ -265,5 +265,31 @@ object PhaseValidationSuite:
             finishResp.body.contains("wrong_phase"),
             finishResp.body.contains("Authorized")
           )
+        ,
+        test(
+          "with no identification survey, an unidentified visitor ends at Ready, not at a video"):
+          // The flow trades access for data. With nothing able to identify the visitor, carrying on
+          // to the advertiser video would hand out the access and collect nothing — and the session
+          // would reach it with user_id still NULL, since only UserCreated ever sets it.
+          //
+          // Retiring the last active email question is now a single call, so this is reachable by
+          // an operator, not just by a misprovisioned deployment.
+          for
+            advertiser <- TestFixtures.seedAdvertiserWithVideoAndSurvey(questionCount = 1)
+            backend    <- testBackend
+            cookie     <- createSession(backend)
+            nextResp   <- getNextSurvey(backend, cookie)
+            dbState    <- TestFixtures.queryDbState
+          yield assertTrue(
+            nextResp.code.isSuccess,
+            // No survey to serve: a step, not a question.
+            parseNextSurvey(nextResp.body).isEmpty,
+            nextResp.body.contains("\"phase\":\"ready\""),
+            !nextResp.body.contains("advertiser_video"),
+            dbState.sessions.exists(_.phase == Phase.Ready),
+            // And crucially, no video was assigned on the way.
+            dbState.sessions.forall(_.currentVideoId.isEmpty),
+            advertiser.questionIds.nonEmpty
+          )
       )
 end PhaseValidationSuite

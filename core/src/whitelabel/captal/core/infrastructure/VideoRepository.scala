@@ -5,6 +5,8 @@ import whitelabel.captal.core.{user, video}
 
 trait VideoRepository[F[_]]:
   def findById(id: video.Id): F[Option[video.AdvertiserVideo]]
-  def findNextForUser(
-      userId: Option[user.Id],
-      lastPromoVideoId: Option[video.Id]): F[Option[VideoToWatch]]
+
+  /** The visitor is identified by construction: reaching the video phase without a user is a broken
+    * invariant, not a case to serve. Callers that have no user must not ask.
+    */
+  def findNextForUser(userId: user.Id, lastPromoVideoId: Option[video.Id]): F[Option[VideoToWatch]]
