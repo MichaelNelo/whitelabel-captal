@@ -30,10 +30,22 @@ object NextIdentificationSurvey:
 object ProvideNextIdentificationSurveyHandler:
   type Response = NextIdentificationSurvey | NextStep
 
+  /** @param exhausted
+    *   where an identified visitor goes once the identification pool has nothing left to ask. The
+    *   normal end of this phase.
+    * @param unidentifiable
+    *   where a visitor goes when there is nobody to identify them with — no user yet and no active
+    *   identification survey to offer. Distinct from [[exhausted]] on purpose: sending them onward
+    *   through the flow would grant access in exchange for nothing, which is the business model
+    *   backwards. It means the deployment is misconfigured, and the only safe destination is the
+    *   end of the flow.
+    */
   def apply[F[_]: Monad](
       surveyRepo: SurveyRepository[F],
       userRepo: UserRepository[F],
-      fallback: FallbackPhase): Handler.Aux[F, ProvideNextIdentificationSurveyCommand, Response] =
+      exhausted: FallbackPhase,
+      unidentifiable: FallbackPhase)
+      : Handler.Aux[F, ProvideNextIdentificationSurveyCommand, Response] =
     new Handler[F, ProvideNextIdentificationSurveyCommand]:
       type Result = Response
 
@@ -55,18 +67,18 @@ object ProvideNextIdentificationSurveyHandler:
             createGuest(None, cmd.occurredAt)
               .convertEvent
               .convertError
-              .as(NextStep(fallback.phase): Response)
+              .as(NextStep(unidentifiable.phase): Response)
           case (Some(existingUser), Some(next)) =>
             val nextQuestion = Some(FullyQualifiedQuestionId(next.surveyId, next.question.id))
             existingUser
-              .assignSurvey(nextQuestion, fallback.phase, cmd.occurredAt)
+              .assignSurvey(nextQuestion, exhausted.phase, cmd.occurredAt)
               .convertEvent
               .convertError
               .as(next: Response)
           case (Some(existingUser), None) =>
             existingUser
-              .assignSurvey(None, fallback.phase, cmd.occurredAt)
+              .assignSurvey(None, exhausted.phase, cmd.occurredAt)
               .convertEvent
               .convertError
-              .as(NextStep(fallback.phase): Response)
+              .as(NextStep(exhausted.phase): Response)
 end ProvideNextIdentificationSurveyHandler

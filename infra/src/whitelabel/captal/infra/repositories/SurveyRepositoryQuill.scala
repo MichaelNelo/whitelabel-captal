@@ -273,13 +273,28 @@ object SurveyRepositoryQuill:
                   .flatMap(_.headOption.fold(ZIO.none)(fetchQuestionDetails))
                   .orDie
               case None =>
-                run(firstEmailSurveyQuery.take(1))
-                  .flatMap(_.headOption.fold(ZIO.none)(fetchQuestionDetails))
-                  .orDie
+                firstEmailSurvey
           case None =>
-            run(firstEmailSurveyQuery.take(1))
-              .flatMap(_.headOption.fold(ZIO.none)(fetchQuestionDetails))
-              .orDie
+            firstEmailSurvey
+
+      /** The visitor has no user yet, so this is the only thing that can identify them.
+        *
+        * Finding nothing means the deployment has no active email survey, and the flow ends at
+        * Ready rather than handing out access for nothing. That is a misconfiguration, not a
+        * visitor state: log it, because from the outside it looks like the portal working.
+        */
+      private def firstEmailSurvey: Task[Option[NextIdentificationSurvey]] = run(
+        firstEmailSurveyQuery.take(1))
+        .orDie
+        .flatMap: rows =>
+          rows.headOption match
+            case Some(row) =>
+              fetchQuestionDetails(row).orDie
+            case None =>
+              ZIO
+                .logWarning(
+                  "No active email survey: an unidentified visitor cannot be identified, so the flow ends at Ready without granting access. Check list_surveys — the email survey or its questions may have been retired.")
+                .as(None)
 
       private def fetchQuestionDetails(
           row: NextIdentificationSurveyRow): Task[Option[NextIdentificationSurvey]] =

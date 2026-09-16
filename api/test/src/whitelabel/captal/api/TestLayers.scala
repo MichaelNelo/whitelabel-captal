@@ -130,7 +130,11 @@ object TestLayers:
         userRepo: UserRepository[Task],
         eventHandler: EventHandler[Task, Event]) =>
       Flow(
-        ProvideNextIdentificationSurveyHandler(surveyRepo, userRepo, fallbackFromIdentification),
+        ProvideNextIdentificationSurveyHandler(
+          surveyRepo,
+          userRepo,
+          fallbackFromIdentification,
+          FallbackPhase(Phase.Ready)),
         eventHandler)
 
   private val nextVideoFlowLayer: ZLayer[
