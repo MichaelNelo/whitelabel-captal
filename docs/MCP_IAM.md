@@ -18,7 +18,7 @@ this document as part of the change rather than as follow-up.
     {
       "Sid": "LocationAssets",
       "Effect": "Allow",
-      "Action": ["s3:PutObject", "s3:GetObject"],
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:HeadObject"],
       "Resource": "arn:aws:s3:::<assets-bucket>/*"
     },
     {
@@ -37,7 +37,9 @@ this document as part of the change rather than as follow-up.
 |---|---|---|
 | `s3:PutObject` | `set_location_styles`, `set_location_icon` | Writes `<slug>/custom-styles.css.gz` and `<slug>/brand-icon.svg` |
 | `s3:GetObject` | `get_location_styles`, `get_location_icon` | Reads them back so an edit starts from what is deployed |
-| `cloudfront:CreateInvalidation` | both writes | Without it the edge serves the previous file until the cache expires, and the write looks applied while being invisible |
+| `s3:PutObject` (presigned) | `create_advertiser_video` | The signature is issued by this role, so it must itself be allowed to write the key. The bytes go browser-to-S3 and never reach this server |
+| `s3:HeadObject` | `confirm_video_upload` | Separates a finished upload from an abandoned one. The video row is written before the file exists, and stays inactive until this finds it |
+| `cloudfront:CreateInvalidation` | both asset writes | Without it the edge serves the previous file until the cache expires, and the write looks applied while being invisible |
 
 `s3:ListBucket` is deliberately absent. Nothing enumerates the bucket — every key is derived from a
 slug the database already confirmed — and leaving it out means a bug in key construction fails
@@ -49,6 +51,7 @@ loudly on a missing object rather than quietly finding a neighbour's.
 |---|---|
 | `ASSETS_BUCKET` | Bucket holding the per-location assets |
 | `CLOUDFRONT_DISTRIBUTION_ID` | Distribution to invalidate |
+| `PUBLIC_BASE_URL` | Origin the portal serves assets from; stored in each video row as its playable URL |
 | `DB_URL` | rqlite endpoint |
 | `MCP_TOKENS` | Operator tokens, `secret\|name\|scope,scope;…` |
 | `MCP_RESOURCE_URI` | The URI this deployment declares itself to be, for RFC 8707 audience binding |
@@ -67,5 +70,3 @@ scopes. Recorded here as they are built, not before:
   group, listener rule), CloudWatch Logs (create log group), S3 (bundle sync), CloudFront
   (invalidation)
 - **`deprovision_location`** — the delete counterpart of each of the above
-- **Video uploads** — `s3:PutObject` under the same bucket, already covered, plus whatever the
-  presigned-URL flow needs if it is issued server-side

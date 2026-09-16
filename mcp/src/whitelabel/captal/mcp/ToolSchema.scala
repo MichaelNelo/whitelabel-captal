@@ -25,6 +25,17 @@ object ToolSchema:
         override def callWithContext(args: Option[Json.Obj], ctx: McpToolContext) = handler
           .callWithContext(args, ctx)
 
+    /** Sets `_meta` on the tool definition. The builder does not expose it, but `McpToolHandlerR`
+      * is a plain trait with an override-able `definition`, so a decorator reaches it without
+      * forking the library — and keeps the typed derivation, including the MRTR signal the SDK
+      * re-throws from `handleWithContext`.
+      */
+    def withMeta(meta: Json.Obj): McpToolHandlerR[R] = withDefinition(_.copy(meta = Some(meta)))
+
+    /** Points the tool at an MCP App. The host reads the `ui://` resource and renders it. */
+    def withUi(resourceUri: String): McpToolHandlerR[R] = withMeta(
+      Json.Obj(Chunk("ui" -> Json.Obj(Chunk("resourceUri" -> Json.Str(resourceUri))))))
+
     /** Adds `discriminator: <caseId>` as a required const to every variant of the `oneOf` under
       * `properties.<field>`. The variants come out in declaration order, so `caseIds` is zipped
       * positionally against them.

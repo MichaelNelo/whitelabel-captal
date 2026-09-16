@@ -13,9 +13,12 @@ import software.amazon.awssdk.services.cloudfront.model.{
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.{
   GetObjectRequest,
+  HeadObjectRequest,
   NoSuchKeyException,
   PutObjectRequest
 }
+import software.amazon.awssdk.services.s3.presigner.S3Presigner
+import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest
 import zio.*
 
 /** One asset a location can override, and how it has to be stored.
@@ -37,8 +40,10 @@ enum Asset(val fileName: String, val contentType: String, val gzipped: Boolean):
 final case class AssetStore(
     bucket: String,
     distributionId: String,
+    publicBaseUrl: String,
     s3: S3Client,
-    cdn: CloudFrontClient):
+    cdn: CloudFrontClient,
+    presigner: S3Presigner):
 
   /** The key the SPA asks for. Its `index.html` is served from under the slug and references these
     * by relative name, so each object has to sit beside it under the same prefix.
@@ -111,6 +116,62 @@ final case class AssetStore(
         .id()
     .mapError(e => s"Wrote ${asset.fileName} but could not invalidate the CDN: ${e.getMessage}")
 
+  /** What the SPA fetches. The row stores this rather than the key, because the player needs a URL
+    * and the portal has no way to turn a bucket key into one.
+    */
+  def publicUrl(key: String): String = s"${publicBaseUrl.stripSuffix("/")}/$key"
+
+  /** The key behind a stored URL.
+    *
+    * Taken from the URI path rather than by stripping the configured base, so a row written when
+    * the portal lived on a different domain still resolves.
+    */
+  def keyOf(url: String): String = scala
+    .util
+    .Try(java.net.URI.create(url).getPath.stripPrefix("/"))
+    .getOrElse(url)
+
+  /** A URL the browser can PUT the video to directly.
+    *
+    * Presigned rather than proxied: the bytes never pass through this server, which has neither the
+    * memory budget nor a reason to see them. The signature carries the content type, so the upload
+    * has to send the same one or S3 rejects it — that is what keeps a caller from storing something
+    * else under a key the portal will serve as video.
+    */
+  def presignPut(key: String, contentType: String, validFor: Duration): ZIO[Any, String, String] =
+    ZIO
+      .attemptBlocking:
+        val request = PutObjectRequest
+          .builder()
+          .bucket(bucket)
+          .key(key)
+          .contentType(contentType)
+          .build()
+        presigner
+          .presignPutObject(
+            PutObjectPresignRequest
+              .builder()
+              .signatureDuration(java.time.Duration.ofSeconds(validFor.toSeconds))
+              .putObjectRequest(request)
+              .build())
+          .url()
+          .toString
+      .mapError(e => s"Could not presign an upload for $key: ${e.getMessage}")
+
+  /** Whether the object is actually there.
+    *
+    * The video row is written before the upload, so this is what separates "the operator finished"
+    * from "the operator walked away" — and it is why the row starts inactive.
+    */
+  def exists(key: String): ZIO[Any, String, Boolean] = ZIO
+    .attemptBlocking:
+      s3.headObject(HeadObjectRequest.builder().bucket(bucket).key(key).build())
+      true
+    .catchSome { case _: NoSuchKeyException =>
+      ZIO.succeed(false)
+    }
+    .mapError(e => s"Could not check $key: ${e.getMessage}")
+
   private def gzip(bytes: Array[Byte]): Array[Byte] =
     val out = new ByteArrayOutputStream()
     val gz = new GZIPOutputStream(out)
@@ -130,11 +191,14 @@ object AssetStore:
     */
   val layer: ZLayer[Any, Throwable, AssetStore] = ZLayer.scoped:
     for
-      bucket       <- required("ASSETS_BUCKET")
-      distribution <- required("CLOUDFRONT_DISTRIBUTION_ID")
+      bucket        <- required("ASSETS_BUCKET")
+      distribution  <- required("CLOUDFRONT_DISTRIBUTION_ID")
+      publicBaseUrl <- required("PUBLIC_BASE_URL")
       s3  <- ZIO.acquireRelease(ZIO.attempt(S3Client.create()))(c => ZIO.succeed(c.close()))
       cdn <- ZIO.acquireRelease(ZIO.attempt(CloudFrontClient.create()))(c => ZIO.succeed(c.close()))
-    yield AssetStore(bucket, distribution, s3, cdn)
+      presigner <-
+        ZIO.acquireRelease(ZIO.attempt(S3Presigner.create()))(p => ZIO.succeed(p.close()))
+    yield AssetStore(bucket, distribution, publicBaseUrl, s3, cdn, presigner)
 
   private def required(name: String): ZIO[Any, Throwable, String] = System
     .env(name)

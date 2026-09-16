@@ -370,7 +370,9 @@ object cli extends BaseModule:
     mvn"software.amazon.awssdk:elasticloadbalancingv2:2.29.51",
     mvn"software.amazon.awssdk:ecr:2.29.51",
     mvn"software.amazon.awssdk:cloudfront:2.29.51",
+    mvn"com.lihaoyi::scalatags:0.13.1",
     mvn"software.amazon.awssdk:cloudwatchlogs:2.29.51",
+    mvn"com.lihaoyi::scalatags:0.13.1",
     mvn"org.slf4j:slf4j-nop:1.7.36")
   def mainClass = Some("whitelabel.captal.cli.Main")
 
@@ -589,6 +591,7 @@ object mcp extends BaseModule:
     mvn"com.jamesward::zio-http-mcp:0.5.0",
     mvn"software.amazon.awssdk:s3:2.29.51",
     mvn"software.amazon.awssdk:cloudfront:2.29.51",
+    mvn"com.lihaoyi::scalatags:0.13.1",
     mvn"org.slf4j:slf4j-nop:1.7.36")
 
   /** Declared as a Task.Source so Mill both permits the read and reinvalidates the copy whenever a

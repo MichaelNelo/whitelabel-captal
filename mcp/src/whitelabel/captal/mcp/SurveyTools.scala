@@ -583,6 +583,99 @@ object SurveyTools:
         yield CreateSurveyOut(id.asString, category)
         end for
 
+  /** Writes one question with its texts, options and rules.
+    *
+    * Extracted so `create_advertiser_video` can build a video's survey in the same call that
+    * registers the video, rather than leaving the operator to add questions afterwards — which is
+    * the state `captal video add` left behind, with "TODO" standing in for the wording.
+    *
+    * Takes `displayOrder` rather than computing it: a caller writing several questions in one go
+    * knows the order it wants and should not have to re-read the table between each.
+    */
+  private[mcp] def writeQuestion(
+      surveyId: survey.Id,
+      surveyCategory: String,
+      text: List[TextIn],
+      spec: QuestionSpec,
+      descriptions: List[TextIn],
+      placeholders: List[TextIn],
+      required: Boolean,
+      points: Int,
+      hierarchyLevel: Option[Hierarchy],
+      displayOrder: Int,
+      now: String): ZIO[QuillSqlite, String, CreateQuestionOut] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
+      import quill.*
+      val (questionType, options, ruleSpecs) = flatten(spec)
+      for
+        _ <-
+          ZIO.when(text.isEmpty)(
+            ZIO.fail("A question needs text in at least one locale, or it cannot be rendered."))
+        _ <- validateTexts(text, "text")
+        _ <- validateTexts(descriptions, "description")
+        _ <- validateTexts(placeholders, "placeholder")
+        // Whether a type takes options is structural; that it takes at least one is not.
+        _ <-
+          ZIO.when(
+            options.isEmpty && (
+              questionType == "radio" || questionType == "checkbox" || questionType == "dropdown"
+            ))(ZIO.fail(s"A $questionType question needs at least one option."))
+        _ <-
+          ZIO.foreachDiscard(options.zipWithIndex): (o, i) =>
+            ZIO.when(o.text.isEmpty)(ZIO.fail(s"Option ${i + 1} has no text.")) *>
+              validateTexts(o.text, s"option ${i + 1}")
+        ruleConfigs <-
+          ZIO.foreach(ruleSpecs): (kind, value) =>
+            ZIO.fromEither(ruleConfig(questionType, kind, value))
+        _ <-
+          ZIO.when(hierarchyLevel.isDefined && surveyCategory != "location")(
+            ZIO.fail("hierarchyLevel only applies to questions in a location survey."))
+        _ <- ZIO.when(points < 0)(ZIO.fail(s"Points must not be negative, got $points."))
+        questionId = survey.question.Id.generate
+        affected <-
+          run(
+            query[QuestionRow].insertValue(
+              lift(
+                QuestionRow(
+                  questionId,
+                  surveyId,
+                  questionType,
+                  points,
+                  displayOrder,
+                  hierarchyLevel.map(_.toString),
+                  if required then
+                    1
+                  else
+                    0
+                  ,
+                  now,
+                  1)))).orDie
+        _ <- Writes.expectOne(affected, s"Creating question in survey '${surveyId.asString}'")
+        _ <- writeTexts(questionId.asString, text, now)
+        _ <- writeTexts(s"${questionId.asString}_desc", descriptions, now)
+        _ <- writeTexts(s"${questionId.asString}_placeholder", placeholders, now)
+        optionIds <-
+          ZIO.foreach(options.zipWithIndex): (o, i) =>
+            val optionId = survey.question.OptionId.generate
+            for
+              written <-
+                run(
+                  query[QuestionOptionRow].insertValue(
+                    lift(QuestionOptionRow(optionId, questionId, i + 1, None, 1)))).orDie
+              _ <- Writes.expectOne(written, s"Creating option ${i + 1}")
+              _ <- writeTexts(optionId.asString, o.text, now)
+            yield optionId.asString
+        _ <-
+          ZIO.foreachDiscard(ruleConfigs): config =>
+            run(
+              query[QuestionRuleRow].insertValue(
+                lift(
+                  QuestionRuleRow(UUID.randomUUID.toString, questionId, questionType, config, 1))))
+              .orDie
+              .flatMap(Writes.expectOne(_, s"Creating rule $config"))
+      yield CreateQuestionOut(questionId.asString, displayOrder, optionIds)
+      end for
+
   val createQuestion: McpToolHandlerR[QuillSqlite] = McpTool("create_question")
     .description(
       "Add a question to a survey. Appended last; use reorder_questions to move it. Only the wording has to come from the operator — the question shape carries what varies by type, and everything else has a default. Read skill://add-survey/SKILL.md for the locale constraints, which the schema cannot express.")
@@ -590,89 +683,27 @@ object SurveyTools:
     .handle: (in: CreateQuestionIn) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
-        val (questionType, options, ruleSpecs) = flatten(in.question)
-        val descriptions = in.description.getOrElse(Nil)
-        val placeholders = in.placeholder.getOrElse(Nil)
-        val isRequired = in.required.getOrElse(true)
-        val points = in.points.getOrElse(10)
         for
           surveys <- run(query[SurveyRow]).orDie
           survey_ <- ZIO
             .succeed(surveys.find(_.id.asString == in.surveyId))
             .someOrFail(
               s"No survey with id '${in.surveyId}'. Call list_surveys to see what exists.")
-          _ <-
-            ZIO.when(in.text.isEmpty)(
-              ZIO.fail("A question needs text in at least one locale, or it cannot be rendered."))
-          _ <- validateTexts(in.text, "text")
-          _ <- validateTexts(descriptions, "description")
-          _ <- validateTexts(placeholders, "placeholder")
-          // Whether a type takes options is structural now; that it takes at least one is not.
-          _ <-
-            ZIO.when(
-              options.isEmpty && (
-                questionType == "radio" || questionType == "checkbox" || questionType == "dropdown"
-              ))(ZIO.fail(s"A $questionType question needs at least one option."))
-          _ <-
-            ZIO.foreachDiscard(options.zipWithIndex): (o, i) =>
-              ZIO.when(o.text.isEmpty)(ZIO.fail(s"Option ${i + 1} has no text.")) *>
-                validateTexts(o.text, s"option ${i + 1}")
-          ruleConfigs <-
-            ZIO.foreach(ruleSpecs): (kind, value) =>
-              ZIO.fromEither(ruleConfig(questionType, kind, value))
-          _ <-
-            ZIO.when(in.hierarchyLevel.isDefined && survey_.category != "location")(
-              ZIO.fail("hierarchyLevel only applies to questions in a location survey."))
-          _        <- ZIO.when(points < 0)(ZIO.fail(s"Points must not be negative, got $points."))
           siblings <- run(questionsOfQuery(lift(in.surveyId))).orDie
-          order      = siblings.map(_.displayOrder).maxOption.getOrElse(0) + 1
-          now        = java.time.Instant.now.toString
-          questionId = survey.question.Id.generate
-          affected <-
-            run(
-              query[QuestionRow].insertValue(
-                lift(
-                  QuestionRow(
-                    questionId,
-                    survey_.id,
-                    questionType,
-                    points,
-                    order,
-                    in.hierarchyLevel.map(_.toString),
-                    if isRequired then
-                      1
-                    else
-                      0
-                    ,
-                    now,
-                    1)))).orDie
-          _         <- Writes.expectOne(affected, s"Creating question in survey '${in.surveyId}'")
-          _         <- writeTexts(questionId.asString, in.text, now)
-          _         <- writeTexts(s"${questionId.asString}_desc", descriptions, now)
-          _         <- writeTexts(s"${questionId.asString}_placeholder", placeholders, now)
-          optionIds <-
-            ZIO.foreach(options.zipWithIndex): (o, i) =>
-              val optionId = survey.question.OptionId.generate
-              for
-                written <-
-                  run(
-                    query[QuestionOptionRow].insertValue(
-                      lift(QuestionOptionRow(optionId, questionId, i + 1, None, 1)))).orDie
-                _ <- Writes.expectOne(written, s"Creating option ${i + 1}")
-                _ <- writeTexts(optionId.asString, o.text, now)
-              yield optionId.asString
-          _ <-
-            ZIO.foreachDiscard(ruleConfigs): config =>
-              run(
-                query[QuestionRuleRow].insertValue(
-                  lift(
-                    QuestionRuleRow(
-                      UUID.randomUUID.toString,
-                      questionId,
-                      questionType,
-                      config,
-                      1)))).orDie.flatMap(Writes.expectOne(_, s"Creating rule $config"))
-        yield CreateQuestionOut(questionId.asString, order, optionIds)
+          written  <- writeQuestion(
+            surveyId = survey_.id,
+            surveyCategory = survey_.category,
+            text = in.text,
+            spec = in.question,
+            descriptions = in.description.getOrElse(Nil),
+            placeholders = in.placeholder.getOrElse(Nil),
+            required = in.required.getOrElse(true),
+            points = in.points.getOrElse(10),
+            hierarchyLevel = in.hierarchyLevel,
+            displayOrder = siblings.map(_.displayOrder).maxOption.getOrElse(0) + 1,
+            now = java.time.Instant.now.toString
+          )
+        yield written
         end for
     // JsonSchemaGen drops the discriminator, leaving a schema whose variants the decoder rejects.
     .withDiscriminator("question", "questionType", QuestionSpec.caseIds)
