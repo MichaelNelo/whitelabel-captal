@@ -151,6 +151,7 @@ object I18nTools:
   val setTranslations: McpToolHandlerR[QuillSqlite] = McpTool("set_translations")
     .description(
       "Create or update translations for one locale of a location. Keys must belong to the i18n schema; read i18n://required-keys for the list. Reports which keys are still missing afterwards.")
+    .requireScopes(Auth.I18nWrite)
     .handle: (in: SetTranslationsIn) =>
       val requiredSet = I18nSchema.keys[I18n].toSet
       val unknown = in.entries.map(_.key).filterNot(requiredSet.contains).distinct.sorted
@@ -171,6 +172,7 @@ object I18nTools:
   val removeTranslation: McpToolHandlerR[QuillSqlite] = McpTool("remove_translation")
     .description(
       "Retire one translation (soft delete). The portal will render the literal [key] for that locale until it is set again.")
+    .requireScopes(Auth.I18nWrite)
     .handle: (in: RemoveTranslationIn) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*

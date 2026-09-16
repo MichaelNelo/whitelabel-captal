@@ -195,6 +195,7 @@ object SurveyTools:
   val setQuestionActive: McpToolHandlerR[QuillSqlite] = McpTool("set_question_active")
     .description(
       "Retire a question or bring it back. Never deletes: answers reference questions, so a retired question keeps resolving for everything already recorded. Reports how many answers that is.")
+    .requireScopes(Auth.ContentWrite)
     .handle: (in: SetQuestionActiveIn) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
@@ -227,6 +228,7 @@ object SurveyTools:
   val reorder: McpToolHandlerR[QuillSqlite] = McpTool("reorder_questions")
     .description(
       "Set the order questions are asked in. Give every active question of the survey exactly once; display_order is rewritten to match the list.")
+    .requireScopes(Auth.ContentWrite)
     .handle: (in: ReorderIn) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
@@ -369,6 +371,7 @@ object SurveyTools:
   val createSurvey: McpToolHandlerR[QuillSqlite] = McpTool("create_survey")
     .description(
       "Create a survey. Category is one of email, profiling, location or advertiser. Advertiser surveys must name the video they follow; the others are picked by category during identification.")
+    .requireScopes(Auth.ContentWrite)
     .handle: (in: CreateSurveyIn) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
@@ -413,6 +416,7 @@ object SurveyTools:
   val createQuestion: McpToolHandlerR[QuillSqlite] = McpTool("create_question")
     .description(
       "Add a question to a survey, with its texts, options and validation rules. Appended last; use reorder_questions to move it. Choice questions (radio, checkbox, dropdown) require options; the others must not have any.")
+    .requireScopes(Auth.ContentWrite)
     .handle: (in: CreateQuestionIn) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*

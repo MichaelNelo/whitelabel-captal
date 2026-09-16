@@ -22,15 +22,32 @@ object Main extends ZIOAppDefault:
     .orDie
     .map(_.flatMap(_.toIntOption).getOrElse(DefaultPort))
 
+  /** Refuses to start without tokens rather than falling back to an open server.
+    *
+    * This server mutates production data. A missing environment variable is a deployment mistake,
+    * and the failure mode of guessing "open" would be silent and total.
+    */
+  private def operators: ZIO[Any, Throwable, List[(String, Auth.Operator)]] = System
+    .env("MCP_TOKENS")
+    .orDie
+    .someOrFail(
+      new IllegalStateException(
+        "MCP_TOKENS is not set. Expected secret|name|scope,scope entries separated by ';'. Scopes: i18n:write, content:write."))
+    .flatMap: spec =>
+      ZIO.fromEither(Auth.parse(spec)).mapError(new IllegalStateException(_))
+
   def run: ZIO[Any, Throwable, Unit] =
     for
-      p <- port
+      p        <- port
+      ops      <- operators
+      resource <- Auth.resourceUri
+      tools = I18nTools.all.size + AdvertiserTools.all.size + SurveyTools.all.size
       _ <- ZIO.logInfo(
-        s"MCP backoffice on :$p — ${Skills.all.size} skills, ${CaptalMcp
+        s"MCP backoffice on :$p as $resource — ${Skills.all.size} skills, ${CaptalMcp
             .resources
-            .size} resources, ${I18nTools.all.size} tools")
+            .size} resources, $tools tools, ${ops.size} operator(s)")
       _ <- Server
-        .serve(CaptalMcp.server().statelessRoutes)
+        .serve(CaptalMcp.server(Auth.mcpAuth(ops, resource)).statelessRoutes)
         .provide(
           Server.defaultWithPort(p),
           RqliteDataSource.layer,
