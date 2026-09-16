@@ -1,13 +1,13 @@
 package whitelabel.captal.api.suites
 
 import io.circe.parser.parse
-import whitelabel.captal.api.{TestFixtures, TestUnifiClient}
 import whitelabel.captal.api.TestHelpers.*
+import whitelabel.captal.api.{TestFixtures, TestUnifiClient}
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.user
 import whitelabel.captal.infra.session.JobRunner
-import zio.{Clock, ZIO, durationInt}
 import zio.test.*
+import zio.{Clock, ZIO, durationInt}
 
 object AuthorizedSuite:
   val suite: Spec[TestEnv, Throwable] =
