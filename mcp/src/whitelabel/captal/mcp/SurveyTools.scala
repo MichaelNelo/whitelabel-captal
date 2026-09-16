@@ -9,6 +9,7 @@ import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.given
 import whitelabel.captal.infra.{
+  AdvertiserVideoRow,
   AnswerRow,
   LocalizedTextRow,
   QuestionOptionRow,
@@ -96,6 +97,9 @@ object SurveyTools:
 
   private inline def answerCountQuery = quote: (questionIdParam: String) =>
     query[AnswerRow].filter(a => sql"${a.questionId}".as[String] == questionIdParam).size
+
+  private inline def videoByIdQuery = quote: (idParam: String) =>
+    query[AdvertiserVideoRow].filter(v => sql"${v.id}".as[String] == idParam)
 
   private inline def textsForQuery = quote: (entityIdParam: String) =>
     query[LocalizedTextRow].filter(t => t.entityId == entityIdParam && t.isActive == 1)
@@ -278,11 +282,10 @@ object SurveyTools:
   final case class TextIn(locale: String, value: String)
   final case class OptionIn(text: List[TextIn])
 
-  final case class CreateSurveyIn(
-      category: String,
-      name: Option[String],
-      videoId: Option[String],
-      locationId: Option[String])
+  /** No locationId: identification surveys are global, and an advertiser survey takes its location
+    * from the video it follows.
+    */
+  final case class CreateSurveyIn(category: String, name: Option[String], videoId: Option[String])
   final case class CreateSurveyOut(surveyId: String, category: String)
 
   final case class CreateQuestionIn(
@@ -370,7 +373,7 @@ object SurveyTools:
 
   val createSurvey: McpToolHandlerR[QuillSqlite] = McpTool("create_survey")
     .description(
-      "Create a survey. Category is one of email, profiling, location or advertiser. Advertiser surveys must name the video they follow; the others are picked by category during identification. Read skill://add-survey/SKILL.md first.")
+      "Create a survey. Category is one of email, profiling, location or advertiser. Advertiser surveys name the video they follow and inherit its location; identification surveys are global and are picked by category. Read skill://add-survey/SKILL.md first.")
     .requireScopes(Auth.ContentWrite)
     .handle: (in: CreateSurveyIn) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
@@ -389,25 +392,37 @@ object SurveyTools:
           _ <-
             ZIO.when(in.category != "advertiser" && in.videoId.isDefined)(
               ZIO.fail(s"Only advertiser surveys attach to a video; this one is '${in.category}'."))
+          // Verified rather than trusted: a survey pointing at a video that does not exist is
+          // reachable by nothing, and the foreign key will not say so.
+          video <-
+            ZIO.foreach(in.videoId): videoId =>
+              run(videoByIdQuery(lift(videoId)))
+                .orDie
+                .map(_.headOption)
+                .someOrFail(s"No video with id '$videoId'.")
+          // Taken from the video rather than asked for. Advertiser surveys are scoped to a location
+          // through their video — the selection filters videos by location and the survey follows —
+          // so a location_id of its own could only ever disagree with it.
+          locationId = video.flatMap(_.locationId)
           existing <- run(query[SurveyRow]).orDie
-          // Identification surveys are chosen by category alone, so a second active one of the same
-          // category makes which gets served depend on display_order across unrelated surveys.
+          // Identification surveys are chosen by category alone, with no location filter anywhere in
+          // SurveyRepositoryQuill, so a second active one of the same category makes which gets
+          // served depend on display_order across unrelated surveys.
           clashes = existing.filter(s =>
-            s.isActive == 1 && s.category == in.category && s.category != "advertiser" &&
-              s.locationId == in.locationId)
+            s.isActive == 1 && s.category == in.category && s.category != "advertiser")
           _ <-
             ZIO.when(clashes.nonEmpty)(
               ZIO.fail(
-                s"An active '${in.category}' survey already exists here (id ${clashes
+                s"An active '${in.category}' survey already exists (id ${clashes
                     .head
                     .id
-                    .asString}). Identification surveys are picked by category, so two would be ambiguous."))
+                    .asString}). Identification surveys are global and picked by category, so two would be ambiguous."))
           now = java.time.Instant.now.toString
           id  = survey.Id.generate
           affected <-
             run(
               query[SurveyRow].insertValue(
-                lift(SurveyRow(id, in.category, None, in.videoId, in.locationId, 1, now, in.name))))
+                lift(SurveyRow(id, in.category, None, in.videoId, locationId, 1, now, in.name))))
               .orDie
           _ <- Writes.expectOne(affected, s"Creating ${in.category} survey")
         yield CreateSurveyOut(id.asString, in.category)

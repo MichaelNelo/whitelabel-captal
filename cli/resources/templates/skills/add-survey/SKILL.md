@@ -14,8 +14,9 @@ already exists.
 1. `list_surveys` — see what is already there. Identification surveys are picked by category alone,
    so a second active survey of the same category is refused.
 2. `create_survey` — category is `email`, `profiling`, `location` or `advertiser`. An advertiser
-   survey must name the `videoId` of the video it follows; without it the survey exists but is
-   never reachable.
+   survey names the `videoId` of the video it follows and inherits that video's location; there is
+   no location to pass. The video is verified: naming one that does not exist is refused, since no
+   foreign key would catch it and the survey would simply be unreachable.
 3. `create_question` once per question, in the order you want them asked. Each is appended last.
 4. `reorder_questions` if the order needs changing later. It takes every active question of the
    survey exactly once.
@@ -35,12 +36,21 @@ read path drops such a rule silently: it would sit in the table and never apply.
 
 ## Texts are per locale, and nothing audits them
 
-Question and option texts are stored per locale. Give every locale the location serves, in one call:
+Every question and every option needs text in each locale that will see it. Give them all in one
+call:
 
 ```json
 "text": [{"locale": "es", "value": "¿Cuántos años tenés?"},
          {"locale": "en", "value": "How old are you?"}]
 ```
+
+**Which locales "each" means depends on the category:**
+
+- **Identification surveys are global.** `SurveyRepositoryQuill` picks them by category with no
+  location filter anywhere, so one profiling question is asked at every location. It needs every
+  locale any location serves, not just the one you had in mind.
+- **Advertiser surveys follow their video**, and videos are filtered by location, so those questions
+  only ever reach the locations running that video.
 
 **`i18n_status` will not tell you if you forget one.** It reports the portal's interface keys, which
 are a different category of text. A question with only English text does not render a placeholder —
