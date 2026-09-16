@@ -94,8 +94,8 @@ object CaptalMcp:
     val withResources =
       resources.foldLeft(McpServer(name, version).instructions(instructions).auth(auth))(
         _.resource(_))
-    val withData = (I18nTools.all ++ AdvertiserTools.all ++ SurveyTools.all).foldLeft[McpServer[
-      QuillSqlite]](withResources)(_.tool(_))
+    val withData = (LocationTools.all ++ I18nTools.all ++ AdvertiserTools.all ++ SurveyTools.all)
+      .foldLeft[McpServer[QuillSqlite]](withResources)(_.tool(_))
     val withAssets = (AssetTools.all ++ VideoTools.all).foldLeft[McpServer[
       QuillSqlite & AssetStore]](withData)(_.tool(_))
     // The upload page is served per video by a source rather than as a static resource: it is built
