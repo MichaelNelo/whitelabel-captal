@@ -89,7 +89,7 @@ object CaptalMcp:
   def server(
       auth: McpAuth[Any],
       name: String = "captal-backoffice",
-      version: String = "0.1.0"): McpServer[QuillSqlite] =
+      version: String = "0.1.0"): McpServer[QuillSqlite & AssetStore] =
     val withResources =
       resources.foldLeft(McpServer(name, version).instructions(instructions).auth(auth))(
         _.resource(_))

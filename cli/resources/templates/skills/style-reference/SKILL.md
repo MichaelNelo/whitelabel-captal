@@ -1,16 +1,24 @@
 ---
 name: style-reference
-description: Reference for the CSS variables, class hooks, and per-screen DOM structure that locations can override via `assets/styles.css`. Lists the theming API (recommended), the per-page class anatomy, and shared/state modifiers. Use when customizing branding, colors, typography, layout, or specific screens (welcome, question, video, video-survey, ready). Triggers on "custom styles", "branding", "theme", "css variables", "override styles", "style screen", "estilos", "marca", "colores", "personalizar pantalla".
-version: 1.1.0
+description: Reference for the CSS variables, class hooks, and per-screen DOM structure a location can override through set_location_styles. Lists the theming API (recommended), the per-page class anatomy, and shared/state modifiers. Use when customizing branding, colors, typography, layout, or specific screens (welcome, question, video, video-survey, ready). Triggers on "custom styles", "branding", "theme", "css variables", "override styles", "style screen", "estilos", "marca", "colores", "personalizar pantalla".
+version: 2.0.0
 ---
 
 # Style customization reference
 
-Each location can override the SPA's look with `locations/<slug>/assets/styles.css`. On `captal locations push <slug>` the file is gzipped and uploaded to `s3://<bucket>/<slug>/custom-styles.css.gz`. The SPA loads it via `<link rel="stylesheet" href="./custom-styles.css.gz" onerror="this.remove()">` AFTER the base stylesheet, so any selector/variable you define overrides the default by CSS cascade order.
+Each location can override the SPA's look with its own stylesheet, written through the backoffice:
 
-If the file is absent, `onerror="this.remove()"` swallows the 404 silently. You can ship a location without `styles.css` and the SPA will use defaults.
+1. `get_location_styles` — what is deployed today, or nothing when the location uses the base theme.
+2. `set_location_styles` — replaces it. **The whole file, not a patch**: read first when editing,
+   or the rest of the stylesheet is lost.
 
----
+The write also invalidates the CDN, so the change is visible immediately. The CLI never did that,
+which is why a rebrand pushed with `captal locations push` could appear to do nothing until the
+cache expired.
+
+The stylesheet is loaded AFTER the base one, so any selector or variable defined in it overrides
+the default by cascade order. A location without one is normal — the link element carries
+`onerror="this.remove()"`, so the missing file is swallowed and the base theme is used.
 
 ## Quick start: variables-only theming
 

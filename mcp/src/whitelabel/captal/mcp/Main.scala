@@ -41,7 +41,8 @@ object Main extends ZIOAppDefault:
       p        <- port
       ops      <- operators
       resource <- Auth.resourceUri
-      tools = I18nTools.all.size + AdvertiserTools.all.size + SurveyTools.all.size
+      tools =
+        I18nTools.all.size + AdvertiserTools.all.size + SurveyTools.all.size + StyleTools.all.size
       _ <- ZIO.logInfo(
         s"MCP backoffice on :$p as $resource — ${Skills.all.size} skills, ${CaptalMcp
             .resources
@@ -51,6 +52,7 @@ object Main extends ZIOAppDefault:
         .provide(
           Server.defaultWithPort(p),
           RqliteDataSource.layer,
+          AssetStore.layer,
           Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase))
     yield ()
 end Main
