@@ -1,7 +1,10 @@
 package whitelabel.captal.mcp
 
+import java.util.UUID
+
 import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
+import whitelabel.captal.core.survey
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.given
@@ -254,5 +257,260 @@ object SurveyTools:
         yield ReorderOut(in.surveyId, in.orderedQuestionIds)
         end for
 
-  val all: List[McpToolHandlerR[QuillSqlite]] = List(list, get, setQuestionActive, reorder)
+  // ───────────────────────────────────────────────────────────────────────────
+  // Creation
+  // ───────────────────────────────────────────────────────────────────────────
+
+  private val Categories = Set("email", "profiling", "location", "advertiser")
+  private val QuestionTypes = Set(
+    "radio",
+    "checkbox",
+    "dropdown",
+    "input",
+    "rating",
+    "numeric",
+    "date")
+  private val ChoiceTypes = Set("radio", "checkbox", "dropdown")
+  private val HierarchyLevels = Set("state", "city", "municipality", "urbanization")
+
+  final case class TextIn(locale: String, value: String)
+  final case class OptionIn(text: List[TextIn])
+
+  final case class CreateSurveyIn(
+      category: String,
+      name: Option[String],
+      videoId: Option[String],
+      locationId: Option[String])
+  final case class CreateSurveyOut(surveyId: String, category: String)
+
+  final case class CreateQuestionIn(
+      surveyId: String,
+      questionType: String,
+      text: List[TextIn],
+      description: List[TextIn],
+      placeholder: List[TextIn],
+      options: List[OptionIn],
+      rules: List[String],
+      required: Boolean,
+      points: Int,
+      hierarchyLevel: Option[String])
+  final case class CreateQuestionOut(questionId: String, displayOrder: Int, optionIds: List[String])
+
+  given Schema[TextIn] = DeriveSchema.gen
+  given Schema[OptionIn] = DeriveSchema.gen
+  given Schema[CreateSurveyIn] = DeriveSchema.gen
+  given Schema[CreateSurveyOut] = DeriveSchema.gen
+  given Schema[CreateQuestionIn] = DeriveSchema.gen
+  given Schema[CreateQuestionOut] = DeriveSchema.gen
+
+  /** Rejects a rule that would be stored and then never applied.
+    *
+    * `SurveyRepositoryQuill.decodeRules` does `decode[R](config).toOption` and flat-maps, so a rule
+    * whose JSON does not match the ADT implied by the question type disappears at runtime with no
+    * error anywhere. Validating here is the only point where that is visible.
+    */
+  private def validateRule(questionType: String, config: String): Either[String, Unit] =
+    import io.circe.parser.decode
+    import whitelabel.captal.core.survey.question.*
+    import whitelabel.captal.core.survey.question.codecs.given
+    def check[A: io.circe.Decoder](shape: String) = decode[A](config)
+      .left
+      .map(e =>
+        s"Rule $config is not a valid $shape rule for a $questionType question: ${e.getMessage}")
+      .map(_ => ())
+    questionType match
+      case "input" =>
+        check[TextRule]("text")
+      case "checkbox" =>
+        check[SelectionRule]("selection")
+      case "rating" =>
+        check[RangeRule[Int]]("integer range")
+      case "numeric" =>
+        check[RangeRule[BigDecimal]]("numeric range")
+      case "date" =>
+        check[RangeRule[java.time.LocalDate]]("date range")
+      case other =>
+        Left(
+          s"A $other question takes no validation rules; it would be stored and silently ignored.")
+  end validateRule
+
+  private def validateTexts(texts: List[TextIn], what: String): ZIO[Any, String, Unit] =
+    for
+      _ <-
+        ZIO.when(texts.exists(t => t.locale.isBlank || t.value.isBlank))(
+          ZIO.fail(s"$what has an entry with a blank locale or value."))
+      duplicates = texts.groupBy(_.locale).filter(_._2.size > 1).keys.toList.sorted
+      _ <-
+        ZIO.when(duplicates.nonEmpty)(
+          ZIO.fail(s"$what repeats the locale(s) ${duplicates.mkString(", ")}."))
+    yield ()
+
+  private def writeTexts(
+      entityId: String,
+      texts: List[TextIn],
+      now: String): ZIO[QuillSqlite, String, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.*
+    ZIO.foreachDiscard(texts): t =>
+      val row = LocalizedTextRow(
+        id = UUID.randomUUID.toString,
+        entityId = entityId,
+        locale = t.locale,
+        value = t.value,
+        category = "backend",
+        createdAt = now,
+        updatedAt = now,
+        locationId = None,
+        isActive = 1
+      )
+      run(query[LocalizedTextRow].insertValue(lift(row)))
+        .orDie
+        .flatMap(Writes.expectOne(_, s"Text for '$entityId' (${t.locale})"))
+
+  val createSurvey: McpToolHandlerR[QuillSqlite] = McpTool("create_survey")
+    .description(
+      "Create a survey. Category is one of email, profiling, location or advertiser. Advertiser surveys must name the video they follow; the others are picked by category during identification.")
+    .handle: (in: CreateSurveyIn) =>
+      ZIO.serviceWithZIO[QuillSqlite]: quill =>
+        import quill.*
+        for
+          _ <-
+            ZIO.when(!Categories.contains(in.category))(
+              ZIO.fail(
+                s"Category must be one of ${Categories.toList.sorted.mkString(", ")}, got '${in
+                    .category}'."))
+          // The video is what findNextAdvertiserSurvey matches on; without it the survey exists but
+          // is unreachable.
+          _ <-
+            ZIO.when(in.category == "advertiser" && in.videoId.isEmpty)(
+              ZIO.fail("An advertiser survey needs the videoId of the video it follows."))
+          _ <-
+            ZIO.when(in.category != "advertiser" && in.videoId.isDefined)(
+              ZIO.fail(s"Only advertiser surveys attach to a video; this one is '${in.category}'."))
+          existing <- run(query[SurveyRow]).orDie
+          // Identification surveys are chosen by category alone, so a second active one of the same
+          // category makes which gets served depend on display_order across unrelated surveys.
+          clashes = existing.filter(s =>
+            s.isActive == 1 && s.category == in.category && s.category != "advertiser" &&
+              s.locationId == in.locationId)
+          _ <-
+            ZIO.when(clashes.nonEmpty)(
+              ZIO.fail(
+                s"An active '${in.category}' survey already exists here (id ${clashes
+                    .head
+                    .id
+                    .asString}). Identification surveys are picked by category, so two would be ambiguous."))
+          now = java.time.Instant.now.toString
+          id  = survey.Id.generate
+          affected <-
+            run(
+              query[SurveyRow].insertValue(
+                lift(SurveyRow(id, in.category, None, in.videoId, in.locationId, 1, now, in.name))))
+              .orDie
+          _ <- Writes.expectOne(affected, s"Creating ${in.category} survey")
+        yield CreateSurveyOut(id.asString, in.category)
+        end for
+
+  val createQuestion: McpToolHandlerR[QuillSqlite] = McpTool("create_question")
+    .description(
+      "Add a question to a survey, with its texts, options and validation rules. Appended last; use reorder_questions to move it. Choice questions (radio, checkbox, dropdown) require options; the others must not have any.")
+    .handle: (in: CreateQuestionIn) =>
+      ZIO.serviceWithZIO[QuillSqlite]: quill =>
+        import quill.*
+        for
+          surveys <- run(query[SurveyRow]).orDie
+          survey_ <- ZIO
+            .succeed(surveys.find(_.id.asString == in.surveyId))
+            .someOrFail(
+              s"No survey with id '${in.surveyId}'. Call list_surveys to see what exists.")
+          _ <-
+            ZIO.when(!QuestionTypes.contains(in.questionType))(
+              ZIO.fail(
+                s"Question type must be one of ${QuestionTypes
+                    .toList
+                    .sorted
+                    .mkString(", ")}, got '${in.questionType}'."))
+          _ <-
+            ZIO.when(in.text.isEmpty)(
+              ZIO.fail("A question needs text in at least one locale, or it cannot be rendered."))
+          _ <- validateTexts(in.text, "text")
+          _ <- validateTexts(in.description, "description")
+          _ <- validateTexts(in.placeholder, "placeholder")
+          isChoice = ChoiceTypes.contains(in.questionType)
+          _ <-
+            ZIO.when(isChoice && in.options.isEmpty)(
+              ZIO.fail(s"A ${in.questionType} question needs at least one option."))
+          _ <-
+            ZIO.when(!isChoice && in.options.nonEmpty)(
+              ZIO.fail(s"A ${in.questionType} question takes no options."))
+          _ <-
+            ZIO.foreachDiscard(in.options.zipWithIndex): (o, i) =>
+              ZIO.when(o.text.isEmpty)(ZIO.fail(s"Option ${i + 1} has no text.")) *>
+                validateTexts(o.text, s"option ${i + 1}")
+          _ <- ZIO.foreachDiscard(in.rules)(r => ZIO.fromEither(validateRule(in.questionType, r)))
+          _ <-
+            ZIO.when(in.hierarchyLevel.isDefined && survey_.category != "location")(
+              ZIO.fail("hierarchyLevel only applies to questions in a location survey."))
+          _ <-
+            ZIO.when(in.hierarchyLevel.exists(h => !HierarchyLevels.contains(h)))(
+              ZIO.fail(
+                s"hierarchyLevel must be one of ${HierarchyLevels.toList.sorted.mkString(", ")}."))
+          _ <- ZIO.when(in.points < 0)(ZIO.fail(s"Points must not be negative, got ${in.points}."))
+          siblings <- run(questionsOfQuery(lift(in.surveyId))).orDie
+          order      = siblings.map(_.displayOrder).maxOption.getOrElse(0) + 1
+          now        = java.time.Instant.now.toString
+          questionId = survey.question.Id.generate
+          affected <-
+            run(
+              query[QuestionRow].insertValue(
+                lift(
+                  QuestionRow(
+                    questionId,
+                    survey_.id,
+                    in.questionType,
+                    in.points,
+                    order,
+                    in.hierarchyLevel,
+                    if in.required then
+                      1
+                    else
+                      0
+                    ,
+                    now,
+                    1)))).orDie
+          _         <- Writes.expectOne(affected, s"Creating question in survey '${in.surveyId}'")
+          _         <- writeTexts(questionId.asString, in.text, now)
+          _         <- writeTexts(s"${questionId.asString}_desc", in.description, now)
+          _         <- writeTexts(s"${questionId.asString}_placeholder", in.placeholder, now)
+          optionIds <-
+            ZIO.foreach(in.options.zipWithIndex): (o, i) =>
+              val optionId = survey.question.OptionId.generate
+              for
+                written <-
+                  run(
+                    query[QuestionOptionRow].insertValue(
+                      lift(QuestionOptionRow(optionId, questionId, i + 1, None, 1)))).orDie
+                _ <- Writes.expectOne(written, s"Creating option ${i + 1}")
+                _ <- writeTexts(optionId.asString, o.text, now)
+              yield optionId.asString
+          _ <-
+            ZIO.foreachDiscard(in.rules): config =>
+              run(
+                query[QuestionRuleRow].insertValue(
+                  lift(
+                    QuestionRuleRow(
+                      UUID.randomUUID.toString,
+                      questionId,
+                      in.questionType,
+                      config,
+                      1)))).orDie.flatMap(Writes.expectOne(_, s"Creating rule $config"))
+        yield CreateQuestionOut(questionId.asString, order, optionIds)
+        end for
+
+  val all: List[McpToolHandlerR[QuillSqlite]] = List(
+    list,
+    get,
+    setQuestionActive,
+    reorder,
+    createSurvey,
+    createQuestion)
 end SurveyTools
