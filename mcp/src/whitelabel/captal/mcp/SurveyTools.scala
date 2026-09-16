@@ -18,7 +18,115 @@ import whitelabel.captal.infra.{
   SurveyRow
 }
 import zio.*
+import zio.schema.annotation.{description, discriminatorName, rejectExtraFields}
 import zio.schema.{DeriveSchema, Schema}
+
+import ToolSchema.withDiscriminator
+
+// The case names are the wire values, lowercase and underscored, which is why they break Scala
+// naming convention. `@caseName` is not an option: the JSON codec honours it but JsonSchemaGen
+// builds the enum from the case id, so the schema would advertise "Profiling" while the decoder
+// rejected anything but "profiling". A schema that lies is worse than an ugly identifier.
+
+enum SurveyCategory:
+  case email
+  case profiling
+  case location
+  case advertiser
+
+object SurveyCategory:
+  given Schema[SurveyCategory] = DeriveSchema.gen
+
+enum Hierarchy:
+  case state
+  case city
+  case municipality
+  case urbanization
+
+object Hierarchy:
+  given Schema[Hierarchy] = DeriveSchema.gen
+
+enum TextRuleKind:
+  case min_length
+  case max_length
+  case pattern
+  case email
+  case url
+
+object TextRuleKind:
+  given Schema[TextRuleKind] = DeriveSchema.gen
+
+enum SelectionRuleKind:
+  case min_selections
+  case max_selections
+
+object SelectionRuleKind:
+  given Schema[SelectionRuleKind] = DeriveSchema.gen
+
+enum RangeRuleKind:
+  case min
+  case max
+
+object RangeRuleKind:
+  given Schema[RangeRuleKind] = DeriveSchema.gen
+
+final case class TextIn(locale: String, value: String)
+final case class OptionIn(text: List[TextIn])
+
+final case class TextRuleIn(
+    kind: TextRuleKind,
+    @description(
+      "Omit for email and url. A whole number for the length rules; a regex for pattern.")
+    value: Option[String])
+final case class SelectionRuleIn(
+    kind: SelectionRuleKind,
+    @description("A whole number.")
+    value: String)
+final case class RangeRuleIn(
+    kind: RangeRuleKind,
+    @description(
+      "A whole number for rating, any number for numeric, an ISO date (yyyy-mm-dd) for date.")
+    value: String)
+
+/** What varies by question type, and only that.
+  *
+  * Discriminated so the schema carries the constraint instead of the prose: an `input` variant has
+  * no `options` field to pass, and its rules are text rules by type. The fields every question
+  * shares stay flat in [[SurveyTools.CreateQuestionIn]] rather than being repeated across seven
+  * variants.
+  *
+  * The discriminator is put back into the generated schema by `ToolSchema.withDiscriminator` —
+  * JsonSchemaGen drops it, which would leave the schema describing a payload the decoder rejects.
+  */
+@discriminatorName("questionType")
+enum QuestionSpec:
+  @rejectExtraFields
+  case radio(options: List[OptionIn])
+  @rejectExtraFields
+  case dropdown(options: List[OptionIn])
+  @rejectExtraFields
+  case checkbox(options: List[OptionIn], rules: Option[List[SelectionRuleIn]])
+  @rejectExtraFields
+  case input(rules: Option[List[TextRuleIn]])
+  @rejectExtraFields
+  case rating(rules: Option[List[RangeRuleIn]])
+  @rejectExtraFields
+  case numeric(rules: Option[List[RangeRuleIn]])
+  @rejectExtraFields
+  case date(rules: Option[List[RangeRuleIn]])
+
+object QuestionSpec:
+  given Schema[QuestionSpec] = DeriveSchema.gen
+
+  /** Declaration order, which is the order JsonSchemaGen emits the `oneOf` variants in. */
+  val caseIds: List[String] = List(
+    "radio",
+    "dropdown",
+    "checkbox",
+    "input",
+    "rating",
+    "numeric",
+    "date")
 
 /** Survey and question tools.
   *
@@ -265,40 +373,38 @@ object SurveyTools:
 
   // ───────────────────────────────────────────────────────────────────────────
   // Creation
+  //
+  // The input types exist to keep the operator out of decisions the agent can make on its own.
+  // Anything with a sensible default is an Option — zio-schema marks only non-Option fields as
+  // required, and a Scala default does not reach the schema — and every constrained field is an
+  // enum, so the legal values are in the schema rather than in prose the caller may not read.
   // ───────────────────────────────────────────────────────────────────────────
 
-  private val Categories = Set("email", "profiling", "location", "advertiser")
-  private val QuestionTypes = Set(
-    "radio",
-    "checkbox",
-    "dropdown",
-    "input",
-    "rating",
-    "numeric",
-    "date")
-  private val ChoiceTypes = Set("radio", "checkbox", "dropdown")
-  private val HierarchyLevels = Set("state", "city", "municipality", "urbanization")
-
-  final case class TextIn(locale: String, value: String)
-  final case class OptionIn(text: List[TextIn])
-
-  /** No locationId: identification surveys are global, and an advertiser survey takes its location
-    * from the video it follows.
-    */
-  final case class CreateSurveyIn(category: String, name: Option[String], videoId: Option[String])
+  final case class CreateSurveyIn(
+      category: SurveyCategory,
+      @description("Label for operators. Not shown to guests; safe to omit.")
+      name: Option[String],
+      @description(
+        "Required for advertiser surveys and rejected for the others: the video this survey follows. The survey inherits that video's location.")
+      videoId: Option[String])
   final case class CreateSurveyOut(surveyId: String, category: String)
 
   final case class CreateQuestionIn(
       surveyId: String,
-      questionType: String,
+      @description(
+        "The wording, one entry per locale. Ask the operator for this; nothing else can supply it.")
       text: List[TextIn],
-      description: List[TextIn],
-      placeholder: List[TextIn],
-      options: List[OptionIn],
-      rules: List[String],
-      required: Boolean,
-      points: Int,
-      hierarchyLevel: Option[String])
+      question: QuestionSpec,
+      @description("Helper text under the question. Omit when there is none.")
+      description: Option[List[TextIn]],
+      @description("Placeholder inside the input. Only meaningful for input questions.")
+      placeholder: Option[List[TextIn]],
+      @description("Whether an answer is mandatory. Defaults to true.")
+      required: Option[Boolean],
+      @description("Points awarded for answering. Defaults to 10, which is what every survey uses.")
+      points: Option[Int],
+      @description("Only for questions in a location survey; rejected elsewhere.")
+      hierarchyLevel: Option[Hierarchy])
   final case class CreateQuestionOut(questionId: String, displayOrder: Int, optionIds: List[String])
 
   given Schema[TextIn] = DeriveSchema.gen
@@ -308,36 +414,90 @@ object SurveyTools:
   given Schema[CreateQuestionIn] = DeriveSchema.gen
   given Schema[CreateQuestionOut] = DeriveSchema.gen
 
-  /** Rejects a rule that would be stored and then never applied.
+  /** Flattens the discriminated spec into what the row needs.
     *
-    * `SurveyRepositoryQuill.decodeRules` does `decode[R](config).toOption` and flat-maps, so a rule
-    * whose JSON does not match the ADT implied by the question type disappears at runtime with no
-    * error anywhere. Validating here is the only point where that is visible.
+    * The kind-versus-type pairing that used to be checked here is gone: `QuestionSpec` makes it
+    * unrepresentable, so an `input` question cannot carry a selection rule to be rejected. What is
+    * left is parsing each value, which the types cannot do.
     */
-  private def validateRule(questionType: String, config: String): Either[String, Unit] =
-    import io.circe.parser.decode
-    import whitelabel.captal.core.survey.question.*
-    import whitelabel.captal.core.survey.question.codecs.given
-    def check[A: io.circe.Decoder](shape: String) = decode[A](config)
+  private def flatten(
+      spec: QuestionSpec): (String, List[OptionIn], List[(String, Option[String])]) =
+    def text(rules: Option[List[TextRuleIn]]) = rules
+      .getOrElse(Nil)
+      .map(r => (r.kind.toString, r.value))
+    def selection(rules: Option[List[SelectionRuleIn]]) = rules
+      .getOrElse(Nil)
+      .map(r => (r.kind.toString, Some(r.value)))
+    def range(rules: Option[List[RangeRuleIn]]) = rules
+      .getOrElse(Nil)
+      .map(r => (r.kind.toString, Some(r.value)))
+    spec match
+      case QuestionSpec.radio(options) =>
+        ("radio", options, Nil)
+      case QuestionSpec.dropdown(options) =>
+        ("dropdown", options, Nil)
+      case QuestionSpec.checkbox(options, rules) =>
+        ("checkbox", options, selection(rules))
+      case QuestionSpec.input(rules) =>
+        ("input", Nil, text(rules))
+      case QuestionSpec.rating(rules) =>
+        ("rating", Nil, range(rules))
+      case QuestionSpec.numeric(rules) =>
+        ("numeric", Nil, range(rules))
+      case QuestionSpec.date(rules) =>
+        ("date", Nil, range(rules))
+  end flatten
+
+  /** Builds the stored rule JSON. Only the value can be wrong now; the kind is already known to
+    * belong to the question type.
+    *
+    * The config is constructed here rather than accepted from the caller so its shape is always the
+    * one `SurveyRepositoryQuill.decodeRules` expects — it decodes with `.toOption` and flat-maps,
+    * so a rule it cannot read disappears at runtime with no error.
+    */
+  private def ruleConfig(
+      questionType: String,
+      kind: String,
+      value: Option[String]): Either[String, String] =
+    def wholeNumber(v: String) = v
+      .toIntOption
+      .toRight(s"The $kind rule needs a whole number, got '$v'.")
+      .map(_.toString)
+    def number(v: String) = v
+      .toDoubleOption
+      .toRight(s"The $kind rule needs a number, got '$v'.")
+      .map(_ => v)
+    def isoDate(v: String) = scala
+      .util
+      .Try(java.time.LocalDate.parse(v))
+      .toEither
       .left
-      .map(e =>
-        s"Rule $config is not a valid $shape rule for a $questionType question: ${e.getMessage}")
-      .map(_ => ())
-    questionType match
-      case "input" =>
-        check[TextRule]("text")
-      case "checkbox" =>
-        check[SelectionRule]("selection")
-      case "rating" =>
-        check[RangeRule[Int]]("integer range")
-      case "numeric" =>
-        check[RangeRule[BigDecimal]]("numeric range")
-      case "date" =>
-        check[RangeRule[java.time.LocalDate]]("date range")
-      case other =>
-        Left(
-          s"A $other question takes no validation rules; it would be stored and silently ignored.")
-  end validateRule
+      .map(_ => s"The $kind rule needs an ISO date (yyyy-mm-dd), got '$v'.")
+      .map(_ => s""""$v"""")
+    def quoted(v: String) = Right(s""""${v.replace("\\", "\\\\").replace("\"", "\\\"")}"""")
+    def needs(render: String => Either[String, String]) = value
+      .toRight(s"The $kind rule needs a value.")
+      .flatMap(render)
+
+    val rendered: Either[String, Option[String]] =
+      (questionType, kind) match
+        case (_, "email") | (_, "url") =>
+          Right(None)
+        case (_, "pattern") =>
+          needs(quoted).map(Some(_))
+        case ("date", _) =>
+          needs(isoDate).map(Some(_))
+        case ("numeric", _) =>
+          needs(number).map(Some(_))
+        case _ =>
+          needs(wholeNumber).map(Some(_))
+
+    rendered.map:
+      case Some(v) =>
+        s"""{"type":"$kind","value":$v}"""
+      case None =>
+        s"""{"type":"$kind"}"""
+  end ruleConfig
 
   private def validateTexts(texts: List[TextIn], what: String): ZIO[Any, String, Unit] =
     for
@@ -373,25 +533,21 @@ object SurveyTools:
 
   val createSurvey: McpToolHandlerR[QuillSqlite] = McpTool("create_survey")
     .description(
-      "Create a survey. Category is one of email, profiling, location or advertiser. Advertiser surveys name the video they follow and inherit its location; identification surveys are global and are picked by category. Read skill://add-survey/SKILL.md first.")
+      "Create a survey. Advertiser surveys name the video they follow and inherit its location; identification surveys are global and are picked by category. Read skill://add-survey/SKILL.md first.")
     .requireScopes(Auth.ContentWrite)
     .handle: (in: CreateSurveyIn) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
+        val category = in.category.toString
         for
-          _ <-
-            ZIO.when(!Categories.contains(in.category))(
-              ZIO.fail(
-                s"Category must be one of ${Categories.toList.sorted.mkString(", ")}, got '${in
-                    .category}'."))
           // The video is what findNextAdvertiserSurvey matches on; without it the survey exists but
           // is unreachable.
           _ <-
-            ZIO.when(in.category == "advertiser" && in.videoId.isEmpty)(
+            ZIO.when(in.category == SurveyCategory.advertiser && in.videoId.isEmpty)(
               ZIO.fail("An advertiser survey needs the videoId of the video it follows."))
           _ <-
-            ZIO.when(in.category != "advertiser" && in.videoId.isDefined)(
-              ZIO.fail(s"Only advertiser surveys attach to a video; this one is '${in.category}'."))
+            ZIO.when(in.category != SurveyCategory.advertiser && in.videoId.isDefined)(
+              ZIO.fail(s"Only advertiser surveys attach to a video; this one is '$category'."))
           // Verified rather than trusted: a survey pointing at a video that does not exist is
           // reachable by nothing, and the foreign key will not say so.
           video <-
@@ -409,11 +565,11 @@ object SurveyTools:
           // SurveyRepositoryQuill, so a second active one of the same category makes which gets
           // served depend on display_order across unrelated surveys.
           clashes = existing.filter(s =>
-            s.isActive == 1 && s.category == in.category && s.category != "advertiser")
+            s.isActive == 1 && s.category == category && in.category != SurveyCategory.advertiser)
           _ <-
             ZIO.when(clashes.nonEmpty)(
               ZIO.fail(
-                s"An active '${in.category}' survey already exists (id ${clashes
+                s"An active '$category' survey already exists (id ${clashes
                     .head
                     .id
                     .asString}). Identification surveys are global and picked by category, so two would be ambiguous."))
@@ -422,19 +578,23 @@ object SurveyTools:
           affected <-
             run(
               query[SurveyRow].insertValue(
-                lift(SurveyRow(id, in.category, None, in.videoId, locationId, 1, now, in.name))))
-              .orDie
-          _ <- Writes.expectOne(affected, s"Creating ${in.category} survey")
-        yield CreateSurveyOut(id.asString, in.category)
+                lift(SurveyRow(id, category, None, in.videoId, locationId, 1, now, in.name)))).orDie
+          _ <- Writes.expectOne(affected, s"Creating $category survey")
+        yield CreateSurveyOut(id.asString, category)
         end for
 
   val createQuestion: McpToolHandlerR[QuillSqlite] = McpTool("create_question")
     .description(
-      "Add a question to a survey, with its texts, options and validation rules. Appended last; use reorder_questions to move it. Choice questions (radio, checkbox, dropdown) require options; the others must not have any. Read skill://add-survey/SKILL.md for the rule and locale constraints, which this schema cannot express.")
+      "Add a question to a survey. Appended last; use reorder_questions to move it. Only the wording has to come from the operator — the question shape carries what varies by type, and everything else has a default. Read skill://add-survey/SKILL.md for the locale constraints, which the schema cannot express.")
     .requireScopes(Auth.ContentWrite)
     .handle: (in: CreateQuestionIn) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
+        val (questionType, options, ruleSpecs) = flatten(in.question)
+        val descriptions = in.description.getOrElse(Nil)
+        val placeholders = in.placeholder.getOrElse(Nil)
+        val isRequired = in.required.getOrElse(true)
+        val points = in.points.getOrElse(10)
         for
           surveys <- run(query[SurveyRow]).orDie
           survey_ <- ZIO
@@ -442,38 +602,28 @@ object SurveyTools:
             .someOrFail(
               s"No survey with id '${in.surveyId}'. Call list_surveys to see what exists.")
           _ <-
-            ZIO.when(!QuestionTypes.contains(in.questionType))(
-              ZIO.fail(
-                s"Question type must be one of ${QuestionTypes
-                    .toList
-                    .sorted
-                    .mkString(", ")}, got '${in.questionType}'."))
-          _ <-
             ZIO.when(in.text.isEmpty)(
               ZIO.fail("A question needs text in at least one locale, or it cannot be rendered."))
           _ <- validateTexts(in.text, "text")
-          _ <- validateTexts(in.description, "description")
-          _ <- validateTexts(in.placeholder, "placeholder")
-          isChoice = ChoiceTypes.contains(in.questionType)
+          _ <- validateTexts(descriptions, "description")
+          _ <- validateTexts(placeholders, "placeholder")
+          // Whether a type takes options is structural now; that it takes at least one is not.
           _ <-
-            ZIO.when(isChoice && in.options.isEmpty)(
-              ZIO.fail(s"A ${in.questionType} question needs at least one option."))
+            ZIO.when(
+              options.isEmpty && (
+                questionType == "radio" || questionType == "checkbox" || questionType == "dropdown"
+              ))(ZIO.fail(s"A $questionType question needs at least one option."))
           _ <-
-            ZIO.when(!isChoice && in.options.nonEmpty)(
-              ZIO.fail(s"A ${in.questionType} question takes no options."))
-          _ <-
-            ZIO.foreachDiscard(in.options.zipWithIndex): (o, i) =>
+            ZIO.foreachDiscard(options.zipWithIndex): (o, i) =>
               ZIO.when(o.text.isEmpty)(ZIO.fail(s"Option ${i + 1} has no text.")) *>
                 validateTexts(o.text, s"option ${i + 1}")
-          _ <- ZIO.foreachDiscard(in.rules)(r => ZIO.fromEither(validateRule(in.questionType, r)))
+          ruleConfigs <-
+            ZIO.foreach(ruleSpecs): (kind, value) =>
+              ZIO.fromEither(ruleConfig(questionType, kind, value))
           _ <-
             ZIO.when(in.hierarchyLevel.isDefined && survey_.category != "location")(
               ZIO.fail("hierarchyLevel only applies to questions in a location survey."))
-          _ <-
-            ZIO.when(in.hierarchyLevel.exists(h => !HierarchyLevels.contains(h)))(
-              ZIO.fail(
-                s"hierarchyLevel must be one of ${HierarchyLevels.toList.sorted.mkString(", ")}."))
-          _ <- ZIO.when(in.points < 0)(ZIO.fail(s"Points must not be negative, got ${in.points}."))
+          _        <- ZIO.when(points < 0)(ZIO.fail(s"Points must not be negative, got $points."))
           siblings <- run(questionsOfQuery(lift(in.surveyId))).orDie
           order      = siblings.map(_.displayOrder).maxOption.getOrElse(0) + 1
           now        = java.time.Instant.now.toString
@@ -485,11 +635,11 @@ object SurveyTools:
                   QuestionRow(
                     questionId,
                     survey_.id,
-                    in.questionType,
-                    in.points,
+                    questionType,
+                    points,
                     order,
-                    in.hierarchyLevel,
-                    if in.required then
+                    in.hierarchyLevel.map(_.toString),
+                    if isRequired then
                       1
                     else
                       0
@@ -498,10 +648,10 @@ object SurveyTools:
                     1)))).orDie
           _         <- Writes.expectOne(affected, s"Creating question in survey '${in.surveyId}'")
           _         <- writeTexts(questionId.asString, in.text, now)
-          _         <- writeTexts(s"${questionId.asString}_desc", in.description, now)
-          _         <- writeTexts(s"${questionId.asString}_placeholder", in.placeholder, now)
+          _         <- writeTexts(s"${questionId.asString}_desc", descriptions, now)
+          _         <- writeTexts(s"${questionId.asString}_placeholder", placeholders, now)
           optionIds <-
-            ZIO.foreach(in.options.zipWithIndex): (o, i) =>
+            ZIO.foreach(options.zipWithIndex): (o, i) =>
               val optionId = survey.question.OptionId.generate
               for
                 written <-
@@ -512,18 +662,20 @@ object SurveyTools:
                 _ <- writeTexts(optionId.asString, o.text, now)
               yield optionId.asString
           _ <-
-            ZIO.foreachDiscard(in.rules): config =>
+            ZIO.foreachDiscard(ruleConfigs): config =>
               run(
                 query[QuestionRuleRow].insertValue(
                   lift(
                     QuestionRuleRow(
                       UUID.randomUUID.toString,
                       questionId,
-                      in.questionType,
+                      questionType,
                       config,
                       1)))).orDie.flatMap(Writes.expectOne(_, s"Creating rule $config"))
         yield CreateQuestionOut(questionId.asString, order, optionIds)
         end for
+    // JsonSchemaGen drops the discriminator, leaving a schema whose variants the decoder rejects.
+    .withDiscriminator("question", "questionType", QuestionSpec.caseIds)
 
   val all: List[McpToolHandlerR[QuillSqlite]] = List(
     list,

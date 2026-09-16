@@ -1,7 +1,7 @@
 ---
 name: add-survey
 description: Use this skill when adding or changing identification surveys (email, profiling, location) or advertiser surveys through the backoffice MCP server. Triggers on "add survey", "create survey", "new survey", "add question", "survey question".
-version: 2.0.0
+version: 3.0.0
 ---
 
 # Add a survey
@@ -21,18 +21,59 @@ already exists.
 4. `reorder_questions` if the order needs changing later. It takes every active question of the
    survey exactly once.
 
-## Question types
+## What to ask the operator, and what not to
 
-| Type | Options | Rules |
-|---|---|---|
-| `radio`, `checkbox`, `dropdown` | required | `checkbox` takes selection rules; `radio` and `dropdown` take none |
-| `input` | none | text rules: `min_length`, `max_length`, `pattern`, `email`, `url` |
-| `rating` | none | integer range: `min`, `max` |
-| `numeric` | none | numeric range |
-| `date` | none | date range |
+**Only the wording has to come from them.** The schema marks three fields required —
+`surveyId`, `text` and `question` — and everything else has a default or follows from the type. Do not ask about an optional field unless the operator raises it.
 
-A rule that does not match its question type is refused at the write. That check exists because the
-read path drops such a rule silently: it would sit in the table and never apply.
+| Field | Where it comes from |
+|---|---|
+| `text` | the operator; nothing else can supply it |
+| `question.questionType` | the shape of the answer being collected — infer it |
+| `question.options` | the operator, and only where the variant has the field |
+| `required` | defaults to true |
+| `points` | defaults to 10, which is what every existing question uses |
+| `displayOrder` | automatic; the question is appended last |
+| `description`, `placeholder` | omit unless asked for |
+| `hierarchyLevel` | only in a location survey, and only if the operator is building a hierarchy |
+
+A plain text question is one call with nothing but the wording:
+
+```json
+{"surveyId": "…",
+ "text": [{"locale": "es", "value": "¿En qué barrio vivís?"}],
+ "question": {"questionType": "input"}}
+```
+
+## The question shape
+
+What varies by type lives in `question`, which is discriminated. The schema carries the constraint,
+so an `input` variant has no `options` field to pass and a `radio` has no `rules`:
+
+```json
+{"surveyId": "…",
+ "text": [{"locale": "es", "value": "¿En qué barrio vivís?"}],
+ "question": {"questionType": "input"}}
+```
+
+```json
+{"question": {"questionType": "checkbox",
+              "options": [{"text": [{"locale": "es", "value": "Mañana"}]}],
+              "rules": [{"kind": "min_selections", "value": "1"}]}}
+```
+
+| `questionType` | Carries |
+|---|---|
+| `radio`, `dropdown` | `options` |
+| `checkbox` | `options`, and selection rules: `min_selections`, `max_selections` |
+| `input` | text rules: `min_length`, `max_length`, `pattern`, `email`, `url` |
+| `rating` | range rules `min`, `max` — whole numbers |
+| `numeric` | range rules `min`, `max` — any number |
+| `date` | range rules `min`, `max` — ISO dates, `yyyy-mm-dd` |
+
+Passing a field the variant does not have is refused, as is a rule kind that belongs to another
+type. Neither reaches validation — the shape makes them undecodable — which is why the pairing no
+longer has to be remembered. `email` and `url` take no value; everything else does, as text.
 
 ## Texts are per locale, and nothing audits them
 
