@@ -429,14 +429,13 @@ For exact default values check `client/assets/styles.css:1-100` (`:root { ... }`
 
 ## Brand icon
 
-Written through `get_location_icon` and `set_location_icon`, the same way as the stylesheet: the whole SVG, not a patch, and the CDN is invalidated for it.
+An SVG, written with `get_location_icon` and `set_location_icon` — the whole document, not a patch.
+Scripts and `on*` handlers are refused.
 
-An SVG carrying a `<script>` element or an `on*` handler is refused. It would never run through the `img` element the SPA uses, but the file sits on the portal's own origin, and anything opening it directly renders it as a document.
-
-The SPA references it as `brand-icon.svg` (relative — resolves under each location's slug via the `<base href>` injection). Used inside:
-- `.view-icon` (loading + post-load layout — every screen)
-- `.video-intro-icon` (advertiser video intro)
-- `.loader-icon` (initial HTML loader + navigation overlay)
+Rendered through an `img` element at small sizes, on every screen:
+- `.view-icon` — layout icon, all screens
+- `.video-intro-icon` — advertiser video intro
+- `.loader-icon` — initial loader and navigation overlay
 
 **Format**: must be SVG (`<svg>...</svg>`). PNG/JPG with `.svg` extension won't render.
 
