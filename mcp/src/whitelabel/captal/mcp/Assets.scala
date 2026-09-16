@@ -64,8 +64,11 @@ final case class AssetStore(
     .mapError(e => s"Could not read ${stylesKey(slug)}: ${e.getMessage}")
 
   /** Without this the edge keeps serving the previous stylesheet until the cache expires, so a
-    * write would look applied in the tool and be invisible in the portal. The CLI's asset sync
-    * never invalidated, which is why an operator could push a rebrand and see nothing change.
+    * write would look applied in the tool and be invisible in the portal.
+    *
+    * `captal locations push` does invalidate, but the whole `<slug>` prefix, because it has just
+    * synced the bundle. Writing one file does not need that reach, and more to the point does not
+    * need a deploy: the gain here is that changing a stylesheet stops being a redeploy.
     */
   def invalidate(slug: String): ZIO[Any, String, String] = ZIO
     .attemptBlocking:
