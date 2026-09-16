@@ -139,5 +139,51 @@ object CaptalMcpSpec extends ZIOSpecDefault:
             .contains("skill://style-reference/SKILL.md"),
           AssetTools.setStyles.definition.description.exists(_.contains("whole file"))
         )
+      ,
+      test("every published question oneOf names the variant the decoder demands"):
+        // The decoder rejects a variant without `questionType`, and JsonSchemaGen drops it, so an
+        // unpatched schema is not incomplete — it is wrong, and a caller following it cannot
+        // construct a valid call. Four of the seven variants have no distinguishing property at
+        // all, which is how two agents in a row ended up guessing at the field name.
+        def variantsOf(schema: zio.json.ast.Json): List[zio.json.ast.Json] =
+          schema match
+            case zio.json.ast.Json.Obj(fields) =>
+              fields
+                .toList
+                .flatMap:
+                  case ("oneOf", zio.json.ast.Json.Arr(variants)) =>
+                    variants.toList
+                  case (_, nested) =>
+                    variantsOf(nested)
+            case zio.json.ast.Json.Arr(items) =>
+              items.toList.flatMap(variantsOf)
+            case _ =>
+              Nil
+
+        def tagsOf(handler: com.jamesward.ziohttp.mcp.McpToolHandlerR[?]): List[String] =
+          variantsOf(handler.definition.inputSchema).flatMap:
+            case zio.json.ast.Json.Obj(fields) =>
+              fields
+                .toList
+                .collect { case ("properties", zio.json.ast.Json.Obj(props)) =>
+                  props
+                }
+                .flatMap(_.toList)
+                .collect { case ("questionType", zio.json.ast.Json.Obj(tag)) =>
+                  tag
+                }
+                .flatMap(_.toList)
+                .collect { case ("const", zio.json.ast.Json.Str(value)) =>
+                  value
+                }
+            case _ =>
+              Nil
+
+        val fromCreateQuestion = tagsOf(SurveyTools.createQuestion)
+        // The same enum, nested one level inside an array of questions.
+        val fromCreateVideo = tagsOf(VideoTools.create)
+        assertTrue(
+          fromCreateQuestion == QuestionSpec.caseIds,
+          fromCreateVideo == QuestionSpec.caseIds)
     )
 end CaptalMcpSpec

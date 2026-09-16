@@ -47,6 +47,25 @@ object ToolSchema:
       definition.copy(inputSchema =
         patchProperty(definition.inputSchema, field)(variantSchema =>
           patchOneOf(variantSchema, discriminator, caseIds)))
+
+    /** The same repair, one level down: `properties.<arrayField>.items.properties.<field>`.
+      *
+      * A tool that takes a list of questions rather than one carries the identical `oneOf`, and
+      * leaving it unpatched is worse there than at the top level — four of the seven variants have
+      * no properties beyond `rules`, so they are not merely undocumented but indistinguishable from
+      * each other. Two separate agents have already been stopped by it, both reporting the same
+      * "missing subtype" and both guessing at the field name.
+      */
+    def withDiscriminatorInArray(
+        arrayField: String,
+        field: String,
+        discriminator: String,
+        caseIds: List[String]): McpToolHandlerR[R] = withDefinition: definition =>
+      definition.copy(inputSchema =
+        patchProperty(definition.inputSchema, arrayField): arraySchema =>
+          mapField(arraySchema, "items"): item =>
+            patchProperty(item, field)(variantSchema =>
+              patchOneOf(variantSchema, discriminator, caseIds)))
   end extension
 
   private def patchProperty(schema: Json.Obj, field: String)(f: Json.Obj => Json.Obj): Json.Obj =
