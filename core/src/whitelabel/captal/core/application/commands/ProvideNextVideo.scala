@@ -58,10 +58,7 @@ object ProvideNextVideoHandler:
                 // Asked for only once there is a user to ask for. Previously the lookup ran first
                 // and its result was discarded on this same branch — a weighted draw against the
                 // database whose answer nobody ever read.
-                for videoOpt <- videoRepo.findNextForUser(
-                  user.id,
-                  None
-                ) // TODO: get lastPromoVideoId from session
+                for videoOpt <- videoRepo.findNextForUser(user.id)
                 yield videoOpt match
                   case Some(videoToWatch) =>
                     user
