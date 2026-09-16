@@ -194,7 +194,7 @@ object SurveyTools:
 
   val setQuestionActive: McpToolHandlerR[QuillSqlite] = McpTool("set_question_active")
     .description(
-      "Retire a question or bring it back. Never deletes: answers reference questions, so a retired question keeps resolving for everything already recorded. Reports how many answers that is.")
+      "Retire a question or bring it back. Never deletes: answers reference questions, so a retired question keeps resolving for everything already recorded. Reports how many answers that is. See skill://add-survey/SKILL.md.")
     .requireScopes(Auth.ContentWrite)
     .handle: (in: SetQuestionActiveIn) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
@@ -370,7 +370,7 @@ object SurveyTools:
 
   val createSurvey: McpToolHandlerR[QuillSqlite] = McpTool("create_survey")
     .description(
-      "Create a survey. Category is one of email, profiling, location or advertiser. Advertiser surveys must name the video they follow; the others are picked by category during identification.")
+      "Create a survey. Category is one of email, profiling, location or advertiser. Advertiser surveys must name the video they follow; the others are picked by category during identification. Read skill://add-survey/SKILL.md first.")
     .requireScopes(Auth.ContentWrite)
     .handle: (in: CreateSurveyIn) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
@@ -415,7 +415,7 @@ object SurveyTools:
 
   val createQuestion: McpToolHandlerR[QuillSqlite] = McpTool("create_question")
     .description(
-      "Add a question to a survey, with its texts, options and validation rules. Appended last; use reorder_questions to move it. Choice questions (radio, checkbox, dropdown) require options; the others must not have any.")
+      "Add a question to a survey, with its texts, options and validation rules. Appended last; use reorder_questions to move it. Choice questions (radio, checkbox, dropdown) require options; the others must not have any. Read skill://add-survey/SKILL.md for the rule and locale constraints, which this schema cannot express.")
     .requireScopes(Auth.ContentWrite)
     .handle: (in: CreateQuestionIn) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
