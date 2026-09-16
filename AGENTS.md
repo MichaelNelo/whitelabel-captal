@@ -1297,6 +1297,21 @@ inline given MappedEncoding[String, user.Id] = MappedEncoding(user.Id.unsafe)
 ./mill client.bundle            # Production
 ENVIRONMENT=dev ./mill client.bundle
 
+# Backoffice MCP en local — rqlite + migraciones + LocalStack + servidor, en ese orden
+./mill mcp.dev                       # :8081, token "dev-token"
+./mill mcp.dev --port 9000 --token x
+./mill mcp.stopLocalStack            # Borra el contenedor y con el todos los objetos
+```
+
+`mcp.dev` comparte el contenedor `rqlite-dev` con `api.dev` a proposito: ninguna tool del MCP crea
+locations —eso sigue viniendo del provisioning— asi que la base necesita que `./mill api.dev` haya
+corrido al menos una vez para tener `cafe-centro`. Si no hay ninguna, el comando lo dice al arrancar.
+
+LocalStack Community no implementa CloudFront. Con `AWS_ENDPOINT_URL` apuntando a un endpoint local
+el servidor omite la invalidacion en vez de reportar un 501 en cada escritura de asset; contra AWS
+real la invalidacion vuelve a ser obligatoria y un fallo es un error de la tool.
+
+```bash
 # Docker - imagenes base
 ./mill api.dockerBuild   <ecr-uri>/captal-api v1.0.0
 ./mill infra.dockerBuild <ecr-uri>/captal-provision v1.0.0

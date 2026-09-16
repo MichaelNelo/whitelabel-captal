@@ -39,8 +39,9 @@ object CaptalMcp:
       .mkString("\n")
     s"""Backoffice for the Captal whitelabel captive portal.
        |
-       |Translations are edited here. Everything else — deployments, videos, surveys, advertisers —
-       |still goes through the CLI.
+       |Content is edited here: translations, surveys and questions, advertisers, videos, and each
+       |location's stylesheet and brand icon. Deployment — pushing a location, deprovisioning one,
+       |bootstrapping infrastructure — still goes through the CLI.
        |
        |Read the relevant `skill://` resource before acting on a request in its area. Each one is a
        |procedure, not background reading, and they encode constraints that are not visible from

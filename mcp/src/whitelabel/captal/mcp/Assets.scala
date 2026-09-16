@@ -43,7 +43,13 @@ final case class AssetStore(
     publicBaseUrl: String,
     s3: S3Client,
     cdn: CloudFrontClient,
-    presigner: S3Presigner):
+    presigner: S3Presigner,
+    // LocalStack Community answers every CloudFront call with a 501, so against a local endpoint
+    // every asset write would report a failed invalidation even though the object landed. There is
+    // no edge cache in front of LocalStack either, making the invalidation meaningless rather than
+    // merely unavailable. Defaults to true so that forgetting to pass it can only ever make the
+    // server stricter.
+    cdnEnabled: Boolean = true):
 
   /** The key the SPA asks for. Its `index.html` is served from under the slug and references these
     * by relative name, so each object has to sit beside it under the same prefix.
@@ -95,7 +101,13 @@ final case class AssetStore(
     * `captal locations push` does invalidate, but the whole `<slug>` prefix, because it has just
     * synced the bundle. Writing one file needs neither that reach nor the deploy.
     */
-  def invalidate(slug: String, asset: Asset): ZIO[Any, String, String] = ZIO
+  def invalidate(slug: String, asset: Asset): ZIO[Any, String, String] =
+    if !cdnEnabled then
+      ZIO.succeed("skipped-no-cdn")
+    else
+      invalidateNow(slug, asset)
+
+  private def invalidateNow(slug: String, asset: Asset): ZIO[Any, String, String] = ZIO
     .attemptBlocking:
       // A caller reference must be unique per request; the key plus the clock is enough, since two
       // invalidations of the same object in the same millisecond are indistinguishable anyway.
@@ -194,11 +206,49 @@ object AssetStore:
       bucket        <- required("ASSETS_BUCKET")
       distribution  <- required("CLOUDFRONT_DISTRIBUTION_ID")
       publicBaseUrl <- required("PUBLIC_BASE_URL")
-      s3  <- ZIO.acquireRelease(ZIO.attempt(S3Client.create()))(c => ZIO.succeed(c.close()))
+      endpoint      <- System.env("AWS_ENDPOINT_URL").orDie
+      s3  <- ZIO.acquireRelease(ZIO.attempt(s3ClientFor(endpoint)))(c => ZIO.succeed(c.close()))
       cdn <- ZIO.acquireRelease(ZIO.attempt(CloudFrontClient.create()))(c => ZIO.succeed(c.close()))
       presigner <-
-        ZIO.acquireRelease(ZIO.attempt(S3Presigner.create()))(p => ZIO.succeed(p.close()))
-    yield AssetStore(bucket, distribution, publicBaseUrl, s3, cdn, presigner)
+        ZIO.acquireRelease(ZIO.attempt(presignerFor(endpoint)))(p => ZIO.succeed(p.close()))
+    yield AssetStore(bucket, distribution, publicBaseUrl, s3, cdn, presigner, endpoint.isEmpty)
+
+  /** `AWS_ENDPOINT_URL` points the S3 client somewhere other than AWS — LocalStack, for testing the
+    * upload flow without an account.
+    *
+    * Path-style addressing comes with it. The default puts the bucket in the hostname, which works
+    * against AWS and not against a single local endpoint, where `bucket.localhost` resolves to
+    * nothing. The credentials are still required by the signer but never checked: LocalStack does
+    * not verify signatures, so any pair does.
+    */
+  private[mcp] def s3ClientFor(endpoint: Option[String]): S3Client =
+    endpoint match
+      case Some(url) =>
+        S3Client.builder().endpointOverride(java.net.URI.create(url)).forcePathStyle(true).build()
+      case None =>
+        S3Client.create()
+
+  private[mcp] def presignerFor(endpoint: Option[String]): S3Presigner =
+    endpoint match
+      case Some(url) =>
+        S3Presigner
+          .builder()
+          .endpointOverride(java.net.URI.create(url))
+          // Without this the signed URL names a host the browser cannot resolve, and the failure
+          // shows up as a network error at upload time rather than here.
+          .serviceConfiguration(
+            software
+              .amazon
+              .awssdk
+              .services
+              .s3
+              .S3Configuration
+              .builder()
+              .pathStyleAccessEnabled(true)
+              .build())
+          .build()
+      case None =>
+        S3Presigner.create()
 
   private def required(name: String): ZIO[Any, Throwable, String] = System
     .env(name)
