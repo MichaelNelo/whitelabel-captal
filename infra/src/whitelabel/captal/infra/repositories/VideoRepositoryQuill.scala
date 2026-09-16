@@ -85,7 +85,7 @@ object VideoRepositoryQuill:
                   s.category == "advertiser")
               .flatMap(s =>
                 query[QuestionRow].filter(q =>
-                  q.surveyId == s.id && !answeredByUser.contains(q.id)))
+                  q.surveyId == s.id && q.isActive == 1 && !answeredByUser.contains(q.id)))
               .nonEmpty)
         .sortBy((v, a) =>
           -sqliteLog(sqliteAbs(sqliteRandom) + 0.0001) / (
@@ -198,11 +198,11 @@ object VideoRepositoryQuill:
         for
           titleTexts <- run(
             query[LocalizedTextRow]
-              .filter(lt => lt.entityId == lift(videoIdStr))
+              .filter(lt => lt.entityId == lift(videoIdStr) && lt.isActive == 1)
               .filter(lt => lt.locale == lift(locale) || lt.locale == "en"))
           descTexts <- run(
             query[LocalizedTextRow]
-              .filter(lt => lt.entityId == lift(videoIdStr + "_desc"))
+              .filter(lt => lt.entityId == lift(videoIdStr + "_desc") && lt.isActive == 1)
               .filter(lt => lt.locale == lift(locale) || lt.locale == "en"))
         yield toVideoToWatch(
           videoRow,

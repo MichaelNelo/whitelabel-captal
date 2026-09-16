@@ -150,6 +150,17 @@ object TestHelpers:
     .response(asStringAlways)
     .send(backend)
 
+  /** `postProfilingAnswer` sends a SingleChoice, which an `input` question cannot accept. */
+  def postProfilingTextAnswer(
+      backend: SttpBackend[Task, Any],
+      sessionCookie: String,
+      text: String) = basicRequest
+    .post(uri"http://test/api/survey/profiling")
+    .cookie("captal_session", sessionCookie)
+    .body(s"""{"answer":{"type":"text","value":"$text"}}""")
+    .contentType("application/json")
+    .response(asStringAlways)
+    .send(backend)
   def postLocationAnswer(backend: SttpBackend[Task, Any], sessionCookie: String, optionId: String) =
     basicRequest
       .post(uri"http://test/api/survey/location")
