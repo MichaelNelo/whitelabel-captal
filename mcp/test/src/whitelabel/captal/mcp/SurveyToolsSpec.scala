@@ -290,10 +290,9 @@ object SurveyToolsSpec extends ZIOSpecDefault:
             .createSurvey
             .call(
               json(
-                "category"   -> str("profiling"),
-                "name"       -> zio.json.ast.Json.Null,
-                "videoId"    -> zio.json.ast.Json.Null,
-                "locationId" -> zio.json.ast.Json.Null))
+                "category" -> str("profiling"),
+                "name"     -> zio.json.ast.Json.Null,
+                "videoId"  -> zio.json.ast.Json.Null))
         yield assertTrue(result.isError.contains(true), textOf(result).contains("already exists"))
       ,
       test("an advertiser survey without a video is refused"):
@@ -303,12 +302,25 @@ object SurveyToolsSpec extends ZIOSpecDefault:
             .createSurvey
             .call(
               json(
-                "category"   -> str("advertiser"),
-                "name"       -> zio.json.ast.Json.Null,
-                "videoId"    -> zio.json.ast.Json.Null,
-                "locationId" -> zio.json.ast.Json.Null))
+                "category" -> str("advertiser"),
+                "name"     -> zio.json.ast.Json.Null,
+                "videoId"  -> zio.json.ast.Json.Null))
         yield assertTrue(
           result.isError.contains(true),
           textOf(result).contains("needs the videoId"))
+      ,
+      test("an advertiser survey naming a video that does not exist is refused"):
+        // Nothing else would catch it: advertiser_videos has no foreign key from surveys, so the
+        // row would store fine and the survey would simply be unreachable forever.
+        for
+          _      <- seed
+          result <- SurveyTools
+            .createSurvey
+            .call(
+              json(
+                "category" -> str("advertiser"),
+                "name"     -> zio.json.ast.Json.Null,
+                "videoId"  -> str("no-such-video")))
+        yield assertTrue(result.isError.contains(true), textOf(result).contains("No video with id"))
     ).provideShared(quillLayer, ZLayer.fromZIO(migrate.unit)) @@ TestAspect.sequential
 end SurveyToolsSpec
