@@ -429,10 +429,13 @@ For exact default values check `client/assets/styles.css:1-100` (`:root { ... }`
 
 ## Brand icon
 
-`locations/<slug>/assets/brand-icon.svg` is uploaded to `s3://<bucket>/<slug>/brand-icon.svg` by `captal locations push`. **There is no backoffice tool for the icon yet** — unlike the stylesheet, changing it still needs the CLI. The SPA references it as `brand-icon.svg` (relative — resolves under each location's slug via the `<base href>` injection). Used inside:
-- `.view-icon` (loading + post-load layout — every screen)
-- `.video-intro-icon` (advertiser video intro)
-- `.loader-icon` (initial HTML loader + navigation overlay)
+An SVG, written with `get_location_icon` and `set_location_icon` — the whole document, not a patch.
+Scripts and `on*` handlers are refused.
+
+Rendered through an `img` element at small sizes, on every screen:
+- `.view-icon` — layout icon, all screens
+- `.video-intro-icon` — advertiser video intro
+- `.loader-icon` — initial loader and navigation overlay
 
 **Format**: must be SVG (`<svg>...</svg>`). PNG/JPG with `.svg` extension won't render.
 
