@@ -9,11 +9,13 @@ import mill.*, scalalib.*, scalafmt.*, scalajslib.*
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Render index.html.template replacing {{JS_PATH}} and {{CSS_PATH}} placeholders. */
-private def renderIndex(templatePath: os.Path, destPath: os.Path, jsPath: String, cssPath: String): Unit =
+private def renderIndex(
+    templatePath: os.Path,
+    destPath: os.Path,
+    jsPath: String,
+    cssPath: String): Unit =
   val template = os.read(templatePath)
-  val rendered = template
-    .replace("{{JS_PATH}}", jsPath)
-    .replace("{{CSS_PATH}}", cssPath)
+  val rendered = template.replace("{{JS_PATH}}", jsPath).replace("{{CSS_PATH}}", cssPath)
   os.write.over(destPath, rendered)
 
 /** Ensure an rqlite Docker container is running. Starts one if needed. */
@@ -26,11 +28,7 @@ private def ensureRqlite(containerName: String, hostPort: Int): String =
 
   // Check if container is already running
   println(s"[rqlite] Checking for existing container '$containerName'...")
-  val running = os
-    .proc("docker", "ps", "-q", "-f", s"name=$containerName")
-    .call()
-    .out
-    .trim()
+  val running = os.proc("docker", "ps", "-q", "-f", s"name=$containerName").call().out.trim()
 
   if running.nonEmpty then
     println(s"[rqlite] Container '$containerName' already running")
@@ -44,18 +42,19 @@ private def ensureRqlite(containerName: String, hostPort: Int): String =
       sys.error(s"[rqlite] Port $hostPort is already in use by another container")
 
     println(s"[rqlite] Starting container '$containerName' on port $hostPort...")
-    val startResult = os.proc(
-      "docker",
-      "run",
-      "-d",
-      "--name",
-      containerName,
-      "-p",
-      s"$hostPort:4001",
-      "-e",
-      "SQLITE_EXTENSIONS=sqlean,misc",
-      "rqlite/rqlite:8.36.2"
-    ).call(check = false, stderr = os.Pipe)
+    val startResult = os
+      .proc(
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        containerName,
+        "-p",
+        s"$hostPort:4001",
+        "-e",
+        "SQLITE_EXTENSIONS=sqlean,misc",
+        "rqlite/rqlite:8.36.2")
+      .call(check = false, stderr = os.Pipe)
 
     if startResult.exitCode != 0 then
       sys.error(s"[rqlite] Failed to start container: ${startResult.err.trim()}")
@@ -65,9 +64,11 @@ private def ensureRqlite(containerName: String, hostPort: Int): String =
     var attempts = 0
     while !ready && attempts < 30 do
       Thread.sleep(500)
-      ready = scala.util
-        .Try(os.proc("curl", "-sf", s"http://localhost:$hostPort/readyz").call())
-        .isSuccess
+      ready =
+        scala
+          .util
+          .Try(os.proc("curl", "-sf", s"http://localhost:$hostPort/readyz").call())
+          .isSuccess
       attempts += 1
 
     if !ready then
@@ -77,11 +78,72 @@ private def ensureRqlite(containerName: String, hostPort: Int): String =
         .call(check = false, stderr = os.Pipe)
       sys.error(
         s"[rqlite] Container '$containerName' failed to become ready after ${attempts * 500}ms.\n" +
-          s"Container logs:\n${logs.out.trim()}\n${logs.err.trim()}"
-      )
+          s"Container logs:\n${logs.out.trim()}\n${logs.err.trim()}")
+  end if
 
   println(s"[rqlite] '$containerName' ready on port $hostPort")
   s"jdbc:rqlite:http://localhost:$hostPort"
+end ensureRqlite
+
+/** Starts LocalStack if it is not already up, creates the bucket, and returns its endpoint.
+  *
+  * The MCP server needs S3 to hand out upload URLs and store per-location assets. Against real AWS
+  * that means an account and an identity; against LocalStack it means neither — it does not verify
+  * signatures, so the dummy credentials below are enough for the SDK's signer and are never
+  * checked.
+  */
+private def ensureLocalStack(containerName: String, hostPort: Int, bucket: String): String =
+  val endpoint = s"http://localhost:$hostPort"
+  val running = os.proc("docker", "ps", "-q", "-f", s"name=$containerName").call().out.trim()
+
+  if running.nonEmpty then
+    println(s"[localstack] '$containerName' already running")
+  else
+    os.proc("docker", "rm", "-f", containerName).call(check = false, stderr = os.Pipe)
+    println(s"[localstack] Starting '$containerName' on port $hostPort...")
+    val started = os
+      .proc(
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        containerName,
+        "-p",
+        s"$hostPort:4566",
+        "-e",
+        "SERVICES=s3",
+        "localstack/localstack:3")
+      .call(check = false, stderr = os.Pipe)
+    if started.exitCode != 0 then
+      sys.error(s"[localstack] Failed to start: ${started.err.trim()}")
+
+    var ready = false
+    var attempts = 0
+    while !ready && attempts < 60 do
+      Thread.sleep(1000)
+      ready =
+        scala.util.Try(os.proc("curl", "-sf", s"$endpoint/_localstack/health").call()).isSuccess
+      attempts += 1
+    if !ready then
+      val logs = os
+        .proc("docker", "logs", "--tail", "20", containerName)
+        .call(check = false, stderr = os.Pipe)
+      sys.error(
+        s"[localstack] Not ready after ${attempts}s.\n${logs.out.trim()}\n${logs.err.trim()}")
+  end if
+
+  // Idempotent: creating a bucket that exists is not an error worth stopping for.
+  os.proc("docker", "exec", containerName, "awslocal", "s3api", "create-bucket", "--bucket", bucket)
+    .call(check = false, stderr = os.Pipe)
+
+  println(s"[localstack] '$containerName' ready on $endpoint, bucket $bucket")
+  endpoint
+end ensureLocalStack
+
+// Shared by api.dev and mcp.dev on purpose: the backoffice writes what the portal reads, so they
+// have to be looking at the same database to be worth running together.
+private val rqliteDevPort = 4001
+private val rqliteDevContainerName = "rqlite-dev"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Base traits
@@ -108,7 +170,8 @@ trait CoreDepsJVM extends ScalaModule:
     mvn"io.circe::circe-parser:0.14.10",
     mvn"io.taig::babel-core:0.5.3",
     mvn"io.taig::babel-generic:0.5.3",
-    mvn"io.taig::babel-circe:0.5.3")
+    mvn"io.taig::babel-circe:0.5.3"
+  )
 
 trait CoreDepsJS extends ScalaJSModule:
   def mvnDeps = Seq(
@@ -119,7 +182,8 @@ trait CoreDepsJS extends ScalaJSModule:
     mvn"io.github.cquiroz::scala-java-time::2.6.0",
     mvn"io.taig::babel-core::0.5.3",
     mvn"io.taig::babel-generic::0.5.3",
-    mvn"io.taig::babel-circe::0.5.3")
+    mvn"io.taig::babel-circe::0.5.3"
+  )
 
 object core extends BaseModule with CoreDepsJVM:
   object test extends ScalaTests with TestModule.Utest with ScalafmtModule with ScalafixModule:
@@ -156,9 +220,7 @@ object `endpoints-js` extends BaseJSModule with EndpointsDepsJS:
 
 object provision extends BaseModule:
   def moduleDeps = Seq()
-  def mvnDeps = Seq(
-    mvn"io.circe::circe-core:0.14.10",
-    mvn"io.circe::circe-generic:0.14.10")
+  def mvnDeps = Seq(mvn"io.circe::circe-core:0.14.10", mvn"io.circe::circe-generic:0.14.10")
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Infra: JVM only
@@ -174,30 +236,35 @@ object infra extends BaseModule:
     mvn"dev.zio::zio-interop-cats:23.1.0.3",
     mvn"io.rqlite:rqlite-jdbc:9.1.2.1",
     mvn"ch.qos.logback:logback-classic:1.5.6",
-    mvn"io.circe::circe-yaml:0.16.0")
+    mvn"io.circe::circe-yaml:0.16.0"
+  )
 
   def migrate() = Task.Command:
     runMain("whitelabel.captal.infra.Migrate")()
 
-  /** Build production base image captal-provision.
-    * Usage: ./mill infra.dockerBuild <ecr-repo-uri> <tag>
+  /** Build production base image captal-provision. Usage: ./mill infra.dockerBuild <ecr-repo-uri>
+    * <tag>
     */
   def dockerBuild(repoUri: String, tag: String) = Task.Command:
     val root = moduleDir / os.up
     val fullTag = s"$repoUri:$tag"
     println(s"[docker] Building $fullTag ...")
-    val result = os.proc(
-      "docker", "build",
-      "-f", (root / "Dockerfile.provision").toString,
-      "-t", fullTag,
-      root.toString
-    ).call(check = false, stderr = os.Pipe)
+    val result = os
+      .proc(
+        "docker",
+        "build",
+        "-f",
+        (root / "Dockerfile.provision").toString,
+        "-t",
+        fullTag,
+        root.toString)
+      .call(check = false, stderr = os.Pipe)
     if result.exitCode != 0 then
       sys.error(s"[docker] Build failed:\n${result.err.trim()}")
     println(s"[docker] Built $fullTag")
 
-  /** Push image to ECR. Operator must run `aws ecr get-login-password | docker login` first.
-    * Usage: ./mill infra.dockerPush <ecr-repo-uri> <tag>
+  /** Push image to ECR. Operator must run `aws ecr get-login-password | docker login` first. Usage:
+    * ./mill infra.dockerPush <ecr-repo-uri> <tag>
     */
   def dockerPush(repoUri: String, tag: String) = Task.Command:
     val fullTag = s"$repoUri:$tag"
@@ -206,7 +273,7 @@ object infra extends BaseModule:
     if result.exitCode != 0 then
       sys.error(s"[docker] Push failed:\n${result.err.trim()}")
     println(s"[docker] Pushed $fullTag")
-
+end infra
 
 // ─────────────────────────────────────────────────────────────────────────────
 // API: JVM only (server implementation)
@@ -217,10 +284,14 @@ object api extends BaseModule:
   def mvnDeps = Seq(
     mvn"com.softwaremill.sttp.tapir::tapir-zio-http-server:1.11.11",
     mvn"com.softwaremill.sttp.tapir::tapir-json-circe:1.11.11",
-    mvn"dev.zio::zio-interop-cats:23.1.0.3")
+    mvn"dev.zio::zio-interop-cats:23.1.0.3"
+  )
 
   override def forkEnv: T[Map[String, String]] = Task:
-    Map("PROVISION_DIR" -> defaultProvisionDir, "LOCATION_SLUG" -> defaultLocationSlug, "SHARED_DIR" -> defaultSharedDir) ++ super.forkEnv()
+    Map(
+      "PROVISION_DIR" -> defaultProvisionDir,
+      "LOCATION_SLUG" -> defaultLocationSlug,
+      "SHARED_DIR"    -> defaultSharedDir) ++ super.forkEnv()
 
   // Render index.html from template for local development
   def copyIndex() = Task.Command:
@@ -229,11 +300,8 @@ object api extends BaseModule:
       root / "client" / "index.html.template",
       root / "client" / "index.html",
       jsPath = "/out/client/fastLinkJS.dest/main.js",
-      cssPath = "/assets/styles.css"
-    )
+      cssPath = "/assets/styles.css")
 
-  private val rqliteDevPort = 4001
-  private val rqliteDevContainerName = "rqlite-dev"
   private val devProvisionBase = moduleDir / "resources" / "provision" / "dev"
   private val defaultProvisionDir = (devProvisionBase / "locations" / "cafe-centro").toString
   private val defaultSharedDir = (devProvisionBase / "shared").toString
@@ -252,9 +320,8 @@ object api extends BaseModule:
     client.fastLinkJS()
     super.run(args)()
 
-  /** Full dev workflow: rqlite + migrations + client + server.
-    * Usage: ./mill api.dev
-    *        ./mill api.dev --slug basic --dir /path/to/location --shared-dir /path/to/shared
+  /** Full dev workflow: rqlite + migrations + client + server. Usage: ./mill api.dev ./mill api.dev
+    * --slug basic --dir /path/to/location --shared-dir /path/to/shared
     */
   def dev(
       slug: String = defaultLocationSlug,
@@ -269,16 +336,10 @@ object api extends BaseModule:
     client.fastLinkJS()
     val cp = runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
     val mc = "whitelabel.captal.api.Main"
-    val env = forkEnv() ++ Map(
-      "PROVISION_DIR" -> dir,
-      "LOCATION_SLUG" -> slug,
-      "SHARED_DIR" -> sharedDir)
-    os.proc("java", forkArgs(), "-cp", cp, mc).call(
-      env = env,
-      stdin = os.Inherit,
-      stdout = os.Inherit,
-      stderr = os.Inherit
-    )
+    val env =
+      forkEnv() ++ Map("PROVISION_DIR" -> dir, "LOCATION_SLUG" -> slug, "SHARED_DIR" -> sharedDir)
+    os.proc("java", forkArgs(), "-cp", cp, mc)
+      .call(env = env, stdin = os.Inherit, stdout = os.Inherit, stderr = os.Inherit)
 
   object test extends ScalaTests with ScalafmtModule with ScalafixModule:
     def mvnDeps = Seq(
@@ -305,44 +366,53 @@ object api extends BaseModule:
     def stopRqlite() = Task.Command:
       os.proc("docker", "rm", "-f", rqliteContainerName).call(check = false)
       println("rqlite test container stopped")
+  end test
 
-  /** Build the dev Docker image (uses Dockerfile.api with SERVER_DEV_ENDPOINTS=true).
-    * Usage: ./mill api.dockerBuildDev captal-dev 0.1.0
+  /** Build the dev Docker image (uses Dockerfile.api with SERVER_DEV_ENDPOINTS=true). Usage: ./mill
+    * api.dockerBuildDev captal-dev 0.1.0
     */
   def dockerBuildDev(name: String, version: String) = Task.Command:
     val root = moduleDir / os.up
     val tag = s"$name:$version"
     println(s"[docker] Building $tag ...")
-    val result = os.proc(
-      "docker", "build",
-      "-f", (root / "Dockerfile.api").toString,
-      "--build-arg", "SERVER_DEV_ENDPOINTS=true",
-      "-t", tag,
-      root.toString
-    ).call(check = false, stderr = os.Pipe)
+    val result = os
+      .proc(
+        "docker",
+        "build",
+        "-f",
+        (root / "Dockerfile.api").toString,
+        "--build-arg",
+        "SERVER_DEV_ENDPOINTS=true",
+        "-t",
+        tag,
+        root.toString)
+      .call(check = false, stderr = os.Pipe)
     if result.exitCode != 0 then
       sys.error(s"[docker] Build failed:\n${result.err.trim()}")
     println(s"[docker] Built $tag")
 
-  /** Build production base image captal-api.
-    * Usage: ./mill api.dockerBuild <ecr-repo-uri> <tag>
+  /** Build production base image captal-api. Usage: ./mill api.dockerBuild <ecr-repo-uri> <tag>
     */
   def dockerBuild(repoUri: String, tag: String) = Task.Command:
     val root = moduleDir / os.up
     val fullTag = s"$repoUri:$tag"
     println(s"[docker] Building $fullTag ...")
-    val result = os.proc(
-      "docker", "build",
-      "-f", (root / "Dockerfile.api").toString,
-      "-t", fullTag,
-      root.toString
-    ).call(check = false, stderr = os.Pipe)
+    val result = os
+      .proc(
+        "docker",
+        "build",
+        "-f",
+        (root / "Dockerfile.api").toString,
+        "-t",
+        fullTag,
+        root.toString)
+      .call(check = false, stderr = os.Pipe)
     if result.exitCode != 0 then
       sys.error(s"[docker] Build failed:\n${result.err.trim()}")
     println(s"[docker] Built $fullTag")
 
-  /** Push image to ECR. Operator must run `aws ecr get-login-password | docker login` first.
-    * Usage: ./mill api.dockerPush <ecr-repo-uri> <tag>
+  /** Push image to ECR. Operator must run `aws ecr get-login-password | docker login` first. Usage:
+    * ./mill api.dockerPush <ecr-repo-uri> <tag>
     */
   def dockerPush(repoUri: String, tag: String) = Task.Command:
     val fullTag = s"$repoUri:$tag"
@@ -351,6 +421,7 @@ object api extends BaseModule:
     if result.exitCode != 0 then
       sys.error(s"[docker] Push failed:\n${result.err.trim()}")
     println(s"[docker] Pushed $fullTag")
+end api
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Client: JS only (Laminar app)
@@ -373,7 +444,8 @@ object cli extends BaseModule:
     mvn"com.lihaoyi::scalatags:0.13.1",
     mvn"software.amazon.awssdk:cloudwatchlogs:2.29.51",
     mvn"com.lihaoyi::scalatags:0.13.1",
-    mvn"org.slf4j:slf4j-nop:1.7.36")
+    mvn"org.slf4j:slf4j-nop:1.7.36"
+  )
   def mainClass = Some("whitelabel.captal.cli.Main")
 
   // Wrappers swap a freshly-downloaded captal.jar.new into place BEFORE launching Java.
@@ -396,8 +468,8 @@ if exist "%SCRIPT_DIR%captal.jar.new" (
 java -jar "%SCRIPT_DIR%captal.jar" %*
 """
 
-  /** Bundle CLI release artifacts (JAR + cross-platform wrappers).
-    * Output: out/cli/releaseAssets.dest/{captal.jar, captal, captal.bat}
+  /** Bundle CLI release artifacts (JAR + cross-platform wrappers). Output:
+    * out/cli/releaseAssets.dest/{captal.jar, captal, captal.bat}
     */
   def releaseAssets = Task:
     val dest = Task.dest
@@ -407,9 +479,9 @@ java -jar "%SCRIPT_DIR%captal.jar" %*
     os.write.over(dest / "captal.bat", batWrapper)
     PathRef(dest)
 
-  /** Publish CLI release to S3 under both versioned and latest prefixes.
-    * Usage: ./mill cli.publishS3 --bucket captal-cli-releases --version 1.0.0
-    * Operator must run `aws sso login` or have AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY set.
+  /** Publish CLI release to S3 under both versioned and latest prefixes. Usage: ./mill
+    * cli.publishS3 --bucket captal-cli-releases --version 1.0.0 Operator must run `aws sso login`
+    * or have AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY set.
     */
   def publishS3(bucket: String, version: String) = Task.Command:
     val src = releaseAssets().path
@@ -419,14 +491,17 @@ java -jar "%SCRIPT_DIR%captal.jar" %*
       "captal.bat" -> "application/bat")
     val prefixes = Seq(s"s3://$bucket/v$version", s"s3://$bucket/latest")
     for
-      prefix         <- prefixes
-      (name, ctype)  <- files
+      prefix        <- prefixes
+      (name, ctype) <- files
     do
       val args = Seq(
-        "aws", "s3", "cp",
+        "aws",
+        "s3",
+        "cp",
         (src / name).toString,
         s"$prefix/$name",
-        "--content-type", ctype)
+        "--content-type",
+        ctype)
       println(s"[publish] $name -> $prefix/$name")
       val result = os.proc(args).call(check = false, stderr = os.Pipe)
       if result.exitCode != 0 then
@@ -437,18 +512,21 @@ java -jar "%SCRIPT_DIR%captal.jar" %*
     os.write.over(versionFile, version)
     for prefix <- prefixes do
       val args = Seq(
-        "aws", "s3", "cp",
+        "aws",
+        "s3",
+        "cp",
         versionFile.toString,
         s"$prefix/version.txt",
-        "--content-type", "text/plain")
+        "--content-type",
+        "text/plain")
       println(s"[publish] version.txt -> $prefix/version.txt")
       val result = os.proc(args).call(check = false, stderr = os.Pipe)
       if result.exitCode != 0 then
         sys.error(s"[publish] aws s3 cp failed for version.txt: ${result.err.trim()}")
     println(s"[publish] uploaded captal v$version to $bucket")
 
-  /** Install the CLI locally to ~/.local/bin/ (Linux/macOS) for development convenience.
-    * Usage: ./mill cli.installLocal
+  /** Install the CLI locally to ~/.local/bin/ (Linux/macOS) for development convenience. Usage:
+    * ./mill cli.installLocal
     */
   def installLocal() = Task.Command:
     val src = releaseAssets().path
@@ -462,6 +540,7 @@ java -jar "%SCRIPT_DIR%captal.jar" %*
 
   object test extends ScalaTests with TestModule.Utest with ScalafmtModule with ScalafixModule:
     def mvnDeps = Seq(mvn"com.lihaoyi::utest:0.8.9")
+end cli
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Client: JS only (Laminar app)
@@ -506,9 +585,8 @@ object client extends BaseJSModule:
   def clientAssets: T[PathRef] = Task.Source(moduleDir / "assets")
   def clientTemplate: T[PathRef] = Task.Source(moduleDir / "index.html.template")
 
-  /** Build production bundle and gzip assets.
-    * Usage: ./mill client.bundle
-    * Output: out/client/bundle.dest/
+  /** Build production bundle and gzip assets. Usage: ./mill client.bundle Output:
+    * out/client/bundle.dest/
     */
   def bundle = Task:
     val src = fullLinkJS().dest.path
@@ -523,12 +601,7 @@ object client extends BaseJSModule:
 
     // Render index.html from template with relative paths so the browser resolves them
     // against the current directory (which lives at https://<host>/<slug>/ in prod).
-    renderIndex(
-      template,
-      dest / "index.html",
-      jsPath = "./main.js.gz",
-      cssPath = "./styles.css.gz"
-    )
+    renderIndex(template, dest / "index.html", jsPath = "./main.js.gz", cssPath = "./styles.css.gz")
 
     // Gzip JS and CSS
     gzipFile(dest / "main.js", dest / "main.js.gz")
@@ -536,11 +609,11 @@ object client extends BaseJSModule:
 
     PathRef(dest)
 
-  /** Publish the bundle to S3 under `<bucket>/<prefix>/`. Replaces 4 manual `aws s3 cp`
-    * invocations and ensures Content-Type / Content-Encoding metadata stay consistent.
+  /** Publish the bundle to S3 under `<bucket>/<prefix>/`. Replaces 4 manual `aws s3 cp` invocations
+    * and ensures Content-Type / Content-Encoding metadata stay consistent.
     *
-    * Usage: `./mill client.publishS3 --bucket captal-dev-assets --prefix bundle`
-    *        Optional: `--region us-east-1` (default).
+    * Usage: `./mill client.publishS3 --bucket captal-dev-assets --prefix bundle` Optional:
+    * `--region us-east-1` (default).
     *
     * Operator must run `aws sso login` or have AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY set.
     */
@@ -550,24 +623,29 @@ object client extends BaseJSModule:
     val destBase = s"s3://$bucket/$normalizedPrefix"
     // (name, content-type, content-encoding)
     val files: Seq[(String, String, Option[String])] = Seq(
-      ("index.html",     "text/html; charset=utf-8", None),
-      ("brand-icon.svg", "image/svg+xml",            None),
-      ("main.js.gz",     "application/javascript",   Some("gzip")),
-      ("styles.css.gz",  "text/css",                 Some("gzip")))
+      ("index.html", "text/html; charset=utf-8", None),
+      ("brand-icon.svg", "image/svg+xml", None),
+      ("main.js.gz", "application/javascript", Some("gzip")),
+      ("styles.css.gz", "text/css", Some("gzip"))
+    )
     for (name, ctype, enc) <- files do
       val baseArgs = Seq(
-        "aws", "s3", "cp",
+        "aws",
+        "s3",
+        "cp",
         (src / name).toString,
         s"$destBase/$name",
-        "--region", region,
-        "--content-type", ctype)
+        "--region",
+        region,
+        "--content-type",
+        ctype)
       val args = enc.fold(baseArgs)(e => baseArgs ++ Seq("--content-encoding", e))
       println(s"[publish] $name -> $destBase/$name")
       val result = os.proc(args).call(check = false, stderr = os.Pipe)
       if result.exitCode != 0 then
         sys.error(s"[publish] aws s3 cp failed for $name: ${result.err.trim()}")
     println(s"[publish] uploaded bundle to $destBase")
-
+end client
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MCP: backoffice server. Its own deployable, deliberately not linked into `api`.
@@ -587,12 +665,20 @@ object client extends BaseJSModule:
 object mcp extends BaseModule:
   def scalaVersion = "3.8.4"
   def moduleDeps = Seq(core, infra)
+  // The AWS SDK ships `netty-nio-client` for its *async* clients, and that client pins netty
+  // 4.1.x. zio-http is on 4.2.x, where `DefaultHeaders` moved to `netty-codec-base` — so the
+  // stale `netty-codec` 4.1 jar shadows the class and every request dies with
+  // `NoSuchMethodError: DefaultHeaders.containsAny`. This module only builds the synchronous
+  // `S3Client`/`CloudFrontClient`/`S3Presigner`, which use `apache-client`, so the async client
+  // is dead weight. Excluding it is what keeps the server able to answer at all.
   def mvnDeps = Seq(
     mvn"com.jamesward::zio-http-mcp:0.5.0",
-    mvn"software.amazon.awssdk:s3:2.29.51",
-    mvn"software.amazon.awssdk:cloudfront:2.29.51",
+    mvn"software.amazon.awssdk:s3:2.29.51".exclude("software.amazon.awssdk" -> "netty-nio-client"),
+    mvn"software.amazon.awssdk:cloudfront:2.29.51".exclude(
+      "software.amazon.awssdk" -> "netty-nio-client"),
     mvn"com.lihaoyi::scalatags:0.13.1",
-    mvn"org.slf4j:slf4j-nop:1.7.36")
+    mvn"org.slf4j:slf4j-nop:1.7.36"
+  )
 
   /** Declared as a Task.Source so Mill both permits the read and reinvalidates the copy whenever a
     * skill changes.
@@ -606,6 +692,96 @@ object mcp extends BaseModule:
     val names = os.list(dest).filter(os.isDir).map(_.last).sorted
     os.write(dest / "index.txt", names.mkString("\n"))
     super.resources() ++ Seq(PathRef(Task.dest))
+
+  private val localStackContainer = "localstack-dev"
+  private val localStackPort = 4566
+  private val devBucket = "captal-assets-dev"
+  private val devPort = 8081
+
+  def localStackSetup() = Task.Command:
+    ensureLocalStack(localStackContainer, localStackPort, devBucket)
+
+  def stopLocalStack() = Task.Command:
+    os.proc("docker", "rm", "-f", localStackContainer).call(check = false)
+    println("localstack dev container stopped")
+
+  /** Runs the backoffice against local rqlite and LocalStack.
+    *
+    * Everything the server refuses to start without is supplied here, so the failure modes it is
+    * designed to have — no tokens, no bucket — do not get in the way of running it locally.
+    *
+    * The token is fixed and printed rather than generated: it goes into a `.mcp.json` by hand, and
+    * one that changed every run would be copied wrong more often than it would be secure. It is a
+    * local server holding local data.
+    *
+    * Usage: ./mill mcp.dev
+    */
+  def dev(port: Int = devPort, token: String = "dev-token") = Task.Command:
+    val migrationCp = infra.runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
+    val cp = runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
+
+    println("[dev] Step 1/4: Ensuring rqlite...")
+    val dbUrl = ensureRqlite(rqliteDevContainerName, rqliteDevPort)
+
+    println("[dev] Step 2/4: Running migrations...")
+    val migration = os
+      .proc("java", "-cp", migrationCp, "whitelabel.captal.infra.Migrate")
+      .call(env = Map("DB_URL" -> dbUrl), check = false, stdout = os.Inherit, stderr = os.Inherit)
+    if migration.exitCode != 0 then
+      sys.error("[dev] Migrations failed; the server would start against a schema-less database.")
+
+    println("[dev] Step 3/4: Ensuring LocalStack...")
+    val endpoint = ensureLocalStack(localStackContainer, localStackPort, devBucket)
+
+    println(s"[dev] Step 4/4: Starting MCP backoffice on :$port")
+
+    val env =
+      forkEnv() ++
+        Map(
+          "DB_URL"           -> dbUrl,
+          "MCP_PORT"         -> port.toString,
+          "MCP_RESOURCE_URI" -> s"http://localhost:$port/mcp",
+          "MCP_TOKENS"       -> s"$token|dev|i18n:write,content:write",
+          "ASSETS_BUCKET"    -> devBucket,
+          // Never called in this flow — only the asset writes invalidate — but the server refuses to
+          // start without it, which is deliberate: in production a missing distribution means writes
+          // land and stay invisible.
+          "CLOUDFRONT_DISTRIBUTION_ID" -> "E000000000000",
+          "PUBLIC_BASE_URL"            -> s"http://localhost:$port",
+          "AWS_ENDPOINT_URL"           -> endpoint,
+          "AWS_REGION"                 -> "us-east-1",
+          // LocalStack does not verify signatures; the signer only needs a pair to exist.
+          "AWS_ACCESS_KEY_ID"     -> "test",
+          "AWS_SECRET_ACCESS_KEY" -> "test"
+        )
+
+    // Every tool here is scoped to a location, and none of them can create one — locations still
+    // arrive through provisioning. `api.dev` seeds `cafe-centro` into this same container on boot,
+    // which is the whole reason the two commands share it.
+    val seeded =
+      val probe = scala.util.Try:
+        val url = java.net.URI
+          .create(s"http://localhost:$rqliteDevPort/db/query?q=SELECT+COUNT(*)+FROM+locations")
+          .toURL
+        scala.io.Source.fromInputStream(url.openStream()).mkString
+      if probe.toOption.exists(_.contains("[[0]]")) then
+        "  No locations in the database yet — run `./mill api.dev` once to seed cafe-centro.\n"
+      else
+        ""
+
+    println(s"""
+      |[dev] Point a host at it with:
+      |
+      |  "captal": {
+      |    "command": "npx",
+      |    "args": ["mcp-remote", "http://localhost:$port/mcp",
+      |             "--header", "Authorization: Bearer $token"]
+      |  }
+      |
+      |$seeded""".stripMargin)
+
+    os.proc("java", forkArgs(), "-cp", cp, "whitelabel.captal.mcp.Main")
+      .call(env = env, stdin = os.Inherit, stdout = os.Inherit, stderr = os.Inherit)
 
   object test extends ScalaTests with ScalafmtModule with ScalafixModule:
     // zio-test 2.1.26 to match what zio-http-mcp 0.5.0 pulls in; the rest of the build is on
@@ -630,3 +806,5 @@ object mcp extends BaseModule:
     def stopRqlite() = Task.Command:
       os.proc("docker", "rm", "-f", rqliteContainer).call(check = false)
       println("rqlite mcp test container stopped")
+  end test
+end mcp
