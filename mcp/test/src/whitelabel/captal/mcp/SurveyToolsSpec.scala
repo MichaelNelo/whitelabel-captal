@@ -96,6 +96,37 @@ object SurveyToolsSpec extends ZIOSpecDefault:
       }
       .mkString
 
+  private def textArr(locale: String, value: String) = zio
+    .json
+    .ast
+    .Json
+    .Arr(Chunk(zio.json.ast.Json.Obj(Chunk("locale" -> str(locale), "value" -> str(value)))))
+
+  private def optionJson(label: String) = zio
+    .json
+    .ast
+    .Json
+    .Obj(Chunk("text" -> textArr("en", label)))
+
+  /** Every field spelled out: the input schema has no optional fields, so a partial object would be
+    * rejected by the decoder rather than by the validation under test.
+    */
+  private def questionJson(
+      surveyId: String,
+      questionType: String,
+      options: Chunk[zio.json.ast.Json] = Chunk.empty,
+      rules: Chunk[zio.json.ast.Json] = Chunk.empty) = json(
+    "surveyId"       -> str(surveyId),
+    "questionType"   -> str(questionType),
+    "text"           -> textArr("en", "A question"),
+    "description"    -> zio.json.ast.Json.Arr(Chunk.empty),
+    "placeholder"    -> zio.json.ast.Json.Arr(Chunk.empty),
+    "options"        -> zio.json.ast.Json.Arr(options),
+    "rules"          -> zio.json.ast.Json.Arr(rules),
+    "required"       -> zio.json.ast.Json.Bool(true),
+    "points"         -> zio.json.ast.Json.Num(10),
+    "hierarchyLevel" -> zio.json.ast.Json.Null
+  )
   private val quillLayer =
     RqliteDataSource.layer >>> Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)
 
@@ -177,5 +208,107 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           _      <- seed
           result <- SurveyTools.get.call(json("surveyId" -> str("nope")))
         yield assertTrue(result.isError.contains(true), textOf(result).contains("No survey"))
+      ,
+      test("creating a choice question writes its options and texts"):
+        for
+          fixture <- seed
+          created <- SurveyTools
+            .createQuestion
+            .call(
+              json(
+                "surveyId"     -> str(fixture.surveyId),
+                "questionType" -> str("radio"),
+                "text"         -> textArr("en", "How old are you?"),
+                "description"  -> zio.json.ast.Json.Arr(Chunk.empty),
+                "placeholder"  -> zio.json.ast.Json.Arr(Chunk.empty),
+                "options"      ->
+                  zio.json.ast.Json.Arr(Chunk(optionJson("Under 30"), optionJson("Over 30"))),
+                "rules"          -> zio.json.ast.Json.Arr(Chunk.empty),
+                "required"       -> zio.json.ast.Json.Bool(true),
+                "points"         -> zio.json.ast.Json.Num(5),
+                "hierarchyLevel" -> zio.json.ast.Json.Null
+              ))
+          fetched <- SurveyTools.get.call(json("surveyId" -> str(fixture.surveyId)))
+          body = textOf(fetched)
+        yield assertTrue(
+          !created.isError.contains(true),
+          // Appended after the three seeded questions rather than inserted anywhere.
+          textOf(created).contains("\"displayOrder\":4"),
+          body.contains("How old are you?"),
+          body.contains("Under 30"),
+          body.contains("Over 30")
+        )
+      ,
+      test("a rule that does not match the question type is refused"):
+        // The whole point: decodeRules drops a mismatched rule at runtime with no error, so a
+        // min_selections rule on an input question would be stored and never applied.
+        for
+          fixture <- seed
+          result  <- SurveyTools
+            .createQuestion
+            .call(
+              questionJson(
+                fixture.surveyId,
+                "input",
+                rules = Chunk(str("""{"type":"min_selections","value":2}"""))))
+        yield assertTrue(
+          result.isError.contains(true),
+          textOf(result).contains("not a valid text rule"))
+      ,
+      test("a matching rule is accepted"):
+        for
+          fixture <- seed
+          result  <- SurveyTools
+            .createQuestion
+            .call(
+              questionJson(
+                fixture.surveyId,
+                "input",
+                rules = Chunk(str("""{"type":"min_length","value":3}"""))))
+        yield assertTrue(!result.isError.contains(true))
+      ,
+      test("a radio question with no options is refused"):
+        for
+          fixture <- seed
+          result  <- SurveyTools.createQuestion.call(questionJson(fixture.surveyId, "radio"))
+        yield assertTrue(
+          result.isError.contains(true),
+          textOf(result).contains("needs at least one option"))
+      ,
+      test("an input question carrying options is refused"):
+        for
+          fixture <- seed
+          result  <- SurveyTools
+            .createQuestion
+            .call(questionJson(fixture.surveyId, "input", options = Chunk(optionJson("nope"))))
+        yield assertTrue(result.isError.contains(true), textOf(result).contains("takes no options"))
+      ,
+      test("a second active survey of the same category is refused"):
+        for
+          _      <- seed
+          result <- SurveyTools
+            .createSurvey
+            .call(
+              json(
+                "category"   -> str("profiling"),
+                "name"       -> zio.json.ast.Json.Null,
+                "videoId"    -> zio.json.ast.Json.Null,
+                "locationId" -> zio.json.ast.Json.Null))
+        yield assertTrue(result.isError.contains(true), textOf(result).contains("already exists"))
+      ,
+      test("an advertiser survey without a video is refused"):
+        for
+          _      <- seed
+          result <- SurveyTools
+            .createSurvey
+            .call(
+              json(
+                "category"   -> str("advertiser"),
+                "name"       -> zio.json.ast.Json.Null,
+                "videoId"    -> zio.json.ast.Json.Null,
+                "locationId" -> zio.json.ast.Json.Null))
+        yield assertTrue(
+          result.isError.contains(true),
+          textOf(result).contains("needs the videoId"))
     ).provideShared(quillLayer, ZLayer.fromZIO(migrate.unit)) @@ TestAspect.sequential
 end SurveyToolsSpec
