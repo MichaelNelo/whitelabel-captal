@@ -92,7 +92,7 @@ call:
 - **Advertiser surveys follow their video**, and videos are filtered by location, so those questions
   only ever reach the locations running that video.
 
-**`i18n_status` will not tell you if you forget one.** It reports the portal's interface keys, which
+**`get_i18n_status` will not tell you if you forget one.** It reports the portal's interface keys, which
 are a different category of text. A question with only English text does not render a placeholder —
 a guest browsing in Spanish is simply shown the English wording, with nothing logged anywhere. The
 only way to catch it is `get_survey`, which lists every locale each text has.
