@@ -84,5 +84,6 @@ object CaptalMcp:
       version: String = "0.1.0"): McpServer[QuillSqlite] =
     val withResources =
       resources.foldLeft(McpServer(name, version).instructions(instructions))(_.resource(_))
-    I18nTools.all.foldLeft[McpServer[QuillSqlite]](withResources)(_.tool(_))
+    (I18nTools.all ++ AdvertiserTools.all).foldLeft[McpServer[QuillSqlite]](withResources)(
+      _.tool(_))
 end CaptalMcp

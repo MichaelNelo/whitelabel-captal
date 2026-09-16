@@ -119,13 +119,8 @@ object I18nTools:
               isActive = 1
             )
             run(query[LocalizedTextRow].insertValue(lift(row))).orDie
-      // rqlite reports a rejected statement as an `error` field inside an HTTP 200, and the JDBC
-      // driver turns that into "0 rows affected" rather than an exception. Without this check a
-      // rejected write looks exactly like a successful one. See I18nToolsSpec for the evidence.
-      _ <-
-        ZIO.when(affected != 1)(
-          ZIO.fail(
-            s"Write for '$key' ($locale) affected $affected rows, expected 1. The database rejected it silently."))
+      // The guard lives in Writes because it applies to every write in this server, not just here.
+      _ <- Writes.expectOne(affected, s"Write for '$key' ($locale)")
     yield ()
     end for
 
