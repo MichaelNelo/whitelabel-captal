@@ -87,14 +87,26 @@ object VideoRepositoryQuill:
           .map(_.headOption.map(toAdvertiserVideo))
           .orDie
 
-      def findNextForUser(
-          userId: user.Id,
-          lastPromoVideoId: Option[video.Id]): Task[Option[VideoToWatch]] =
+      /** Advertiser video first, promo second.
+        *
+        * The promo is the venue's own content and exists so the visitor is not sent onward with
+        * nothing to watch when no advertiser video qualifies — every advertiser video has been
+        * seen, or none has a question left to ask.
+        */
+      def findNextForUser(userId: user.Id): Task[Option[VideoToWatch]] =
         for
           sessionData <- ctx.getOrFail
           locale = sessionData.locale
-          ad <- findNextAd(userId, locale)
-        yield ad
+          ad     <- findNextAd(userId, locale)
+          result <-
+            ad match
+              case Some(_) =>
+                ZIO.succeed(ad)
+              case None =>
+                // The cursor is read here rather than passed in: it lives on the session row, and
+                // SessionVideoHandler advances it whenever a promo is watched.
+                findNextPromo(sessionData.lastPromoVideoId, locale)
+        yield result
 
       private def findNextAd(userId: user.Id, locale: String): Task[Option[VideoToWatch]] =
         for

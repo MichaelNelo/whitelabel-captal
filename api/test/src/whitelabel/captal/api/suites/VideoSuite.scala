@@ -95,5 +95,27 @@ object VideoSuite:
             watchResp.code.isSuccess,
             videoViews.nonEmpty,
             videoViews.exists(v => v.completed == 0 && v.durationWatchedSeconds == 10))
+        ,
+        test("with no advertiser video available, the visitor gets a promo instead of nothing"):
+          // findNextPromo was fully written — cursor rotation over (priority, createdAt), wrapping
+          // at the end — and findNextForUser never called it, so a visitor with no qualifying
+          // advertiser video was sent straight on with nothing to watch.
+          for
+            _       <- TestFixtures.seedEmailSurvey
+            promo   <- TestFixtures.seedPromoVideo(videoTitle = "House promo")
+            backend <- testBackend
+            cookie  <- createSession(backend)
+            _       <- getNextSurvey(backend, cookie)
+            _       <- postEmailAnswer(backend, cookie, "promo-fallback@example.com")
+            // No advertiser was seeded, so nextAdQueryAuthenticated has nothing to return.
+            videoResp <- getNextVideo(backend, cookie)
+            parsed = parseNextVideo(videoResp.body)
+          yield assertTrue(
+            videoResp.code.isSuccess,
+            parsed.isDefined,
+            // NextVideo carries no id; the url is what identifies which video was served.
+            parsed.get.videoUrl == promo.videoUrl,
+            parsed.get.title.contains("House promo")
+          )
       )
 end VideoSuite
