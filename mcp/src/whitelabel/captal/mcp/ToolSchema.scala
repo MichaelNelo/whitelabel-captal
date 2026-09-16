@@ -25,6 +25,17 @@ object ToolSchema:
         override def callWithContext(args: Option[Json.Obj], ctx: McpToolContext) = handler
           .callWithContext(args, ctx)
 
+    /** Sets `_meta` on the tool definition. The builder does not expose it, but `McpToolHandlerR`
+      * is a plain trait with an override-able `definition`, so a decorator reaches it without
+      * forking the library — and keeps the typed derivation, including the MRTR signal the SDK
+      * re-throws from `handleWithContext`.
+      */
+    def withMeta(meta: Json.Obj): McpToolHandlerR[R] = withDefinition(_.copy(meta = Some(meta)))
+
+    /** Points the tool at an MCP App. The host reads the `ui://` resource and renders it. */
+    def withUi(resourceUri: String): McpToolHandlerR[R] = withMeta(
+      Json.Obj(Chunk("ui" -> Json.Obj(Chunk("resourceUri" -> Json.Str(resourceUri))))))
+
     /** Adds `discriminator: <caseId>` as a required const to every variant of the `oneOf` under
       * `properties.<field>`. The variants come out in declaration order, so `caseIds` is zipped
       * positionally against them.
@@ -36,6 +47,25 @@ object ToolSchema:
       definition.copy(inputSchema =
         patchProperty(definition.inputSchema, field)(variantSchema =>
           patchOneOf(variantSchema, discriminator, caseIds)))
+
+    /** The same repair, one level down: `properties.<arrayField>.items.properties.<field>`.
+      *
+      * A tool that takes a list of questions rather than one carries the identical `oneOf`, and
+      * leaving it unpatched is worse there than at the top level — four of the seven variants have
+      * no properties beyond `rules`, so they are not merely undocumented but indistinguishable from
+      * each other. Two separate agents have already been stopped by it, both reporting the same
+      * "missing subtype" and both guessing at the field name.
+      */
+    def withDiscriminatorInArray(
+        arrayField: String,
+        field: String,
+        discriminator: String,
+        caseIds: List[String]): McpToolHandlerR[R] = withDefinition: definition =>
+      definition.copy(inputSchema =
+        patchProperty(definition.inputSchema, arrayField): arraySchema =>
+          mapField(arraySchema, "items"): item =>
+            patchProperty(item, field)(variantSchema =>
+              patchOneOf(variantSchema, discriminator, caseIds)))
   end extension
 
   private def patchProperty(schema: Json.Obj, field: String)(f: Json.Obj => Json.Obj): Json.Obj =
