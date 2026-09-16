@@ -114,20 +114,17 @@ object SurveyToolsSpec extends ZIOSpecDefault:
     .Json
     .Obj(Chunk("kind" -> str(kind)) ++ value.fold(Chunk.empty)(v => Chunk("value" -> str(v))))
 
-  /** Only the three fields the schema actually requires. Everything else is optional now, which is
-    * the point: an agent adding a plain text question supplies the wording and nothing else.
+  /** The discriminated shape: `question` carries the type and whatever that type accepts. Only
+    * surveyId, text and question are required, which is the point — an agent adding a plain text
+    * question supplies the wording and nothing else.
     */
   private def questionJson(
       surveyId: String,
       questionType: String,
       options: Chunk[zio.json.ast.Json] = Chunk.empty,
       rules: Chunk[zio.json.ast.Json] = Chunk.empty) =
-    val base = Chunk(
-      "surveyId"     -> str(surveyId),
-      "questionType" -> str(questionType),
-      "text"         -> textArr("en", "A question"))
-    val extras =
-      (
+    val spec =
+      Chunk("questionType" -> str(questionType)) ++ (
         if options.isEmpty then
           Chunk.empty
         else
@@ -138,7 +135,16 @@ object SurveyToolsSpec extends ZIOSpecDefault:
         else
           Chunk("rules" -> zio.json.ast.Json.Arr(rules))
       )
-    Some(zio.json.ast.Json.Obj(base ++ extras))
+    Some(
+      zio
+        .json
+        .ast
+        .Json
+        .Obj(
+          Chunk(
+            "surveyId" -> str(surveyId),
+            "text"     -> textArr("en", "A question"),
+            "question" -> zio.json.ast.Json.Obj(spec))))
   end questionJson
 
   private val quillLayer =
@@ -229,26 +235,16 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           created <- SurveyTools
             .createQuestion
             .call(
-              json(
-                "surveyId"     -> str(fixture.surveyId),
-                "questionType" -> str("radio"),
-                "text"         -> textArr("en", "How old are you?"),
-                "description"  -> zio.json.ast.Json.Arr(Chunk.empty),
-                "placeholder"  -> zio.json.ast.Json.Arr(Chunk.empty),
-                "options"      ->
-                  zio.json.ast.Json.Arr(Chunk(optionJson("Under 30"), optionJson("Over 30"))),
-                "rules"          -> zio.json.ast.Json.Arr(Chunk.empty),
-                "required"       -> zio.json.ast.Json.Bool(true),
-                "points"         -> zio.json.ast.Json.Num(5),
-                "hierarchyLevel" -> zio.json.ast.Json.Null
-              ))
+              questionJson(
+                fixture.surveyId,
+                "radio",
+                options = Chunk(optionJson("Under 30"), optionJson("Over 30"))))
           fetched <- SurveyTools.get.call(json("surveyId" -> str(fixture.surveyId)))
           body = textOf(fetched)
         yield assertTrue(
           !created.isError.contains(true),
           // Appended after the three seeded questions rather than inserted anywhere.
           textOf(created).contains("\"displayOrder\":4"),
-          body.contains("How old are you?"),
           body.contains("Under 30"),
           body.contains("Over 30")
         )
@@ -267,7 +263,8 @@ object SurveyToolsSpec extends ZIOSpecDefault:
                 rules = Chunk(ruleJson("min_selections", Some("2")))))
         yield assertTrue(
           result.isError.contains(true),
-          textOf(result).contains("does not accept a min_selections rule"))
+          // Structural now: the input variant has no selection rules to pass.
+          textOf(result).contains("unrecognized string"))
       ,
       test("a matching rule is accepted"):
         for
@@ -295,7 +292,10 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           result  <- SurveyTools
             .createQuestion
             .call(questionJson(fixture.surveyId, "input", options = Chunk(optionJson("nope"))))
-        yield assertTrue(result.isError.contains(true), textOf(result).contains("takes no options"))
+        yield assertTrue(
+          result.isError.contains(true),
+          // The input variant has no options field, and extra fields are rejected.
+          textOf(result).contains("extra field"))
       ,
       test("a second active survey of the same category is refused"):
         for

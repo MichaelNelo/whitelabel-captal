@@ -1,7 +1,7 @@
 ---
 name: add-survey
 description: Use this skill when adding or changing identification surveys (email, profiling, location) or advertiser surveys through the backoffice MCP server. Triggers on "add survey", "create survey", "new survey", "add question", "survey question".
-version: 2.1.0
+version: 3.0.0
 ---
 
 # Add a survey
@@ -24,14 +24,13 @@ already exists.
 ## What to ask the operator, and what not to
 
 **Only the wording has to come from them.** The schema marks three fields required —
-`surveyId`, `questionType` and `text` — and everything else has a default or follows from the
-type. Do not ask about an optional field unless the operator raises it.
+`surveyId`, `text` and `question` — and everything else has a default or follows from the type. Do not ask about an optional field unless the operator raises it.
 
 | Field | Where it comes from |
 |---|---|
 | `text` | the operator; nothing else can supply it |
-| `questionType` | the shape of the answer being collected — infer it |
-| `options` | the operator, and only for `radio`, `checkbox`, `dropdown` |
+| `question.questionType` | the shape of the answer being collected — infer it |
+| `question.options` | the operator, and only where the variant has the field |
 | `required` | defaults to true |
 | `points` | defaults to 10, which is what every existing question uses |
 | `displayOrder` | automatic; the question is appended last |
@@ -41,38 +40,40 @@ type. Do not ask about an optional field unless the operator raises it.
 A plain text question is one call with nothing but the wording:
 
 ```json
-{"surveyId": "…", "questionType": "input",
- "text": [{"locale": "es", "value": "¿En qué barrio vivís?"}]}
+{"surveyId": "…",
+ "text": [{"locale": "es", "value": "¿En qué barrio vivís?"}],
+ "question": {"questionType": "input"}}
 ```
 
-## Question types
+## The question shape
 
-| Type | Options | Rules it accepts |
-|---|---|---|
-| `radio`, `dropdown` | required | none |
-| `checkbox` | required | `min_selections`, `max_selections` |
-| `input` | none | `min_length`, `max_length`, `pattern`, `email`, `url` |
-| `rating` | none | `min`, `max` — whole numbers |
-| `numeric` | none | `min`, `max` — numbers |
-| `date` | none | `min`, `max` — ISO dates, `yyyy-mm-dd` |
-
-## Validation rules
-
-Rules are named, not written as JSON. Give a `kind` and a `value`; the server builds the stored
-config, so its shape is always the one the portal can read.
+What varies by type lives in `question`, which is discriminated. The schema carries the constraint,
+so an `input` variant has no `options` field to pass and a `radio` has no `rules`:
 
 ```json
-"rules": [{"kind": "min_length", "value": "3"},
-          {"kind": "pattern", "value": "^[A-Z].*"}]
+{"surveyId": "…",
+ "text": [{"locale": "es", "value": "¿En qué barrio vivís?"}],
+ "question": {"questionType": "input"}}
 ```
 
-`email` and `url` take no value. Everything else does, as text — the server parses it and rejects a
-`min_length` of `"abc"` or a date `min` that is not `yyyy-mm-dd`.
+```json
+{"question": {"questionType": "checkbox",
+              "options": [{"text": [{"locale": "es", "value": "Mañana"}]}],
+              "rules": [{"kind": "min_selections", "value": "1"}]}}
+```
 
-Pairing a rule with a type that does not accept it is refused at the write, naming both. That check
-is the only thing standing between a wrong rule and silence: the read path decodes rules with
-`decode(config).toOption` and flat-maps, so one it cannot read is dropped at runtime with no error
-anywhere.
+| `questionType` | Carries |
+|---|---|
+| `radio`, `dropdown` | `options` |
+| `checkbox` | `options`, and selection rules: `min_selections`, `max_selections` |
+| `input` | text rules: `min_length`, `max_length`, `pattern`, `email`, `url` |
+| `rating` | range rules `min`, `max` — whole numbers |
+| `numeric` | range rules `min`, `max` — any number |
+| `date` | range rules `min`, `max` — ISO dates, `yyyy-mm-dd` |
+
+Passing a field the variant does not have is refused, as is a rule kind that belongs to another
+type. Neither reaches validation — the shape makes them undecodable — which is why the pairing no
+longer has to be remembered. `email` and `url` take no value; everything else does, as text.
 
 ## Texts are per locale, and nothing audits them
 
