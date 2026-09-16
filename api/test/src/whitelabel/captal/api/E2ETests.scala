@@ -23,7 +23,8 @@ object E2ETests extends ZIOSpecDefault:
         VideoSuite.suite,
         AdvertiserVideoSurveySuite.suite,
         FinishSuite.suite,
-        AuthorizedSuite.suite
+        AuthorizedSuite.suite,
+        SoftDeleteSuite.suite
       ) @@ TestAspect.before(clearAndSeedNoise.orDie),
       ProvisioningSuite.suite
     ) @@ TestAspect.sequential

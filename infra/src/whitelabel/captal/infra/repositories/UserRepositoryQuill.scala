@@ -29,6 +29,15 @@ object UserRepositoryQuill:
       yield (userRow.id, session.currentSurveyId, session.currentQuestionId)
 
   // Query that returns the (surveyId, questionId) pairs the user has answered
+  //
+  // Feeds State.Ready/State.Authorized.answeredQuestionIds, whose only consumer is
+  // Event.UserFinishedProcess -> EventLogHandler -> the event_log row. It is an audit payload; it
+  // decides nothing. What the flow asks next comes from a different subquery, over `answers` alone,
+  // in SurveyRepositoryQuill.nextIdentificationSurveyQuery.
+  //
+  // So it deliberately does NOT filter on is_active: retiring a question in the backoffice must not
+  // rewrite the record of what a user actually answered. (Note the join against `questions` here is
+  // also why a hard delete would silently drop answers from the audit trail.)
   inline def findAnsweredQuestionsByUserQuery = quote: (userIdParam: user.Id) =>
     for
       a <- query[AnswerRow]

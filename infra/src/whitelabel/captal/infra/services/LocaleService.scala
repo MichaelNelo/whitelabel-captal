@@ -97,12 +97,12 @@ object LocaleServiceQuill:
       import quill.*
 
       def listAvailable(): Task[List[String]] =
-        run(query[LocalizedTextRow].map(_.locale).distinct.sortBy(l => l)).orDie
+        run(query[LocalizedTextRow].filter(_.isActive == 1).map(_.locale).distinct.sortBy(l => l)).orDie
 
       def getMessages(locale: String, category: String): Task[Map[String, String]] =
         run(
           query[LocalizedTextRow].filter(r =>
-            r.locale == lift(locale) && r.category == lift(category)))
+            r.locale == lift(locale) && r.category == lift(category) && r.isActive == 1))
           .map(rows => rows.map(r => (r.entityId, r.value)).toMap)
           .orDie
 
@@ -111,7 +111,7 @@ object LocaleServiceQuill:
         run(
           query[LocalizedTextRow].filter(r =>
             r.locale == lift(locale) && r.category == lift("frontend") &&
-              r.locationId == lift(locId)))
+              r.locationId == lift(locId) && r.isActive == 1))
           .map(rows => rows.map(r => (r.entityId, r.value)).toMap)
           .map(LocaleService.buildI18n)
           .orDie

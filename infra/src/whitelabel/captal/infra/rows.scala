@@ -48,19 +48,22 @@ final case class QuestionRow(
     displayOrder: Int,
     hierarchyLevel: Option[String],
     isRequired: Int,
-    createdAt: String)
+    createdAt: String,
+    isActive: Int = 1)
 
 final case class QuestionOptionRow(
     id: survey.question.OptionId,
     questionId: survey.question.Id,
     displayOrder: Int,
-    parentOptionId: Option[survey.question.OptionId])
+    parentOptionId: Option[survey.question.OptionId],
+    isActive: Int = 1)
 
 final case class QuestionRuleRow(
     id: String,
     questionId: survey.question.Id,
     ruleType: String,
-    ruleConfig: String)
+    ruleConfig: String,
+    isActive: Int = 1)
 
 final case class AnswerRow(
     id: String,
@@ -93,7 +96,8 @@ final case class LocalizedTextRow(
     category: String,
     createdAt: String,
     updatedAt: String,
-    locationId: Option[String] = None)
+    locationId: Option[String] = None,
+    isActive: Int = 1)
 
 final case class AdvertiserRow(
     id: String,

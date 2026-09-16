@@ -204,7 +204,7 @@ object TestFixtures:
   def addQuestionRule(
       questionId: survey.question.Id,
       ruleType: String,
-      ruleConfig: String): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]:
+      ruleConfig: String): ZIO[QuillSqlite, Throwable, String] = ZIO.serviceWithZIO[QuillSqlite]:
     quill =>
       import quill.*
       val ruleRow = QuestionRuleRow(
@@ -212,7 +212,61 @@ object TestFixtures:
         questionId = questionId,
         ruleType = ruleType,
         ruleConfig = ruleConfig)
-      run(query[QuestionRuleRow].insertValue(lift(ruleRow))).unit
+      run(query[QuestionRuleRow].insertValue(lift(ruleRow))).as(ruleRow.id)
+
+  final case class RuledSurveyFixture(
+      surveyId: survey.Id,
+      questionId: survey.question.Id,
+      minLengthRuleId: String,
+      patternRuleId: String)
+
+  /** A profiling survey whose single question is `input` and carries TWO text rules.
+    *
+    * Two, not one, on purpose: with a single rule a test cannot tell "the right row was filtered"
+    * apart from "every rule of the question was dropped". The regex deliberately avoids backslashes
+    * so it survives being embedded in a JSON string without escaping.
+    */
+  def seedProfilingInputSurveyWithRules(
+      minLength: Int = 8,
+      pattern: String = "^[A-Z].*"): ZIO[QuillSqlite, Throwable, RuledSurveyFixture] =
+    for
+      fixture <- seedSurvey("profiling", "input", "What is your full name?")
+      minRule <- addQuestionRule(
+        fixture.questionId,
+        "text",
+        s"""{"type":"min_length","value":$minLength}""")
+      patternRule <- addQuestionRule(
+        fixture.questionId,
+        "text",
+        s"""{"type":"pattern","value":"$pattern"}""")
+    yield RuledSurveyFixture(fixture.surveyId, fixture.questionId, minRule, patternRule)
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Soft-delete helpers
+  //
+  // These do what the backoffice will do: flip is_active, never DELETE. The suite that uses them
+  // asserts the row stops reaching the portal, which is the half a migration adding the column
+  // does not give you for free.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  def deactivateQuestion(questionId: survey.question.Id): ZIO[QuillSqlite, Throwable, Unit] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      run(query[QuestionRow].filter(_.id == lift(questionId)).update(_.isActive -> 0)).unit
+
+  def deactivateQuestionOption(optionId: survey.question.OptionId)
+      : ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.*
+    run(query[QuestionOptionRow].filter(_.id == lift(optionId)).update(_.isActive -> 0)).unit
+
+  def deactivateQuestionRule(ruleId: String): ZIO[QuillSqlite, Throwable, Unit] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      run(query[QuestionRuleRow].filter(_.id == lift(ruleId)).update(_.isActive -> 0)).unit
+
+  def deactivateLocalizedText(entityId: String): ZIO[QuillSqlite, Throwable, Unit] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      run(query[LocalizedTextRow].filter(_.entityId == lift(entityId)).update(_.isActive -> 0)).unit
 
   // ─────────────────────────────────────────────────────────────────────────────
   // User and Progress Fixtures

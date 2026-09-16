@@ -40,7 +40,10 @@ object SurveyRepositoryQuill:
     .headOption
     .map(t => LocalizedText(t.value, t.locale))
 
-  // Query con JOINs para textos localizados
+  // Query con JOINs para textos localizados.
+  //
+  // Every child of the question filters on is_active too. Deactivating an option, a rule or a
+  // translation has to remove it from the portal, not just from a backoffice listing.
   inline def questionByIdQuery = quote:
     (
         surveyIdParam: survey.Id,
@@ -52,28 +55,30 @@ object SurveyRepositoryQuill:
       for
         surveyRow   <- query[SurveyRow].filter(_.id == surveyIdParam)
         questionRow <- query[QuestionRow].filter(row =>
-          row.id == questionIdParam && row.surveyId == surveyIdParam)
-        optionRow <- query[QuestionOptionRow].leftJoin(_.questionId == questionIdParam)
-        ruleRow   <- query[QuestionRuleRow].leftJoin(_.questionId == questionIdParam)
+          row.id == questionIdParam && row.surveyId == surveyIdParam && row.isActive == 1)
+        optionRow <- query[QuestionOptionRow].leftJoin(opt =>
+          opt.questionId == questionIdParam && opt.isActive == 1)
+        ruleRow <- query[QuestionRuleRow].leftJoin(rule =>
+          rule.questionId == questionIdParam && rule.isActive == 1)
         // JOIN para texto de pregunta
         questionText <- query[LocalizedTextRow]
-          .filter(lt => lt.entityId == questionIdStr)
+          .filter(lt => lt.entityId == questionIdStr && lt.isActive == 1)
           .filter(lt => lt.locale == localeParam || lt.locale == "en")
           .leftJoin(_ => true)
         // JOIN para descripción de pregunta
         questionDesc <- query[LocalizedTextRow]
-          .filter(lt => lt.entityId == questionDescIdStr)
+          .filter(lt => lt.entityId == questionDescIdStr && lt.isActive == 1)
           .filter(lt => lt.locale == localeParam || lt.locale == "en")
           .leftJoin(_ => true)
         // JOIN para placeholder de pregunta
         questionPlaceholder <- query[LocalizedTextRow]
-          .filter(lt => lt.entityId == questionPlaceholderIdStr)
+          .filter(lt => lt.entityId == questionPlaceholderIdStr && lt.isActive == 1)
           .filter(lt => lt.locale == localeParam || lt.locale == "en")
           .leftJoin(_ => true)
         // JOIN para texto de opción - comparamos String con String directamente
         // El MappedEncoding convierte OptionId a String automáticamente
         optionText <- query[LocalizedTextRow].leftJoin(lt =>
-          optionRow.exists(opt => lt.entityId == sql"${opt.id}".as[String]) &&
+          lt.isActive == 1 && optionRow.exists(opt => lt.entityId == sql"${opt.id}".as[String]) &&
             (lt.locale == localeParam || lt.locale == "en"))
       yield QuestionWithDetails(
         surveyRow,
@@ -88,7 +93,7 @@ object SurveyRepositoryQuill:
   inline def firstEmailSurveyQuery = quote:
     query[SurveyRow]
       .filter(s => s.isActive == 1 && s.category == "email")
-      .join(query[QuestionRow])
+      .join(query[QuestionRow].filter(_.isActive == 1))
       .on((s, q) => s.id == q.surveyId)
       .sortBy((_, q) => q.displayOrder)(using Ord.asc)
       .map((s, q) => NextIdentificationSurveyRow(s.id, q.id, s.category))
@@ -104,7 +109,7 @@ object SurveyRepositoryQuill:
     val hasExhaustedProfiling =
       query[SurveyRow]
         .filter(s => s.isActive == 1 && s.category == "profiling")
-        .join(query[QuestionRow])
+        .join(query[QuestionRow].filter(_.isActive == 1))
         .on((s, q) => s.id == q.surveyId)
         .filter((_, q) => !answeredQuestionIds.contains(q.id))
         .isEmpty
@@ -112,7 +117,7 @@ object SurveyRepositoryQuill:
     val hasExhaustedLocation =
       query[SurveyRow]
         .filter(s => s.isActive == 1 && s.category == "location")
-        .join(query[QuestionRow])
+        .join(query[QuestionRow].filter(_.isActive == 1))
         .on((s, q) => s.id == q.surveyId)
         .filter((_, q) => !answeredQuestionIds.contains(q.id))
         .isEmpty
@@ -126,7 +131,7 @@ object SurveyRepositoryQuill:
                 !hasExhaustedLocation
             )
         )
-      .join(query[QuestionRow])
+      .join(query[QuestionRow].filter(_.isActive == 1))
       .on: (surveyRow, questionRow) =>
         surveyRow.id == questionRow.surveyId && !answeredQuestionIds.contains(questionRow.id)
       .sortBy((_, questionRow) => questionRow.displayOrder)(using Ord.asc)
@@ -138,7 +143,7 @@ object SurveyRepositoryQuill:
     query[SurveyRow]
       .filter(s =>
         s.isActive == 1 && s.category == "advertiser" && s.videoId.contains(videoIdParam))
-      .join(query[QuestionRow])
+      .join(query[QuestionRow].filter(_.isActive == 1))
       .on((s, q) => s.id == q.surveyId)
       .filter((_, q) => !answeredByUser.contains(q.id))
       .sortBy((_, q) => q.displayOrder)(using Ord.asc)
