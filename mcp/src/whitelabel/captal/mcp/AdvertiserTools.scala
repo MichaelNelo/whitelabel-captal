@@ -104,7 +104,7 @@ object AdvertiserTools:
 
   val create: McpToolHandlerR[QuillSqlite] = McpTool("create_advertiser")
     .description(
-      "Register an advertiser. Priority weights the video rotation against the other active advertisers; zero means never drawn. Names must be unique.")
+      "Register an advertiser. Priority weights the video rotation against the other active advertisers; zero means never drawn. Names must be unique. Read skill://add-advertiser/SKILL.md first.")
     .requireScopes(Auth.ContentWrite)
     .handle: (in: CreateIn) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
@@ -159,7 +159,7 @@ object AdvertiserTools:
 
   val setActive: McpToolHandlerR[QuillSqlite] = McpTool("set_advertiser_active")
     .description(
-      "Retire an advertiser or bring it back. Retiring also takes its videos out of the rotation, since the video query joins on the advertiser being active.")
+      "Retire an advertiser or bring it back. Retiring also takes its videos out of the rotation, since the video query joins on the advertiser being active. See skill://add-advertiser/SKILL.md.")
     .requireScopes(Auth.ContentWrite)
     .handle: (in: SetActiveIn) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>

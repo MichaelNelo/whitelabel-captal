@@ -126,7 +126,7 @@ object I18nTools:
 
   val status: McpToolHandlerR[QuillSqlite] = McpTool("i18n_status")
     .description(
-      "Translation coverage for a location: which required keys each locale is missing, and which stored keys are not part of the schema.")
+      "Translation coverage for a location: which required keys each locale is missing, and which stored keys are not part of the schema. Covers the portal interface only, not survey question wording. See skill://edit-i18n/SKILL.md.")
     .handle: (in: I18nStatusIn) =>
       for
         locationId <- resolveSlug(in.slug)
@@ -150,7 +150,7 @@ object I18nTools:
 
   val setTranslations: McpToolHandlerR[QuillSqlite] = McpTool("set_translations")
     .description(
-      "Create or update translations for one locale of a location. Keys must belong to the i18n schema; read i18n://required-keys for the list. Reports which keys are still missing afterwards.")
+      "Create or update translations for one locale of a location. Keys must belong to the i18n schema; read i18n://required-keys for the list and skill://edit-i18n/SKILL.md for the procedure. Reports which keys are still missing afterwards.")
     .requireScopes(Auth.I18nWrite)
     .handle: (in: SetTranslationsIn) =>
       val requiredSet = I18nSchema.keys[I18n].toSet
