@@ -43,31 +43,6 @@ object VideoRepositoryQuill:
       .sortBy(v => (v.priority, v.createdAt))(Ord.asc)
       .take(1)
 
-  // Weighted random ad selection — anonymous user (no EXISTS filter)
-  inline def nextAdQueryAnonymous = quote: (locationIdParam: Option[String]) =>
-    val advertiserPrioritySum = query[AdvertiserRow].filter(_.isActive == 1).map(_.priority).sum
-    query[AdvertiserVideoRow]
-      .join(query[AdvertiserRow])
-      .on((v, a) => v.advertiserId.contains(a.id) && a.isActive == 1)
-      .filter((v, _) =>
-        v.isActive == 1 && v.videoType == "publicidad" &&
-          locationIdParam.forall(lid => v.locationId.contains(lid)))
-      .sortBy((v, a) =>
-        -sqliteLog(sqliteAbs(sqliteRandom) + 0.0001) / (
-          (castAsReal(a.priority) / nullif(castAsRealOpt(advertiserPrioritySum), 0.0)) * (
-            castAsReal(v.priority) /
-              nullif(
-                castAsRealOpt(
-                  query[AdvertiserVideoRow]
-                    .filter(av => av.advertiserId == v.advertiserId && av.isActive == 1)
-                    .map(_.priority)
-                    .sum),
-                0.0)
-          )
-        ))(using Ord.asc)
-      .take(1)
-      .map((v, _) => v)
-
   // Weighted random ad selection — authenticated user (with EXISTS for unanswered surveys)
   inline def nextAdQueryAuthenticated = quote:
     (userIdParam: user.Id, locationIdParam: Option[String]) =>
@@ -113,7 +88,7 @@ object VideoRepositoryQuill:
           .orDie
 
       def findNextForUser(
-          userId: Option[user.Id],
+          userId: user.Id,
           lastPromoVideoId: Option[video.Id]): Task[Option[VideoToWatch]] =
         for
           sessionData <- ctx.getOrFail
@@ -121,17 +96,12 @@ object VideoRepositoryQuill:
           ad <- findNextAd(userId, locale)
         yield ad
 
-      private def findNextAd(userId: Option[user.Id], locale: String): Task[Option[VideoToWatch]] =
+      private def findNextAd(userId: user.Id, locale: String): Task[Option[VideoToWatch]] =
         for
           sessionData <- ctx.getOrFail
           locationId = sessionData.locationId
-          queryResult <-
-            userId match
-              case Some(uid) =>
-                run(nextAdQueryAuthenticated(lift(uid), lift(locationId)))
-              case None =>
-                run(nextAdQueryAnonymous(lift(locationId)))
-          result <-
+          queryResult <- run(nextAdQueryAuthenticated(lift(userId), lift(locationId)))
+          result      <-
             queryResult match
               case Nil =>
                 ZIO.none
