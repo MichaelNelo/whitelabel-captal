@@ -1,7 +1,7 @@
 package whitelabel.captal.infra.services
 
 import io.getquill.*
-import whitelabel.captal.core.i18n.I18n
+import whitelabel.captal.core.i18n.{I18n, I18nSchema}
 import whitelabel.captal.infra.LocalizedTextRow
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.given
@@ -24,69 +24,6 @@ object LocaleService:
   def getI18n(locale: String): ZIO[LocaleService, Throwable, I18n] = ZIO.serviceWithZIO[
     LocaleService](_.getI18n(locale))
 
-  def buildI18n(messages: Map[String, String]): I18n =
-    def get(key: String): String = messages.getOrElse(key, s"[$key]")
-
-    I18n(
-      welcome = I18n.Welcome(
-        title = get("welcome.title"),
-        subtitle = get("welcome.subtitle"),
-        steps = I18n
-          .Welcome
-          .Steps(
-            step1 = get("welcome.steps.step1"),
-            step2 = get("welcome.steps.step2"),
-            step3 = get("welcome.steps.step3")),
-        button = I18n
-          .Welcome
-          .Button(
-            start = get("welcome.button.start"),
-            connecting = get("welcome.button.connecting")),
-        selectLanguage = get("welcome.selectLanguage"),
-        authorized = I18n
-          .Welcome
-          .Authorized(
-            title = get("welcome.authorized.title"),
-            remaining = get("welcome.authorized.remaining"))
-      ),
-      ready = I18n.Ready(
-        title = get("ready.title"),
-        subtitle = get("ready.subtitle"),
-        resetButton = get("ready.resetButton")),
-      loading = I18n.Loading(message = get("loading.message")),
-      error = I18n.Error(
-        title = get("error.title"),
-        retry = get("error.retry"),
-        generic = get("error.generic")),
-      question = I18n.Question(
-        submit = get("question.submit"),
-        next = get("question.next"),
-        required = get("question.required"),
-        invalidEmail = get("question.invalidEmail"),
-        invalidUrl = get("question.invalidUrl"),
-        invalidPattern = get("question.invalidPattern"),
-        minLength = get("question.minLength"),
-        maxLength = get("question.maxLength"),
-        minSelections = get("question.minSelections"),
-        maxSelections = get("question.maxSelections"),
-        invalidOption = get("question.invalidOption"),
-        ratingOutOfRange = get("question.ratingOutOfRange"),
-        numericOutOfRange = get("question.numericOutOfRange"),
-        dateOutOfRange = get("question.dateOutOfRange"),
-        invalidAnswer = get("question.invalidAnswer")
-      ),
-      video = I18n.Video(
-        pageTitle = get("video.pageTitle"),
-        continueIn = get("video.continueIn"),
-        watchComplete = get("video.watchComplete"),
-        markWatched = get("video.markWatched"),
-        loading = get("video.loading"),
-        noVideoAvailable = get("video.noVideoAvailable"),
-        payAttention = get("video.payAttention")
-      )
-    )
-  end buildI18n
-
   val layer: ZLayer[QuillSqlite, Nothing, LocaleService] = ZLayer.fromFunction(
     (quill: QuillSqlite) => LocaleServiceQuill(quill, None))
 end LocaleService
@@ -97,7 +34,8 @@ object LocaleServiceQuill:
       import quill.*
 
       def listAvailable(): Task[List[String]] =
-        run(query[LocalizedTextRow].filter(_.isActive == 1).map(_.locale).distinct.sortBy(l => l)).orDie
+        run(query[LocalizedTextRow].filter(_.isActive == 1).map(_.locale).distinct.sortBy(l => l))
+          .orDie
 
       def getMessages(locale: String, category: String): Task[Map[String, String]] =
         run(
@@ -113,6 +51,6 @@ object LocaleServiceQuill:
             r.locale == lift(locale) && r.category == lift("frontend") &&
               r.locationId == lift(locId) && r.isActive == 1))
           .map(rows => rows.map(r => (r.entityId, r.value)).toMap)
-          .map(LocaleService.buildI18n)
+          .map(messages => I18nSchema.decode[I18n](messages))
           .orDie
 end LocaleServiceQuill
