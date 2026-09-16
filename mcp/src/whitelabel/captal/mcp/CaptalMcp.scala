@@ -1,6 +1,7 @@
 package whitelabel.captal.mcp
 
 import com.jamesward.ziohttp.mcp.*
+import com.jamesward.ziohttp.mcp.auth.McpAuth
 import whitelabel.captal.core.i18n.{I18n, I18nSchema}
 import whitelabel.captal.infra.schema.QuillSqlite
 import zio.{Chunk, ZIO}
@@ -79,11 +80,19 @@ object CaptalMcp:
 
   val resources: List[McpResourceHandler] = requiredI18nKeys :: Skills.all.map(skillResource)
 
+  /** Auth is not optional.
+    *
+    * The SDK ignores `requireScopes` declarations when no `.auth(...)` is configured — silently, so
+    * an unauthenticated server looks exactly like a scoped one from the outside while every tool is
+    * open to anyone who can reach the port.
+    */
   def server(
+      auth: McpAuth[Any],
       name: String = "captal-backoffice",
       version: String = "0.1.0"): McpServer[QuillSqlite] =
     val withResources =
-      resources.foldLeft(McpServer(name, version).instructions(instructions))(_.resource(_))
+      resources.foldLeft(McpServer(name, version).instructions(instructions).auth(auth))(
+        _.resource(_))
     (I18nTools.all ++ AdvertiserTools.all ++ SurveyTools.all).foldLeft[McpServer[QuillSqlite]](
       withResources)(_.tool(_))
 end CaptalMcp
