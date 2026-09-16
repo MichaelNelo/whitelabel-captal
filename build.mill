@@ -143,7 +143,7 @@ trait EndpointsDepsJS extends ScalaJSModule:
     mvn"com.softwaremill.sttp.tapir::tapir-json-circe::1.11.11")
 
 object endpoints extends BaseModule with EndpointsDepsJVM:
-  def moduleDeps = Seq(core)
+  def moduleDeps = Seq(core, infra)
 
 object `endpoints-js` extends BaseJSModule with EndpointsDepsJS:
   def moduleDeps = Seq(`core-js`)
@@ -566,3 +566,60 @@ object client extends BaseJSModule:
         sys.error(s"[publish] aws s3 cp failed for $name: ${result.err.trim()}")
     println(s"[publish] uploaded bundle to $destBase")
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MCP: backoffice server. Its own deployable, deliberately not linked into `api`.
+//
+// zio-http-mcp 0.5.0 is built against Scala 3.8.4 / zio-http 3.11.3, while the rest of the
+// build is on 3.8.0 / 3.0.1. Scala 3 can read TASTy from the same or an older compiler, so a
+// 3.8.4 module may depend on 3.8.0 ones but not the reverse — which is exactly why the version
+// bump is contained here instead of applied build-wide.
+//
+// Depending on `infra` also pulls its zio-http 3.0.1, which Coursier evicts up to the 3.11.3 that
+// zio-http-mcp requires — but only inside THIS module's classpath; `api` still resolves 3.0.1.
+// `UnifiClient` is the single file in `infra` compiled against zio-http, and the backoffice never
+// authorizes guests, so that class is never loaded here. If this server ever needs to talk to a
+// UniFi controller, align the versions first rather than finding out through a NoSuchMethodError.
+// ─────────────────────────────────────────────────────────────────────────────
+
+object mcp extends BaseModule:
+  def scalaVersion = "3.8.4"
+  def moduleDeps = Seq(core, infra)
+  def mvnDeps = Seq(mvn"com.jamesward::zio-http-mcp:0.5.0")
+
+  /** Declared as a Task.Source so Mill both permits the read and reinvalidates the copy whenever a
+    * skill changes.
+    */
+  def skillTemplates: T[PathRef] = Task.Source(
+    moduleDir / os.up / "cli" / "resources" / "templates" / "skills")
+
+  def resources: T[Seq[PathRef]] = Task:
+    val dest = Task.dest / "skills"
+    os.copy(skillTemplates().path, dest, createFolders = true)
+    val names = os.list(dest).filter(os.isDir).map(_.last).sorted
+    os.write(dest / "index.txt", names.mkString("\n"))
+    super.resources() ++ Seq(PathRef(Task.dest))
+
+  object test extends ScalaTests with ScalafmtModule with ScalafixModule:
+    // zio-test 2.1.26 to match what zio-http-mcp 0.5.0 pulls in; the rest of the build is on
+    // 2.1.14 and stays there.
+    def mvnDeps = Seq(mvn"dev.zio::zio-test:2.1.26", mvn"dev.zio::zio-test-sbt:2.1.26")
+    def testFramework = "zio.test.sbt.ZTestFramework"
+
+    // Its own container, not the one api.test uses: the two suites share a schema and would clear
+    // each other's rows.
+    private val rqlitePort = 4012
+    private val rqliteContainer = "rqlite-mcp-test"
+
+    // Task.Input so every run re-checks the container is actually alive, rather than caching a URL
+    // that points at something the operator removed in between.
+    def rqliteUrl: T[String] = Task.Input:
+      ensureRqlite(rqliteContainer, rqlitePort)
+
+    // RqliteDataSource reads `database.jdbcUrl`, which infra's application.conf overrides from DB_URL.
+    override def forkEnv: T[Map[String, String]] = Task:
+      super.forkEnv() ++ Map("DB_URL" -> rqliteUrl())
+
+    def stopRqlite() = Task.Command:
+      os.proc("docker", "rm", "-f", rqliteContainer).call(check = false)
+      println("rqlite mcp test container stopped")
