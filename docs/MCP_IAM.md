@@ -11,6 +11,9 @@ this document as part of the change rather than as follow-up.
 
 ## Current policy
 
+Defined in the infrastructure repo at `modules/mcp-iam`, attached to the ECS task role. The two
+have to move together: a permission added here and not there fails at runtime.
+
 ```json
 {
   "Version": "2012-10-17",
@@ -18,7 +21,7 @@ this document as part of the change rather than as follow-up.
     {
       "Sid": "LocationAssets",
       "Effect": "Allow",
-      "Action": ["s3:PutObject", "s3:GetObject", "s3:HeadObject"],
+      "Action": ["s3:PutObject", "s3:GetObject"],
       "Resource": "arn:aws:s3:::<assets-bucket>/*"
     },
     {
@@ -38,7 +41,7 @@ this document as part of the change rather than as follow-up.
 | `s3:PutObject` | `set_location_styles`, `set_location_icon` | Writes `<slug>/custom-styles.css.gz` and `<slug>/brand-icon.svg` |
 | `s3:GetObject` | `get_location_styles`, `get_location_icon` | Reads them back so an edit starts from what is deployed |
 | `s3:PutObject` (presigned) | `create_advertiser_video` | The signature is issued by this role, so it must itself be allowed to write the key. The bytes go browser-to-S3 and never reach this server |
-| `s3:HeadObject` | `confirm_video_upload` | Separates a finished upload from an abandoned one. The video row is written before the file exists, and stays inactive until this finds it |
+| `s3:GetObject` | `confirm_video_upload` | Also authorises HeadObject — IAM has no separate action for it. That call is what separates a finished upload from an abandoned one: the video row is written before the file exists and stays inactive until it is found |
 | `cloudfront:CreateInvalidation` | both asset writes | Without it the edge serves the previous file until the cache expires, and the write looks applied while being invisible |
 
 `s3:ListBucket` is deliberately absent. Nothing enumerates the bucket — every key is derived from a
