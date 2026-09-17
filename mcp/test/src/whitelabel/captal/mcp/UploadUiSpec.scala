@@ -76,5 +76,24 @@ object UploadUiSpec extends ZIOSpecDefault:
           page.contains("No hay videos esperando archivo"),
           page.contains("create_advertiser_video"),
           !page.contains("""class="row""""))
+      ,
+      test("the page speaks JSON-RPC to the host and tells the model what it did"):
+        // Both were wrong before the extension spec was read. The page posted an ad-hoc
+        // `{type: 'tool'}` envelope no host reads, and even a working call would have been
+        // invisible to the model — which here means the agent waiting forever on a confirmation
+        // that already happened.
+        val page = UploadUi.renderPending(
+          List(UploadUi.Pending("v-1", "Promo", "cafe-centro", "https://s3/a?sig=x", "video/mp4")),
+          None)
+        assertTrue(
+          page.contains("ui/initialize"),
+          page.contains("ui/notifications/initialized"),
+          // the result of the call that opened the page, which is how it can single out one video
+          page.contains("ui/notifications/tool-result"),
+          page.contains("""method: 'tools/call'""") || page.contains("'tools/call'"),
+          page.contains("ui/message"),
+          page.contains("jsonrpc"),
+          !page.contains("""type: 'tool'""")
+        )
     )
 end UploadUiSpec

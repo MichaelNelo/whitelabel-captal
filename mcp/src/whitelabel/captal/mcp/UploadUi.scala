@@ -201,14 +201,66 @@ object UploadUi:
     |input[type=file].file { display: none; }
     |""".stripMargin
 
-  /** The same upload as the single-video page, once per row. Kept as one listener over the list
-    * rather than a closure per item so the page stays readable at any number of pending videos.
+  /** The host bridge, which is JSON-RPC over `postMessage` and not an ad-hoc envelope.
+    *
+    * The page used to post `{type: 'tool', name: …}`, which no host reads. Views are MCP clients:
+    * they open with a `ui/initialize` request, answer it with `ui/notifications/initialized`, and
+    * speak ordinary JSON-RPC from then on.
+    *
+    * Two consequences worth spelling out, both discovered from the extension spec rather than from
+    * anything the SDK exposes:
+    *
+    *   - `ui/notifications/tool-result` delivers the result of the call that opened the page. That
+    *     is how a page addressed as "everything pending" can still single out the video just
+    *     created — the URI could never carry it, but the host hands it over anyway.
+    *   - A `tools/call` the page makes is **not** visible to the model. It runs, the row turns
+    *     green, and the conversation knows nothing. `ui/message` is what puts it there, which
+    *     matters here because confirming an upload is precisely the thing the agent is waiting on
+    *     and cannot otherwise observe.
     */
   private val pendingScript =
     """
     |const uploads = {};
     |for (const u of window.__UPLOADS__) uploads[u.videoId] = u;
     |const pick = (sel, id) => document.querySelector(sel + '[data-video="' + id + '"]');
+    |
+    |let nextId = 1;
+    |const send = (method, params) => {
+    |  const id = nextId++;
+    |  window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
+    |  return id;
+    |};
+    |const notify = (method, params) =>
+    |  window.parent.postMessage({ jsonrpc: '2.0', method, params }, '*');
+    |
+    |// Narrow to the video the opening call produced, when there was one. Without it the page is
+    |// still correct, just longer: every upload that is still outstanding.
+    |const focusOn = (videoId) => {
+    |  if (!uploads[videoId]) return;
+    |  for (const row of document.querySelectorAll('.row')) {
+    |    const id = row.querySelector('[data-video]').dataset.video;
+    |    if (id !== videoId) row.remove();
+    |  }
+    |  const heading = document.querySelector('h1');
+    |  if (heading) heading.textContent = 'Subir el video';
+    |};
+    |
+    |const initializeId = send('ui/initialize', {
+    |  appCapabilities: { availableDisplayModes: ['inline', 'fullscreen'] }
+    |});
+    |
+    |window.addEventListener('message', (event) => {
+    |  const message = event.data;
+    |  if (!message || message.jsonrpc !== '2.0') return;
+    |  if (message.id === initializeId && message.result) {
+    |    notify('ui/notifications/initialized', {});
+    |    return;
+    |  }
+    |  if (message.method === 'ui/notifications/tool-result') {
+    |    const structured = (message.params || {}).structuredContent || {};
+    |    if (structured.videoId) focusOn(structured.videoId);
+    |  }
+    |});
     |
     |for (const button of document.querySelectorAll('button.pick')) {
     |  const id = button.dataset.video;
@@ -238,12 +290,17 @@ object UploadUi:
     |        status.textContent = 'Listo. Confirmando…';
     |        bar.style.width = '100%';
     |        // The video stays out of rotation until the server has seen the object, so the page
-    |        // has to ask for that itself.
-    |        window.parent.postMessage({
-    |          type: 'tool',
-    |          name: 'confirm_video_upload',
-    |          arguments: { videoId: id }
-    |        }, '*');
+    |        // asks for that itself rather than leaving it to the operator to remember.
+    |        send('tools/call', { name: 'confirm_video_upload', arguments: { videoId: id } });
+    |        // And says so in the conversation, because a call the page makes is invisible to the
+    |        // model otherwise — which would leave the agent waiting on something already done.
+    |        send('ui/message', {
+    |          role: 'user',
+    |          content: {
+    |            type: 'text',
+    |            text: 'Subí el archivo del video ' + id + ' y llamé confirm_video_upload.'
+    |          }
+    |        });
     |      } else {
     |        button.disabled = false;
     |        status.textContent = 'S3 rechazó la subida (' + request.status + ').';
@@ -252,7 +309,7 @@ object UploadUi:
     |
     |    request.addEventListener('error', () => {
     |      button.disabled = false;
-    |      status.textContent = 'No se pudo conectar con S3. Puede que el enlace haya expirado.';
+    |      status.textContent = 'No se pudo conectar con S3. Puede que el enlace haya expirado; volvé a abrir esta página para firmar de nuevo.';
     |    });
     |
     |    request.send(file);
