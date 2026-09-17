@@ -31,9 +31,9 @@ object VideoTools:
       @description("Whose video this is. Call list_advertisers for the ids.")
       advertiserId: String,
       @description("Shown above the player, one entry per locale.")
-      title: List[TextIn],
+      title: List[LocalizedText],
       @description("Optional blurb under the title.")
-      description: Option[List[TextIn]],
+      description: Option[List[LocalizedText]],
       @description("The file name to store it under. Keep the extension; it decides the MIME type.")
       fileName: String,
       @description("The video's full length. Drives the default for minWatchSeconds.")
@@ -46,12 +46,12 @@ object VideoTools:
       priority: Option[Int],
       @description(
         "Asked after the video. At least one — a video whose survey has nothing left to ask is never served.")
-      questions: List[VideoQuestionIn])
+      questions: List[VideoQuestion])
 
-  final case class VideoQuestionIn(
+  final case class VideoQuestion(
       @description(
         "The wording, one entry per locale. Ask the operator; nothing else can supply it.")
-      text: List[TextIn],
+      text: List[LocalizedText],
       @description(
         "The shape of the answer. questionType picks the variant and decides which other fields are allowed.")
       question: QuestionSpec,
@@ -94,7 +94,7 @@ object VideoTools:
       @description("Where the portal will fetch it from.")
       videoUrl: String)
 
-  given Schema[VideoQuestionIn] = DeriveSchema.gen
+  given Schema[VideoQuestion] = DeriveSchema.gen
   given Schema[CreateVideoIn] = DeriveSchema.gen
   given Schema[CreateVideoOut] = DeriveSchema.gen
   given Schema[ConfirmUploadIn] = DeriveSchema.gen

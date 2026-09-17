@@ -70,28 +70,28 @@ enum RangeRuleKind:
 object RangeRuleKind:
   given Schema[RangeRuleKind] = DeriveSchema.gen
 
-final case class TextIn(
+final case class LocalizedText(
     @description("BCP 47 tag — 'es', 'en'. One entry per locale the location serves.")
     locale: String,
     @description("The text guests see in that locale.")
     value: String)
 
-final case class OptionIn(
+final case class AnswerOption(
     @description("The option's label, one entry per locale.")
-    text: List[TextIn])
+    text: List[LocalizedText])
 
-final case class TextRuleIn(
+final case class TextRule(
     @description("Which rule. Only the kinds an input question accepts are listed here.")
     kind: TextRuleKind,
     @description(
       "Omit for email and url. A whole number for the length rules; a regex for pattern.")
     value: Option[String])
-final case class SelectionRuleIn(
+final case class SelectionRule(
     @description("Which bound to set on how many options may be picked.")
     kind: SelectionRuleKind,
     @description("A whole number.")
     value: String)
-final case class RangeRuleIn(
+final case class RangeRule(
     @description("Which end of the range to set.")
     kind: RangeRuleKind,
     @description(
@@ -113,35 +113,35 @@ enum QuestionSpec:
   @rejectExtraFields
   case Radio(
       @description("The choices, in the order they are shown. At least one.")
-      options: List[OptionIn])
+      options: List[AnswerOption])
   @rejectExtraFields
   case Dropdown(
       @description("The choices, in the order they are shown. At least one.")
-      options: List[OptionIn])
+      options: List[AnswerOption])
   @rejectExtraFields
   case Checkbox(
       @description("The choices, in the order they are shown. At least one.")
-      options: List[OptionIn],
+      options: List[AnswerOption],
       @description(
         "How many may be picked: min_selections, max_selections. Omit for no limit either way.")
-      rules: Option[List[SelectionRuleIn]])
+      rules: Option[List[SelectionRule]])
   @rejectExtraFields
   case Input(
       @description(
         "What the text must satisfy: min_length, max_length, pattern, email, url. Omit for none.")
-      rules: Option[List[TextRuleIn]])
+      rules: Option[List[TextRule]])
   @rejectExtraFields
   case Rating(
       @description("The bounds of the scale: min, max, as whole numbers. Omit for the default.")
-      rules: Option[List[RangeRuleIn]])
+      rules: Option[List[RangeRule]])
   @rejectExtraFields
   case Numeric(
       @description("The accepted range: min, max. Any number. Omit for unbounded.")
-      rules: Option[List[RangeRuleIn]])
+      rules: Option[List[RangeRule]])
   @rejectExtraFields
   case Date(
       @description("The accepted range: min, max, as ISO dates (yyyy-mm-dd). Omit for unbounded.")
-      rules: Option[List[RangeRuleIn]])
+      rules: Option[List[RangeRule]])
 end QuestionSpec
 
 object QuestionSpec:
@@ -170,11 +170,6 @@ object QuestionSpec:
   * checked in Scala to produce a message the operator can act on.
   */
 object SurveyTools:
-  final case class LocalizedValue(
-      @description("BCP 47 tag.")
-      locale: String,
-      @description("The stored text for that locale.")
-      value: String)
   final case class OptionView(
       @description("Stable across edits; answers reference it.")
       id: String,
@@ -183,7 +178,7 @@ object SurveyTools:
       @description("A retired option stops being offered but keeps the answers that chose it.")
       active: Boolean,
       @description("The label, per locale. A locale missing here shows nothing for this option.")
-      text: List[LocalizedValue])
+      text: List[LocalizedText])
   final case class QuestionView(
       @description("What set_question_active and reorder_questions take.")
       id: String,
@@ -202,7 +197,7 @@ object SurveyTools:
         "How many answers already reference this question. Non-zero is why retiring exists instead of deleting: the rows would lose what they point at.")
       answers: Int,
       @description("The wording, per locale.")
-      text: List[LocalizedValue],
+      text: List[LocalizedText],
       @description("Empty for the types that take no options.")
       options: List[OptionView],
       @description("The stored validation rules, rendered for reading — 'min_length=3'.")
@@ -272,7 +267,6 @@ object SurveyTools:
       @description("The order as stored, which should match what was sent.")
       order: List[String])
 
-  given Schema[LocalizedValue] = DeriveSchema.gen
   given Schema[OptionView] = DeriveSchema.gen
   given Schema[QuestionView] = DeriveSchema.gen
   given Schema[SurveyView] = DeriveSchema.gen
@@ -300,12 +294,12 @@ object SurveyTools:
   private inline def textsForQuery = quote: (entityIdParam: String) =>
     query[LocalizedTextRow].filter(t => t.entityId == entityIdParam && t.isActive == 1)
 
-  private def texts(entityId: String): ZIO[QuillSqlite, Nothing, List[LocalizedValue]] = ZIO
+  private def texts(entityId: String): ZIO[QuillSqlite, Nothing, List[LocalizedText]] = ZIO
     .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
       run(textsForQuery(lift(entityId)))
         .orDie
-        .map(_.sortBy(_.locale).map(r => LocalizedValue(r.locale, r.value)))
+        .map(_.sortBy(_.locale).map(r => LocalizedText(r.locale, r.value)))
 
   private def answerCount(questionId: String): ZIO[QuillSqlite, Nothing, Int] = ZIO.serviceWithZIO[
     QuillSqlite]: quill =>
@@ -489,14 +483,14 @@ object SurveyTools:
       surveyId: String,
       @description(
         "The wording, one entry per locale. Ask the operator for this; nothing else can supply it.")
-      text: List[TextIn],
+      text: List[LocalizedText],
       @description(
         "The shape of the answer. questionType picks the variant and decides which other fields are allowed; a field the variant does not have is refused.")
       question: QuestionSpec,
       @description("Helper text under the question. Omit when there is none.")
-      description: Option[List[TextIn]],
+      description: Option[List[LocalizedText]],
       @description("Placeholder inside the input. Only meaningful for input questions.")
-      placeholder: Option[List[TextIn]],
+      placeholder: Option[List[LocalizedText]],
       @description("Whether an answer is mandatory. Defaults to true.")
       required: Option[Boolean],
       @description("Points awarded for answering. Defaults to 10, which is what every survey uses.")
@@ -513,8 +507,8 @@ object SurveyTools:
         "Ids of the options created, in the order given. Empty for the types that take none — and empty for a choice type means the options were dropped rather than stored.")
       optionIds: List[String])
 
-  given Schema[TextIn] = DeriveSchema.gen
-  given Schema[OptionIn] = DeriveSchema.gen
+  given Schema[LocalizedText] = DeriveSchema.gen
+  given Schema[AnswerOption] = DeriveSchema.gen
   given Schema[CreateSurveyIn] = DeriveSchema.gen
   given Schema[CreateSurveyOut] = DeriveSchema.gen
   given Schema[CreateQuestionIn] = DeriveSchema.gen
@@ -527,14 +521,14 @@ object SurveyTools:
     * left is parsing each value, which the types cannot do.
     */
   private def flatten(
-      spec: QuestionSpec): (String, List[OptionIn], List[(String, Option[String])]) =
-    def text(rules: Option[List[TextRuleIn]]) = rules
+      spec: QuestionSpec): (String, List[AnswerOption], List[(String, Option[String])]) =
+    def text(rules: Option[List[TextRule]]) = rules
       .getOrElse(Nil)
       .map(r => (r.kind.toString, r.value))
-    def selection(rules: Option[List[SelectionRuleIn]]) = rules
+    def selection(rules: Option[List[SelectionRule]]) = rules
       .getOrElse(Nil)
       .map(r => (r.kind.toString, Some(r.value)))
-    def range(rules: Option[List[RangeRuleIn]]) = rules
+    def range(rules: Option[List[RangeRule]]) = rules
       .getOrElse(Nil)
       .map(r => (r.kind.toString, Some(r.value)))
     spec match
@@ -605,7 +599,7 @@ object SurveyTools:
         s"""{"type":"$kind"}"""
   end ruleConfig
 
-  private def validateTexts(texts: List[TextIn], what: String): ZIO[Any, String, Unit] =
+  private def validateTexts(texts: List[LocalizedText], what: String): ZIO[Any, String, Unit] =
     for
       _ <-
         ZIO.when(texts.exists(t => t.locale.isBlank || t.value.isBlank))(
@@ -618,7 +612,7 @@ object SurveyTools:
 
   private def writeTexts(
       entityId: String,
-      texts: List[TextIn],
+      texts: List[LocalizedText],
       now: String): ZIO[QuillSqlite, String, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*
     ZIO.foreachDiscard(texts): t =>
@@ -701,10 +695,10 @@ object SurveyTools:
   private[mcp] def writeQuestion(
       surveyId: survey.Id,
       surveyCategory: String,
-      text: List[TextIn],
+      text: List[LocalizedText],
       spec: QuestionSpec,
-      descriptions: List[TextIn],
-      placeholders: List[TextIn],
+      descriptions: List[LocalizedText],
+      placeholders: List[LocalizedText],
       required: Boolean,
       points: Int,
       hierarchyLevel: Option[Hierarchy],
