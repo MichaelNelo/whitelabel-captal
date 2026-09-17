@@ -235,7 +235,7 @@ object CaptalMcpSpec extends ZIOSpecDefault:
           rendered.contains("Only for questions in a location survey; rejected elsewhere."),
           rendered.contains("Omit for email and url."),
           // And must not have brought back the generated filler, which told an agent nothing.
-          !rendered.contains("a list of TextIn")
+          !rendered.contains("a list of LocalizedText")
         )
       ,
       test("output schemas come from the same renderer as the inputs"):
