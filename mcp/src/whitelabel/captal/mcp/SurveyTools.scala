@@ -12,6 +12,7 @@ import whitelabel.captal.infra.{
   AdvertiserVideoRow,
   AnswerRow,
   LocalizedTextRow,
+  LocationRow,
   QuestionOptionRow,
   QuestionRow,
   QuestionRuleRow,
@@ -214,21 +215,43 @@ object SurveyTools:
 
   final case class ListRequest(
       @description("Retired surveys are hidden by default; set this to see them too.")
-      includeInactive: Boolean = false)
+      includeInactive: Boolean = false,
+      @description(
+        "Show only the surveys of one location. Omit for all of them. Email, profiling and location surveys belong to no location and are always shown, since the portal picks them by category across the whole deployment.")
+      slug: Option[String] = None)
+
+  /** Enough to find a question and act on it, and no more. `get_survey` is where the options, the
+    * rules and the answer count live — duplicating those here would make it the same call twice.
+    */
+  final case class QuestionSummary(
+      @description("What set_question_active and reorder_questions take.")
+      id: String,
+      @description("A retired question stops being served but keeps its answers.")
+      active: Boolean,
+      @description("The wording, per locale. This is what an operator recognises a question by.")
+      text: List[LocalizedText])
+
   final case class SurveySummary(
-      @description("Pass to get_survey for the questions themselves.")
+      @description("What create_question and get_survey take.")
       id: String,
       @description("What the survey is for.")
       category: String,
       @description("Operator-facing label. Absent when none was set.")
       name: Option[String],
-      @description("A retired survey is served to nobody.")
+      @description(
+        "Present only on advertiser surveys: the video this one follows. It is the link to the video, where the name is only a description of it.")
+      videoId: Option[String],
+      @description(
+        "Where this survey is served. Absent means everywhere — email, profiling and location surveys are chosen by category alone, with no location filter in the read path.")
+      locationSlug: Option[String],
+      @description("A retired survey is served to nobody, whatever its questions say.")
       active: Boolean,
       @description(
-        "Questions currently in rotation. Zero with active true is a survey that would be served and has nothing to ask.")
-      activeQuestions: Int)
+        "In display order, retired ones included. An empty list on an active survey is one that would be served with nothing to ask.")
+      questions: List[QuestionSummary])
+
   final case class ListResponse(
-      @description("Call get_survey with an id for the questions.")
+      @description("Call get_survey with an id for a question's options, rules and answer count.")
       surveys: List[SurveySummary])
 
   final case class GetRequest(
@@ -268,6 +291,7 @@ object SurveyTools:
   given Schema[QuestionView] = DeriveSchema.gen
   given Schema[SurveyView] = DeriveSchema.gen
   given Schema[ListRequest] = DeriveSchema.gen
+  given Schema[QuestionSummary] = DeriveSchema.gen
   given Schema[SurveySummary] = DeriveSchema.gen
   given Schema[ListResponse] = DeriveSchema.gen
   given Schema[GetRequest] = DeriveSchema.gen
@@ -313,24 +337,45 @@ object SurveyTools:
 
   val list: McpToolHandlerR[QuillSqlite] = McpTool("list_surveys")
     .description(
-      "Surveys with their category and how many active questions each has. Categories are email, profiling, location and advertiser.")
+      "Every survey with the questions in it, enough of each to find one and act on it. Categories are email, profiling, location and advertiser; only advertiser surveys belong to a location, through their video. Call get_survey for a question's options, rules and answer count.")
     .handle: (in: ListRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         for
           surveys   <- run(query[SurveyRow]).orDie
           questions <- run(query[QuestionRow]).orDie
-          visible   = surveys.filter(s => in.includeInactive || s.isActive == 1)
-          summaries = visible
-            .sortBy(s => (s.category, s.name.getOrElse("")))
-            .map: s =>
-              SurveySummary(
-                id = s.id.asString,
-                category = s.category,
-                name = s.name,
-                active = s.isActive == 1,
-                activeQuestions = questions.count(q => q.surveyId == s.id && q.isActive == 1))
+          locations <- run(query[LocationRow]).orDie
+          slugOf = locations.map(l => l.id -> l.slug).toMap
+          // A slug that resolves to nothing would otherwise filter everything out and read as "this
+          // location has no surveys" rather than "there is no such location".
+          _ <-
+            ZIO.foreachDiscard(in.slug): wanted =>
+              ZIO
+                .fail(s"No location with slug '$wanted'. Call list_locations to see what exists.")
+                .unless(locations.exists(_.slug == wanted))
+          visible = surveys
+            .filter(s => in.includeInactive || s.isActive == 1)
+            // The unscoped categories are kept whatever the filter says: they are served at every
+            // location, so hiding them would misreport what a guest there actually sees.
+            .filter(s =>
+              in.slug.forall(wanted => s.locationId.forall(id => slugOf.get(id).contains(wanted))))
+          summaries <-
+            ZIO.foreach(visible.sortBy(s => (s.category, s.name.getOrElse("")))): s =>
+              ZIO
+                .foreach(questions.filter(_.surveyId == s.id).sortBy(_.displayOrder)): q =>
+                  texts(q.id.asString).map(QuestionSummary(q.id.asString, q.isActive == 1, _))
+                .map: summaries =>
+                  SurveySummary(
+                    id = s.id.asString,
+                    category = s.category,
+                    name = s.name,
+                    videoId = s.videoId,
+                    locationSlug = s.locationId.flatMap(slugOf.get),
+                    active = s.isActive == 1,
+                    questions = summaries
+                  )
         yield ListResponse(summaries)
+        end for
 
   val get: McpToolHandlerR[QuillSqlite] = McpTool("get_survey")
     .description(
