@@ -44,7 +44,7 @@ object Main extends ZIOAppDefault:
       resource <- Auth.resourceUri
       tools =
         LocationTools.all.size + I18nTools.all.size + AdvertiserTools.all.size +
-          SurveyTools.all.size + AssetTools.all.size + VideoTools.all.size
+          SurveyTools.all.size + AssetTools.all.size + 2
       _ <- ZIO.logInfo(
         s"MCP backoffice on :$p as $resource — ${Skills.all.size} skills, ${CaptalMcp
             .resources
@@ -52,7 +52,14 @@ object Main extends ZIOAppDefault:
       _ <- ZIO
         .environment[QuillSqlite & AssetStore]
         .flatMap: env =>
-          Server.serve(CaptalMcp.server(Auth.mcpAuth(ops, resource), env).statelessRoutes)
+          ZIO
+            .serviceWithZIO[AssetStore](_.uploadOrigin)
+            // Startup, not a request: a server that cannot name the origin its own upload page
+            // must reach would serve a page whose PUT the browser blocks, and nothing would say so.
+            .mapError(new IllegalStateException(_))
+            .flatMap: origin =>
+              Server.serve(
+                CaptalMcp.server(Auth.mcpAuth(ops, resource), env, origin).statelessRoutes)
         .provide(
           Server.defaultWithPort(p),
           RqliteDataSource.layer,

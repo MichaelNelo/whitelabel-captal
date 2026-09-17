@@ -31,9 +31,27 @@ object ToolSchema:
       */
     def withMeta(meta: Json.Obj): McpToolHandlerR[R] = withDefinition(_.copy(meta = Some(meta)))
 
-    /** Points the tool at an MCP App. The host reads the `ui://` resource and renders it. */
-    def withUi(resourceUri: String): McpToolHandlerR[R] = withMeta(
-      Json.Obj(Chunk("ui" -> Json.Obj(Chunk("resourceUri" -> Json.Str(resourceUri))))))
+    /** Points the tool at an MCP App, and declares what the page is allowed to reach.
+      *
+      * Without `csp` the host applies `connect-src 'self'`, which blocks the PUT to S3 — at the
+      * moment the operator picks a file, and nowhere earlier. The origins are named here rather
+      * than in the page because the page cannot widen its own policy.
+      */
+    def withUi(resourceUri: String, connectDomains: List[String] = Nil): McpToolHandlerR[R] =
+      val ui =
+        Chunk("resourceUri" -> (Json.Str(resourceUri): Json)) ++ (
+          if connectDomains.isEmpty then
+            Chunk.empty
+          else
+            Chunk(
+              "csp" -> (
+                Json.Obj(
+                  Chunk(
+                    "connectDomains" ->
+                      (Json.Arr(Chunk.fromIterable(connectDomains.map(Json.Str(_)))): Json))): Json
+              ))
+        )
+      withMeta(Json.Obj(Chunk("ui" -> (Json.Obj(ui): Json))))
 
   end extension
 end ToolSchema

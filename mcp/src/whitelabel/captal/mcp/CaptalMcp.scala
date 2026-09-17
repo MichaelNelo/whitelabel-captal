@@ -100,6 +100,9 @@ object CaptalMcp:
       // Prompts alone need the services in hand: `McpPromptHandler.get` returns `ZIO[Any, ...]`, so
       // it has no environment to ask a database for. Everything else is resolved by the runtime.
       promptEnv: ZEnvironment[QuillSqlite & AssetStore],
+      // The origin the upload page PUTs to, declared in the App's CSP. Resolved once at startup
+      // from the same store that signs the URLs.
+      uploadOrigin: String,
       name: String = "captal-backoffice",
       version: String = "0.1.0"): McpServer[QuillSqlite & AssetStore] =
     val withResources =
@@ -108,10 +111,11 @@ object CaptalMcp:
     val withPrompts = Prompts.all(promptEnv).foldLeft(withResources)(_.prompt(_))
     val withData = (LocationTools.all ++ I18nTools.all ++ AdvertiserTools.all ++ SurveyTools.all)
       .foldLeft[McpServer[QuillSqlite]](withPrompts)(_.tool(_))
-    val withAssets = (AssetTools.all ++ VideoTools.all).foldLeft[McpServer[
+    val withAssets = (AssetTools.all ++ VideoTools.all(uploadOrigin)).foldLeft[McpServer[
       QuillSqlite & AssetStore]](withData)(_.tool(_))
     // One source for everything: `McpServer` holds a single `resourceSrc`, so the upload page and
     // the entity tree cannot be registered separately. The page is built per video from the row, a
     // freshly signed URL and the location's stylesheet, none of which a static handler can reach.
     withAssets.resourceSource(EntityResources(UploadUiSource()))
+  end server
 end CaptalMcp

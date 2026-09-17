@@ -51,6 +51,26 @@ final case class AssetStore(
     // server stricter.
     cdnEnabled: Boolean = true):
 
+  /** The origin the upload page PUTs to, which the MCP App has to declare in its CSP or the browser
+    * blocks the request. The host defaults `connect-src` to `'self'`, so an undeclared bucket fails
+    * at the PUT and nowhere earlier.
+    *
+    * Taken from a signature rather than rebuilt from the bucket and region, because the shape
+    * differs — path-style against a local endpoint, virtual-hosted against AWS — and a guess that
+    * is close but wrong fails in exactly the same silent way as no declaration at all.
+    */
+  def uploadOrigin: ZIO[Any, String, String] = presignPut(
+    "csp-probe",
+    "application/octet-stream",
+    1.minute).map: url =>
+    val parsed = java.net.URI.create(url)
+    val port =
+      if parsed.getPort < 0 then
+        ""
+      else
+        s":${parsed.getPort}"
+    s"${parsed.getScheme}://${parsed.getHost}$port"
+
   /** The key the SPA asks for. Its `index.html` is served from under the slug and references these
     * by relative name, so each object has to sit beside it under the same prefix.
     */

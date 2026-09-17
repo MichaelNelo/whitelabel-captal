@@ -5,7 +5,7 @@ import io.getquill.*
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.{AdvertiserVideoRow, LocationRow}
+import whitelabel.captal.infra.{AdvertiserVideoRow, LocalizedTextRow, LocationRow}
 import zio.*
 import zio.json.ast.Json
 
@@ -31,63 +31,61 @@ final class UploadUiSource extends McpResourceSource[QuillSqlite & AssetStore]:
   private inline def locationByIdQuery = quote: (idParam: String) =>
     query[LocationRow].filter(_.id == idParam).take(1)
 
+  /** Not listed here. `EntityResources` enumerates one `ui://upload-video/{id}` per video still
+    * waiting for a file, which is a resource per video rather than one page that lists them — the
+    * listing is the place to answer "which are pending", not the page.
+    *
+    * The bare `ui://upload-video` stays readable because `_meta.ui.resourceUri` has nothing else it
+    * can say: the declaration is built before any call has produced a video.
+    */
   override def listResources(ctx: McpToolContext): ZIO[Any, Nothing, Chunk[ResourceDefinition]] =
     ZIO.succeed(Chunk.empty)
 
   override def listResourceTemplates(
       ctx: McpToolContext): ZIO[Any, Nothing, Chunk[ResourceTemplateDefinition]] = ZIO.succeed(
-    Chunk(
-      ResourceTemplateDefinition(
-        uriTemplate = s"${UploadUi.Uri}/{videoId}",
-        name = "Upload a video",
-        description = Some(
-          "A page for uploading one advertiser video's file, themed with that location's stylesheet."),
-        mimeType = Some("text/html")
-      )))
+    Chunk.empty)
 
   override def readResource(
       uri: String,
       ctx: McpToolContext): ZIO[QuillSqlite & AssetStore, ToolError, Chunk[ResourceContents]] =
-    if !uri.startsWith(Prefix) then
-      ZIO.fail(ToolError(s"Not an upload page: $uri"))
+    if uri == UploadUi.Uri then
+      ZIO.succeed(Chunk(ResourceContents(uri, Some("text/html"), Some(UploadUi.app()))))
+    else if uri.startsWith(Prefix) then
+      pageFor(uri, uri.stripPrefix(Prefix)).mapError(ToolError.apply)
     else
-      val videoId = uri.stripPrefix(Prefix)
-      page(videoId, uri).mapError(ToolError.apply)
+      ZIO.fail(ToolError(s"Not an upload page: $uri"))
 
-  private def page(
-      videoId: String,
-      uri: String): ZIO[QuillSqlite & AssetStore, String, Chunk[ResourceContents]] = ZIO
-    .serviceWithZIO[QuillSqlite]: quill =>
+  /** The title and location are rendered into the markup, so the page has them before it asks for
+    * anything. The signed URL is not: that is read at the moment it is needed, which is what lets
+    * it be read again when it lapses.
+    */
+  private def pageFor(uri: String, videoId: String)
+      : ZIO[QuillSqlite, String, Chunk[ResourceContents]] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
       import quill.*
       for
-        video <- run(videoByIdQuery(lift(videoId)))
-          .orDie
-          .map(_.headOption)
-          .someOrFail(s"No video with id '$videoId'.")
-        store <- ZIO.service[AssetStore]
-        key         = store.keyOf(video.videoUrl)
+        videos    <- run(videoByIdQuery(lift(videoId))).orDie
+        video     <- ZIO.succeed(videos.headOption).someOrFail(s"No video with id '$videoId'.")
+        locations <- run(query[LocationRow]).orDie
+        titles    <- run(query[LocalizedTextRow].filter(_.entityId == lift(videoId))).orDie
+        key         = video.videoUrl.reverse.takeWhile(_ != '/').reverse
         contentType =
           key.reverse.takeWhile(_ != '.').reverse.toLowerCase match
             case "webm" =>
               "video/webm"
             case _ =>
               "video/mp4"
-        url <- store.presignPut(key, contentType, 30.minutes)
-        // A location without its own stylesheet renders on the page's own minimal styling, which
-        // is the same thing the portal does.
-        css <- ZIO
-          .foreach(video.locationId): locationId =>
-            run(locationByIdQuery(lift(locationId)))
-              .orDie
-              .map(_.headOption)
-              .flatMap:
-                case Some(location) =>
-                  store.get(location.slug, Asset.Styles)
-                case None =>
-                  ZIO.none
-          .map(_.flatten)
-        html = UploadUi.render(videoId, url, contentType, css)
-      yield Chunk(ResourceContents(uri, Some("text/html"), Some(html)))
+        pending = UploadUi.PendingVideo(
+          videoId = videoId,
+          title = titles.map(_.value).minOption.getOrElse(videoId),
+          slug = video
+            .locationId
+            .flatMap(id => locations.find(_.id == id))
+            .map(_.slug)
+            .getOrElse("—"),
+          contentType = contentType
+        )
+      yield Chunk(ResourceContents(uri, Some("text/html"), Some(UploadUi.app(Some(pending)))))
       end for
 
   override def readDirectory(

@@ -655,7 +655,7 @@ object SurveyTools:
           ZIO.fail(s"$what repeats the locale(s) ${duplicates.mkString(", ")}."))
     yield ()
 
-  private def writeTexts(
+  private[mcp] def writeTexts(
       entityId: String,
       texts: List[LocalizedText],
       now: String): ZIO[QuillSqlite, String, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
