@@ -42,7 +42,7 @@ A plain text question is one call with nothing but the wording:
 ```json
 {"surveyId": "…",
  "text": [{"locale": "es", "value": "¿En qué barrio vivís?"}],
- "question": {"questionType": "input"}}
+ "question": {"questionType": "Input"}}
 ```
 
 ## The question shape
@@ -53,23 +53,23 @@ so an `input` variant has no `options` field to pass and a `radio` has no `rules
 ```json
 {"surveyId": "…",
  "text": [{"locale": "es", "value": "¿En qué barrio vivís?"}],
- "question": {"questionType": "input"}}
+ "question": {"questionType": "Input"}}
 ```
 
 ```json
-{"question": {"questionType": "checkbox",
+{"question": {"questionType": "Checkbox",
               "options": [{"text": [{"locale": "es", "value": "Mañana"}]}],
               "rules": [{"kind": "min_selections", "value": "1"}]}}
 ```
 
 | `questionType` | Carries |
 |---|---|
-| `radio`, `dropdown` | `options` |
-| `checkbox` | `options`, and selection rules: `min_selections`, `max_selections` |
-| `input` | text rules: `min_length`, `max_length`, `pattern`, `email`, `url` |
-| `rating` | range rules `min`, `max` — whole numbers |
-| `numeric` | range rules `min`, `max` — any number |
-| `date` | range rules `min`, `max` — ISO dates, `yyyy-mm-dd` |
+| `Radio`, `Dropdown` | `options` |
+| `Checkbox` | `options`, and selection rules: `min_selections`, `max_selections` |
+| `Input` | text rules: `min_length`, `max_length`, `pattern`, `email`, `url` |
+| `Rating` | range rules `min`, `max` — whole numbers |
+| `Numeric` | range rules `min`, `max` — any number |
+| `Date` | range rules `min`, `max` — ISO dates, `yyyy-mm-dd` |
 
 Passing a field the variant does not have is refused, as is a rule kind that belongs to another
 type. Neither reaches validation — the shape makes them undecodable — which is why the pairing no

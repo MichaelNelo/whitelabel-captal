@@ -21,7 +21,7 @@ import zio.*
 import zio.schema.annotation.{description, discriminatorName, rejectExtraFields}
 import zio.schema.{DeriveSchema, Schema}
 
-import ToolSchema.withDiscriminator
+import McpSchema.given
 
 // The case names are the wire values, lowercase and underscored, which is why they break Scala
 // naming convention. `@caseName` is not an option: the JSON codec honours it but JsonSchemaGen
@@ -101,19 +101,19 @@ final case class RangeRuleIn(
 @discriminatorName("questionType")
 enum QuestionSpec:
   @rejectExtraFields
-  case radio(options: List[OptionIn])
+  case Radio(options: List[OptionIn])
   @rejectExtraFields
-  case dropdown(options: List[OptionIn])
+  case Dropdown(options: List[OptionIn])
   @rejectExtraFields
-  case checkbox(options: List[OptionIn], rules: Option[List[SelectionRuleIn]])
+  case Checkbox(options: List[OptionIn], rules: Option[List[SelectionRuleIn]])
   @rejectExtraFields
-  case input(rules: Option[List[TextRuleIn]])
+  case Input(rules: Option[List[TextRuleIn]])
   @rejectExtraFields
-  case rating(rules: Option[List[RangeRuleIn]])
+  case Rating(rules: Option[List[RangeRuleIn]])
   @rejectExtraFields
-  case numeric(rules: Option[List[RangeRuleIn]])
+  case Numeric(rules: Option[List[RangeRuleIn]])
   @rejectExtraFields
-  case date(rules: Option[List[RangeRuleIn]])
+  case Date(rules: Option[List[RangeRuleIn]])
 
 object QuestionSpec:
   given schema: Schema[QuestionSpec] = DeriveSchema.gen
@@ -434,19 +434,19 @@ object SurveyTools:
       .getOrElse(Nil)
       .map(r => (r.kind.toString, Some(r.value)))
     spec match
-      case QuestionSpec.radio(options) =>
+      case QuestionSpec.Radio(options) =>
         ("radio", options, Nil)
-      case QuestionSpec.dropdown(options) =>
+      case QuestionSpec.Dropdown(options) =>
         ("dropdown", options, Nil)
-      case QuestionSpec.checkbox(options, rules) =>
+      case QuestionSpec.Checkbox(options, rules) =>
         ("checkbox", options, selection(rules))
-      case QuestionSpec.input(rules) =>
+      case QuestionSpec.Input(rules) =>
         ("input", Nil, text(rules))
-      case QuestionSpec.rating(rules) =>
+      case QuestionSpec.Rating(rules) =>
         ("rating", Nil, range(rules))
-      case QuestionSpec.numeric(rules) =>
+      case QuestionSpec.Numeric(rules) =>
         ("numeric", Nil, range(rules))
-      case QuestionSpec.date(rules) =>
+      case QuestionSpec.Date(rules) =>
         ("date", Nil, range(rules))
   end flatten
 
@@ -707,8 +707,6 @@ object SurveyTools:
           )
         yield written
         end for
-    // JsonSchemaGen drops the discriminator, leaving a schema whose variants the decoder rejects.
-    .withDiscriminator("question", "questionType", QuestionSpec.caseIds)
 
   val all: List[McpToolHandlerR[QuillSqlite]] = List(
     list,

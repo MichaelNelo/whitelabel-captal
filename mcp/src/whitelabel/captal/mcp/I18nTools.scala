@@ -11,6 +11,8 @@ import whitelabel.captal.infra.{LocalizedTextRow, LocationRow}
 import zio.*
 import zio.schema.{DeriveSchema, Schema}
 
+import McpSchema.given
+
 /** Translation tools: the first mutations the backoffice exposes.
   *
   * i18n goes first deliberately. `localized_texts` is a leaf table with no nested children, the

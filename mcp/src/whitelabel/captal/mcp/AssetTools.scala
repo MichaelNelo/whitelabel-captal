@@ -9,6 +9,8 @@ import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
+import McpSchema.given
+
 /** Per-location overrides of the two assets a location can replace: its stylesheet and its brand
   * icon.
   *

@@ -10,6 +10,8 @@ import whitelabel.captal.infra.schema.given
 import zio.*
 import zio.schema.{DeriveSchema, Schema}
 
+import McpSchema.given
+
 /** Location tools.
   *
   * Every other tool in this server takes a `slug` and refuses to act when it does not resolve, so

@@ -140,11 +140,11 @@ object CaptalMcpSpec extends ZIOSpecDefault:
           AssetTools.setStyles.definition.description.exists(_.contains("whole file"))
         )
       ,
-      test("every published question oneOf names the variant the decoder demands"):
-        // The decoder rejects a variant without `questionType`, and JsonSchemaGen drops it, so an
-        // unpatched schema is not incomplete — it is wrong, and a caller following it cannot
-        // construct a valid call. Four of the seven variants have no distinguishing property at
-        // all, which is how two agents in a row ended up guessing at the field name.
+      test("every published question variant names the tag the decoder demands"):
+        // The document and the decoder are two readings of one `Schema`. The SDK's renderer read
+        // fewer annotations than the codec, so the published contract was a strict subset of the
+        // enforced one — silently. This asserts the two agree on the discriminator, per variant,
+        // by going to the codec for the expected value rather than to a transcribed list.
         def variantsOf(schema: zio.json.ast.Json): List[zio.json.ast.Json] =
           schema match
             case zio.json.ast.Json.Obj(fields) =>
@@ -173,36 +173,28 @@ object CaptalMcpSpec extends ZIOSpecDefault:
                   tag
                 }
                 .flatMap(_.toList)
-                .collect { case ("const", zio.json.ast.Json.Str(value)) =>
+                .collect { case ("enum", zio.json.ast.Json.Arr(values)) =>
+                  values
+                }
+                .flatMap(_.toList)
+                .collect { case zio.json.ast.Json.Str(value) =>
                   value
                 }
             case _ =>
               Nil
 
-        val fromCreateQuestion = tagsOf(SurveyTools.createQuestion)
-        // The same enum, nested one level inside an array of questions.
-        val fromCreateVideo = tagsOf(VideoTools.create)
-        assertTrue(
-          fromCreateQuestion == QuestionSpec.caseIds,
-          fromCreateVideo == QuestionSpec.caseIds)
-      ,
-      test("the tag attached at each oneOf position is the one the codec emits there"):
-        // `withDiscriminator` zips caseIds positionally against the variants JsonSchemaGen emits,
-        // and nothing in the types says those two orders agree. If they ever drift, the arity check
-        // still passes and every variant is silently labelled as its neighbour — a schema that
-        // looks right and is not. This pins position to tag through the codec, which is the
-        // authority the decoder actually uses.
+        // What the codec puts on the wire for one instance of each case, which is the authority.
         val samples = List(
-          QuestionSpec.radio(Nil),
-          QuestionSpec.dropdown(Nil),
-          QuestionSpec.checkbox(Nil, None),
-          QuestionSpec.input(None),
-          QuestionSpec.rating(None),
-          QuestionSpec.numeric(None),
-          QuestionSpec.date(None)
+          QuestionSpec.Radio(Nil),
+          QuestionSpec.Dropdown(Nil),
+          QuestionSpec.Checkbox(Nil, None),
+          QuestionSpec.Input(None),
+          QuestionSpec.Rating(None),
+          QuestionSpec.Numeric(None),
+          QuestionSpec.Date(None)
         )
         val encoder = zio.schema.codec.JsonCodec.jsonEncoder(QuestionSpec.schema)
-        val emitted = samples.map: sample =>
+        val fromCodec = samples.map: sample =>
           zio
             .json
             .ast
@@ -217,6 +209,33 @@ object CaptalMcpSpec extends ZIOSpecDefault:
                   v
                 })
             .getOrElse("<no questionType>")
-        assertTrue(emitted == QuestionSpec.caseIds)
+
+        assertTrue(
+          tagsOf(SurveyTools.createQuestion) == fromCodec,
+          // The same enum, nested inside an array of questions. The renderer reaches it wherever it
+          // sits, which the per-tool patch it replaced did not.
+          tagsOf(VideoTools.create) == fromCodec
+        )
+      ,
+      test("a variant that rejects extra fields says so"):
+        // `@rejectExtraFields` was enforced by the decoder and absent from the document, which is
+        // how an `options` list sent to an `input` question was dropped without complaint and the
+        // question created with none. Every QuestionSpec case carries it.
+        val rendered =
+          (SurveyTools.createQuestion.definition.inputSchema: zio.json.ast.Json).toString
+        val needle = """"additionalProperties":false"""
+        assertTrue(rendered.split(needle).length - 1 == QuestionSpec.caseIds.size)
+      ,
+      test("the published schema keeps every description an operator needs"):
+        // The renderer changed; the guidance written for the operator must not have gone with it.
+        val rendered =
+          (SurveyTools.createQuestion.definition.inputSchema: zio.json.ast.Json).toString
+        assertTrue(
+          rendered.contains("Ask the operator for this; nothing else can supply it."),
+          rendered.contains("Only for questions in a location survey; rejected elsewhere."),
+          rendered.contains("Omit for email and url."),
+          // And must not have brought back the generated filler, which told an agent nothing.
+          !rendered.contains("a list of TextIn")
+        )
     )
 end CaptalMcpSpec

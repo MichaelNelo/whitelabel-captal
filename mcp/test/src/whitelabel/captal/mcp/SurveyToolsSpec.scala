@@ -237,7 +237,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
             .call(
               questionJson(
                 fixture.surveyId,
-                "radio",
+                "Radio",
                 options = Chunk(optionJson("Under 30"), optionJson("Over 30"))))
           fetched <- SurveyTools.get.call(json("surveyId" -> str(fixture.surveyId)))
           body = textOf(fetched)
@@ -259,7 +259,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
             .call(
               questionJson(
                 fixture.surveyId,
-                "input",
+                "Input",
                 rules = Chunk(ruleJson("min_selections", Some("2")))))
         yield assertTrue(
           result.isError.contains(true),
@@ -274,14 +274,14 @@ object SurveyToolsSpec extends ZIOSpecDefault:
             .call(
               questionJson(
                 fixture.surveyId,
-                "input",
+                "Input",
                 rules = Chunk(ruleJson("min_length", Some("3")))))
         yield assertTrue(!result.isError.contains(true))
       ,
       test("a radio question with no options is refused"):
         for
           fixture <- seed
-          result  <- SurveyTools.createQuestion.call(questionJson(fixture.surveyId, "radio"))
+          result  <- SurveyTools.createQuestion.call(questionJson(fixture.surveyId, "Radio"))
         yield assertTrue(
           result.isError.contains(true),
           textOf(result).contains("needs at least one option"))
@@ -291,7 +291,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           fixture <- seed
           result  <- SurveyTools
             .createQuestion
-            .call(questionJson(fixture.surveyId, "input", options = Chunk(optionJson("nope"))))
+            .call(questionJson(fixture.surveyId, "Input", options = Chunk(optionJson("nope"))))
         yield assertTrue(
           result.isError.contains(true),
           // The input variant has no options field, and extra fields are rejected.
