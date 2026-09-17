@@ -12,7 +12,13 @@ import whitelabel.captal.core.survey
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.{LocalizedTextRow, QuestionRow, RqliteDataSource, SurveyRow}
+import whitelabel.captal.infra.{
+  LocalizedTextRow,
+  LocationRow,
+  QuestionRow,
+  RqliteDataSource,
+  SurveyRow
+}
 import zio.*
 import zio.interop.catz.*
 import zio.test.*
@@ -320,5 +326,63 @@ object SurveyToolsSpec extends ZIOSpecDefault:
             .createSurvey
             .call(json("category" -> str("advertiser"), "videoId" -> str("no-such-video")))
         yield assertTrue(result.isError.contains(true), textOf(result).contains("No video with id"))
+      ,
+      test("the listing carries each question's id and wording, so one call finds it"):
+        // The point of putting questions in the list: acting on one needs its id, and finding the
+        // id used to mean calling get_survey on every survey until the wording matched.
+        for
+          fixture <- seed
+          listed  <- SurveyTools.list.call(json())
+          body = textOf(listed)
+        yield assertTrue(
+          !listed.isError.contains(true),
+          fixture.questionIds.forall(body.contains),
+          body.contains("Question 1"),
+          // and nothing get_survey is for
+          !body.contains("\"rules\""),
+          !body.contains("\"answers\""),
+          !body.contains("\"options\"")
+        )
+      ,
+      test("the slug filter keeps the surveys that belong nowhere"):
+        // email, profiling and location surveys are chosen by category with no location filter in
+        // the read path, so they are served at every location. Hiding them under a slug filter
+        // would misreport what a guest there is actually asked.
+        ZIO.serviceWithZIO[QuillSqlite]: quill =>
+          import quill.*
+          val locationId = UUID.randomUUID.toString
+          val scoped = survey.Id.generate
+          for
+            _ <- seed
+            _ <- quill.run(query[LocationRow].filter(_.slug == "list-spec").delete)
+            _ <- quill.run(
+              query[LocationRow].insertValue(
+                lift(LocationRow(locationId, "list-spec", "List Spec", 1, Now, Now, None))))
+            _ <- quill.run(
+              query[SurveyRow].insertValue(
+                lift(
+                  SurveyRow(
+                    scoped,
+                    "advertiser",
+                    None,
+                    Some("vid-1"),
+                    Some(locationId),
+                    1,
+                    Now,
+                    Some("Scoped")))))
+            mine    <- SurveyTools.list.call(json("slug" -> str("list-spec")))
+            unknown <- SurveyTools.list.call(json("slug" -> str("nope")))
+            body = textOf(mine)
+          yield assertTrue(
+            body.contains("Scoped"),
+            body.contains("\"locationSlug\":\"list-spec\""),
+            body.contains("\"videoId\":\"vid-1\""),
+            // The profiling survey from the fixture has no location and survives the filter.
+            body.contains("Profiling"),
+            // A slug that resolves to nothing is an error, not an empty list that reads as "none".
+            unknown.isError.contains(true),
+            textOf(unknown).contains("No location with slug")
+          )
+          end for
     ).provideShared(quillLayer, ZLayer.fromZIO(migrate.unit)) @@ TestAspect.sequential
 end SurveyToolsSpec
