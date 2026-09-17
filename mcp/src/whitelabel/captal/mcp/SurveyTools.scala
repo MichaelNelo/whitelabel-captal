@@ -70,19 +70,29 @@ enum RangeRuleKind:
 object RangeRuleKind:
   given Schema[RangeRuleKind] = DeriveSchema.gen
 
-final case class TextIn(locale: String, value: String)
-final case class OptionIn(text: List[TextIn])
+final case class TextIn(
+    @description("BCP 47 tag — 'es', 'en'. One entry per locale the location serves.")
+    locale: String,
+    @description("The text guests see in that locale.")
+    value: String)
+
+final case class OptionIn(
+    @description("The option's label, one entry per locale.")
+    text: List[TextIn])
 
 final case class TextRuleIn(
+    @description("Which rule. Only the kinds an input question accepts are listed here.")
     kind: TextRuleKind,
     @description(
       "Omit for email and url. A whole number for the length rules; a regex for pattern.")
     value: Option[String])
 final case class SelectionRuleIn(
+    @description("Which bound to set on how many options may be picked.")
     kind: SelectionRuleKind,
     @description("A whole number.")
     value: String)
 final case class RangeRuleIn(
+    @description("Which end of the range to set.")
     kind: RangeRuleKind,
     @description(
       "A whole number for rating, any number for numeric, an ISO date (yyyy-mm-dd) for date.")
@@ -101,19 +111,38 @@ final case class RangeRuleIn(
 @discriminatorName("questionType")
 enum QuestionSpec:
   @rejectExtraFields
-  case Radio(options: List[OptionIn])
+  case Radio(
+      @description("The choices, in the order they are shown. At least one.")
+      options: List[OptionIn])
   @rejectExtraFields
-  case Dropdown(options: List[OptionIn])
+  case Dropdown(
+      @description("The choices, in the order they are shown. At least one.")
+      options: List[OptionIn])
   @rejectExtraFields
-  case Checkbox(options: List[OptionIn], rules: Option[List[SelectionRuleIn]])
+  case Checkbox(
+      @description("The choices, in the order they are shown. At least one.")
+      options: List[OptionIn],
+      @description(
+        "How many may be picked: min_selections, max_selections. Omit for no limit either way.")
+      rules: Option[List[SelectionRuleIn]])
   @rejectExtraFields
-  case Input(rules: Option[List[TextRuleIn]])
+  case Input(
+      @description(
+        "What the text must satisfy: min_length, max_length, pattern, email, url. Omit for none.")
+      rules: Option[List[TextRuleIn]])
   @rejectExtraFields
-  case Rating(rules: Option[List[RangeRuleIn]])
+  case Rating(
+      @description("The bounds of the scale: min, max, as whole numbers. Omit for the default.")
+      rules: Option[List[RangeRuleIn]])
   @rejectExtraFields
-  case Numeric(rules: Option[List[RangeRuleIn]])
+  case Numeric(
+      @description("The accepted range: min, max. Any number. Omit for unbounded.")
+      rules: Option[List[RangeRuleIn]])
   @rejectExtraFields
-  case Date(rules: Option[List[RangeRuleIn]])
+  case Date(
+      @description("The accepted range: min, max, as ISO dates (yyyy-mm-dd). Omit for unbounded.")
+      rules: Option[List[RangeRuleIn]])
+end QuestionSpec
 
 object QuestionSpec:
   given schema: Schema[QuestionSpec] = DeriveSchema.gen
@@ -141,50 +170,107 @@ object QuestionSpec:
   * checked in Scala to produce a message the operator can act on.
   */
 object SurveyTools:
-  final case class LocalizedValue(locale: String, value: String)
+  final case class LocalizedValue(
+      @description("BCP 47 tag.")
+      locale: String,
+      @description("The stored text for that locale.")
+      value: String)
   final case class OptionView(
+      @description("Stable across edits; answers reference it.")
       id: String,
+      @description("Position within the question, ascending.")
       displayOrder: Int,
+      @description("A retired option stops being offered but keeps the answers that chose it.")
       active: Boolean,
+      @description("The label, per locale. A locale missing here shows nothing for this option.")
       text: List[LocalizedValue])
   final case class QuestionView(
+      @description("What set_question_active and reorder_questions take.")
       id: String,
+      @description(
+        "As stored, lowercase — 'radio', 'input'. The create tools take the capitalised form of the same set.")
       questionType: String,
+      @description("Position within the survey. Questions are served in this order, not at random.")
       displayOrder: Int,
+      @description("Whether a guest must answer to move on.")
       required: Boolean,
+      @description("Points awarded for answering.")
       points: Int,
+      @description("A retired question stops being served but keeps its answers.")
       active: Boolean,
+      @description(
+        "How many answers already reference this question. Non-zero is why retiring exists instead of deleting: the rows would lose what they point at.")
       answers: Int,
+      @description("The wording, per locale.")
       text: List[LocalizedValue],
+      @description("Empty for the types that take no options.")
       options: List[OptionView],
+      @description("The stored validation rules, rendered for reading — 'min_length=3'.")
       rules: List[String])
   final case class SurveyView(
+      @description("What create_question takes to add to this survey.")
       id: String,
+      @description(
+        "What the survey is for: identification surveys have no location, the rest belong to one.")
       category: String,
+      @description("Operator-facing label. Absent when none was set.")
       name: Option[String],
+      @description("A retired survey is served to nobody, whatever its questions say.")
       active: Boolean,
+      @description("In display order, retired questions included so the numbering makes sense.")
       questions: List[QuestionView])
 
-  final case class ListIn(includeInactive: Boolean = false)
+  final case class ListIn(
+      @description("Retired surveys are hidden by default; set this to see them too.")
+      includeInactive: Boolean = false)
   final case class SurveySummary(
+      @description("Pass to get_survey for the questions themselves.")
       id: String,
+      @description("What the survey is for.")
       category: String,
+      @description("Operator-facing label. Absent when none was set.")
       name: Option[String],
+      @description("A retired survey is served to nobody.")
       active: Boolean,
+      @description(
+        "Questions currently in rotation. Zero with active true is a survey that would be served and has nothing to ask.")
       activeQuestions: Int)
-  final case class ListOut(surveys: List[SurveySummary])
+  final case class ListOut(
+      @description("Call get_survey with an id for the questions.")
+      surveys: List[SurveySummary])
 
-  final case class GetIn(surveyId: String)
+  final case class GetIn(
+      @description("Which survey to read. Call list_surveys for the ids.")
+      surveyId: String)
 
-  final case class SetQuestionActiveIn(questionId: String, active: Boolean)
-  final case class SetQuestionActiveOut(
+  final case class SetQuestionActiveIn(
+      @description("Which question to retire or bring back.")
       questionId: String,
+      @description(
+        "False retires it. This is the only removal there is: answers reference the question, so deleting would strand them.")
+      active: Boolean)
+  final case class SetQuestionActiveOut(
+      @description("The question changed.")
+      questionId: String,
+      @description("Its state after the change.")
       active: Boolean,
+      @description("Answers still referencing it. Retiring loses none of them.")
       answersPreserved: Int,
+      @description(
+        "Questions left in rotation in this survey. Zero means the survey would now be served with nothing to ask.")
       remainingActive: Int)
 
-  final case class ReorderIn(surveyId: String, orderedQuestionIds: List[String])
-  final case class ReorderOut(surveyId: String, order: List[String])
+  final case class ReorderIn(
+      @description("Which survey to reorder.")
+      surveyId: String,
+      @description(
+        "Every question in the survey, retired ones included, in the order they should be served. A partial list is refused rather than applied to the ids it names.")
+      orderedQuestionIds: List[String])
+  final case class ReorderOut(
+      @description("The survey reordered.")
+      surveyId: String,
+      @description("The order as stored, which should match what was sent.")
+      order: List[String])
 
   given Schema[LocalizedValue] = DeriveSchema.gen
   given Schema[OptionView] = DeriveSchema.gen
@@ -383,19 +469,29 @@ object SurveyTools:
   // ───────────────────────────────────────────────────────────────────────────
 
   final case class CreateSurveyIn(
+      @description(
+        "What the survey is for. Identification surveys are asked before a guest has a location; the others belong to one.")
       category: SurveyCategory,
       @description("Label for operators. Not shown to guests; safe to omit.")
       name: Option[String],
       @description(
         "Required for advertiser surveys and rejected for the others: the video this survey follows. The survey inherits that video's location.")
       videoId: Option[String])
-  final case class CreateSurveyOut(surveyId: String, category: String)
+  final case class CreateSurveyOut(
+      @description(
+        "Pass to create_question to add questions. A survey with none is served to nobody.")
+      surveyId: String,
+      @description("The category as stored.")
+      category: String)
 
   final case class CreateQuestionIn(
+      @description("Which survey to append to. Call list_surveys for the ids.")
       surveyId: String,
       @description(
         "The wording, one entry per locale. Ask the operator for this; nothing else can supply it.")
       text: List[TextIn],
+      @description(
+        "The shape of the answer. questionType picks the variant and decides which other fields are allowed; a field the variant does not have is refused.")
       question: QuestionSpec,
       @description("Helper text under the question. Omit when there is none.")
       description: Option[List[TextIn]],
@@ -407,7 +503,15 @@ object SurveyTools:
       points: Option[Int],
       @description("Only for questions in a location survey; rejected elsewhere.")
       hierarchyLevel: Option[Hierarchy])
-  final case class CreateQuestionOut(questionId: String, displayOrder: Int, optionIds: List[String])
+  final case class CreateQuestionOut(
+      @description("What set_question_active and reorder_questions take.")
+      questionId: String,
+      @description(
+        "Where it landed: appended after the survey's existing questions. Use reorder_questions to move it.")
+      displayOrder: Int,
+      @description(
+        "Ids of the options created, in the order given. Empty for the types that take none — and empty for a choice type means the options were dropped rather than stored.")
+      optionIds: List[String])
 
   given Schema[TextIn] = DeriveSchema.gen
   given Schema[OptionIn] = DeriveSchema.gen

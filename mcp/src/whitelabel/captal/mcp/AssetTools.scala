@@ -19,21 +19,45 @@ import McpSchema.given
   * a rebrand from a deploy into a call.
   */
 object AssetTools:
-  final case class GetIn(slug: String)
-  final case class GetStylesOut(slug: String, present: Boolean, css: Option[String])
-  final case class GetIconOut(slug: String, present: Boolean, svg: Option[String])
+  final case class GetIn(
+      @description("Which location's asset to read.")
+      slug: String)
+  final case class GetStylesOut(
+      @description("The location read.")
+      slug: String,
+      @description(
+        "False when this location has no stylesheet of its own and is running on the bundle's defaults.")
+      present: Boolean,
+      @description("The stored stylesheet, ungzipped. Absent when there is none.")
+      css: Option[String])
+  final case class GetIconOut(
+      @description("The location read.")
+      slug: String,
+      @description("False when this location is showing the bundle's default icon.")
+      present: Boolean,
+      @description("The stored SVG document. Absent when there is none.")
+      svg: Option[String])
 
   final case class SetStylesIn(
+      @description("Which location to restyle. Only this one changes.")
       slug: String,
       @description(
         "The full stylesheet. Replaces whatever is there — this is not a patch. Read skill://style-reference/SKILL.md for the variables and class hooks worth overriding.")
       css: String)
   final case class SetIconIn(
+      @description("Which location's icon to replace. Only this one changes.")
       slug: String,
       @description(
         "The full SVG document. Replaces whatever is there. It is rendered through an img element on every screen, so it should look right at small sizes and carry no scripting.")
       svg: String)
-  final case class SetOut(slug: String, storedBytes: Int, invalidationId: String)
+  final case class SetOut(
+      @description("The location written to.")
+      slug: String,
+      @description("Size of the stored object, after gzip where it applies.")
+      storedBytes: Int,
+      @description(
+        "The CloudFront invalidation created, so the change is visible rather than waiting behind the edge cache. 'skipped-no-cdn' when running against a local endpoint, where there is no cache in front.")
+      invalidationId: String)
 
   given Schema[GetIn] = DeriveSchema.gen
   given Schema[GetStylesOut] = DeriveSchema.gen

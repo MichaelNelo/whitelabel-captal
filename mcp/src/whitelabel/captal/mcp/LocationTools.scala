@@ -8,6 +8,7 @@ import whitelabel.captal.infra.LocationRow
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.given
 import zio.*
+import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
 import McpSchema.given
@@ -38,15 +39,39 @@ object LocationTools:
   private val SlugPattern = "[a-z0-9]+(-[a-z0-9]+)*".r
 
   final case class LocationView(
+      @description("What every other tool here takes to address this location.")
       slug: String,
+      @description("Display name. Not used to address anything.")
       name: String,
+      @description("A retired location keeps its content but serves nothing.")
       active: Boolean,
+      @description(
+        "False means no UniFi host is set, so the portal cannot authorize guests there however complete its content is. Configured outside this server.")
       unifiConfigured: Boolean)
-  final case class ListIn(includeInactive: Boolean = false)
-  final case class ListOut(locations: List[LocationView])
+  final case class ListIn(
+      @description("Retired locations are hidden by default; set this to see them too.")
+      includeInactive: Boolean = false)
+  final case class ListOut(
+      @description("Sorted by slug.")
+      locations: List[LocationView])
 
-  final case class CreateIn(slug: String, name: String)
-  final case class CreateOut(id: String, slug: String, name: String, active: Boolean)
+  final case class CreateIn(
+      @description(
+        "Permanent identifier, kebab-case, 25 characters at most. It becomes the portal's URL prefix, the asset prefix in S3 and the AWS resource names, so it cannot be changed afterwards — a rename would orphan the assets and break every live session's cookie.")
+      slug: String,
+      @description("Display name. Free text, and changeable later, unlike the slug.")
+      name: String)
+  final case class CreateOut(
+      @description(
+        "Internal id. Nothing else in this server takes it; tools address locations by slug.")
+      id: String,
+      @description("The slug as stored, trimmed. Use this with the other tools.")
+      slug: String,
+      @description("The name as stored, trimmed.")
+      name: String,
+      @description(
+        "Always true for a new location — but it has no translations yet, so the portal would render key names until set_translations runs.")
+      active: Boolean)
 
   given Schema[LocationView] = DeriveSchema.gen
   given Schema[ListIn] = DeriveSchema.gen
