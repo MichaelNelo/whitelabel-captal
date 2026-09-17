@@ -377,55 +377,59 @@ object SurveyTools:
         yield ListResponse(summaries)
         end for
 
+  /** The read behind `get_survey`, lifted out so the `captal://surveys/{id}` resource answers with
+    * the same record rather than a second implementation that could drift from it.
+    */
+  private[mcp] def viewOf(surveyId: String): ZIO[QuillSqlite, String, SurveyView] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      for
+        surveys <- run(query[SurveyRow]).orDie
+        survey  <- ZIO
+          .succeed(surveys.find(_.id.asString == surveyId))
+          .someOrFail(s"No survey with id '$surveyId'. Call list_surveys to see what exists.")
+        questionRows <- run(questionsOfQuery(lift(surveyId))).orDie
+        optionRows   <- run(query[QuestionOptionRow]).orDie
+        ruleRows     <- run(query[QuestionRuleRow]).orDie
+        views        <-
+          ZIO.foreach(questionRows.sortBy(_.displayOrder)): q =>
+            val qid = q.id.asString
+            for
+              questionText <- texts(qid)
+              answers      <- answerCount(qid)
+              options      <-
+                ZIO.foreach(optionRows.filter(_.questionId == q.id).sortBy(_.displayOrder)): o =>
+                  texts(o.id.asString).map: t =>
+                    OptionView(o.id.asString, o.displayOrder, o.isActive == 1, t)
+            yield QuestionView(
+              id = qid,
+              displayOrder = q.displayOrder,
+              required = q.isRequired == 1,
+              points = q.pointsAwarded,
+              active = q.isActive == 1,
+              answers = answers,
+              text = questionText,
+              options = options,
+              // Raw config rather than a decoded rule: `decodeRules` silently drops anything that
+              // does not match the question type's ADT, so showing what is stored is the only way
+              // to see a rule that exists in the table but never applies at runtime.
+              rules = ruleRows
+                .filter(r => r.questionId == q.id && r.isActive == 1)
+                .map(_.ruleConfig)
+            )
+            end for
+      yield SurveyView(
+        id = survey.id.asString,
+        category = survey.category,
+        name = survey.name,
+        active = survey.isActive == 1,
+        questions = views)
+      end for
+
   val get: McpToolHandlerR[QuillSqlite] = McpTool("get_survey")
     .description(
       "The full contents of a survey: every question in display order with its texts, options, validation rules and how many answers reference it. Retired questions and options are included, marked inactive.")
-    .handle: (in: GetRequest) =>
-      ZIO.serviceWithZIO[QuillSqlite]: quill =>
-        import quill.*
-        for
-          surveys <- run(query[SurveyRow]).orDie
-          survey  <- ZIO
-            .succeed(surveys.find(_.id.asString == in.surveyId))
-            .someOrFail(
-              s"No survey with id '${in.surveyId}'. Call list_surveys to see what exists.")
-          questionRows <- run(questionsOfQuery(lift(in.surveyId))).orDie
-          optionRows   <- run(query[QuestionOptionRow]).orDie
-          ruleRows     <- run(query[QuestionRuleRow]).orDie
-          views        <-
-            ZIO.foreach(questionRows.sortBy(_.displayOrder)): q =>
-              val qid = q.id.asString
-              for
-                questionText <- texts(qid)
-                answers      <- answerCount(qid)
-                options      <-
-                  ZIO.foreach(optionRows.filter(_.questionId == q.id).sortBy(_.displayOrder)): o =>
-                    texts(o.id.asString).map: t =>
-                      OptionView(o.id.asString, o.displayOrder, o.isActive == 1, t)
-              yield QuestionView(
-                id = qid,
-                displayOrder = q.displayOrder,
-                required = q.isRequired == 1,
-                points = q.pointsAwarded,
-                active = q.isActive == 1,
-                answers = answers,
-                text = questionText,
-                options = options,
-                // Raw config rather than a decoded rule: `decodeRules` silently drops anything that
-                // does not match the question type's ADT, so showing what is stored is the only way
-                // to see a rule that exists in the table but never applies at runtime.
-                rules = ruleRows
-                  .filter(r => r.questionId == q.id && r.isActive == 1)
-                  .map(_.ruleConfig)
-              )
-              end for
-        yield SurveyView(
-          id = survey.id.asString,
-          category = survey.category,
-          name = survey.name,
-          active = survey.isActive == 1,
-          questions = views)
-        end for
+    .handle((in: GetRequest) => viewOf(in.surveyId))
 
   val setQuestionActive: McpToolHandlerR[QuillSqlite] = McpTool("set_question_active")
     .description(

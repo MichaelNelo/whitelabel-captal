@@ -163,5 +163,11 @@ object LocationTools:
         yield CreateResponse(id, slug, name, active = true)
         end for
 
+  /** The slugs, for the prompt's catalogue and for completing the `{slug}` template argument. */
+  private[mcp] def slugs: ZIO[QuillSqlite, Nothing, List[String]] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
+      import quill.*
+      run(query[LocationRow]).orDie.map(_.filter(_.isActive == 1).map(_.slug).sorted)
+
   val all: List[McpToolHandlerR[QuillSqlite]] = List(list, create)
 end LocationTools
