@@ -102,14 +102,14 @@ final case class RangeRule(
   *
   * Discriminated so the schema carries the constraint instead of the prose: an `input` variant has
   * no `options` field to pass, and its rules are text rules by type. The fields every question
-  * shares stay flat in [[SurveyTools.CreateQuestionIn]] rather than being repeated across seven
-  * variants.
+  * shares stay flat in [[SurveyTools.CreateQuestionRequest]] rather than being repeated across
+  * seven variants.
   *
   * The discriminator is put back into the generated schema by `ToolSchema.withDiscriminator` —
   * JsonSchemaGen drops it, which would leave the schema describing a payload the decoder rejects.
   */
-@discriminatorName("questionType")
-enum QuestionSpec:
+@discriminatorName("kind")
+enum AnswerFormat:
   @rejectExtraFields
   case Radio(
       @description("The choices, in the order they are shown. At least one.")
@@ -142,10 +142,10 @@ enum QuestionSpec:
   case Date(
       @description("The accepted range: min, max, as ISO dates (yyyy-mm-dd). Omit for unbounded.")
       rules: Option[List[RangeRule]])
-end QuestionSpec
+end AnswerFormat
 
-object QuestionSpec:
-  given schema: Schema[QuestionSpec] = DeriveSchema.gen
+object AnswerFormat:
+  given schema: Schema[AnswerFormat] = DeriveSchema.gen
 
   /** Read off the derived schema rather than transcribed, so adding or reordering a case above
     * cannot leave this list disagreeing with it. `withDiscriminator` zips these positionally
@@ -157,7 +157,7 @@ object QuestionSpec:
         e.cases.map(_.id).toList
       case other =>
         throw new IllegalStateException(
-          s"QuestionSpec no longer derives to an enum schema but to $other; the discriminator patch has nothing to attach to.")
+          s"AnswerFormat no longer derives to an enum schema but to $other; the discriminator patch has nothing to attach to.")
 
 /** Survey and question tools.
   *
@@ -182,9 +182,6 @@ object SurveyTools:
   final case class QuestionView(
       @description("What set_question_active and reorder_questions take.")
       id: String,
-      @description(
-        "As stored, lowercase — 'radio', 'input'. The create tools take the capitalised form of the same set.")
-      questionType: String,
       @description("Position within the survey. Questions are served in this order, not at random.")
       displayOrder: Int,
       @description("Whether a guest must answer to move on.")
@@ -215,7 +212,7 @@ object SurveyTools:
       @description("In display order, retired questions included so the numbering makes sense.")
       questions: List[QuestionView])
 
-  final case class ListIn(
+  final case class ListRequest(
       @description("Retired surveys are hidden by default; set this to see them too.")
       includeInactive: Boolean = false)
   final case class SurveySummary(
@@ -230,21 +227,21 @@ object SurveyTools:
       @description(
         "Questions currently in rotation. Zero with active true is a survey that would be served and has nothing to ask.")
       activeQuestions: Int)
-  final case class ListOut(
+  final case class ListResponse(
       @description("Call get_survey with an id for the questions.")
       surveys: List[SurveySummary])
 
-  final case class GetIn(
+  final case class GetRequest(
       @description("Which survey to read. Call list_surveys for the ids.")
       surveyId: String)
 
-  final case class SetQuestionActiveIn(
+  final case class SetQuestionActiveRequest(
       @description("Which question to retire or bring back.")
       questionId: String,
       @description(
         "False retires it. This is the only removal there is: answers reference the question, so deleting would strand them.")
       active: Boolean)
-  final case class SetQuestionActiveOut(
+  final case class SetQuestionActiveResponse(
       @description("The question changed.")
       questionId: String,
       @description("Its state after the change.")
@@ -255,13 +252,13 @@ object SurveyTools:
         "Questions left in rotation in this survey. Zero means the survey would now be served with nothing to ask.")
       remainingActive: Int)
 
-  final case class ReorderIn(
+  final case class ReorderRequest(
       @description("Which survey to reorder.")
       surveyId: String,
       @description(
         "Every question in the survey, retired ones included, in the order they should be served. A partial list is refused rather than applied to the ids it names.")
       orderedQuestionIds: List[String])
-  final case class ReorderOut(
+  final case class ReorderResponse(
       @description("The survey reordered.")
       surveyId: String,
       @description("The order as stored, which should match what was sent.")
@@ -270,14 +267,14 @@ object SurveyTools:
   given Schema[OptionView] = DeriveSchema.gen
   given Schema[QuestionView] = DeriveSchema.gen
   given Schema[SurveyView] = DeriveSchema.gen
-  given Schema[ListIn] = DeriveSchema.gen
+  given Schema[ListRequest] = DeriveSchema.gen
   given Schema[SurveySummary] = DeriveSchema.gen
-  given Schema[ListOut] = DeriveSchema.gen
-  given Schema[GetIn] = DeriveSchema.gen
-  given Schema[SetQuestionActiveIn] = DeriveSchema.gen
-  given Schema[SetQuestionActiveOut] = DeriveSchema.gen
-  given Schema[ReorderIn] = DeriveSchema.gen
-  given Schema[ReorderOut] = DeriveSchema.gen
+  given Schema[ListResponse] = DeriveSchema.gen
+  given Schema[GetRequest] = DeriveSchema.gen
+  given Schema[SetQuestionActiveRequest] = DeriveSchema.gen
+  given Schema[SetQuestionActiveResponse] = DeriveSchema.gen
+  given Schema[ReorderRequest] = DeriveSchema.gen
+  given Schema[ReorderResponse] = DeriveSchema.gen
 
   private inline def questionsOfQuery = quote: (surveyIdParam: String) =>
     query[QuestionRow].filter(q => sql"${q.surveyId}".as[String] == surveyIdParam)
@@ -317,7 +314,7 @@ object SurveyTools:
   val list: McpToolHandlerR[QuillSqlite] = McpTool("list_surveys")
     .description(
       "Surveys with their category and how many active questions each has. Categories are email, profiling, location and advertiser.")
-    .handle: (in: ListIn) =>
+    .handle: (in: ListRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         for
@@ -333,12 +330,12 @@ object SurveyTools:
                 name = s.name,
                 active = s.isActive == 1,
                 activeQuestions = questions.count(q => q.surveyId == s.id && q.isActive == 1))
-        yield ListOut(summaries)
+        yield ListResponse(summaries)
 
   val get: McpToolHandlerR[QuillSqlite] = McpTool("get_survey")
     .description(
       "The full contents of a survey: every question in display order with its texts, options, validation rules and how many answers reference it. Retired questions and options are included, marked inactive.")
-    .handle: (in: GetIn) =>
+    .handle: (in: GetRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         for
@@ -362,7 +359,6 @@ object SurveyTools:
                       OptionView(o.id.asString, o.displayOrder, o.isActive == 1, t)
               yield QuestionView(
                 id = qid,
-                questionType = q.questionType,
                 displayOrder = q.displayOrder,
                 required = q.isRequired == 1,
                 points = q.pointsAwarded,
@@ -390,7 +386,7 @@ object SurveyTools:
     .description(
       "Retire a question or bring it back. Never deletes: answers reference questions, so a retired question keeps resolving for everything already recorded. Reports how many answers that is. See skill://add-survey/SKILL.md.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: SetQuestionActiveIn) =>
+    .handle: (in: SetQuestionActiveRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         for
@@ -416,14 +412,14 @@ object SurveyTools:
               else
                 1
             )
-        yield SetQuestionActiveOut(in.questionId, in.active, answers, remaining)
+        yield SetQuestionActiveResponse(in.questionId, in.active, answers, remaining)
         end for
 
   val reorder: McpToolHandlerR[QuillSqlite] = McpTool("reorder_questions")
     .description(
       "Set the order questions are asked in. Give every active question of the survey exactly once; display_order is rewritten to match the list.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: ReorderIn) =>
+    .handle: (in: ReorderRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         for
@@ -450,7 +446,7 @@ object SurveyTools:
               run(questionByIdQuery(lift(id)).update(_.displayOrder -> lift(index + 1)))
                 .orDie
                 .flatMap(Writes.expectOne(_, s"Reordering question '$id'"))
-        yield ReorderOut(in.surveyId, in.orderedQuestionIds)
+        yield ReorderResponse(in.surveyId, in.orderedQuestionIds)
         end for
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -462,7 +458,7 @@ object SurveyTools:
   // enum, so the legal values are in the schema rather than in prose the caller may not read.
   // ───────────────────────────────────────────────────────────────────────────
 
-  final case class CreateSurveyIn(
+  final case class CreateSurveyRequest(
       @description(
         "What the survey is for. Identification surveys are asked before a guest has a location; the others belong to one.")
       category: SurveyCategory,
@@ -471,22 +467,22 @@ object SurveyTools:
       @description(
         "Required for advertiser surveys and rejected for the others: the video this survey follows. The survey inherits that video's location.")
       videoId: Option[String])
-  final case class CreateSurveyOut(
+  final case class CreateSurveyResponse(
       @description(
         "Pass to create_question to add questions. A survey with none is served to nobody.")
       surveyId: String,
       @description("The category as stored.")
       category: String)
 
-  final case class CreateQuestionIn(
+  final case class CreateQuestionRequest(
       @description("Which survey to append to. Call list_surveys for the ids.")
       surveyId: String,
       @description(
         "The wording, one entry per locale. Ask the operator for this; nothing else can supply it.")
       text: List[LocalizedText],
       @description(
-        "The shape of the answer. questionType picks the variant and decides which other fields are allowed; a field the variant does not have is refused.")
-      question: QuestionSpec,
+        "How the answer is collected, and what constrains it. `kind` picks the variant and decides which other fields are allowed; a field the variant does not have is refused.")
+      answer: AnswerFormat,
       @description("Helper text under the question. Omit when there is none.")
       description: Option[List[LocalizedText]],
       @description("Placeholder inside the input. Only meaningful for input questions.")
@@ -497,7 +493,7 @@ object SurveyTools:
       points: Option[Int],
       @description("Only for questions in a location survey; rejected elsewhere.")
       hierarchyLevel: Option[Hierarchy])
-  final case class CreateQuestionOut(
+  final case class CreateQuestionResponse(
       @description("What set_question_active and reorder_questions take.")
       questionId: String,
       @description(
@@ -509,19 +505,19 @@ object SurveyTools:
 
   given Schema[LocalizedText] = DeriveSchema.gen
   given Schema[AnswerOption] = DeriveSchema.gen
-  given Schema[CreateSurveyIn] = DeriveSchema.gen
-  given Schema[CreateSurveyOut] = DeriveSchema.gen
-  given Schema[CreateQuestionIn] = DeriveSchema.gen
-  given Schema[CreateQuestionOut] = DeriveSchema.gen
+  given Schema[CreateSurveyRequest] = DeriveSchema.gen
+  given Schema[CreateSurveyResponse] = DeriveSchema.gen
+  given Schema[CreateQuestionRequest] = DeriveSchema.gen
+  given Schema[CreateQuestionResponse] = DeriveSchema.gen
 
   /** Flattens the discriminated spec into what the row needs.
     *
-    * The kind-versus-type pairing that used to be checked here is gone: `QuestionSpec` makes it
+    * The kind-versus-type pairing that used to be checked here is gone: `AnswerFormat` makes it
     * unrepresentable, so an `input` question cannot carry a selection rule to be rejected. What is
     * left is parsing each value, which the types cannot do.
     */
   private def flatten(
-      spec: QuestionSpec): (String, List[AnswerOption], List[(String, Option[String])]) =
+      spec: AnswerFormat): (String, List[AnswerOption], List[(String, Option[String])]) =
     def text(rules: Option[List[TextRule]]) = rules
       .getOrElse(Nil)
       .map(r => (r.kind.toString, r.value))
@@ -532,19 +528,19 @@ object SurveyTools:
       .getOrElse(Nil)
       .map(r => (r.kind.toString, Some(r.value)))
     spec match
-      case QuestionSpec.Radio(options) =>
+      case AnswerFormat.Radio(options) =>
         ("radio", options, Nil)
-      case QuestionSpec.Dropdown(options) =>
+      case AnswerFormat.Dropdown(options) =>
         ("dropdown", options, Nil)
-      case QuestionSpec.Checkbox(options, rules) =>
+      case AnswerFormat.Checkbox(options, rules) =>
         ("checkbox", options, selection(rules))
-      case QuestionSpec.Input(rules) =>
+      case AnswerFormat.Input(rules) =>
         ("input", Nil, text(rules))
-      case QuestionSpec.Rating(rules) =>
+      case AnswerFormat.Rating(rules) =>
         ("rating", Nil, range(rules))
-      case QuestionSpec.Numeric(rules) =>
+      case AnswerFormat.Numeric(rules) =>
         ("numeric", Nil, range(rules))
-      case QuestionSpec.Date(rules) =>
+      case AnswerFormat.Date(rules) =>
         ("date", Nil, range(rules))
   end flatten
 
@@ -635,7 +631,7 @@ object SurveyTools:
     .description(
       "Create a survey. Advertiser surveys name the video they follow and inherit its location; identification surveys are global and are picked by category. Read skill://add-survey/SKILL.md first.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: CreateSurveyIn) =>
+    .handle: (in: CreateSurveyRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         val category = in.category.toString
@@ -680,7 +676,7 @@ object SurveyTools:
               query[SurveyRow].insertValue(
                 lift(SurveyRow(id, category, None, in.videoId, locationId, 1, now, in.name)))).orDie
           _ <- Writes.expectOne(affected, s"Creating $category survey")
-        yield CreateSurveyOut(id.asString, category)
+        yield CreateSurveyResponse(id.asString, category)
         end for
 
   /** Writes one question with its texts, options and rules.
@@ -696,91 +692,90 @@ object SurveyTools:
       surveyId: survey.Id,
       surveyCategory: String,
       text: List[LocalizedText],
-      spec: QuestionSpec,
+      spec: AnswerFormat,
       descriptions: List[LocalizedText],
       placeholders: List[LocalizedText],
       required: Boolean,
       points: Int,
       hierarchyLevel: Option[Hierarchy],
       displayOrder: Int,
-      now: String): ZIO[QuillSqlite, String, CreateQuestionOut] = ZIO.serviceWithZIO[QuillSqlite]:
-    quill =>
-      import quill.*
-      val (questionType, options, ruleSpecs) = flatten(spec)
-      for
-        _ <-
-          ZIO.when(text.isEmpty)(
-            ZIO.fail("A question needs text in at least one locale, or it cannot be rendered."))
-        _ <- validateTexts(text, "text")
-        _ <- validateTexts(descriptions, "description")
-        _ <- validateTexts(placeholders, "placeholder")
-        // Whether a type takes options is structural; that it takes at least one is not.
-        _ <-
-          ZIO.when(
-            options.isEmpty && (
-              questionType == "radio" || questionType == "checkbox" || questionType == "dropdown"
-            ))(ZIO.fail(s"A $questionType question needs at least one option."))
-        _ <-
-          ZIO.foreachDiscard(options.zipWithIndex): (o, i) =>
-            ZIO.when(o.text.isEmpty)(ZIO.fail(s"Option ${i + 1} has no text.")) *>
-              validateTexts(o.text, s"option ${i + 1}")
-        ruleConfigs <-
-          ZIO.foreach(ruleSpecs): (kind, value) =>
-            ZIO.fromEither(ruleConfig(questionType, kind, value))
-        _ <-
-          ZIO.when(hierarchyLevel.isDefined && surveyCategory != "location")(
-            ZIO.fail("hierarchyLevel only applies to questions in a location survey."))
-        _ <- ZIO.when(points < 0)(ZIO.fail(s"Points must not be negative, got $points."))
-        questionId = survey.question.Id.generate
-        affected <-
+      now: String)
+      : ZIO[QuillSqlite, String, CreateQuestionResponse] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.*
+    val (questionType, options, ruleSpecs) = flatten(spec)
+    for
+      _ <-
+        ZIO.when(text.isEmpty)(
+          ZIO.fail("A question needs text in at least one locale, or it cannot be rendered."))
+      _ <- validateTexts(text, "text")
+      _ <- validateTexts(descriptions, "description")
+      _ <- validateTexts(placeholders, "placeholder")
+      // Whether a type takes options is structural; that it takes at least one is not.
+      _ <-
+        ZIO.when(
+          options.isEmpty &&
+            (questionType == "radio" || questionType == "checkbox" || questionType == "dropdown"))(
+          ZIO.fail(s"A $questionType question needs at least one option."))
+      _ <-
+        ZIO.foreachDiscard(options.zipWithIndex): (o, i) =>
+          ZIO.when(o.text.isEmpty)(ZIO.fail(s"Option ${i + 1} has no text.")) *>
+            validateTexts(o.text, s"option ${i + 1}")
+      ruleConfigs <-
+        ZIO.foreach(ruleSpecs): (kind, value) =>
+          ZIO.fromEither(ruleConfig(questionType, kind, value))
+      _ <-
+        ZIO.when(hierarchyLevel.isDefined && surveyCategory != "location")(
+          ZIO.fail("hierarchyLevel only applies to questions in a location survey."))
+      _ <- ZIO.when(points < 0)(ZIO.fail(s"Points must not be negative, got $points."))
+      questionId = survey.question.Id.generate
+      affected <-
+        run(
+          query[QuestionRow].insertValue(
+            lift(
+              QuestionRow(
+                questionId,
+                surveyId,
+                questionType,
+                points,
+                displayOrder,
+                hierarchyLevel.map(_.toString),
+                if required then
+                  1
+                else
+                  0
+                ,
+                now,
+                1)))).orDie
+      _         <- Writes.expectOne(affected, s"Creating question in survey '${surveyId.asString}'")
+      _         <- writeTexts(questionId.asString, text, now)
+      _         <- writeTexts(s"${questionId.asString}_desc", descriptions, now)
+      _         <- writeTexts(s"${questionId.asString}_placeholder", placeholders, now)
+      optionIds <-
+        ZIO.foreach(options.zipWithIndex): (o, i) =>
+          val optionId = survey.question.OptionId.generate
+          for
+            written <-
+              run(
+                query[QuestionOptionRow].insertValue(
+                  lift(QuestionOptionRow(optionId, questionId, i + 1, None, 1)))).orDie
+            _ <- Writes.expectOne(written, s"Creating option ${i + 1}")
+            _ <- writeTexts(optionId.asString, o.text, now)
+          yield optionId.asString
+      _ <-
+        ZIO.foreachDiscard(ruleConfigs): config =>
           run(
-            query[QuestionRow].insertValue(
-              lift(
-                QuestionRow(
-                  questionId,
-                  surveyId,
-                  questionType,
-                  points,
-                  displayOrder,
-                  hierarchyLevel.map(_.toString),
-                  if required then
-                    1
-                  else
-                    0
-                  ,
-                  now,
-                  1)))).orDie
-        _ <- Writes.expectOne(affected, s"Creating question in survey '${surveyId.asString}'")
-        _ <- writeTexts(questionId.asString, text, now)
-        _ <- writeTexts(s"${questionId.asString}_desc", descriptions, now)
-        _ <- writeTexts(s"${questionId.asString}_placeholder", placeholders, now)
-        optionIds <-
-          ZIO.foreach(options.zipWithIndex): (o, i) =>
-            val optionId = survey.question.OptionId.generate
-            for
-              written <-
-                run(
-                  query[QuestionOptionRow].insertValue(
-                    lift(QuestionOptionRow(optionId, questionId, i + 1, None, 1)))).orDie
-              _ <- Writes.expectOne(written, s"Creating option ${i + 1}")
-              _ <- writeTexts(optionId.asString, o.text, now)
-            yield optionId.asString
-        _ <-
-          ZIO.foreachDiscard(ruleConfigs): config =>
-            run(
-              query[QuestionRuleRow].insertValue(
-                lift(
-                  QuestionRuleRow(UUID.randomUUID.toString, questionId, questionType, config, 1))))
-              .orDie
-              .flatMap(Writes.expectOne(_, s"Creating rule $config"))
-      yield CreateQuestionOut(questionId.asString, displayOrder, optionIds)
-      end for
+            query[QuestionRuleRow].insertValue(
+              lift(QuestionRuleRow(UUID.randomUUID.toString, questionId, questionType, config, 1))))
+            .orDie
+            .flatMap(Writes.expectOne(_, s"Creating rule $config"))
+    yield CreateQuestionResponse(questionId.asString, displayOrder, optionIds)
+    end for
 
   val createQuestion: McpToolHandlerR[QuillSqlite] = McpTool("create_question")
     .description(
       "Add a question to a survey. Appended last; use reorder_questions to move it. Only the wording has to come from the operator — the question shape carries what varies by type, and everything else has a default. Read skill://add-survey/SKILL.md for the locale constraints, which the schema cannot express.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: CreateQuestionIn) =>
+    .handle: (in: CreateQuestionRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         for
@@ -794,7 +789,7 @@ object SurveyTools:
             surveyId = survey_.id,
             surveyCategory = survey_.category,
             text = in.text,
-            spec = in.question,
+            spec = in.answer,
             descriptions = in.description.getOrElse(Nil),
             placeholders = in.placeholder.getOrElse(Nil),
             required = in.required.getOrElse(true),

@@ -29,7 +29,7 @@ already exists.
 | Field | Where it comes from |
 |---|---|
 | `text` | the operator; nothing else can supply it |
-| `question.questionType` | the shape of the answer being collected — infer it |
+| `answer.kind` | how the answer is collected — infer it |
 | `question.options` | the operator, and only where the variant has the field |
 | `required` | defaults to true |
 | `points` | defaults to 10, which is what every existing question uses |
@@ -42,27 +42,27 @@ A plain text question is one call with nothing but the wording:
 ```json
 {"surveyId": "…",
  "text": [{"locale": "es", "value": "¿En qué barrio vivís?"}],
- "question": {"questionType": "Input"}}
+ "answer": {"kind": "Input"}}
 ```
 
 ## The question shape
 
-What varies by type lives in `question`, which is discriminated. The schema carries the constraint,
-so an `input` variant has no `options` field to pass and a `radio` has no `rules`:
+What varies by type lives in `answer`, which is discriminated. The schema carries the constraint,
+so an `Input` variant has no `options` field to pass and a `Radio` has no `rules`:
 
 ```json
 {"surveyId": "…",
  "text": [{"locale": "es", "value": "¿En qué barrio vivís?"}],
- "question": {"questionType": "Input"}}
+ "answer": {"kind": "Input"}}
 ```
 
 ```json
-{"question": {"questionType": "Checkbox",
-              "options": [{"text": [{"locale": "es", "value": "Mañana"}]}],
-              "rules": [{"kind": "min_selections", "value": "1"}]}}
+{"answer": {"kind": "Checkbox",
+            "options": [{"text": [{"locale": "es", "value": "Mañana"}]}],
+            "rules": [{"kind": "min_selections", "value": "1"}]}}
 ```
 
-| `questionType` | Carries |
+| `answer.kind` | Carries |
 |---|---|
 | `Radio`, `Dropdown` | `options` |
 | `Checkbox` | `options`, and selection rules: `min_selections`, `max_selections` |

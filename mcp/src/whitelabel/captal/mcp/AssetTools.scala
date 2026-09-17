@@ -19,10 +19,10 @@ import McpSchema.given
   * a rebrand from a deploy into a call.
   */
 object AssetTools:
-  final case class GetIn(
+  final case class GetRequest(
       @description("Which location's asset to read.")
       slug: String)
-  final case class GetStylesOut(
+  final case class GetStylesResponse(
       @description("The location read.")
       slug: String,
       @description(
@@ -30,7 +30,7 @@ object AssetTools:
       present: Boolean,
       @description("The stored stylesheet, ungzipped. Absent when there is none.")
       css: Option[String])
-  final case class GetIconOut(
+  final case class GetIconResponse(
       @description("The location read.")
       slug: String,
       @description("False when this location is showing the bundle's default icon.")
@@ -38,19 +38,19 @@ object AssetTools:
       @description("The stored SVG document. Absent when there is none.")
       svg: Option[String])
 
-  final case class SetStylesIn(
+  final case class SetStylesRequest(
       @description("Which location to restyle. Only this one changes.")
       slug: String,
       @description(
         "The full stylesheet. Replaces whatever is there — this is not a patch. Read skill://style-reference/SKILL.md for the variables and class hooks worth overriding.")
       css: String)
-  final case class SetIconIn(
+  final case class SetIconRequest(
       @description("Which location's icon to replace. Only this one changes.")
       slug: String,
       @description(
         "The full SVG document. Replaces whatever is there. It is rendered through an img element on every screen, so it should look right at small sizes and carry no scripting.")
       svg: String)
-  final case class SetOut(
+  final case class SetResponse(
       @description("The location written to.")
       slug: String,
       @description("Size of the stored object, after gzip where it applies.")
@@ -59,12 +59,12 @@ object AssetTools:
         "The CloudFront invalidation created, so the change is visible rather than waiting behind the edge cache. 'skipped-no-cdn' when running against a local endpoint, where there is no cache in front.")
       invalidationId: String)
 
-  given Schema[GetIn] = DeriveSchema.gen
-  given Schema[GetStylesOut] = DeriveSchema.gen
-  given Schema[GetIconOut] = DeriveSchema.gen
-  given Schema[SetStylesIn] = DeriveSchema.gen
-  given Schema[SetIconIn] = DeriveSchema.gen
-  given Schema[SetOut] = DeriveSchema.gen
+  given Schema[GetRequest] = DeriveSchema.gen
+  given Schema[GetStylesResponse] = DeriveSchema.gen
+  given Schema[GetIconResponse] = DeriveSchema.gen
+  given Schema[SetStylesRequest] = DeriveSchema.gen
+  given Schema[SetIconRequest] = DeriveSchema.gen
+  given Schema[SetResponse] = DeriveSchema.gen
 
   private inline def locationBySlugQuery = quote: (slugParam: String) =>
     query[LocationRow].filter(_.slug == slugParam).take(1)
@@ -84,13 +84,13 @@ object AssetTools:
   private def write(
       slug: String,
       asset: Asset,
-      content: String): ZIO[QuillSqlite & AssetStore, String, SetOut] =
+      content: String): ZIO[QuillSqlite & AssetStore, String, SetResponse] =
     for
       _            <- requireLocation(slug)
       store        <- ZIO.service[AssetStore]
       bytes        <- store.put(slug, asset, content)
       invalidation <- store.invalidate(slug, asset)
-    yield SetOut(slug, bytes, invalidation)
+    yield SetResponse(slug, bytes, invalidation)
 
   /** An SVG reaching the browser only through `img` cannot run scripts — but the object is served
     * from the portal's own origin, so anything that navigates straight to it renders the file as a
@@ -123,18 +123,18 @@ object AssetTools:
   val getStyles: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("get_location_styles")
     .description(
       "The location's custom stylesheet, or nothing when it has none and is using the base theme.")
-    .handle: (in: GetIn) =>
+    .handle: (in: GetRequest) =>
       for
         _     <- requireLocation(in.slug)
         store <- ZIO.service[AssetStore]
         css   <- store.get(in.slug, Asset.Styles)
-      yield GetStylesOut(in.slug, css.isDefined, css)
+      yield GetStylesResponse(in.slug, css.isDefined, css)
 
   val setStyles: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("set_location_styles")
     .description(
       "Replace the location's custom stylesheet and invalidate the CDN so the change is visible immediately. Sends the whole file, not a patch — call get_location_styles first when editing rather than rewriting.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: SetStylesIn) =>
+    .handle: (in: SetStylesRequest) =>
       for
         // An empty string would store an empty stylesheet, which looks identical to having none
         // while still costing a request. Removing the override is a different operation.
@@ -147,18 +147,18 @@ object AssetTools:
   val getIcon: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("get_location_icon")
     .description(
       "The location's brand icon as SVG source, or nothing when it has none and is using the default.")
-    .handle: (in: GetIn) =>
+    .handle: (in: GetRequest) =>
       for
         _     <- requireLocation(in.slug)
         store <- ZIO.service[AssetStore]
         svg   <- store.get(in.slug, Asset.BrandIcon)
-      yield GetIconOut(in.slug, svg.isDefined, svg)
+      yield GetIconResponse(in.slug, svg.isDefined, svg)
 
   val setIcon: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("set_location_icon")
     .description(
       "Replace the location's brand icon and invalidate the CDN. The icon appears on every screen, including the loader shown before anything else renders, so a broken one is visible everywhere at once.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: SetIconIn) =>
+    .handle: (in: SetIconRequest) =>
       for
         _   <- validateSvg(in.svg)
         out <- write(in.slug, Asset.BrandIcon, in.svg)

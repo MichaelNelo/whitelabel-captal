@@ -48,20 +48,20 @@ object LocationTools:
       @description(
         "False means no UniFi host is set, so the portal cannot authorize guests there however complete its content is. Configured outside this server.")
       unifiConfigured: Boolean)
-  final case class ListIn(
+  final case class ListRequest(
       @description("Retired locations are hidden by default; set this to see them too.")
       includeInactive: Boolean = false)
-  final case class ListOut(
+  final case class ListResponse(
       @description("Sorted by slug.")
       locations: List[LocationView])
 
-  final case class CreateIn(
+  final case class CreateRequest(
       @description(
         "Permanent identifier, kebab-case, 25 characters at most. It becomes the portal's URL prefix, the asset prefix in S3 and the AWS resource names, so it cannot be changed afterwards — a rename would orphan the assets and break every live session's cookie.")
       slug: String,
       @description("Display name. Free text, and changeable later, unlike the slug.")
       name: String)
-  final case class CreateOut(
+  final case class CreateResponse(
       @description(
         "Internal id. Nothing else in this server takes it; tools address locations by slug.")
       id: String,
@@ -74,10 +74,10 @@ object LocationTools:
       active: Boolean)
 
   given Schema[LocationView] = DeriveSchema.gen
-  given Schema[ListIn] = DeriveSchema.gen
-  given Schema[ListOut] = DeriveSchema.gen
-  given Schema[CreateIn] = DeriveSchema.gen
-  given Schema[CreateOut] = DeriveSchema.gen
+  given Schema[ListRequest] = DeriveSchema.gen
+  given Schema[ListResponse] = DeriveSchema.gen
+  given Schema[CreateRequest] = DeriveSchema.gen
+  given Schema[CreateResponse] = DeriveSchema.gen
 
   private inline def bySlugQuery = quote: (slugParam: String) =>
     query[LocationRow].filter(_.slug == slugParam).take(1)
@@ -108,11 +108,11 @@ object LocationTools:
   val list: McpToolHandlerR[QuillSqlite] = McpTool("list_locations")
     .description(
       "Every location, with the slug the other tools take. Inactive locations are hidden unless asked for. `unifiConfigured` false means the portal cannot authorize guests there yet.")
-    .handle: (in: ListIn) =>
+    .handle: (in: ListRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         for rows <- run(query[LocationRow]).orDie
-        yield ListOut(
+        yield ListResponse(
           rows
             .filter(r => in.includeInactive || r.isActive == 1)
             .sortBy(_.slug)
@@ -127,7 +127,7 @@ object LocationTools:
     .description(
       "Create a location: the portal instance the other tools hang content off. The slug is permanent — it becomes the URL prefix, the asset prefix in S3 and the AWS resource names, so it cannot be renamed later. Creates nothing else: the location starts with no translations, so add them with set_translations before deploying or the portal renders raw key names. UniFi credentials are configured separately.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: CreateIn) =>
+    .handle: (in: CreateRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         for
@@ -160,7 +160,7 @@ object LocationTools:
                     updatedAt = now,
                     unifiApMac = None)))).orDie
           _ <- Writes.expectOne(affected, s"Creating location '$slug'")
-        yield CreateOut(id, slug, name, active = true)
+        yield CreateResponse(id, slug, name, active = true)
         end for
 
   val all: List[McpToolHandlerR[QuillSqlite]] = List(list, create)

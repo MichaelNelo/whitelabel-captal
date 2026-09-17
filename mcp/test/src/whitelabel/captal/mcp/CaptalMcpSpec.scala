@@ -169,7 +169,7 @@ object CaptalMcpSpec extends ZIOSpecDefault:
                   props
                 }
                 .flatMap(_.toList)
-                .collect { case ("questionType", zio.json.ast.Json.Obj(tag)) =>
+                .collect { case ("kind", zio.json.ast.Json.Obj(tag)) =>
                   tag
                 }
                 .flatMap(_.toList)
@@ -185,15 +185,15 @@ object CaptalMcpSpec extends ZIOSpecDefault:
 
         // What the codec puts on the wire for one instance of each case, which is the authority.
         val samples = List(
-          QuestionSpec.Radio(Nil),
-          QuestionSpec.Dropdown(Nil),
-          QuestionSpec.Checkbox(Nil, None),
-          QuestionSpec.Input(None),
-          QuestionSpec.Rating(None),
-          QuestionSpec.Numeric(None),
-          QuestionSpec.Date(None)
+          AnswerFormat.Radio(Nil),
+          AnswerFormat.Dropdown(Nil),
+          AnswerFormat.Checkbox(Nil, None),
+          AnswerFormat.Input(None),
+          AnswerFormat.Rating(None),
+          AnswerFormat.Numeric(None),
+          AnswerFormat.Date(None)
         )
-        val encoder = zio.schema.codec.JsonCodec.jsonEncoder(QuestionSpec.schema)
+        val encoder = zio.schema.codec.JsonCodec.jsonEncoder(AnswerFormat.schema)
         val fromCodec = samples.map: sample =>
           zio
             .json
@@ -205,10 +205,10 @@ object CaptalMcpSpec extends ZIOSpecDefault:
             .flatMap(_.asObject)
             .flatMap(
               _.fields
-                .collectFirst { case ("questionType", zio.json.ast.Json.Str(v)) =>
+                .collectFirst { case ("kind", zio.json.ast.Json.Str(v)) =>
                   v
                 })
-            .getOrElse("<no questionType>")
+            .getOrElse("<no kind>")
 
         assertTrue(
           tagsOf(SurveyTools.createQuestion) == fromCodec,
@@ -220,11 +220,11 @@ object CaptalMcpSpec extends ZIOSpecDefault:
       test("a variant that rejects extra fields says so"):
         // `@rejectExtraFields` was enforced by the decoder and absent from the document, which is
         // how an `options` list sent to an `input` question was dropped without complaint and the
-        // question created with none. Every QuestionSpec case carries it.
+        // question created with none. Every AnswerFormat case carries it.
         val rendered =
           (SurveyTools.createQuestion.definition.inputSchema: zio.json.ast.Json).toString
         val needle = """"additionalProperties":false"""
-        assertTrue(rendered.split(needle).length - 1 == QuestionSpec.caseIds.size)
+        assertTrue(rendered.split(needle).length - 1 == AnswerFormat.caseIds.size)
       ,
       test("the published schema keeps every description an operator needs"):
         // The renderer changed; the guidance written for the operator must not have gone with it.
@@ -244,11 +244,11 @@ object CaptalMcpSpec extends ZIOSpecDefault:
         // a symptom — every published outputSchema must be what the shared renderer produces.
         val cases = List(
           SurveyTools.createQuestion ->
-            McpSchema.fromSchema(summon[zio.schema.Schema[SurveyTools.CreateQuestionOut]]),
+            McpSchema.fromSchema(summon[zio.schema.Schema[SurveyTools.CreateQuestionResponse]]),
           LocationTools.create ->
-            McpSchema.fromSchema(summon[zio.schema.Schema[LocationTools.CreateOut]]),
+            McpSchema.fromSchema(summon[zio.schema.Schema[LocationTools.CreateResponse]]),
           AdvertiserTools.list ->
-            McpSchema.fromSchema(summon[zio.schema.Schema[AdvertiserTools.ListOut]])
+            McpSchema.fromSchema(summon[zio.schema.Schema[AdvertiserTools.ListResponse]])
         )
         assertTrue(
           cases.forall((handler, expected) => handler.definition.outputSchema.contains(expected)))
@@ -285,9 +285,9 @@ object CaptalMcpSpec extends ZIOSpecDefault:
                 .flatMap(_.toList)
                 .flatMap: (name, sub) =>
                   val documented = sub.asObject.exists(_.fields.exists(_._1 == "description"))
-                  // `questionType` is synthesised by the generator to carry the discriminator; there
+                  // `kind` is synthesised by the generator to carry the discriminator; there
                   // is no field in the Scala type to annotate, and its one-value enum says what it is.
-                  val exempt = name == "questionType"
+                  val exempt = name == "kind"
                   (
                     if documented || exempt then
                       Nil
