@@ -54,7 +54,7 @@ object I18nTools:
       key: String,
       @description("The text guests see, in this locale.")
       value: String)
-  final case class SetTranslationsIn(
+  final case class SetTranslationsRequest(
       @description("Which location's translations to write.")
       slug: String,
       @description("BCP 47 tag. Writing a locale the location does not serve yet creates it.")
@@ -62,14 +62,14 @@ object I18nTools:
       @description(
         "The keys to write. Existing keys are overwritten and keys left out are untouched, so this can be a partial update.")
       entries: List[Translation])
-  final case class SetTranslationsOut(
+  final case class SetTranslationsResponse(
       @description("How many keys were written.")
       written: Int,
       @description(
         "Required keys this locale still has no value for. Empty means the locale is complete and the portal will render no literal key names.")
       stillMissing: List[String])
 
-  final case class RemoveTranslationIn(
+  final case class RemoveTranslationRequest(
       @description("Which location's translation to remove.")
       slug: String,
       @description("Which locale to remove it from. Other locales keep theirs.")
@@ -77,7 +77,7 @@ object I18nTools:
       @description(
         "The key to remove. Removing a required key puts the locale back into a state where the portal shows the key name, so this is for unknown keys rather than tidying.")
       key: String)
-  final case class RemoveTranslationOut(
+  final case class RemoveTranslationResponse(
       @description("False when there was nothing stored under that key to begin with.")
       removed: Boolean,
       @description("Required keys this locale has no value for, after the removal.")
@@ -87,10 +87,10 @@ object I18nTools:
   given Schema[I18nStatusIn] = DeriveSchema.gen
   given Schema[I18nStatusOut] = DeriveSchema.gen
   given Schema[Translation] = DeriveSchema.gen
-  given Schema[SetTranslationsIn] = DeriveSchema.gen
-  given Schema[SetTranslationsOut] = DeriveSchema.gen
-  given Schema[RemoveTranslationIn] = DeriveSchema.gen
-  given Schema[RemoveTranslationOut] = DeriveSchema.gen
+  given Schema[SetTranslationsRequest] = DeriveSchema.gen
+  given Schema[SetTranslationsResponse] = DeriveSchema.gen
+  given Schema[RemoveTranslationRequest] = DeriveSchema.gen
+  given Schema[RemoveTranslationResponse] = DeriveSchema.gen
 
   private inline def locationBySlugQuery = quote: (slugParam: String) =>
     query[LocationRow].filter(_.slug == slugParam).take(1)
@@ -199,7 +199,7 @@ object I18nTools:
     .description(
       "Create or update translations for one locale of a location. Keys must belong to the i18n schema; read i18n://required-keys for the list and skill://edit-i18n/SKILL.md for the procedure. Reports which keys are still missing afterwards.")
     .requireScopes(Auth.I18nWrite)
-    .handle: (in: SetTranslationsIn) =>
+    .handle: (in: SetTranslationsRequest) =>
       val requiredSet = I18nSchema.keys[I18n].toSet
       val unknown = in.entries.map(_.key).filterNot(requiredSet.contains).distinct.sorted
       for
@@ -214,13 +214,13 @@ object I18nTools:
         locationId <- resolveSlug(in.slug)
         _ <- ZIO.foreachDiscard(in.entries)(e => upsert(locationId, in.locale, e.key, e.value))
         missing <- missingFor(locationId, in.locale)
-      yield SetTranslationsOut(in.entries.size, missing)
+      yield SetTranslationsResponse(in.entries.size, missing)
 
   val removeTranslation: McpToolHandlerR[QuillSqlite] = McpTool("remove_translation")
     .description(
       "Retire one translation (soft delete). The portal will render the literal [key] for that locale until it is set again.")
     .requireScopes(Auth.I18nWrite)
-    .handle: (in: RemoveTranslationIn) =>
+    .handle: (in: RemoveTranslationRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         for
@@ -234,7 +234,7 @@ object I18nTools:
                     r.locationId == lift(Option(locationId)) && r.isActive == 1)
                 .update(_.isActive -> 0, _.updatedAt -> lift(now))).orDie
           missing <- missingFor(locationId, in.locale)
-        yield RemoveTranslationOut(affected > 0, missing)
+        yield RemoveTranslationResponse(affected > 0, missing)
 
   val all: List[McpToolHandlerR[QuillSqlite]] = List(status, setTranslations, removeTranslation)
 end I18nTools

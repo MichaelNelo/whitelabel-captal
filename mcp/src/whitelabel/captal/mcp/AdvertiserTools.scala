@@ -35,21 +35,21 @@ object AdvertiserTools:
       @description(
         "Videos of this advertiser currently in rotation. Zero with active true means the advertiser can be drawn and has nothing to show.")
       activeVideos: Int)
-  final case class ListIn(
+  final case class ListRequest(
       @description("Retired advertisers are hidden by default; set this to see them too.")
       includeInactive: Boolean = false)
-  final case class ListOut(
+  final case class ListResponse(
       @description("Sorted by name.")
       advertisers: List[AdvertiserView])
 
-  final case class CreateIn(
+  final case class CreateRequest(
       @description(
         "Display name, and the identity this tool enforces: a name already in use is refused.")
       name: String,
       @description(
         "Rotation weight against the other active advertisers. Ten is the usual value; zero registers the advertiser without ever showing it.")
       priority: Int)
-  final case class CreateOut(
+  final case class CreateResponse(
       @description("The new advertiser's id, which create_advertiser_video takes.")
       id: String,
       @description("The name as stored, trimmed.")
@@ -57,14 +57,14 @@ object AdvertiserTools:
       @description("The rotation weight as stored.")
       priority: Int)
 
-  final case class UpdateIn(
+  final case class UpdateRequest(
       @description("Which advertiser to change. Call list_advertisers for the ids.")
       id: String,
       @description("New display name. Omit to leave it alone. Still has to be unique.")
       name: Option[String],
       @description("New rotation weight. Omit to leave it alone.")
       priority: Option[Int])
-  final case class UpdateOut(
+  final case class UpdateResponse(
       @description("The advertiser changed.")
       id: String,
       @description("The name after the change, whether or not it was the field updated.")
@@ -72,13 +72,13 @@ object AdvertiserTools:
       @description("The rotation weight after the change.")
       priority: Int)
 
-  final case class SetActiveIn(
+  final case class SetActiveRequest(
       @description("Which advertiser to retire or bring back.")
       id: String,
       @description(
         "False retires it. Nothing is deleted — answers already given stay attached to their questions — but the advertiser and its videos leave the rotation.")
       active: Boolean)
-  final case class SetActiveOut(
+  final case class SetActiveResponse(
       @description("The advertiser changed.")
       id: String,
       @description("Its state after the change.")
@@ -88,14 +88,14 @@ object AdvertiserTools:
       activeVideos: Int)
 
   given Schema[AdvertiserView] = DeriveSchema.gen
-  given Schema[ListIn] = DeriveSchema.gen
-  given Schema[ListOut] = DeriveSchema.gen
-  given Schema[CreateIn] = DeriveSchema.gen
-  given Schema[CreateOut] = DeriveSchema.gen
-  given Schema[UpdateIn] = DeriveSchema.gen
-  given Schema[UpdateOut] = DeriveSchema.gen
-  given Schema[SetActiveIn] = DeriveSchema.gen
-  given Schema[SetActiveOut] = DeriveSchema.gen
+  given Schema[ListRequest] = DeriveSchema.gen
+  given Schema[ListResponse] = DeriveSchema.gen
+  given Schema[CreateRequest] = DeriveSchema.gen
+  given Schema[CreateResponse] = DeriveSchema.gen
+  given Schema[UpdateRequest] = DeriveSchema.gen
+  given Schema[UpdateResponse] = DeriveSchema.gen
+  given Schema[SetActiveRequest] = DeriveSchema.gen
+  given Schema[SetActiveResponse] = DeriveSchema.gen
 
   private inline def byIdQuery = quote: (idParam: String) =>
     query[AdvertiserRow].filter(_.id == idParam)
@@ -140,7 +140,7 @@ object AdvertiserTools:
   val list: McpToolHandlerR[QuillSqlite] = McpTool("list_advertisers")
     .description(
       "Advertisers with their rotation priority and how many active videos each one has. Inactive advertisers are hidden unless asked for.")
-    .handle: (in: ListIn) =>
+    .handle: (in: ListRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         for
@@ -150,13 +150,13 @@ object AdvertiserTools:
             ZIO.foreach(visible): row =>
               countActiveVideos(row.id).map: videos =>
                 AdvertiserView(row.id, row.name, row.priority, row.isActive == 1, videos)
-        yield ListOut(views)
+        yield ListResponse(views)
 
   val create: McpToolHandlerR[QuillSqlite] = McpTool("create_advertiser")
     .description(
       "Register an advertiser. Priority weights the video rotation against the other active advertisers; zero means never drawn. Names must be unique. Read skill://add-advertiser/SKILL.md first.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: CreateIn) =>
+    .handle: (in: CreateRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         for
@@ -177,12 +177,12 @@ object AdvertiserTools:
               query[AdvertiserRow].insertValue(
                 lift(AdvertiserRow(id, name, priority, 1, now, now)))).orDie
           _ <- Writes.expectOne(affected, s"Creating advertiser '$name'")
-        yield CreateOut(id, name, priority)
+        yield CreateResponse(id, name, priority)
 
   val update: McpToolHandlerR[QuillSqlite] = McpTool("update_advertiser")
     .description("Change an advertiser's name or rotation priority. Omitted fields are left alone.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: UpdateIn) =>
+    .handle: (in: UpdateRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         for
@@ -204,14 +204,14 @@ object AdvertiserTools:
                 _.priority  -> lift(priority),
                 _.updatedAt -> lift(now))).orDie
           _ <- Writes.expectOne(affected, s"Updating advertiser '${in.id}'")
-        yield UpdateOut(in.id, name, priority)
+        yield UpdateResponse(in.id, name, priority)
         end for
 
   val setActive: McpToolHandlerR[QuillSqlite] = McpTool("set_advertiser_active")
     .description(
       "Retire an advertiser or bring it back. Retiring also takes its videos out of the rotation, since the video query joins on the advertiser being active. See skill://add-advertiser/SKILL.md.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: SetActiveIn) =>
+    .handle: (in: SetActiveRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         for
@@ -228,7 +228,7 @@ object AdvertiserTools:
           _ <- Writes.expectOne(affected, s"Setting advertiser '${in.id}' active=${in.active}")
           // Reported so the operator sees the blast radius rather than discovering it in the portal.
           videos <- countActiveVideos(in.id)
-        yield SetActiveOut(in.id, in.active, videos)
+        yield SetActiveResponse(in.id, in.active, videos)
 
   val all: List[McpToolHandlerR[QuillSqlite]] = List(list, create, update, setActive)
 end AdvertiserTools

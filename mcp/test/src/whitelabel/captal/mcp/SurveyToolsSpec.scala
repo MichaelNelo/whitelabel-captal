@@ -124,7 +124,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
       options: Chunk[zio.json.ast.Json] = Chunk.empty,
       rules: Chunk[zio.json.ast.Json] = Chunk.empty) =
     val spec =
-      Chunk("questionType" -> str(questionType)) ++ (
+      Chunk("kind" -> str(questionType)) ++ (
         if options.isEmpty then
           Chunk.empty
         else
@@ -144,7 +144,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           Chunk(
             "surveyId" -> str(surveyId),
             "text"     -> textArr("en", "A question"),
-            "question" -> zio.json.ast.Json.Obj(spec))))
+            "answer"   -> zio.json.ast.Json.Obj(spec))))
   end questionJson
 
   private val quillLayer =

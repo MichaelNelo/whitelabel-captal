@@ -24,7 +24,7 @@ import ToolSchema.withUi
 object VideoTools:
   private val UploadValidFor: Duration = 30.minutes
 
-  final case class CreateVideoIn(
+  final case class CreateVideoRequest(
       @description(
         "Which location shows the video. The survey created alongside it inherits this, which is how advertiser questions get scoped.")
       slug: String,
@@ -53,14 +53,14 @@ object VideoTools:
         "The wording, one entry per locale. Ask the operator; nothing else can supply it.")
       text: List[LocalizedText],
       @description(
-        "The shape of the answer. questionType picks the variant and decides which other fields are allowed.")
-      question: QuestionSpec,
+        "How the answer is collected, and what constrains it. `kind` picks the variant and decides which other fields are allowed.")
+      answer: AnswerFormat,
       @description("Whether an answer is mandatory. Defaults to true.")
       required: Option[Boolean],
       @description("Points awarded for answering. Defaults to 10.")
       points: Option[Int])
 
-  final case class CreateVideoOut(
+  final case class CreateVideoResponse(
       @description("What confirm_video_upload takes once the file is in place.")
       videoId: String,
       @description("The survey created alongside, asked after this video.")
@@ -82,10 +82,10 @@ object VideoTools:
         "The video stays inactive and out of rotation until confirm_video_upload finds the file.")
       active: Boolean)
 
-  final case class ConfirmUploadIn(
+  final case class ConfirmUploadRequest(
       @description("The video whose upload to check, from create_advertiser_video.")
       videoId: String)
-  final case class ConfirmUploadOut(
+  final case class ConfirmUploadResponse(
       @description("The video confirmed.")
       videoId: String,
       @description(
@@ -95,10 +95,10 @@ object VideoTools:
       videoUrl: String)
 
   given Schema[VideoQuestion] = DeriveSchema.gen
-  given Schema[CreateVideoIn] = DeriveSchema.gen
-  given Schema[CreateVideoOut] = DeriveSchema.gen
-  given Schema[ConfirmUploadIn] = DeriveSchema.gen
-  given Schema[ConfirmUploadOut] = DeriveSchema.gen
+  given Schema[CreateVideoRequest] = DeriveSchema.gen
+  given Schema[CreateVideoResponse] = DeriveSchema.gen
+  given Schema[ConfirmUploadRequest] = DeriveSchema.gen
+  given Schema[ConfirmUploadResponse] = DeriveSchema.gen
 
   private inline def locationBySlugQuery = quote: (slugParam: String) =>
     query[LocationRow].filter(_.slug == slugParam).take(1)
@@ -129,7 +129,7 @@ object VideoTools:
     .description(
       "Register an advertiser video together with the survey shown after it, and hand back a URL to upload the file to. The video stays out of rotation until confirm_video_upload finds the file, so an abandoned upload costs nothing. Read skill://add-video/SKILL.md first.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: CreateVideoIn) =>
+    .handle: (in: CreateVideoRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         for
@@ -210,7 +210,7 @@ object VideoTools:
                 surveyId = surveyId,
                 surveyCategory = "advertiser",
                 text = q.text,
-                spec = q.question,
+                spec = q.answer,
                 descriptions = Nil,
                 placeholders = Nil,
                 required = q.required.getOrElse(true),
@@ -219,7 +219,7 @@ object VideoTools:
                 displayOrder = index + 1,
                 now = now
               )
-        yield CreateVideoOut(
+        yield CreateVideoResponse(
           videoId = videoId.asString,
           surveyId = surveyId.asString,
           questionIds = questionIds.map(_.questionId),
@@ -238,7 +238,7 @@ object VideoTools:
     .description(
       "Check the file arrived and put the video into rotation. Refuses when the object is not there, which is what an abandoned upload looks like.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: ConfirmUploadIn) =>
+    .handle: (in: ConfirmUploadRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         for
@@ -258,7 +258,7 @@ object VideoTools:
             run(videoByIdQuery(lift(in.videoId)).update(_.isActive -> 1, _.updatedAt -> lift(now)))
               .orDie
           _ <- Writes.expectOne(affected, s"Activating video '${in.videoId}'")
-        yield ConfirmUploadOut(in.videoId, active = true, videoUrl = row.videoUrl)
+        yield ConfirmUploadResponse(in.videoId, active = true, videoUrl = row.videoUrl)
 
   val all: List[McpToolHandlerR[QuillSqlite & AssetStore]] = List(create, confirm)
 end VideoTools
