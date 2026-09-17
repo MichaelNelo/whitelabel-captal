@@ -25,7 +25,10 @@ object VideoTools:
   private val UploadValidFor: Duration = 30.minutes
 
   final case class CreateVideoIn(
+      @description(
+        "Which location shows the video. The survey created alongside it inherits this, which is how advertiser questions get scoped.")
       slug: String,
+      @description("Whose video this is. Call list_advertisers for the ids.")
       advertiserId: String,
       @description("Shown above the player, one entry per locale.")
       title: List[TextIn],
@@ -33,6 +36,7 @@ object VideoTools:
       description: Option[List[TextIn]],
       @description("The file name to store it under. Keep the extension; it decides the MIME type.")
       fileName: String,
+      @description("The video's full length. Drives the default for minWatchSeconds.")
       durationSeconds: Int,
       @description(
         "How long the guest must watch before the survey unlocks. Defaults to the full duration.")
@@ -45,7 +49,11 @@ object VideoTools:
       questions: List[VideoQuestionIn])
 
   final case class VideoQuestionIn(
+      @description(
+        "The wording, one entry per locale. Ask the operator; nothing else can supply it.")
       text: List[TextIn],
+      @description(
+        "The shape of the answer. questionType picks the variant and decides which other fields are allowed.")
       question: QuestionSpec,
       @description("Whether an answer is mandatory. Defaults to true.")
       required: Option[Boolean],
@@ -53,12 +61,19 @@ object VideoTools:
       points: Option[Int])
 
   final case class CreateVideoOut(
+      @description("What confirm_video_upload takes once the file is in place.")
       videoId: String,
+      @description("The survey created alongside, asked after this video.")
       surveyId: String,
+      @description("The questions created, in the order given.")
       questionIds: List[String],
       @description("PUT the file here. Send the same Content-Type; the signature covers it.")
       uploadUrl: String,
+      @description(
+        "Send exactly this on the PUT. The signature covers the header, so a different value is rejected as a signature mismatch rather than a bad type.")
       contentType: String,
+      @description(
+        "How long the signed URL stays valid. After that, call create_advertiser_video again for a fresh one rather than retrying the PUT.")
       expiresInSeconds: Long,
       @description(
         "The upload page for this video, when the host renders MCP Apps. Otherwise PUT to uploadUrl directly.")
@@ -67,8 +82,17 @@ object VideoTools:
         "The video stays inactive and out of rotation until confirm_video_upload finds the file.")
       active: Boolean)
 
-  final case class ConfirmUploadIn(videoId: String)
-  final case class ConfirmUploadOut(videoId: String, active: Boolean, videoUrl: String)
+  final case class ConfirmUploadIn(
+      @description("The video whose upload to check, from create_advertiser_video.")
+      videoId: String)
+  final case class ConfirmUploadOut(
+      @description("The video confirmed.")
+      videoId: String,
+      @description(
+        "True once the object was found and the video entered rotation. The tool refuses rather than returning false, so this reports success.")
+      active: Boolean,
+      @description("Where the portal will fetch it from.")
+      videoUrl: String)
 
   given Schema[VideoQuestionIn] = DeriveSchema.gen
   given Schema[CreateVideoIn] = DeriveSchema.gen

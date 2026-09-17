@@ -9,6 +9,7 @@ import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.given
 import whitelabel.captal.infra.{LocalizedTextRow, LocationRow}
 import zio.*
+import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
 import McpSchema.given
@@ -24,19 +25,63 @@ object I18nTools:
   private val Category = "frontend"
 
   final case class LocaleStatus(
+      @description("BCP 47 tag, as stored — 'es', 'en'.")
       locale: String,
+      @description("How many of the required keys this locale has a value for.")
       present: Int,
+      @description(
+        "Required keys with no value in this locale. The portal renders each one as its literal name to guests, so this list is the user-visible defect.")
       missing: List[String],
+      @description(
+        "Stored keys the portal never reads. Usually a typo or a key that outlived the screen it belonged to; harmless but worth removing.")
       unknown: List[String])
-  final case class I18nStatusIn(slug: String)
-  final case class I18nStatusOut(slug: String, required: Int, locales: List[LocaleStatus])
+  final case class I18nStatusIn(
+      @description("Which location to report on.")
+      slug: String)
+  final case class I18nStatusOut(
+      @description("The location reported on.")
+      slug: String,
+      @description(
+        "How many keys the portal needs, derived from the I18n type rather than a list kept by hand. Every locale is measured against this number.")
+      required: Int,
+      @description(
+        "One entry per locale that has any translation at all. A locale absent here has none, which is why a fresh location reports an empty list.")
+      locales: List[LocaleStatus])
 
-  final case class Translation(key: String, value: String)
-  final case class SetTranslationsIn(slug: String, locale: String, entries: List[Translation])
-  final case class SetTranslationsOut(written: Int, stillMissing: List[String])
+  final case class Translation(
+      @description(
+        "A required key, dotted — 'welcome.title'. Read i18n://required-keys for the full set and what each one is for; a key outside it is refused.")
+      key: String,
+      @description("The text guests see, in this locale.")
+      value: String)
+  final case class SetTranslationsIn(
+      @description("Which location's translations to write.")
+      slug: String,
+      @description("BCP 47 tag. Writing a locale the location does not serve yet creates it.")
+      locale: String,
+      @description(
+        "The keys to write. Existing keys are overwritten and keys left out are untouched, so this can be a partial update.")
+      entries: List[Translation])
+  final case class SetTranslationsOut(
+      @description("How many keys were written.")
+      written: Int,
+      @description(
+        "Required keys this locale still has no value for. Empty means the locale is complete and the portal will render no literal key names.")
+      stillMissing: List[String])
 
-  final case class RemoveTranslationIn(slug: String, locale: String, key: String)
-  final case class RemoveTranslationOut(removed: Boolean, stillMissing: List[String])
+  final case class RemoveTranslationIn(
+      @description("Which location's translation to remove.")
+      slug: String,
+      @description("Which locale to remove it from. Other locales keep theirs.")
+      locale: String,
+      @description(
+        "The key to remove. Removing a required key puts the locale back into a state where the portal shows the key name, so this is for unknown keys rather than tidying.")
+      key: String)
+  final case class RemoveTranslationOut(
+      @description("False when there was nothing stored under that key to begin with.")
+      removed: Boolean,
+      @description("Required keys this locale has no value for, after the removal.")
+      stillMissing: List[String])
 
   given Schema[LocaleStatus] = DeriveSchema.gen
   given Schema[I18nStatusIn] = DeriveSchema.gen

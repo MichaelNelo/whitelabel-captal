@@ -265,5 +265,51 @@ object CaptalMcpSpec extends ZIOSpecDefault:
           .description("probe")
           .handle((_: Unit) => zio.ZIO.succeed("hello"))
         assertTrue(plain.definition.outputSchema.isEmpty)
+      ,
+      test("every published property carries a description"):
+        // The schema is what an agent reads before asking the operator anything, so an undocumented
+        // field is a question asked badly or a value invented. Pinned rather than left to habit:
+        // this started at 31 of 137 inputs and 3 of 98 outputs documented.
+        val tools: List[com.jamesward.ziohttp.mcp.McpToolHandlerR[?]] =
+          LocationTools.all ++ I18nTools.all ++ AdvertiserTools.all ++ SurveyTools.all ++
+            AssetTools.all ++ VideoTools.all
+
+        def undocumented(node: zio.json.ast.Json, path: String): List[String] =
+          node match
+            case zio.json.ast.Json.Obj(fields) =>
+              val here = fields
+                .collectFirst { case ("properties", zio.json.ast.Json.Obj(props)) =>
+                  props
+                }
+                .toList
+                .flatMap(_.toList)
+                .flatMap: (name, sub) =>
+                  val documented = sub.asObject.exists(_.fields.exists(_._1 == "description"))
+                  // `questionType` is synthesised by the generator to carry the discriminator; there
+                  // is no field in the Scala type to annotate, and its one-value enum says what it is.
+                  val exempt = name == "questionType"
+                  (
+                    if documented || exempt then
+                      Nil
+                    else
+                      List(s"$path.$name")
+                  ) ++ undocumented(sub, s"$path.$name")
+              val nested = fields.flatMap:
+                case ("properties", _) =>
+                  Nil
+                case (key, value) =>
+                  undocumented(value, s"$path.$key")
+              here ++ nested.toList
+            case zio.json.ast.Json.Arr(items) =>
+              items.toList.zipWithIndex.flatMap((item, i) => undocumented(item, s"$path[$i]"))
+            case _ =>
+              Nil
+
+        val gaps = tools.flatMap: tool =>
+          val name = tool.name.toString
+          undocumented(tool.definition.inputSchema, s"$name.in") ++
+            tool.definition.outputSchema.toList.flatMap(undocumented(_, s"$name.out"))
+
+        assertTrue(gaps == Nil)
     )
 end CaptalMcpSpec

@@ -8,6 +8,7 @@ import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.given
 import whitelabel.captal.infra.{AdvertiserRow, AdvertiserVideoRow}
 import zio.*
+import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
 import McpSchema.given
@@ -22,22 +23,69 @@ import McpSchema.given
   */
 object AdvertiserTools:
   final case class AdvertiserView(
+      @description("What create_advertiser_video takes to attach a video to this advertiser.")
       id: String,
+      @description("Display name. Unique, because nothing in the schema makes it so.")
       name: String,
+      @description(
+        "Rotation weight against the other active advertisers, as a share of their total. Zero means never drawn.")
       priority: Int,
+      @description("A retired advertiser keeps its rows but is drawn by nothing.")
       active: Boolean,
+      @description(
+        "Videos of this advertiser currently in rotation. Zero with active true means the advertiser can be drawn and has nothing to show.")
       activeVideos: Int)
-  final case class ListIn(includeInactive: Boolean = false)
-  final case class ListOut(advertisers: List[AdvertiserView])
+  final case class ListIn(
+      @description("Retired advertisers are hidden by default; set this to see them too.")
+      includeInactive: Boolean = false)
+  final case class ListOut(
+      @description("Sorted by name.")
+      advertisers: List[AdvertiserView])
 
-  final case class CreateIn(name: String, priority: Int)
-  final case class CreateOut(id: String, name: String, priority: Int)
+  final case class CreateIn(
+      @description(
+        "Display name, and the identity this tool enforces: a name already in use is refused.")
+      name: String,
+      @description(
+        "Rotation weight against the other active advertisers. Ten is the usual value; zero registers the advertiser without ever showing it.")
+      priority: Int)
+  final case class CreateOut(
+      @description("The new advertiser's id, which create_advertiser_video takes.")
+      id: String,
+      @description("The name as stored, trimmed.")
+      name: String,
+      @description("The rotation weight as stored.")
+      priority: Int)
 
-  final case class UpdateIn(id: String, name: Option[String], priority: Option[Int])
-  final case class UpdateOut(id: String, name: String, priority: Int)
+  final case class UpdateIn(
+      @description("Which advertiser to change. Call list_advertisers for the ids.")
+      id: String,
+      @description("New display name. Omit to leave it alone. Still has to be unique.")
+      name: Option[String],
+      @description("New rotation weight. Omit to leave it alone.")
+      priority: Option[Int])
+  final case class UpdateOut(
+      @description("The advertiser changed.")
+      id: String,
+      @description("The name after the change, whether or not it was the field updated.")
+      name: String,
+      @description("The rotation weight after the change.")
+      priority: Int)
 
-  final case class SetActiveIn(id: String, active: Boolean)
-  final case class SetActiveOut(id: String, active: Boolean, activeVideos: Int)
+  final case class SetActiveIn(
+      @description("Which advertiser to retire or bring back.")
+      id: String,
+      @description(
+        "False retires it. Nothing is deleted — answers already given stay attached to their questions — but the advertiser and its videos leave the rotation.")
+      active: Boolean)
+  final case class SetActiveOut(
+      @description("The advertiser changed.")
+      id: String,
+      @description("Its state after the change.")
+      active: Boolean,
+      @description(
+        "Videos that went out of rotation with it, or came back. Reported because the blast radius is otherwise only visible in the portal.")
+      activeVideos: Int)
 
   given Schema[AdvertiserView] = DeriveSchema.gen
   given Schema[ListIn] = DeriveSchema.gen
