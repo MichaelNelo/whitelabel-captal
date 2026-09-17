@@ -237,5 +237,33 @@ object CaptalMcpSpec extends ZIOSpecDefault:
           // And must not have brought back the generated filler, which told an agent nothing.
           !rendered.contains("a list of TextIn")
         )
+      ,
+      test("output schemas come from the same renderer as the inputs"):
+        // McpOutput had the identical asymmetry: the encoder honours annotations the SDK's renderer
+        // drops. No tool returns a discriminated enum today, so this pins the property rather than
+        // a symptom — every published outputSchema must be what the shared renderer produces.
+        val cases = List(
+          SurveyTools.createQuestion ->
+            McpSchema.fromSchema(summon[zio.schema.Schema[SurveyTools.CreateQuestionOut]]),
+          LocationTools.create ->
+            McpSchema.fromSchema(summon[zio.schema.Schema[LocationTools.CreateOut]]),
+          AdvertiserTools.list ->
+            McpSchema.fromSchema(summon[zio.schema.Schema[AdvertiserTools.ListOut]])
+        )
+        assertTrue(
+          cases.forall((handler, expected) => handler.definition.outputSchema.contains(expected)))
+      ,
+      test("a String-returning tool still answers as text, not wrapped"):
+        // The generic given must not out-compete the SDK's `McpOutput[String]`, which returns no
+        // outputSchema and plain text content. Nothing returns String today; this is what would
+        // catch the shadowing reaching further than intended.
+        val plain = com
+          .jamesward
+          .ziohttp
+          .mcp
+          .McpTool("probe")
+          .description("probe")
+          .handle((_: Unit) => zio.ZIO.succeed("hello"))
+        assertTrue(plain.definition.outputSchema.isEmpty)
     )
 end CaptalMcpSpec

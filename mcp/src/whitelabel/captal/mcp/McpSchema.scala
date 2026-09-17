@@ -1,6 +1,6 @@
 package whitelabel.captal.mcp
 
-import com.jamesward.ziohttp.mcp.McpInput
+import com.jamesward.ziohttp.mcp.{CallToolResult, McpInput, McpOutput, ToolContent}
 import zio.Chunk
 import zio.http.endpoint.openapi.JsonSchema
 import zio.json.*
@@ -81,9 +81,54 @@ object McpSchema:
   /** Shadows `McpInput.given`. The decoder is the SDK's, built the same way from the same schema;
     * only the published document changes.
     */
-  given derived[A](using schema: Schema[A]): McpInput[A] with
+  given derivedInput[A](using schema: Schema[A]): McpInput[A] with
     val jsonSchema: Json.Obj = fromSchema(schema)
     private val decoder = SchemaJsonCodec.jsonDecoder(schema)
     def decode(args: Option[Json.Obj]): Either[String, A] = decoder.decodeJson(
       args.getOrElse(Json.Obj(Chunk.empty)).toJson)
+
+  /** The spec constrains `outputSchema` to an object and `structuredContent` to a JSON object, so a
+    * value that is not object-shaped is nested under one property. Kept identical to the SDK's
+    * handling, key included, because the wrapping is a protocol requirement rather than a choice —
+    * only the rendering of the value's own schema changes.
+    */
+  private val WrapperKey = "result"
+
+  /** Shadows `McpOutput.given` for the same reason as the input side.
+    *
+    * No tool returns a discriminated enum today, so nothing is misdescribed right now. It is the
+    * same asymmetry all the same: the encoder honours annotations the renderer drops, and the first
+    * tool to return one would reintroduce the bug that cost this migration two sessions.
+    */
+  given derivedOutput[A](using schema: Schema[A]): McpOutput[A] with
+    private val valueSchema = fromSchema(schema)
+    private val isObject = valueSchema.get("type").flatMap(_.asString).contains("object")
+
+    val outputSchema: Option[Json.Obj] =
+      if isObject then
+        Some(valueSchema)
+      else
+        Some(
+          Json.Obj(
+            Chunk(
+              "type"       -> Json.Str("object"),
+              "properties" -> Json.Obj(Chunk(WrapperKey -> (valueSchema: Json))),
+              "required"   -> Json.Arr(Json.Str(WrapperKey)))))
+
+    private val encoder = SchemaJsonCodec.jsonEncoder(schema)
+
+    def toResult(output: A): CallToolResult =
+      val encoded = encoder.encodeJson(output, None).toString.fromJson[Json].getOrElse(Json.Null)
+      val structured: Json.Obj =
+        encoded match
+          case obj: Json.Obj =>
+            obj
+          case other =>
+            Json.Obj(Chunk(WrapperKey -> other))
+      // Text content mirrors the structured content, which is what the spec recommends for hosts
+      // that predate structured output.
+      CallToolResult(
+        content = Chunk(ToolContent.text(structured.toJson)),
+        structuredContent = Some(structured))
+  end derivedOutput
 end McpSchema
