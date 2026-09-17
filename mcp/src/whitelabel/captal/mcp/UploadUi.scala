@@ -128,6 +128,138 @@ object UploadUi:
       ).render
   end render
 
+  /** One row per video still waiting for its file.
+    *
+    * `_meta.ui.resourceUri` is declared on the tool, before any call has produced a video, and
+    * `CallToolResult` carries no `_meta` to correct it afterwards — so the URI a host reads cannot
+    * name a particular video. Pointing it at a template and hoping the host substitutes was the
+    * original mistake: it read `ui://upload-video/{videoId}` literally and found nothing.
+    *
+    * So the page is addressed by what it is rather than by which video: everything awaiting an
+    * upload. The one the operator just created is in the list, and so is anything abandoned
+    * earlier, which is the more useful thing to be shown anyway.
+    */
+  def renderPending(items: List[Pending], locationCss: Option[String]): String =
+    val payload = items
+      .map(i =>
+        s"""{"videoId":${quote(i.videoId)},"uploadUrl":${quote(i.uploadUrl)},"contentType":${quote(
+            i.contentType)}}""")
+      .mkString("[", ",", "]")
+    "<!doctype html>" +
+      html(
+        head(
+          meta(charset := "utf-8"),
+          titleTag("Subir videos"),
+          styleTag(raw(baseCss)),
+          styleTag(raw(pendingCss)),
+          locationCss.map(css => styleTag(raw(css))).getOrElse(frag())
+        ),
+        body(
+          div(
+            cls := "upload",
+            h1("Subir videos"),
+            if items.isEmpty then
+              p("No hay videos esperando archivo. Creá uno con create_advertiser_video.")
+            else
+              p("Cada video queda fuera de rotación hasta que su archivo llegue.")
+            ,
+            items.map(item =>
+              div(
+                cls := "row",
+                div(cls    := "meta", strong(item.title), span(cls := "slug", item.slug)),
+                button(cls := "pick", data.video := item.videoId, "Subir archivo"),
+                input(
+                  cls        := "file",
+                  data.video := item.videoId,
+                  `type`     := "file",
+                  accept     := item.contentType),
+                div(cls      := "status", data.video := item.videoId),
+                div(cls      := "track", div(cls := "bar", data.video := item.videoId))
+              ))
+          ),
+          script(raw(s"window.__UPLOADS__ = $payload;")),
+          script(raw(pendingScript))
+        )
+      ).render
+  end renderPending
+
+  final case class Pending(
+      videoId: String,
+      title: String,
+      slug: String,
+      uploadUrl: String,
+      contentType: String)
+
+  private val pendingCss =
+    """
+    |.upload { max-width: 40rem; text-align: left; }
+    |.row { padding: 1rem 0; border-top: 1px solid var(--color-border, #e5e7eb); }
+    |.row .meta { display: flex; justify-content: space-between; margin-bottom: .5rem; }
+    |.slug { opacity: .6; font-size: .8rem; }
+    |.row .status { margin-top: .5rem; font-size: .8rem; min-height: 1rem; }
+    |.row .track { margin-top: .5rem; }
+    |input[type=file].file { display: none; }
+    |""".stripMargin
+
+  /** The same upload as the single-video page, once per row. Kept as one listener over the list
+    * rather than a closure per item so the page stays readable at any number of pending videos.
+    */
+  private val pendingScript =
+    """
+    |const uploads = {};
+    |for (const u of window.__UPLOADS__) uploads[u.videoId] = u;
+    |const pick = (sel, id) => document.querySelector(sel + '[data-video="' + id + '"]');
+    |
+    |for (const button of document.querySelectorAll('button.pick')) {
+    |  const id = button.dataset.video;
+    |  const input = pick('input.file', id);
+    |  button.addEventListener('click', () => input.click());
+    |
+    |  input.addEventListener('change', () => {
+    |    const file = input.files[0];
+    |    if (!file) return;
+    |    const data = uploads[id];
+    |    const status = pick('div.status', id);
+    |    const bar = pick('div.bar', id);
+    |    button.disabled = true;
+    |    status.textContent = 'Subiendo ' + file.name + '…';
+    |
+    |    const request = new XMLHttpRequest();
+    |    request.open('PUT', data.uploadUrl, true);
+    |    request.setRequestHeader('Content-Type', data.contentType);
+    |
+    |    request.upload.addEventListener('progress', (event) => {
+    |      if (!event.lengthComputable) return;
+    |      bar.style.width = Math.round((event.loaded / event.total) * 100) + '%';
+    |    });
+    |
+    |    request.addEventListener('load', () => {
+    |      if (request.status >= 200 && request.status < 300) {
+    |        status.textContent = 'Listo. Confirmando…';
+    |        bar.style.width = '100%';
+    |        // The video stays out of rotation until the server has seen the object, so the page
+    |        // has to ask for that itself.
+    |        window.parent.postMessage({
+    |          type: 'tool',
+    |          name: 'confirm_video_upload',
+    |          arguments: { videoId: id }
+    |        }, '*');
+    |      } else {
+    |        button.disabled = false;
+    |        status.textContent = 'S3 rechazó la subida (' + request.status + ').';
+    |      }
+    |    });
+    |
+    |    request.addEventListener('error', () => {
+    |      button.disabled = false;
+    |      status.textContent = 'No se pudo conectar con S3. Puede que el enlace haya expirado.';
+    |    });
+    |
+    |    request.send(file);
+    |  });
+    |}
+    |""".stripMargin
+
   /** Escapes for a JS string literal. The values are server-derived, but a file name reaching this
     * unescaped would be an injection into our own page.
     */

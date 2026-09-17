@@ -42,5 +42,39 @@ object UploadUiSpec extends ZIOSpecDefault:
         assertTrue(
           !page.contains("</script><script>alert(1)"),
           page.contains("\\u003c") || page.contains("\\\""))
+      ,
+      test("the pending page lists one row per video, each with its own signed URL"):
+        // The static page exists because `_meta.ui.resourceUri` is declared before any call has
+        // produced a video, and `CallToolResult` carries no `_meta` to correct it afterwards. So
+        // the URI names what the page is, not which video, and the page lists what is waiting.
+        val page = UploadUi.renderPending(
+          List(
+            UploadUi.Pending(
+              "v-1",
+              "Promo verano",
+              "cafe-centro",
+              "https://s3/a?sig=one",
+              "video/mp4"),
+            UploadUi.Pending("v-2", "Spot corto", "bar-norte", "https://s3/b?sig=two", "video/webm")
+          ),
+          None
+        )
+        assertTrue(
+          page.contains("Promo verano"),
+          page.contains("Spot corto"),
+          page.contains("cafe-centro"),
+          page.contains("sig=one"),
+          page.contains("sig=two"),
+          // Each row confirms its own upload, or the wrong video would enter rotation.
+          page.contains("confirm_video_upload"),
+          page.split("""data-video="v-1"""").length - 1 >= 3
+        )
+      ,
+      test("an empty list says so rather than rendering a page with nothing on it"):
+        val page = UploadUi.renderPending(Nil, None)
+        assertTrue(
+          page.contains("No hay videos esperando archivo"),
+          page.contains("create_advertiser_video"),
+          !page.contains("""class="row""""))
     )
 end UploadUiSpec

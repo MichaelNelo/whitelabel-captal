@@ -189,6 +189,15 @@ object VideoTools:
                     updatedAt = now
                   )))).orDie
           _ <- Writes.expectOne(affected, s"Creating video '${in.fileName}'")
+          // The portal reads these back keyed on the video id, and the description on the id with
+          // a `_desc` suffix — see `VideoRepositoryQuill.fetchLocalizedTexts`. Until this was
+          // written the tool validated that a title was supplied and then dropped it, so every
+          // video created here played untitled.
+          _ <- SurveyTools.writeTexts(videoId.asString, in.title, now)
+          _ <- SurveyTools.writeTexts(
+            s"${videoId.asString}_desc",
+            in.description.getOrElse(Nil),
+            now)
           surveyId = survey.Id.generate
           surveyWritten <-
             run(
@@ -232,7 +241,11 @@ object VideoTools:
         end for
     // Points a host that renders MCP Apps at the upload page. The concrete URI is per video and
     // comes back in uploadPageUri; this is the template the host resolves against.
-    .withUi(s"${UploadUi.Uri}/{videoId}")
+    // The static page, not a per-video template. `_meta.ui.resourceUri` is declared before any call
+    // has produced a video, and `CallToolResult` carries no `_meta` to correct it afterwards — a
+    // template here is read literally and resolves to nothing, which is what "problem displaying
+    // content" was. The page lists whatever is waiting, including what this call just created.
+    .withUi(UploadUi.Uri)
 
   val confirm: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("confirm_video_upload")
     .description(
