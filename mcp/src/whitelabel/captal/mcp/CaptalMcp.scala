@@ -4,7 +4,7 @@ import com.jamesward.ziohttp.mcp.*
 import com.jamesward.ziohttp.mcp.auth.McpAuth
 import whitelabel.captal.core.i18n.{I18n, I18nSchema}
 import whitelabel.captal.infra.schema.QuillSqlite
-import zio.{Chunk, ZIO}
+import zio.{Chunk, ZEnvironment, ZIO}
 
 /** The read-only half of the backoffice server: everything a host can discover and read before any
   * tool exists to mutate anything.
@@ -50,6 +50,14 @@ object CaptalMcp:
        |Skills:
        |$catalogue
        |
+       |Start here for a location that is not finished: the `onboard-location` prompt reads its
+       |current state and names the next step. Re-run it as you go rather than tracking the state
+       |yourself — every tool writes immediately, so there is no commit step and stopping part way
+       |leaves nothing broken.
+       |
+       |Browse `captal://locations`, `captal://advertisers` and `captal://surveys` for the entities
+       |as context, without a tool call each.
+       |
        |Other resources:
        |- `$RequiredI18nKeysUri` — every translation key the portal requires, with what each one is
        |  for. A locale missing any of these renders the literal key to end users.
@@ -89,17 +97,21 @@ object CaptalMcp:
     */
   def server(
       auth: McpAuth[Any],
+      // Prompts alone need the services in hand: `McpPromptHandler.get` returns `ZIO[Any, ...]`, so
+      // it has no environment to ask a database for. Everything else is resolved by the runtime.
+      promptEnv: ZEnvironment[QuillSqlite & AssetStore],
       name: String = "captal-backoffice",
       version: String = "0.1.0"): McpServer[QuillSqlite & AssetStore] =
     val withResources =
       resources.foldLeft(McpServer(name, version).instructions(instructions).auth(auth))(
         _.resource(_))
+    val withPrompts = Prompts.all(promptEnv).foldLeft(withResources)(_.prompt(_))
     val withData = (LocationTools.all ++ I18nTools.all ++ AdvertiserTools.all ++ SurveyTools.all)
-      .foldLeft[McpServer[QuillSqlite]](withResources)(_.tool(_))
+      .foldLeft[McpServer[QuillSqlite]](withPrompts)(_.tool(_))
     val withAssets = (AssetTools.all ++ VideoTools.all).foldLeft[McpServer[
       QuillSqlite & AssetStore]](withData)(_.tool(_))
-    // The upload page is served per video by a source rather than as a static resource: it is built
-    // from the row, a freshly signed URL and the location's stylesheet, none of which a static
-    // handler can reach.
-    withAssets.resourceSource(UploadUiSource())
+    // One source for everything: `McpServer` holds a single `resourceSrc`, so the upload page and
+    // the entity tree cannot be registered separately. The page is built per video from the row, a
+    // freshly signed URL and the location's stylesheet, none of which a static handler can reach.
+    withAssets.resourceSource(EntityResources(UploadUiSource()))
 end CaptalMcp

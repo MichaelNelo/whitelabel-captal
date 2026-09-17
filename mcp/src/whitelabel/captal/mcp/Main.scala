@@ -2,6 +2,7 @@ package whitelabel.captal.mcp
 
 import io.getquill.jdbczio.Quill
 import whitelabel.captal.infra.RqliteDataSource
+import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
 import zio.http.Server
 
@@ -48,8 +49,10 @@ object Main extends ZIOAppDefault:
         s"MCP backoffice on :$p as $resource — ${Skills.all.size} skills, ${CaptalMcp
             .resources
             .size} resources, $tools tools, ${ops.size} operator(s)")
-      _ <- Server
-        .serve(CaptalMcp.server(Auth.mcpAuth(ops, resource)).statelessRoutes)
+      _ <- ZIO
+        .environment[QuillSqlite & AssetStore]
+        .flatMap: env =>
+          Server.serve(CaptalMcp.server(Auth.mcpAuth(ops, resource), env).statelessRoutes)
         .provide(
           Server.defaultWithPort(p),
           RqliteDataSource.layer,
