@@ -10,6 +10,8 @@ import whitelabel.captal.infra.{AdvertiserRow, AdvertiserVideoRow}
 import zio.*
 import zio.schema.{DeriveSchema, Schema}
 
+import McpSchema.given
+
 /** Advertiser tools.
   *
   * `advertisers` has no unique constraint of any kind: two rows may share a name, and nothing stops

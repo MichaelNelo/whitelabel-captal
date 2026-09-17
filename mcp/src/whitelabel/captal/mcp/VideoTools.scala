@@ -10,7 +10,8 @@ import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
-import ToolSchema.{withDiscriminatorInArray, withUi}
+import McpSchema.given
+import ToolSchema.withUi
 
 /** Advertiser videos, created together with the survey they are followed by.
   *
@@ -208,9 +209,6 @@ object VideoTools:
     // Points a host that renders MCP Apps at the upload page. The concrete URI is per video and
     // comes back in uploadPageUri; this is the template the host resolves against.
     .withUi(s"${UploadUi.Uri}/{videoId}")
-    // The nested `questions[].question` carries the same `oneOf` as create_question and loses the
-    // discriminator the same way. Patched here too, or the seven variants arrive indistinguishable.
-    .withDiscriminatorInArray("questions", "question", "questionType", QuestionSpec.caseIds)
 
   val confirm: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("confirm_video_upload")
     .description(
