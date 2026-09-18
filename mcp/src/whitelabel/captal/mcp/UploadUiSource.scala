@@ -3,9 +3,7 @@ package whitelabel.captal.mcp
 import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
 import whitelabel.captal.infra.schema.QuillSqlite
-import whitelabel.captal.infra.schema.core.given
-import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.{AdvertiserVideoRow, LocalizedTextRow, LocationRow}
+import whitelabel.captal.infra.{AdvertiserVideoRow, LocationRow}
 import zio.*
 import zio.json.ast.Json
 
@@ -44,114 +42,15 @@ final class UploadUiSource extends McpResourceSource[QuillSqlite & AssetStore]:
 
   override def listResourceTemplates(
       ctx: McpToolContext): ZIO[Any, Nothing, Chunk[ResourceTemplateDefinition]] = ZIO.succeed(
-    Chunk(
-      ResourceTemplateDefinition(
-        uriTemplate = s"${UploadUi.Uri}/{videoId}",
-        name = "Upload a video",
-        description = Some(
-          "A page for uploading one advertiser video's file, themed with that location's stylesheet."),
-        mimeType = Some("text/html")
-      )))
+    Chunk.empty)
 
   override def readResource(
       uri: String,
       ctx: McpToolContext): ZIO[QuillSqlite & AssetStore, ToolError, Chunk[ResourceContents]] =
     if uri == UploadUi.Uri then
-      pending(uri).mapError(ToolError.apply)
-    else if !uri.startsWith(Prefix) then
-      ZIO.fail(ToolError(s"Not an upload page: $uri"))
+      ZIO.succeed(Chunk(ResourceContents(uri, Some("text/html"), Some(UploadUi.app()))))
     else
-      val videoId = uri.stripPrefix(Prefix)
-      page(videoId, uri).mapError(ToolError.apply)
-
-  /** Every video with `is_active = 0`, which is what "created but never uploaded" looks like.
-    *
-    * Signed here rather than reusing the URL the tool returned, so a page opened after the first
-    * signature expired still works instead of failing at the PUT.
-    */
-  private def pending(uri: String): ZIO[QuillSqlite & AssetStore, String, Chunk[ResourceContents]] =
-    ZIO.serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      for
-        videos    <- run(query[AdvertiserVideoRow].filter(_.isActive == 0)).orDie
-        locations <- run(query[LocationRow]).orDie
-        titles    <- run(query[LocalizedTextRow].filter(_.isActive == 1)).orDie
-        slugOf = locations.map(l => l.id -> l.slug).toMap
-        // Whatever locale comes first; the page is for an operator picking their own upload out of
-        // a list, not for a guest, so any of them identifies it.
-        titleOf = titles.groupBy(_.entityId).view.mapValues(_.map(_.value).minOption).toMap
-        store <- ZIO.service[AssetStore]
-        items <-
-          ZIO.foreach(videos.toList): video =>
-            val id = video.id.toString
-            val key = store.keyOf(video.videoUrl)
-            val contentType =
-              key.reverse.takeWhile(_ != '.').reverse.toLowerCase match
-                case "webm" =>
-                  "video/webm"
-                case _ =>
-                  "video/mp4"
-            store
-              .presignPut(key, contentType, 30.minutes)
-              .map(url =>
-                UploadUi.Pending(
-                  videoId = id,
-                  title = titleOf
-                    .get(id)
-                    .flatten
-                    .getOrElse(key.reverse.takeWhile(_ != '/').reverse),
-                  slug = video.locationId.flatMap(slugOf.get).getOrElse("—"),
-                  uploadUrl = url,
-                  contentType = contentType
-                ))
-        // Only when every pending video belongs to one location: with several there is no single
-        // stylesheet that would be right, and a page themed as the wrong client is worse than one
-        // themed as none.
-        css <-
-          videos.flatMap(_.locationId).distinct.toList match
-            case locationId :: Nil =>
-              slugOf.get(locationId).fold(ZIO.none)(store.get(_, Asset.Styles))
-            case _ =>
-              ZIO.none
-        html = UploadUi.renderPending(items, css)
-      yield Chunk(ResourceContents(uri, Some("text/html"), Some(html)))
-      end for
-
-  private def page(
-      videoId: String,
-      uri: String): ZIO[QuillSqlite & AssetStore, String, Chunk[ResourceContents]] = ZIO
-    .serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      for
-        video <- run(videoByIdQuery(lift(videoId)))
-          .orDie
-          .map(_.headOption)
-          .someOrFail(s"No video with id '$videoId'.")
-        store <- ZIO.service[AssetStore]
-        key         = store.keyOf(video.videoUrl)
-        contentType =
-          key.reverse.takeWhile(_ != '.').reverse.toLowerCase match
-            case "webm" =>
-              "video/webm"
-            case _ =>
-              "video/mp4"
-        url <- store.presignPut(key, contentType, 30.minutes)
-        // A location without its own stylesheet renders on the page's own minimal styling, which
-        // is the same thing the portal does.
-        css <- ZIO
-          .foreach(video.locationId): locationId =>
-            run(locationByIdQuery(lift(locationId)))
-              .orDie
-              .map(_.headOption)
-              .flatMap:
-                case Some(location) =>
-                  store.get(location.slug, Asset.Styles)
-                case None =>
-                  ZIO.none
-          .map(_.flatten)
-        html = UploadUi.render(videoId, url, contentType, css)
-      yield Chunk(ResourceContents(uri, Some("text/html"), Some(html)))
-      end for
+      ZIO.fail(ToolError(s"Not an upload page: $uri"))
 
   override def readDirectory(
       uri: String,

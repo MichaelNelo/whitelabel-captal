@@ -22,7 +22,7 @@ import ToolSchema.withUi
   * here makes it unreachable.
   */
 object VideoTools:
-  private val UploadValidFor: Duration = 30.minutes
+  private[mcp] val UploadValidFor: Duration = 30.minutes
 
   final case class CreateVideoRequest(
       @description(

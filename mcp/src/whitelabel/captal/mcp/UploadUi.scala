@@ -20,58 +20,155 @@ import scalatags.Text.tags2.{style as styleTag, title as titleTag}
 object UploadUi:
   val Uri: String = "ui://upload-video"
 
-  /** Deliberately not a framework. One button, one input, one fetch — anything more would be a
-    * second frontend to keep working, for a page that uploads a file.
+  /** Deliberately not a framework. One fetch, one input, one PUT — anything more would be a second
+    * frontend to keep working, for a page that uploads a file.
     */
-  private val uploadScript =
+  private val appScript =
     """
-    |const data = window.__UPLOAD__;
-    |const input = document.getElementById('file');
-    |const button = document.getElementById('pick');
-    |const status = document.getElementById('status');
-    |const bar = document.getElementById('bar');
+    |let nextId = 1;
+    |const waiting = new Map();
     |
-    |button.addEventListener('click', () => input.click());
+    |const call = (method, params) => new Promise((resolve, reject) => {
+    |  const id = nextId++;
+    |  waiting.set(id, { resolve, reject });
+    |  window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
+    |});
+    |const notify = (method, params) =>
+    |  window.parent.postMessage({ jsonrpc: '2.0', method, params }, '*');
     |
-    |input.addEventListener('change', () => {
-    |  const file = input.files[0];
-    |  if (!file) return;
-    |  button.disabled = true;
-    |  status.textContent = 'Subiendo ' + file.name + '…';
+    |window.addEventListener('message', (event) => {
+    |  const message = event.data;
+    |  if (!message || message.jsonrpc !== '2.0') return;
+    |  if (message.id !== undefined && waiting.has(message.id)) {
+    |    const { resolve, reject } = waiting.get(message.id);
+    |    waiting.delete(message.id);
+    |    message.error ? reject(message.error) : resolve(message.result);
+    |    return;
+    |  }
+    |  // The result of the call that opened this page. The URI cannot carry the video id — it is
+    |  // declared before any call has produced one — so the host hands it over here instead.
+    |  if (message.method === 'ui/notifications/tool-result') {
+    |    const structured = (message.params || {}).structuredContent || {};
+    |    if (structured.videoId) showOne(structured.videoId);
+    |  }
+    |});
     |
-    |  const request = new XMLHttpRequest();
-    |  request.open('PUT', data.uploadUrl, true);
-    |  request.setRequestHeader('Content-Type', data.contentType);
+    |const readJson = async (uri) => {
+    |  const result = await call('resources/read', { uri });
+    |  return JSON.parse(result.contents[0].text);
+    |};
     |
-    |  request.upload.addEventListener('progress', (event) => {
-    |    if (!event.lengthComputable) return;
-    |    bar.style.width = Math.round((event.loaded / event.total) * 100) + '%';
-    |  });
+    |const el = (tag, attrs, text) => {
+    |  const node = document.createElement(tag);
+    |  for (const k in attrs) node.setAttribute(k, attrs[k]);
+    |  if (text !== undefined) node.textContent = text;
+    |  return node;
+    |};
     |
-    |  request.addEventListener('load', () => {
-    |    if (request.status >= 200 && request.status < 300) {
+    |async function showOne(videoId) {
+    |  const rows = document.getElementById('rows');
+    |  rows.innerHTML = '';
+    |  document.getElementById('intro').textContent =
+    |    'El video queda fuera de rotación hasta que el archivo llegue.';
+    |  rows.appendChild(await rowFor(videoId));
+    |}
+    |
+    |async function rowFor(videoId) {
+    |  let ticket = await readJson('captal://videos/' + videoId + '/upload');
+    |  if (ticket.styles) document.getElementById('location-css').textContent = ticket.styles;
+    |
+    |  const row = el('div', { class: 'row' });
+    |  const meta = el('div', { class: 'meta' });
+    |  meta.appendChild(el('strong', {}, ticket.title));
+    |  meta.appendChild(el('span', { class: 'slug' }, ticket.slug));
+    |  const button = el('button', {}, 'Subir archivo');
+    |  const input = el('input', { type: 'file', accept: ticket.contentType });
+    |  input.style.display = 'none';
+    |  const status = el('div', { class: 'status' });
+    |  const track = el('div', { class: 'track' });
+    |  const bar = el('div', {});
+    |  track.appendChild(bar);
+    |  row.append(meta, button, input, status, track);
+    |
+    |  // Re-read before the signature lapses rather than letting the operator discover it at the
+    |  // PUT. Reading costs nothing: a signature is computed, not allocated.
+    |  const refresh = async () => { ticket = await readJson('captal://videos/' + videoId + '/upload'); };
+    |  setInterval(refresh, Math.max(60, ticket.expiresInSeconds - 300) * 1000);
+    |
+    |  button.addEventListener('click', () => input.click());
+    |  input.addEventListener('change', async () => {
+    |    const file = input.files[0];
+    |    if (!file) return;
+    |    button.disabled = true;
+    |    status.textContent = 'Subiendo ' + file.name + '…';
+    |
+    |    const put = (url) => new Promise((resolve) => {
+    |      const request = new XMLHttpRequest();
+    |      request.open('PUT', url, true);
+    |      request.setRequestHeader('Content-Type', ticket.contentType);
+    |      request.upload.addEventListener('progress', (event) => {
+    |        if (event.lengthComputable) {
+    |          bar.style.width = Math.round((event.loaded / event.total) * 100) + '%';
+    |        }
+    |      });
+    |      request.addEventListener('load', () => resolve(request.status));
+    |      request.addEventListener('error', () => resolve(0));
+    |      request.send(file);
+    |    });
+    |
+    |    let code = await put(ticket.uploadUrl);
+    |    // A 403 is what an expired signature looks like. One re-read and one retry, rather than
+    |    // telling the operator to reopen the page.
+    |    if (code === 403) {
+    |      status.textContent = 'El enlace había expirado; reintentando…';
+    |      await refresh();
+    |      code = await put(ticket.uploadUrl);
+    |    }
+    |
+    |    if (code >= 200 && code < 300) {
     |      status.textContent = 'Listo. Confirmando…';
-    |      // The upload is only half of it: the video stays out of rotation until the server has
-    |      // seen the object, so the page has to ask for that itself.
-    |      window.parent.postMessage({
-    |        type: 'tool',
-    |        name: 'confirm_video_upload',
-    |        arguments: { videoId: data.videoId }
-    |      }, '*');
     |      bar.style.width = '100%';
+    |      await call('tools/call', {
+    |        name: 'confirm_video_upload',
+    |        arguments: { videoId }
+    |      });
+    |      status.textContent = 'Confirmado. El video está en rotación.';
+    |      // A call the page makes is invisible to the model, so the agent would keep waiting on
+    |      // something already done. This is what puts it in the conversation.
+    |      notify('ui/message', {
+    |        role: 'user',
+    |        content: { type: 'text', text: 'Subí el archivo del video ' + videoId + ' y lo confirmé.' }
+    |      });
     |    } else {
     |      button.disabled = false;
-    |      status.textContent = 'S3 rechazó la subida (' + request.status + '). Probá de nuevo.';
+    |      status.textContent = code === 0
+    |        ? 'No se pudo conectar con S3.'
+    |        : 'S3 rechazó la subida (' + code + ').';
     |    }
     |  });
+    |  return row;
+    |}
     |
-    |  request.addEventListener('error', () => {
-    |    button.disabled = false;
-    |    status.textContent = 'No se pudo conectar con S3. Puede que el enlace haya expirado.';
+    |async function start() {
+    |  await call('ui/initialize', {
+    |    appCapabilities: { availableDisplayModes: ['inline', 'fullscreen'] }
     |  });
+    |  notify('ui/notifications/initialized', {});
     |
-    |  request.send(file);
-    |});
+    |  // Opened on its own rather than by a call: show everything outstanding, still one signed URL
+    |  // per row and none of them in the markup.
+    |  const pending = await readJson('captal://videos/pending');
+    |  const rows = document.getElementById('rows');
+    |  const intro = document.getElementById('intro');
+    |  if (pending.videos.length === 0) {
+    |    intro.textContent = 'No hay videos esperando archivo. Creá uno con create_advertiser_video.';
+    |    return;
+    |  }
+    |  intro.textContent = 'Cada video queda fuera de rotación hasta que su archivo llegue.';
+    |  for (const v of pending.videos) rows.appendChild(await rowFor(v.videoId));
+    |}
+    |
+    |start();
     |""".stripMargin
 
   /** The page's own styling, kept minimal so the location's stylesheet decides how it looks. The
@@ -82,240 +179,57 @@ object UploadUi:
     """
     |body { margin: 0; padding: 2rem; font-family: var(--font-body, system-ui, sans-serif);
     |       background: var(--color-surface, #fff); color: var(--color-text, #111); }
-    |.upload { max-width: 32rem; margin: 0 auto; text-align: center; }
+    |.upload { max-width: 40rem; margin: 0 auto; }
     |.upload h1 { font-size: 1.25rem; margin: 0 0 .5rem; }
     |.upload p { margin: 0 0 1.5rem; opacity: .75; font-size: .9rem; }
     |button { font: inherit; padding: .75rem 1.5rem; border: 0; border-radius: var(--radius-md, .5rem);
     |         background: var(--color-primary, #2563eb); color: var(--text-inverse, #fff); cursor: pointer; }
     |button[disabled] { opacity: .6; cursor: default; }
-    |.track { height: 4px; margin-top: 1.5rem; border-radius: 2px;
+    |.track { height: 4px; margin-top: .5rem; border-radius: 2px;
     |         background: var(--color-border, #e5e7eb); overflow: hidden; }
     |.track > div { height: 100%; width: 0; background: var(--color-primary, #2563eb); transition: width .2s; }
-    |#status { margin-top: 1rem; font-size: .875rem; min-height: 1.25rem; }
-    |input[type=file] { display: none; }
     |""".stripMargin
 
-  def render(
-      videoId: String,
-      uploadUrl: String,
-      contentType: String,
-      locationCss: Option[String]): String =
-    val payload =
-      s"""{"videoId":${quote(videoId)},"uploadUrl":${quote(uploadUrl)},"contentType":${quote(
-          contentType)}}"""
+  private val pendingCss =
+    """
+    |.row { padding: 1rem 0; border-top: 1px solid var(--color-border, #e5e7eb); }
+    |.row .meta { display: flex; justify-content: space-between; margin-bottom: .5rem; }
+    |.slug { opacity: .6; font-size: .8rem; }
+    |.row .status { margin-top: .5rem; font-size: .8rem; min-height: 1rem; }
+    |""".stripMargin
+
+  /** The page, carrying no data at all.
+    *
+    * It used to be rendered per video, and then rendered with every pending video embedded and the
+    * others hidden in JavaScript — which meant a page opened for one video shipped valid signed PUT
+    * URLs for the rest. Hiding a row is not withholding it.
+    *
+    * So the markup is now static and the page fetches: `ui/notifications/tool-result` tells it
+    * which video the opening call produced, and `resources/read` on that video's upload resource
+    * returns the one signed URL it needs. Reading a resource takes no user consent, unlike a tool
+    * call, so this costs the operator nothing.
+    *
+    * That also disposes of expiry. A signature is arithmetic over the key and the clock, not an
+    * allocation, so there is nothing to release and nothing to notify about — the page simply reads
+    * again, on a timer before it lapses and on a 403 after. The old design could not do that
+    * because its URLs arrived baked into the HTML.
+    */
+  def app(): String =
     "<!doctype html>" +
       html(
         head(
           meta(charset := "utf-8"),
           titleTag("Subir video"),
           styleTag(raw(baseCss)),
-          // After the base so a themed location overrides it, the same order the portal uses.
-          locationCss.map(css => styleTag(raw(css))).getOrElse(frag())
-        ),
-        body(
-          div(
-            cls := "upload",
-            h1("Subir video"),
-            p("El video queda fuera de rotación hasta que el archivo llegue."),
-            button(id := "pick", "Subir video"),
-            input(id  := "file", `type` := "file", accept := contentType),
-            div(id    := "status"),
-            div(cls   := "track", div(id := "bar"))
-          ),
-          script(raw(s"window.__UPLOAD__ = $payload;")),
-          script(raw(uploadScript))
-        )
-      ).render
-  end render
-
-  /** One row per video still waiting for its file.
-    *
-    * `_meta.ui.resourceUri` is declared on the tool, before any call has produced a video, and
-    * `CallToolResult` carries no `_meta` to correct it afterwards — so the URI a host reads cannot
-    * name a particular video. Pointing it at a template and hoping the host substitutes was the
-    * original mistake: it read `ui://upload-video/{videoId}` literally and found nothing.
-    *
-    * So the page is addressed by what it is rather than by which video: everything awaiting an
-    * upload. The one the operator just created is in the list, and so is anything abandoned
-    * earlier, which is the more useful thing to be shown anyway.
-    */
-  def renderPending(items: List[Pending], locationCss: Option[String]): String =
-    val payload = items
-      .map(i =>
-        s"""{"videoId":${quote(i.videoId)},"uploadUrl":${quote(i.uploadUrl)},"contentType":${quote(
-            i.contentType)}}""")
-      .mkString("[", ",", "]")
-    "<!doctype html>" +
-      html(
-        head(
-          meta(charset := "utf-8"),
-          titleTag("Subir videos"),
-          styleTag(raw(baseCss)),
           styleTag(raw(pendingCss)),
-          locationCss.map(css => styleTag(raw(css))).getOrElse(frag())
+          // Filled from the video's own resource, so a page opened for one location is themed as
+          // that location and never as another's.
+          styleTag(id := "location-css")
         ),
         body(
-          div(
-            cls := "upload",
-            h1("Subir videos"),
-            if items.isEmpty then
-              p("No hay videos esperando archivo. Creá uno con create_advertiser_video.")
-            else
-              p("Cada video queda fuera de rotación hasta que su archivo llegue.")
-            ,
-            items.map(item =>
-              div(
-                cls := "row",
-                div(cls    := "meta", strong(item.title), span(cls := "slug", item.slug)),
-                button(cls := "pick", data.video := item.videoId, "Subir archivo"),
-                input(
-                  cls        := "file",
-                  data.video := item.videoId,
-                  `type`     := "file",
-                  accept     := item.contentType),
-                div(cls      := "status", data.video := item.videoId),
-                div(cls      := "track", div(cls := "bar", data.video := item.videoId))
-              ))
-          ),
-          script(raw(s"window.__UPLOADS__ = $payload;")),
-          script(raw(pendingScript))
-        )
+          div(cls := "upload", h1("Subir video"), p(id := "intro", "Cargando…"), div(id := "rows")),
+          script(raw(appScript)))
       ).render
-  end renderPending
-
-  final case class Pending(
-      videoId: String,
-      title: String,
-      slug: String,
-      uploadUrl: String,
-      contentType: String)
-
-  private val pendingCss =
-    """
-    |.upload { max-width: 40rem; text-align: left; }
-    |.row { padding: 1rem 0; border-top: 1px solid var(--color-border, #e5e7eb); }
-    |.row .meta { display: flex; justify-content: space-between; margin-bottom: .5rem; }
-    |.slug { opacity: .6; font-size: .8rem; }
-    |.row .status { margin-top: .5rem; font-size: .8rem; min-height: 1rem; }
-    |.row .track { margin-top: .5rem; }
-    |input[type=file].file { display: none; }
-    |""".stripMargin
-
-  /** The host bridge, which is JSON-RPC over `postMessage` and not an ad-hoc envelope.
-    *
-    * The page used to post `{type: 'tool', name: …}`, which no host reads. Views are MCP clients:
-    * they open with a `ui/initialize` request, answer it with `ui/notifications/initialized`, and
-    * speak ordinary JSON-RPC from then on.
-    *
-    * Two consequences worth spelling out, both discovered from the extension spec rather than from
-    * anything the SDK exposes:
-    *
-    *   - `ui/notifications/tool-result` delivers the result of the call that opened the page. That
-    *     is how a page addressed as "everything pending" can still single out the video just
-    *     created — the URI could never carry it, but the host hands it over anyway.
-    *   - A `tools/call` the page makes is **not** visible to the model. It runs, the row turns
-    *     green, and the conversation knows nothing. `ui/message` is what puts it there, which
-    *     matters here because confirming an upload is precisely the thing the agent is waiting on
-    *     and cannot otherwise observe.
-    */
-  private val pendingScript =
-    """
-    |const uploads = {};
-    |for (const u of window.__UPLOADS__) uploads[u.videoId] = u;
-    |const pick = (sel, id) => document.querySelector(sel + '[data-video="' + id + '"]');
-    |
-    |let nextId = 1;
-    |const send = (method, params) => {
-    |  const id = nextId++;
-    |  window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
-    |  return id;
-    |};
-    |const notify = (method, params) =>
-    |  window.parent.postMessage({ jsonrpc: '2.0', method, params }, '*');
-    |
-    |// Narrow to the video the opening call produced, when there was one. Without it the page is
-    |// still correct, just longer: every upload that is still outstanding.
-    |const focusOn = (videoId) => {
-    |  if (!uploads[videoId]) return;
-    |  for (const row of document.querySelectorAll('.row')) {
-    |    const id = row.querySelector('[data-video]').dataset.video;
-    |    if (id !== videoId) row.remove();
-    |  }
-    |  const heading = document.querySelector('h1');
-    |  if (heading) heading.textContent = 'Subir el video';
-    |};
-    |
-    |const initializeId = send('ui/initialize', {
-    |  appCapabilities: { availableDisplayModes: ['inline', 'fullscreen'] }
-    |});
-    |
-    |window.addEventListener('message', (event) => {
-    |  const message = event.data;
-    |  if (!message || message.jsonrpc !== '2.0') return;
-    |  if (message.id === initializeId && message.result) {
-    |    notify('ui/notifications/initialized', {});
-    |    return;
-    |  }
-    |  if (message.method === 'ui/notifications/tool-result') {
-    |    const structured = (message.params || {}).structuredContent || {};
-    |    if (structured.videoId) focusOn(structured.videoId);
-    |  }
-    |});
-    |
-    |for (const button of document.querySelectorAll('button.pick')) {
-    |  const id = button.dataset.video;
-    |  const input = pick('input.file', id);
-    |  button.addEventListener('click', () => input.click());
-    |
-    |  input.addEventListener('change', () => {
-    |    const file = input.files[0];
-    |    if (!file) return;
-    |    const data = uploads[id];
-    |    const status = pick('div.status', id);
-    |    const bar = pick('div.bar', id);
-    |    button.disabled = true;
-    |    status.textContent = 'Subiendo ' + file.name + '…';
-    |
-    |    const request = new XMLHttpRequest();
-    |    request.open('PUT', data.uploadUrl, true);
-    |    request.setRequestHeader('Content-Type', data.contentType);
-    |
-    |    request.upload.addEventListener('progress', (event) => {
-    |      if (!event.lengthComputable) return;
-    |      bar.style.width = Math.round((event.loaded / event.total) * 100) + '%';
-    |    });
-    |
-    |    request.addEventListener('load', () => {
-    |      if (request.status >= 200 && request.status < 300) {
-    |        status.textContent = 'Listo. Confirmando…';
-    |        bar.style.width = '100%';
-    |        // The video stays out of rotation until the server has seen the object, so the page
-    |        // asks for that itself rather than leaving it to the operator to remember.
-    |        send('tools/call', { name: 'confirm_video_upload', arguments: { videoId: id } });
-    |        // And says so in the conversation, because a call the page makes is invisible to the
-    |        // model otherwise — which would leave the agent waiting on something already done.
-    |        send('ui/message', {
-    |          role: 'user',
-    |          content: {
-    |            type: 'text',
-    |            text: 'Subí el archivo del video ' + id + ' y llamé confirm_video_upload.'
-    |          }
-    |        });
-    |      } else {
-    |        button.disabled = false;
-    |        status.textContent = 'S3 rechazó la subida (' + request.status + ').';
-    |      }
-    |    });
-    |
-    |    request.addEventListener('error', () => {
-    |      button.disabled = false;
-    |      status.textContent = 'No se pudo conectar con S3. Puede que el enlace haya expirado; volvé a abrir esta página para firmar de nuevo.';
-    |    });
-    |
-    |    request.send(file);
-    |  });
-    |}
-    |""".stripMargin
 
   /** Escapes for a JS string literal. The values are server-derived, but a file name reaching this
     * unescaped would be an injection into our own page.

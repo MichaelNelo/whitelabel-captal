@@ -5,7 +5,13 @@ import io.getquill.*
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.{AdvertiserRow, AdvertiserVideoRow, LocationRow, SurveyRow}
+import whitelabel.captal.infra.{
+  AdvertiserRow,
+  AdvertiserVideoRow,
+  LocalizedTextRow,
+  LocationRow,
+  SurveyRow
+}
 import zio.*
 import zio.json.ast.Json
 import zio.schema.codec.JsonCodec as SchemaJsonCodec
@@ -29,9 +35,29 @@ import zio.schema.codec.JsonCodec as SchemaJsonCodec
 final class EntityResources(upload: UploadUiSource)
     extends McpResourceSource[QuillSqlite & AssetStore]:
 
+  /** What the upload page reads for one video. Signed on every read: a presigned URL is arithmetic
+    * over the key and the clock, not an allocation, so there is nothing to keep and nothing to
+    * release — asking again is the whole expiry story.
+    */
+  final case class UploadTicket(
+      videoId: String,
+      title: String,
+      slug: String,
+      uploadUrl: String,
+      contentType: String,
+      expiresInSeconds: Long,
+      styles: Option[String])
+
+  final case class PendingVideo(videoId: String, title: String, slug: String)
+  final case class PendingVideos(videos: List[PendingVideo])
+
   private val Root = "captal://"
   private val Directory = "inode/directory"
   private val JsonMime = "application/json"
+
+  given zio.schema.Schema[UploadTicket] = zio.schema.DeriveSchema.gen
+  given zio.schema.Schema[PendingVideo] = zio.schema.DeriveSchema.gen
+  given zio.schema.Schema[PendingVideos] = zio.schema.DeriveSchema.gen
 
   private inline def locationBySlug = quote: (slugParam: String) =>
     query[LocationRow].filter(_.slug == slugParam).take(1)
@@ -106,6 +132,10 @@ final class EntityResources(upload: UploadUiSource)
           advertiser(uri, id)
         case "surveys" :: id :: Nil =>
           survey(uri, id)
+        case "videos" :: "pending" :: Nil =>
+          pendingVideos(uri).mapError(ToolError.apply)
+        case "videos" :: id :: "upload" :: Nil =>
+          uploadTicket(uri, id).mapError(ToolError.apply)
         case _ =>
           ZIO.fail(ToolError(s"No resource at $uri"))
 
@@ -134,6 +164,70 @@ final class EntityResources(upload: UploadUiSource)
     .viewOf(id)
     .map(v => contents(uri, encode(v)))
     .mapError(ToolError.apply)
+
+  private def videoContentType(key: String): String =
+    key.reverse.takeWhile(_ != '.').reverse.toLowerCase match
+      case "webm" =>
+        "video/webm"
+      case _ =>
+        "video/mp4"
+
+  private def pendingVideos(uri: String): ZIO[QuillSqlite, String, Chunk[ResourceContents]] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      for
+        videos    <- run(query[AdvertiserVideoRow].filter(_.isActive == 0)).orDie
+        locations <- run(query[LocationRow]).orDie
+        titles    <- run(query[LocalizedTextRow].filter(_.isActive == 1)).orDie
+        slugOf  = locations.map(l => l.id -> l.slug).toMap
+        titleOf = titles.groupBy(_.entityId).view.mapValues(_.map(_.value).minOption).toMap
+        listed  = videos
+          .toList
+          .map: video =>
+            val id = video.id.toString
+            PendingVideo(
+              videoId = id,
+              title = titleOf.get(id).flatten.getOrElse(id),
+              slug = video.locationId.flatMap(slugOf.get).getOrElse("—"))
+          .sortBy(_.title)
+      yield contents(uri, encode(PendingVideos(listed)))
+
+  /** No signed URL is listed alongside the others: one read, one video, one signature. The page
+    * used to receive every pending video's URL and hide the ones it was not opened for, which is
+    * not the same as withholding them.
+    */
+  private def uploadTicket(
+      uri: String,
+      videoId: String): ZIO[QuillSqlite & AssetStore, String, Chunk[ResourceContents]] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      for
+        videos <- run(query[AdvertiserVideoRow]).orDie
+        video  <- ZIO
+          .succeed(videos.find(_.id.toString == videoId))
+          .someOrFail(s"No video with id '$videoId'.")
+        _ <- ZIO
+          .fail(s"Video '$videoId' is already in rotation; there is nothing to upload.")
+          .when(video.isActive == 1)
+        locations <- run(query[LocationRow]).orDie
+        titles    <- run(query[LocalizedTextRow].filter(_.entityId == lift(videoId))).orDie
+        store     <- ZIO.service[AssetStore]
+        key         = store.keyOf(video.videoUrl)
+        contentType = videoContentType(key)
+        url <- store.presignPut(key, contentType, VideoTools.UploadValidFor)
+        slug = video.locationId.flatMap(id => locations.find(_.id == id)).map(_.slug)
+        styles <- ZIO.foreach(slug)(store.get(_, Asset.Styles)).map(_.flatten)
+        ticket = UploadTicket(
+          videoId = videoId,
+          title = titles.map(_.value).minOption.getOrElse(videoId),
+          slug = slug.getOrElse("—"),
+          uploadUrl = url,
+          contentType = contentType,
+          expiresInSeconds = VideoTools.UploadValidFor.toSeconds,
+          styles = styles
+        )
+      yield contents(uri, encode(ticket))
+      end for
 
   /** `resources/directory/read`: the children of a directory, each either a leaf or another
     * directory. This is what makes the hierarchy worth having — the relationships are walkable

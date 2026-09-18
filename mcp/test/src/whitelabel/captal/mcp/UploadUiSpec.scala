@@ -2,98 +2,53 @@ package whitelabel.captal.mcp
 
 import zio.test.*
 
-/** The page is rendered server-side from values the caller does not control, but the file name
-  * reaches it through the content type and the ids are echoed into a script literal, so what is
-  * worth pinning is that nothing escapes into the markup.
+/** The page carries no data now — it fetches. So what is worth pinning is the protocol it speaks,
+  * since every one of those strings was wrong at some point and none of them fails loudly: a bad
+  * envelope is silently ignored by the host, and a missing `ui/message` leaves the agent waiting on
+  * a confirmation that already happened.
   */
 object UploadUiSpec extends ZIOSpecDefault:
-  private def render(videoId: String = "v-1", css: Option[String] = None) = UploadUi.render(
-    videoId = videoId,
-    uploadUrl = "https://bucket.s3.amazonaws.com/loc/videos/v-1.mp4?X-Amz-Signature=abc",
-    contentType = "video/mp4",
-    locationCss = css)
+  private val page = UploadUi.app()
 
   def spec =
     suite("upload page")(
-      test("carries the button, the file input and the signed URL"):
-        val page = render()
+      test("ships no signed URL and no video id"):
+        // The previous version embedded a signed PUT URL per pending video and hid the rows it was
+        // not opened for. Hiding a row is not withholding the capability in it.
         assertTrue(
           page.startsWith("<!doctype html>"),
-          page.contains("Subir video"),
-          page.contains("""type="file""""),
-          page.contains("X-Amz-Signature=abc"),
-          page.contains("confirm_video_upload")
-        )
+          !page.contains("X-Amz-Signature"),
+          !page.contains("uploadUrl\":"),
+          page.contains("captal://videos/"))
       ,
-      test("inlines the location stylesheet after its own"):
-        // Cascade order is what makes a themed location theme this page too.
-        val page = render(css = Some(".upload { background: rebeccapurple; }"))
-        assertTrue(
-          page.contains("rebeccapurple"),
-          page.indexOf(".upload { max-width") < page.indexOf("rebeccapurple"))
-      ,
-      test("renders without a stylesheet"):
-        val page = render()
-        assertTrue(!page.contains("rebeccapurple"), page.contains("var(--color-primary"))
-      ,
-      test("a video id cannot break out of the script literal"):
-        // Server-derived today, but the page would be the one place an id reached markup unescaped.
-        val page = render(videoId = """v";</script><script>alert(1)//""")
-        assertTrue(
-          !page.contains("</script><script>alert(1)"),
-          page.contains("\\u003c") || page.contains("\\\""))
-      ,
-      test("the pending page lists one row per video, each with its own signed URL"):
-        // The static page exists because `_meta.ui.resourceUri` is declared before any call has
-        // produced a video, and `CallToolResult` carries no `_meta` to correct it afterwards. So
-        // the URI names what the page is, not which video, and the page lists what is waiting.
-        val page = UploadUi.renderPending(
-          List(
-            UploadUi.Pending(
-              "v-1",
-              "Promo verano",
-              "cafe-centro",
-              "https://s3/a?sig=one",
-              "video/mp4"),
-            UploadUi.Pending("v-2", "Spot corto", "bar-norte", "https://s3/b?sig=two", "video/webm")
-          ),
-          None
-        )
-        assertTrue(
-          page.contains("Promo verano"),
-          page.contains("Spot corto"),
-          page.contains("cafe-centro"),
-          page.contains("sig=one"),
-          page.contains("sig=two"),
-          // Each row confirms its own upload, or the wrong video would enter rotation.
-          page.contains("confirm_video_upload"),
-          page.split("""data-video="v-1"""").length - 1 >= 3
-        )
-      ,
-      test("an empty list says so rather than rendering a page with nothing on it"):
-        val page = UploadUi.renderPending(Nil, None)
-        assertTrue(
-          page.contains("No hay videos esperando archivo"),
-          page.contains("create_advertiser_video"),
-          !page.contains("""class="row""""))
-      ,
-      test("the page speaks JSON-RPC to the host and tells the model what it did"):
-        // Both were wrong before the extension spec was read. The page posted an ad-hoc
-        // `{type: 'tool'}` envelope no host reads, and even a working call would have been
-        // invisible to the model — which here means the agent waiting forever on a confirmation
-        // that already happened.
-        val page = UploadUi.renderPending(
-          List(UploadUi.Pending("v-1", "Promo", "cafe-centro", "https://s3/a?sig=x", "video/mp4")),
-          None)
+      test("opens the bridge as a client before saying anything"):
         assertTrue(
           page.contains("ui/initialize"),
           page.contains("ui/notifications/initialized"),
-          // the result of the call that opened the page, which is how it can single out one video
-          page.contains("ui/notifications/tool-result"),
-          page.contains("""method: 'tools/call'""") || page.contains("'tools/call'"),
-          page.contains("ui/message"),
           page.contains("jsonrpc"),
-          !page.contains("""type: 'tool'""")
+          // the envelope that no host reads, which is what this used to send
+          !page.contains("type: 'tool'")
         )
+      ,
+      test("takes the video id from the opening call, since the URI cannot carry it"):
+        assertTrue(
+          page.contains("ui/notifications/tool-result"),
+          page.contains("structuredContent"))
+      ,
+      test("confirms the upload and says so in the conversation"):
+        // Two separate things: the tool call puts the video in rotation, the ui/message is the only
+        // reason the model ever learns that it did.
+        assertTrue(
+          page.contains("confirm_video_upload"),
+          page.contains("tools/call"),
+          page.contains("ui/message"))
+      ,
+      test("re-reads the ticket rather than treating expiry as an error"):
+        // A presigned URL is arithmetic over the key and the clock, not an allocation, so the
+        // answer to expiry is to ask again — before it lapses, and after a 403.
+        assertTrue(
+          page.contains("403"),
+          page.contains("expiresInSeconds"),
+          page.contains("resources/read"))
     )
 end UploadUiSpec
