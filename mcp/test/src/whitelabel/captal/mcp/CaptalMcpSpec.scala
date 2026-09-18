@@ -322,9 +322,21 @@ object CaptalMcpSpec extends ZIOSpecDefault:
           .meta
           .map(m => (m: zio.json.ast.Json).toString)
           .getOrElse("")
+        val resumeMeta = VideoTools
+          .resume("https://captal-assets.s3.us-east-1.amazonaws.com")
+          .definition
+          .meta
+          .map(m => (m: zio.json.ast.Json).toString)
+          .getOrElse("")
         assertTrue(
+          // Both, because a View is instantiated only by calling a tool that carries this. A
+          // resource a user opens is never rendered, so resume_video_upload without it would open
+          // nothing and the only way back to an abandoned upload would be creating a second video.
+          resumeMeta.contains("ui://upload-video"),
+          resumeMeta.contains("connectDomains"),
           meta.contains("connectDomains"),
           meta.contains("captal-assets.s3.us-east-1.amazonaws.com"),
-          meta.contains("ui://upload-video"))
+          meta.contains("ui://upload-video")
+        )
     )
 end CaptalMcpSpec

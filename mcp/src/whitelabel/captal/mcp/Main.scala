@@ -44,7 +44,7 @@ object Main extends ZIOAppDefault:
       resource <- Auth.resourceUri
       tools =
         LocationTools.all.size + I18nTools.all.size + AdvertiserTools.all.size +
-          SurveyTools.all.size + AssetTools.all.size + 2
+          SurveyTools.all.size + AssetTools.all.size + 3
       _ <- ZIO.logInfo(
         s"MCP backoffice on :$p as $resource — ${Skills.all.size} skills, ${CaptalMcp
             .resources
