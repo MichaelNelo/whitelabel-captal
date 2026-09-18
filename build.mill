@@ -624,14 +624,25 @@ object client extends BaseJSModule:
     val src = bundle().path
     val normalizedPrefix = prefix.stripSuffix("/")
     val destBase = s"s3://$bucket/$normalizedPrefix"
-    // (name, content-type, content-encoding)
-    val files: Seq[(String, String, Option[String])] = Seq(
-      ("index.html", "text/html; charset=utf-8", None),
-      ("brand-icon.svg", "image/svg+xml", None),
-      ("main.js.gz", "application/javascript", Some("gzip")),
-      ("styles.css.gz", "text/css", Some("gzip"))
+    // Cache-Control is part of the contract rather than a tuning knob. Left unset, browsers fall
+    // back to heuristic freshness -- roughly a tenth of the object's age -- so the staleness window
+    // *grows* the longer a location goes without a deploy, and nothing here can bound it. A day is
+    // the bound.
+    //
+    // index.html is the exception, because it is the entrypoint the CloudFront function chooses on
+    // every request. A browser holding it for a day would not ask, so a paused location would keep
+    // serving the portal to devices that had been there before. `s-maxage` still gives CloudFront
+    // its 24h; the invalidation every deploy issues is what clears that copy.
+    val Day = "public, max-age=86400"
+    val Revalidate = "public, max-age=0, must-revalidate, s-maxage=86400"
+    // (name, content-type, content-encoding, cache-control)
+    val files: Seq[(String, String, Option[String], String)] = Seq(
+      ("index.html", "text/html; charset=utf-8", None, Revalidate),
+      ("brand-icon.svg", "image/svg+xml", None, Day),
+      ("main.js.gz", "application/javascript", Some("gzip"), Day),
+      ("styles.css.gz", "text/css", Some("gzip"), Day)
     )
-    for (name, ctype, enc) <- files do
+    for (name, ctype, enc, cache) <- files do
       val baseArgs = Seq(
         "aws",
         "s3",
@@ -641,7 +652,9 @@ object client extends BaseJSModule:
         "--region",
         region,
         "--content-type",
-        ctype)
+        ctype,
+        "--cache-control",
+        cache)
       val args = enc.fold(baseArgs)(e => baseArgs ++ Seq("--content-encoding", e))
       println(s"[publish] $name -> $destBase/$name")
       val result = os.proc(args).call(check = false, stderr = os.Pipe)

@@ -87,6 +87,10 @@ final case class AssetStore(
           .bucket(bucket)
           .key(key(slug, asset))
           .contentType(asset.contentType)
+          // Matches what `client.publishS3` puts on the bundle. Without it the browser invents a
+          // freshness window from the object's age, which grows without bound between edits -- and
+          // these two are the assets an operator changes expecting to see the change.
+          .cacheControl(AssetStore.CacheControl)
         val withEncoding =
           if asset.gzipped then
             request.contentEncoding("gzip")
@@ -215,6 +219,12 @@ final case class AssetStore(
 end AssetStore
 
 object AssetStore:
+  /** A day, matching the bundle. These assets change only when an operator edits them, and that
+    * edit invalidates CloudFront -- so the bound that matters is the one on the browser, which
+    * otherwise derives its own from how long the object has sat unchanged.
+    */
+  private[mcp] val CacheControl = "public, max-age=86400"
+
   /** Fails startup when the bucket or distribution is missing rather than discovering it on the
     * first write, which would leave an operator holding a stylesheet nobody stored.
     */
