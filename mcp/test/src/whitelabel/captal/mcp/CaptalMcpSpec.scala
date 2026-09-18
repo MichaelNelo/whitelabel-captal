@@ -214,7 +214,7 @@ object CaptalMcpSpec extends ZIOSpecDefault:
           tagsOf(SurveyTools.createQuestion) == fromCodec,
           // The same enum, nested inside an array of questions. The renderer reaches it wherever it
           // sits, which the per-tool patch it replaced did not.
-          tagsOf(VideoTools.create) == fromCodec
+          tagsOf(VideoTools.create("https://bucket.s3.amazonaws.com")) == fromCodec
         )
       ,
       test("a variant that rejects extra fields says so"):
@@ -272,7 +272,7 @@ object CaptalMcpSpec extends ZIOSpecDefault:
         // this started at 31 of 137 inputs and 3 of 98 outputs documented.
         val tools: List[com.jamesward.ziohttp.mcp.McpToolHandlerR[?]] =
           LocationTools.all ++ I18nTools.all ++ AdvertiserTools.all ++ SurveyTools.all ++
-            AssetTools.all ++ VideoTools.all
+            AssetTools.all ++ VideoTools.all("https://bucket.s3.amazonaws.com")
 
         def undocumented(node: zio.json.ast.Json, path: String): List[String] =
           node match
@@ -311,5 +311,20 @@ object CaptalMcpSpec extends ZIOSpecDefault:
             tool.definition.outputSchema.toList.flatMap(undocumented(_, s"$name.out"))
 
         assertTrue(gaps == Nil)
+      ,
+      test("the upload tool declares the origin its page has to reach"):
+        // The host defaults `connect-src` to 'self'. Without this the page renders, the operator
+        // picks a file, and the browser blocks the PUT — the first moment anything says so is the
+        // last one. Nothing else in the server would fail.
+        val meta = VideoTools
+          .create("https://captal-assets.s3.us-east-1.amazonaws.com")
+          .definition
+          .meta
+          .map(m => (m: zio.json.ast.Json).toString)
+          .getOrElse("")
+        assertTrue(
+          meta.contains("connectDomains"),
+          meta.contains("captal-assets.s3.us-east-1.amazonaws.com"),
+          meta.contains("ui://upload-video"))
     )
 end CaptalMcpSpec

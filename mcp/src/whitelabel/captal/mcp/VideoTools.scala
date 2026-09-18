@@ -125,7 +125,14 @@ object VideoTools:
       case other =>
         Left(s"Unsupported video format '.$other'. The portal plays mp4 and webm.")
 
-  val create: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("create_advertiser_video")
+  /** Takes the origin rather than reading it, so the CSP the tool advertises and the URL the page
+    * is handed come from the same `AssetStore` instead of two readings of the environment.
+    */
+  def create(uploadOrigin: String): McpToolHandlerR[QuillSqlite & AssetStore] = createTool(
+    uploadOrigin)
+
+  private def createTool(uploadOrigin: String): McpToolHandlerR[QuillSqlite & AssetStore] = McpTool(
+    "create_advertiser_video")
     .description(
       "Register an advertiser video together with the survey shown after it, and hand back a URL to upload the file to. The video stays out of rotation until confirm_video_upload finds the file, so an abandoned upload costs nothing. Read skill://add-video/SKILL.md first.")
     .requireScopes(Auth.ContentWrite)
@@ -245,7 +252,7 @@ object VideoTools:
     // has produced a video, and `CallToolResult` carries no `_meta` to correct it afterwards — a
     // template here is read literally and resolves to nothing, which is what "problem displaying
     // content" was. The page lists whatever is waiting, including what this call just created.
-    .withUi(UploadUi.Uri)
+    .withUi(UploadUi.Uri, connectDomains = List(uploadOrigin))
 
   val confirm: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("confirm_video_upload")
     .description(
@@ -273,5 +280,7 @@ object VideoTools:
           _ <- Writes.expectOne(affected, s"Activating video '${in.videoId}'")
         yield ConfirmUploadResponse(in.videoId, active = true, videoUrl = row.videoUrl)
 
-  val all: List[McpToolHandlerR[QuillSqlite & AssetStore]] = List(create, confirm)
+  def all(uploadOrigin: String): List[McpToolHandlerR[QuillSqlite & AssetStore]] = List(
+    create(uploadOrigin),
+    confirm)
 end VideoTools
