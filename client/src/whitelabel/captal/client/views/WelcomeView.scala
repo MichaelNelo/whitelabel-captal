@@ -1,9 +1,8 @@
 package whitelabel.captal.client.views
-
-import scala.concurrent.ExecutionContext.Implicits.global
 import scala.scalajs.js
 
 import com.raquo.laminar.api.L.*
+import whitelabel.captal.client.Promises.*
 import whitelabel.captal.client.i18n.I18nClient
 import whitelabel.captal.client.{ApiClient, AppState, ErrorHandler, Router, Runtime}
 import whitelabel.captal.core.application.Phase

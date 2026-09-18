@@ -1,11 +1,10 @@
 package whitelabel.captal.client
-
-import scala.concurrent.ExecutionContext.Implicits.global
 import scala.scalajs.js
 import scala.util.Try
 
 import com.raquo.laminar.api.L.*
 import org.scalajs.dom
+import whitelabel.captal.client.Promises.*
 
 @main
 def main(): Unit =

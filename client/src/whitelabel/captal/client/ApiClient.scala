@@ -1,12 +1,11 @@
 package whitelabel.captal.client
 
-import scala.concurrent.ExecutionContext.Implicits.global
-import scala.concurrent.Future
 import scala.scalajs.js
 
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, parser}
 import org.scalajs.dom
+import whitelabel.captal.client.Promises.*
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.core.survey.question.AnswerValue
 import whitelabel.captal.endpoints.i18n.given
@@ -41,7 +40,7 @@ object ApiClient:
       method: String,
       path: String,
       body: Option[io.circe.Json] = None,
-      extraHeaders: Map[String, String] = Map.empty): Future[Either[ApiError, A]] =
+      extraHeaders: Map[String, String] = Map.empty): js.Promise[Either[ApiError, A]] =
     val options = js.Dynamic.literal(method = method)
     val headers = js.Dynamic.literal()
     body.foreach { json =>
@@ -54,8 +53,8 @@ object ApiClient:
     if js.Object.keys(headers.asInstanceOf[js.Object]).length > 0 then
       options.headers = headers
     for
-      response <- dom.fetch(path, options.asInstanceOf[dom.RequestInit]).toFuture
-      text     <- response.text().toFuture
+      response <- dom.fetch(path, options.asInstanceOf[dom.RequestInit])
+      text     <- response.text()
     yield
       if response.ok then
         parser.decode[A](text).left.map(e => ApiError.InternalError(e.getMessage))
@@ -67,62 +66,68 @@ object ApiClient:
             Left(ApiError.InternalError(s"HTTP ${response.status}: $text"))
   end fetchApi
 
-  private def get[A: Decoder](path: String): Future[Either[ApiError, A]] = fetchApi("GET", path)
+  private def get[A: Decoder](path: String): js.Promise[Either[ApiError, A]] = fetchApi("GET", path)
 
-  private def post[A: Decoder](path: String): Future[Either[ApiError, A]] = fetchApi("POST", path)
+  private def post[A: Decoder](path: String): js.Promise[Either[ApiError, A]] = fetchApi(
+    "POST",
+    path)
 
-  private def postJson[B: Encoder, A: Decoder](path: String, body: B): Future[Either[ApiError, A]] =
-    fetchApi("POST", path, Some(body.asJson))
+  private def postJson[B: Encoder, A: Decoder](
+      path: String,
+      body: B): js.Promise[Either[ApiError, A]] = fetchApi("POST", path, Some(body.asJson))
 
-  private def putJson[B: Encoder, A: Decoder](path: String, body: B): Future[Either[ApiError, A]] =
-    fetchApi("PUT", path, Some(body.asJson))
+  private def putJson[B: Encoder, A: Decoder](
+      path: String,
+      body: B): js.Promise[Either[ApiError, A]] = fetchApi("PUT", path, Some(body.asJson))
 
   def getStatus(
-      extraHeaders: Map[String, String] = Map.empty): Future[Either[ApiError, StatusResponse]] =
+      extraHeaders: Map[String, String] = Map.empty): js.Promise[Either[ApiError, StatusResponse]] =
     fetchApi("GET", url("/status"), extraHeaders = extraHeaders)
 
-  def getNextSurvey(): Future[Either[ApiError, SurveyResponse]] = get(url("/survey/next"))
+  def getNextSurvey(): js.Promise[Either[ApiError, SurveyResponse]] = get(url("/survey/next"))
 
-  def answerEmail(answer: AnswerValue): Future[Either[ApiError, SurveyResponse]] = postJson(
+  def answerEmail(answer: AnswerValue): js.Promise[Either[ApiError, SurveyResponse]] = postJson(
     url("/survey/email"),
     AnswerRequest(answer))
 
-  def answerProfiling(answer: AnswerValue): Future[Either[ApiError, SurveyResponse]] = postJson(
+  def answerProfiling(answer: AnswerValue): js.Promise[Either[ApiError, SurveyResponse]] = postJson(
     url("/survey/profiling"),
     AnswerRequest(answer))
 
-  def answerLocation(answer: AnswerValue): Future[Either[ApiError, SurveyResponse]] = postJson(
+  def answerLocation(answer: AnswerValue): js.Promise[Either[ApiError, SurveyResponse]] = postJson(
     url("/survey/location"),
     AnswerRequest(answer))
 
-  def getLocales(): Future[Either[ApiError, List[String]]] = get(url("/locales"))
+  def getLocales(): js.Promise[Either[ApiError, List[String]]] = get(url("/locales"))
 
-  def setLocale(locale: String): Future[Either[ApiError, StatusResponse]] = putJson(
+  def setLocale(locale: String): js.Promise[Either[ApiError, StatusResponse]] = putJson(
     url("/session/locale"),
     SetLocaleRequest(locale))
 
-  def getI18n(locale: String): Future[Either[ApiError, I18n]] = get(url(s"/i18n/$locale"))
+  def getI18n(locale: String): js.Promise[Either[ApiError, I18n]] = get(url(s"/i18n/$locale"))
 
-  def resetPhase(): Future[Either[ApiError, StatusResponse]] = post(url("/dev/reset-phase"))
+  def resetPhase(): js.Promise[Either[ApiError, StatusResponse]] = post(url("/dev/reset-phase"))
 
-  def getNextVideo(): Future[Either[ApiError, VideoResponse]] = get(url("/video/next"))
+  def getNextVideo(): js.Promise[Either[ApiError, VideoResponse]] = get(url("/video/next"))
 
   def markVideoWatched(
       durationWatched: Int,
-      completed: Boolean): Future[Either[ApiError, VideoWatchedResponse]] = postJson(
+      completed: Boolean): js.Promise[Either[ApiError, VideoWatchedResponse]] = postJson(
     url("/video/watched"),
     MarkVideoWatchedRequest(durationWatched, completed))
 
-  def getNextAdvertiserSurvey(): Future[Either[ApiError, AdvertiserSurveyResponse]] = get(
+  def getNextAdvertiserSurvey(): js.Promise[Either[ApiError, AdvertiserSurveyResponse]] = get(
     url("/survey/advertiser/next"))
 
-  def answerAdvertiser(answer: AnswerValue): Future[Either[ApiError, AdvertiserSurveyResponse]] =
-    postJson(url("/survey/advertiser"), AnswerRequest(answer))
+  def answerAdvertiser(
+      answer: AnswerValue): js.Promise[Either[ApiError, AdvertiserSurveyResponse]] = postJson(
+    url("/survey/advertiser"),
+    AnswerRequest(answer))
 
   /** POST `/api/finish`. Triggers `UnifiAccessHandler` post-commit. The response is a
     * [[StatusResponse]] reflecting the session **after** UniFi ran: on success, `phase =
     * Authorized` + `accessExpiresAt = Some(...)`; on UniFi failure / no-config, `phase = Ready` +
     * `accessExpiresAt = None` (caller can retry by calling `finish()` again).
     */
-  def finish(): Future[Either[ApiError, StatusResponse]] = post(url("/finish"))
+  def finish(): js.Promise[Either[ApiError, StatusResponse]] = post(url("/finish"))
 end ApiClient
