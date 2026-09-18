@@ -192,21 +192,6 @@ final case class AssetStore(
     * The video row is written before the upload, so this is what separates "the operator finished"
     * from "the operator walked away" — and it is why the row starts inactive.
     */
-  /** The object's stored content type, or None when there is no object.
-    *
-    * The upload URL is signed without binding the type — the operator has not chosen a file when it
-    * is signed, so there is nothing to bind — which means the browser's PUT decides what S3
-    * records. Reading it back is how the type becomes known, and the only place it can be checked.
-    */
-  def contentTypeOf(key: String): ZIO[Any, String, Option[String]] = ZIO
-    .attemptBlocking:
-      Option(
-        s3.headObject(HeadObjectRequest.builder().bucket(bucket).key(key).build()).contentType())
-    .catchSome { case _: NoSuchKeyException =>
-      ZIO.none
-    }
-    .mapError(e => s"Could not read the type of $key: ${e.getMessage}")
-
   def exists(key: String): ZIO[Any, String, Boolean] = ZIO
     .attemptBlocking:
       s3.headObject(HeadObjectRequest.builder().bucket(bucket).key(key).build())

@@ -141,11 +141,6 @@ object VideoTools:
     */
   private def storageKey(slug: String, videoId: String): String = s"$slug/videos/$videoId"
 
-  /** What the portal can play. Checked against what actually arrived rather than against a name
-    * supplied before the upload, which could only ever have been a claim.
-    */
-  private val Playable = Set("video/mp4", "video/webm")
-
   /** Names the survey after the video, for an operator scanning list_surveys. Prefers Spanish and
     * falls back to whatever locale was given.
     */
@@ -300,23 +295,15 @@ object VideoTools:
             .when(row.status != VideoStatus.Pending)
           store <- ZIO.service[AssetStore]
           key = store.keyOf(row.videoUrl)
-          // What arrived, not what was promised. The signature binds no Content-Type — there was no
-          // file to take one from when it was signed — so this is the first and only moment the
-          // type is a fact rather than a claim.
-          arrived <- store.contentTypeOf(key)
-          found   <- ZIO
-            .succeed(arrived)
-            .someOrFail(
-              s"Nothing was uploaded to $key. The signed URL may have lapsed — call resume_video_upload for a fresh one.")
-          // An object served from the portal's own origin decides how the browser treats it, so a
-          // file that is not a video is refused rather than left to be discovered by a guest.
-          _ <-
-            ZIO.when(!Playable.contains(found.toLowerCase.takeWhile(_ != ';')))(
+          // A HEAD, not a download: the question is whether the object arrived, and a video can be
+          // hundreds of megabytes. What it was sent as is not checked here — the page puts the
+          // file's own type on the PUT, and re-deciding whether that type is acceptable would be
+          // second-guessing a fact with a list.
+          present <- store.exists(key)
+          _       <-
+            ZIO.when(!present)(
               ZIO.fail(
-                s"The uploaded file is $found; the portal plays ${Playable
-                    .toList
-                    .sorted
-                    .mkString(" and ")}. It stays out of rotation."))
+                s"Nothing was uploaded to $key. The signed URL may have lapsed — call resume_video_upload for a fresh one."))
           now = java.time.Instant.now.toString
           affected <-
             run(

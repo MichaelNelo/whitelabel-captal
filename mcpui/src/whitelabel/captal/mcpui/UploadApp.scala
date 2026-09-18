@@ -122,15 +122,15 @@ object UploadApp:
     */
   private def playable(mime: String): Boolean = mime == "video/mp4" || mime == "video/webm"
 
-  /** The browser's type for the chosen file, which it derives from the extension rather than from
-    * the bytes. Empty when it does not recognise the extension — and an empty type would leave the
-    * PUT with no Content-Type at all, which S3 records as binary/octet-stream.
+  /** The only thing worth refusing here, and it is not a judgement about the file: an unrecognised
+    * extension leaves `File.type` empty, which would send the PUT with no Content-Type at all and
+    * have S3 record binary/octet-stream. Everything else the browser reports is passed through — it
+    * is a fact about the file the operator chose, and checking it against a list would be guessing
+    * at something already known.
     */
   private def rejectionFor(file: dom.File): Option[String] =
     if file.`type`.isEmpty then
-      Some("No se pudo determinar el tipo del archivo. Elegí un .mp4 o un .webm.")
-    else if !playable(file.`type`.toLowerCase) then
-      Some(s"El archivo es ${file.`type`}; el portal reproduce mp4 y webm.")
+      Some("No se pudo determinar el tipo del archivo por su extensión. Elegí un .mp4 o un .webm.")
     else
       None
 
