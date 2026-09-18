@@ -94,8 +94,12 @@ object UploadUi:
           styleTag(id := "location-css")
         ),
         body(
-          div(cls := "upload", h1("Subir video"), p(id := "intro", "Cargando…"), div(id := "rows")),
-          script(raw(appScript)))
+          // Laminar renders into this; the markup lives on the other side now, typed, next to the
+          // behaviour that drives it. What stays here is the shell and the stylesheets, because
+          // the location's CSS is server-side knowledge.
+          div(id := "app"),
+          script(raw(appScript))
+        )
       ).render
 
   /** Escapes for a JS string literal. The values are server-derived, but a file name reaching this
