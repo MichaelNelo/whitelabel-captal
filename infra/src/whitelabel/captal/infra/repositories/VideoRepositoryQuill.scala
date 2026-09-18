@@ -39,7 +39,7 @@ object VideoRepositoryQuill:
   // Query DSL para obtener el primer video de propaganda
   inline def firstPromoQuery = quote:
     query[AdvertiserVideoRow]
-      .filter(v => v.isActive == 1 && v.videoType == "propaganda")
+      .filter(v => v.status == "active" && v.videoType == "propaganda")
       .sortBy(v => (v.priority, v.createdAt))(Ord.asc)
       .take(1)
 
@@ -52,7 +52,7 @@ object VideoRepositoryQuill:
         .join(query[AdvertiserRow])
         .on((v, a) => v.advertiserId.contains(a.id) && a.isActive == 1)
         .filter((v, _) =>
-          v.isActive == 1 && v.videoType == "publicidad" &&
+          v.status == "active" && v.videoType == "publicidad" &&
             locationIdParam.forall(lid => v.locationId.contains(lid)) &&
             query[SurveyRow]
               .filter(s =>
@@ -69,7 +69,7 @@ object VideoRepositoryQuill:
                 nullif(
                   castAsRealOpt(
                     query[AdvertiserVideoRow]
-                      .filter(av => av.advertiserId == v.advertiserId && av.isActive == 1)
+                      .filter(av => av.advertiserId == v.advertiserId && av.status == "active")
                       .map(_.priority)
                       .sum),
                   0.0)
@@ -165,7 +165,7 @@ object VideoRepositoryQuill:
           priority: Int,
           createdAt: String): Task[List[AdvertiserVideoRow]] = run(
         query[AdvertiserVideoRow]
-          .filter(v => v.isActive == 1 && v.videoType == "propaganda")
+          .filter(v => v.status == "active" && v.videoType == "propaganda")
           .filter(v =>
             v.priority > lift(priority) ||
               (v.priority == lift(priority) && strGt(v.createdAt, lift(createdAt))))

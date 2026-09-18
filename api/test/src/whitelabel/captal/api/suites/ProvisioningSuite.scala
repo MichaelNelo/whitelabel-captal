@@ -280,7 +280,7 @@ object ProvisioningSuite:
   private def queryVideos: ZIO[QuillSqlite, Throwable, List[AdvertiserVideoRow]] = ZIO
     .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
-      run(query[AdvertiserVideoRow].filter(_.isActive == 1))
+      run(query[AdvertiserVideoRow].filter(_.status == "active"))
 
   private def queryAllVideos: ZIO[QuillSqlite, Throwable, List[AdvertiserVideoRow]] = ZIO
     .serviceWithZIO[QuillSqlite]: quill =>

@@ -164,8 +164,8 @@ object Readiness:
           requiredKeys = requiredKeys.size,
           hasStyles = styles,
           hasIcon = icon,
-          activeVideos = mine.count(_.isActive == 1),
-          pendingVideos = mine.count(_.isActive == 0),
+          activeVideos = mine.count(_.status == "active"),
+          pendingVideos = mine.count(_.status == "pending"),
           advertiserSurveys = scoped.count(s =>
             s.category == "advertiser" &&
               questions.exists(q => q.surveyId == s.id && q.isActive == 1)),

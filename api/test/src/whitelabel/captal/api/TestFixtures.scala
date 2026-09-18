@@ -577,7 +577,7 @@ object TestFixtures:
       showCountdown = 1,
       noRepeatSeconds = None,
       locationId = None,
-      isActive = 1,
+      status = VideoStatus.Active,
       priority = 10,
       createdAt = now,
       updatedAt = now
@@ -619,7 +619,7 @@ object TestFixtures:
       showCountdown = 0,
       noRepeatSeconds = None,
       locationId = None,
-      isActive = 1,
+      status = VideoStatus.Active,
       priority = priority,
       createdAt = now,
       updatedAt = now
@@ -725,7 +725,7 @@ object TestFixtures:
         showCountdown = 1,
         noRepeatSeconds = None,
         locationId = None,
-        isActive = 1,
+        status = VideoStatus.Active,
         priority = 10,
         createdAt = now,
         updatedAt = now

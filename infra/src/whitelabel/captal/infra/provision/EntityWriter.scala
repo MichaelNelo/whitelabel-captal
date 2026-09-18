@@ -94,7 +94,9 @@ object EntityWriter:
           showCountdown,
           noRepeatSeconds,
           locationId,
-          1,
+          // Provisioning only ever wrote videos that already had their file in the bundle, so the
+          // state it creates is 'active'; the upload flow is the only thing that makes a pending.
+          VideoStatus.Active,
           priority,
           now,
           now,
@@ -110,7 +112,7 @@ object EntityWriter:
               (t, e) => t.showCountdown     -> e.showCountdown,
               (t, e) => t.priority          -> e.priority,
               (t, e) => t.productCampaignId -> e.productCampaignId,
-              (t, _) => t.isActive          -> lift(1),
+              (t, _) => t.status            -> lift(VideoStatus.Active),
               (t, _) => t.updatedAt         -> lift(now)
             )).unit
   end upsertVideo
@@ -237,7 +239,7 @@ object EntityWriter:
         run(
           query[AdvertiserVideoRow]
             .filter(_.id == lift(videoId))
-            .update(_.isActive -> 0, _.updatedAt -> lift(now))).unit
+            .update(_.status -> lift(VideoStatus.Retired), _.updatedAt -> lift(now))).unit
 
   /** Soft-delete a survey by setting is_active = 0 */
   def deactivateSurvey(quill: QuillSqlite)(id: String): Task[Unit] =
