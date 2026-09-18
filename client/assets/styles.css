@@ -1627,3 +1627,29 @@ body {
   0% { transform: translate(-50%, -50%) scale(1); }
   50% { transform: translate(-50%, -50%) scale(1.2); }
   100% { transform: translate(-50%, -50%) scale(1); }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Maintenance page
+   Served in place of the portal while a location is paused. Deliberately plain:
+   it has one thing to say and no state to wait for, so it borrows the layout and
+   the brand treatment and adds nothing that could fail to load.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.maintenance-view {
+  width: 100%;
+  text-align: center;
+}
+
+.maintenance-title {
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--text-inverse);
+  margin-bottom: var(--space-sm);
+}
+
+.maintenance-body {
+  font-size: var(--font-size-base);
+  color: var(--glass-text);
+  line-height: 1.6;
+}
