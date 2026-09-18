@@ -10,7 +10,8 @@ import whitelabel.captal.infra.{
   AdvertiserVideoRow,
   LocalizedTextRow,
   LocationRow,
-  SurveyRow
+  SurveyRow,
+  VideoStatus
 }
 import zio.*
 import zio.schema.annotation.description
@@ -218,7 +219,7 @@ object VideoTools:
                     showCountdown = 1,
                     noRepeatSeconds = None,
                     locationId = Some(location.id),
-                    isActive = 0,
+                    status = VideoStatus.Pending,
                     priority = in.priority.getOrElse(10),
                     createdAt = now,
                     updatedAt = now
@@ -294,6 +295,10 @@ object VideoTools:
             .orDie
             .map(_.headOption)
             .someOrFail(s"No video with id '${in.videoId}'.")
+          _ <- ZIO
+            .fail(
+              s"Video '${in.videoId}' is ${row.status}, not pending; there is nothing to confirm.")
+            .when(row.status != VideoStatus.Pending)
           store <- ZIO.service[AssetStore]
           key = store.keyOf(row.videoUrl)
           present <- store.exists(key)
@@ -303,10 +308,13 @@ object VideoTools:
                 s"Nothing was uploaded to $key. The presigned URL may have expired — create the video again to get a fresh one."))
           now = java.time.Instant.now.toString
           affected <-
-            run(videoByIdQuery(lift(in.videoId)).update(_.isActive -> 1, _.updatedAt -> lift(now)))
-              .orDie
+            run(
+              videoByIdQuery(lift(in.videoId)).update(
+                _.status    -> lift(VideoStatus.Active),
+                _.updatedAt -> lift(now))).orDie
           _ <- Writes.expectOne(affected, s"Activating video '${in.videoId}'")
         yield ConfirmUploadResponse(in.videoId, active = true, videoUrl = row.videoUrl)
+        end for
 
   /** Opens the upload page for a video that already exists.
     *
@@ -329,11 +337,14 @@ object VideoTools:
         for
           rows  <- run(videoByIdQuery(lift(in.videoId))).orDie
           video <- ZIO.succeed(rows.headOption).someOrFail(s"No video with id '${in.videoId}'.")
-          _     <- ZIO
+          // Only a pending video has a file to upload. A retired one already has its own, and
+          // handing out a signed URL for it would let this path put it back into rotation — which
+          // is what collapsing 'pending' and 'retired' into one flag made possible.
+          _ <- ZIO
             .fail(
-              s"Video '${in
-                  .videoId}' is already in rotation. There is nothing to upload; create_advertiser_video makes a new one.")
-            .when(video.isActive == 1)
+              s"Video '${in.videoId}' is ${video
+                  .status}, not pending. A retired video keeps its file; create_advertiser_video makes a new one.")
+            .when(video.status != VideoStatus.Pending)
           locations <- run(query[LocationRow]).orDie
           titles    <- run(query[LocalizedTextRow].filter(_.entityId == lift(in.videoId))).orDie
           store     <- ZIO.service[AssetStore]

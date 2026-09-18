@@ -82,7 +82,7 @@ final class EntityResources(upload: UploadUiSource)
     .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
       for
-        videos    <- run(query[AdvertiserVideoRow].filter(_.isActive == 0)).orDie
+        videos    <- run(query[AdvertiserVideoRow].filter(_.status == "pending")).orDie
         locations <- run(query[LocationRow]).orDie
         titles    <- run(query[LocalizedTextRow].filter(_.isActive == 1)).orDie
         slugOf  = locations.map(l => l.id -> l.slug).toMap
@@ -187,7 +187,7 @@ final class EntityResources(upload: UploadUiSource)
           row.name,
           row.priority,
           row.isActive == 1,
-          videos.count(v => v.advertiserId.contains(row.id) && v.isActive == 1))
+          videos.count(v => v.advertiserId.contains(row.id) && v.status == "active"))
       yield contents(uri, encode(view))
 
   private def survey(
@@ -208,7 +208,7 @@ final class EntityResources(upload: UploadUiSource)
     .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
       for
-        videos    <- run(query[AdvertiserVideoRow].filter(_.isActive == 0)).orDie
+        videos    <- run(query[AdvertiserVideoRow].filter(_.status == "pending")).orDie
         locations <- run(query[LocationRow]).orDie
         titles    <- run(query[LocalizedTextRow].filter(_.isActive == 1)).orDie
         slugOf  = locations.map(l => l.id -> l.slug).toMap
@@ -239,8 +239,8 @@ final class EntityResources(upload: UploadUiSource)
           .succeed(videos.find(_.id.toString == videoId))
           .someOrFail(s"No video with id '$videoId'.")
         _ <- ZIO
-          .fail(s"Video '$videoId' is already in rotation; there is nothing to upload.")
-          .when(video.isActive == 1)
+          .fail(s"Video '$videoId' is ${video.status}; only a pending video has a file to upload.")
+          .when(video.status != "pending")
         locations <- run(query[LocationRow]).orDie
         titles    <- run(query[LocalizedTextRow].filter(_.entityId == lift(videoId))).orDie
         store     <- ZIO.service[AssetStore]

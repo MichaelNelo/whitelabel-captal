@@ -108,7 +108,7 @@ object AdvertiserTools:
     */
   private inline def activeVideoCountQuery = quote: (advertiserIdParam: String) =>
     query[AdvertiserVideoRow]
-      .filter(v => v.advertiserId.contains(advertiserIdParam) && v.isActive == 1)
+      .filter(v => v.advertiserId.contains(advertiserIdParam) && v.status == "active")
       .size
 
   private def find(id: String): ZIO[QuillSqlite, String, AdvertiserRow] = ZIO.serviceWithZIO[

@@ -107,6 +107,25 @@ final case class AdvertiserRow(
     createdAt: String,
     updatedAt: String)
 
+/** Where a video is in its life, as one value rather than two flags.
+  *
+  * `pending` and `retired` were both `is_active = 0` until V21, which let an upload path put a
+  * deliberately retired video back into rotation. The fourth combination two booleans would allow —
+  * active with no content — is not representable here, and the column's CHECK enforces it.
+  */
+object VideoStatus:
+  /** Created, with a key reserved and a row to hang its survey off, but no file in S3 yet. Served
+    * to nobody.
+    */
+  val Pending = "pending"
+
+  /** In rotation. */
+  val Active = "active"
+
+  /** Taken out of rotation deliberately. Keeps its file; the answers to its survey still resolve.
+    */
+  val Retired = "retired"
+
 final case class AdvertiserVideoRow(
     id: video.Id,
     advertiserId: Option[String],
@@ -117,7 +136,7 @@ final case class AdvertiserVideoRow(
     showCountdown: Int,
     noRepeatSeconds: Option[Int],
     locationId: Option[String],
-    isActive: Int,
+    status: String,
     priority: Int,
     createdAt: String,
     updatedAt: String,
