@@ -21,7 +21,6 @@ object UploadApp:
     def title: String = raw.title.asInstanceOf[String]
     def slug: String = raw.slug.asInstanceOf[String]
     def uploadUrl: String = raw.uploadUrl.asInstanceOf[String]
-    def contentType: String = raw.contentType.asInstanceOf[String]
     def expiresInSeconds: Double = raw.expiresInSeconds.asInstanceOf[Double]
     def styles: js.UndefOr[String] = raw.styles.asInstanceOf[js.UndefOr[String]]
 
@@ -60,7 +59,6 @@ object UploadApp:
     val file = byId("file").asInstanceOf[dom.html.Input]
     val status = byId("status")
     val bar = byId("bar").asInstanceOf[dom.html.Div]
-    file.accept = ticket.contentType
 
     // Re-read before the signature lapses rather than letting the operator discover it at the PUT.
     // Asking again is the whole expiry story: a presigned URL is computed, never allocated, so
@@ -111,7 +109,8 @@ object UploadApp:
     new js.Promise[Int]((resolve, _) =>
       val request = new dom.XMLHttpRequest()
       request.open("PUT", ticket.uploadUrl, true)
-      request.setRequestHeader("Content-Type", ticket.contentType)
+      // Not set: XMLHttpRequest sends the File's own type, and the signature binds none, so what
+      // S3 records is what the operator actually chose. confirm_video_upload checks it.
       request
         .upload
         .addEventListener(

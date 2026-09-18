@@ -57,13 +57,15 @@ object UploadUiSpec extends ZIOSpecDefault:
         // form carries its id, so opening it from the resource picker needs no tool result.
         val bare = UploadUi.app()
         val forOne = UploadUi.app(
-          Some(UploadUi.PendingVideo("v-42", "Promo de invierno", "bar-norte", "video/mp4")))
+          Some(UploadUi.PendingVideo("v-42", "Promo de invierno", "bar-norte")))
         assertTrue(
           forOne.contains("""data-video="v-42""""),
           // The server knows these before the page opens, so they are markup, not a fetch.
           forOne.contains("Promo de invierno"),
           forOne.contains("bar-norte"),
-          forOne.contains("""accept="video/mp4""""),
+          // Any video: the type is not known before the operator picks a file, and what
+          // arrives is checked at confirm rather than declared here.
+          forOne.contains("""accept="video/*""""),
           // The script reads the attribute either way, so this looks for the attribute itself.
           !bare.contains("""data-video="""" + "\""),
           // one video, always: no listing mode left in the page

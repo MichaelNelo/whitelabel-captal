@@ -68,13 +68,6 @@ final class UploadUiSource extends McpResourceSource[QuillSqlite & AssetStore]:
         video     <- ZIO.succeed(videos.headOption).someOrFail(s"No video with id '$videoId'.")
         locations <- run(query[LocationRow]).orDie
         titles    <- run(query[LocalizedTextRow].filter(_.entityId == lift(videoId))).orDie
-        key         = video.videoUrl.reverse.takeWhile(_ != '/').reverse
-        contentType =
-          key.reverse.takeWhile(_ != '.').reverse.toLowerCase match
-            case "webm" =>
-              "video/webm"
-            case _ =>
-              "video/mp4"
         pending = UploadUi.PendingVideo(
           videoId = videoId,
           title = titles.map(_.value).minOption.getOrElse(videoId),
@@ -82,8 +75,7 @@ final class UploadUiSource extends McpResourceSource[QuillSqlite & AssetStore]:
             .locationId
             .flatMap(id => locations.find(_.id == id))
             .map(_.slug)
-            .getOrElse("—"),
-          contentType = contentType
+            .getOrElse("—")
         )
       yield Chunk(ResourceContents(uri, Some("text/html"), Some(UploadUi.app(Some(pending)))))
       end for

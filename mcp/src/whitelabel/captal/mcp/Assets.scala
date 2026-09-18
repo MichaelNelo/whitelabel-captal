@@ -59,10 +59,7 @@ final case class AssetStore(
     * differs — path-style against a local endpoint, virtual-hosted against AWS — and a guess that
     * is close but wrong fails in exactly the same silent way as no declaration at all.
     */
-  def uploadOrigin: ZIO[Any, String, String] = presignPut(
-    "csp-probe",
-    "application/octet-stream",
-    1.minute).map: url =>
+  def uploadOrigin: ZIO[Any, String, String] = presignPut("csp-probe", 1.minute).map: url =>
     val parsed = java.net.URI.create(url)
     val port =
       if parsed.getPort < 0 then
@@ -170,31 +167,46 @@ final case class AssetStore(
     * has to send the same one or S3 rejects it — that is what keeps a caller from storing something
     * else under a key the portal will serve as video.
     */
-  def presignPut(key: String, contentType: String, validFor: Duration): ZIO[Any, String, String] =
-    ZIO
-      .attemptBlocking:
-        val request = PutObjectRequest
-          .builder()
-          .bucket(bucket)
-          .key(key)
-          .contentType(contentType)
-          .build()
-        presigner
-          .presignPutObject(
-            PutObjectPresignRequest
-              .builder()
-              .signatureDuration(java.time.Duration.ofSeconds(validFor.toSeconds))
-              .putObjectRequest(request)
-              .build())
-          .url()
-          .toString
-      .mapError(e => s"Could not presign an upload for $key: ${e.getMessage}")
+  /** Signed without binding a Content-Type, so `SignedHeaders` is `host` alone and the browser's
+    * PUT decides what S3 records. Binding it would mean knowing the type before the operator has
+    * chosen a file, which is not a thing that can be known — the old design took it from a name
+    * supplied at creation, which was a claim rather than a fact. `confirm_video_upload` checks what
+    * arrived.
+    */
+  def presignPut(key: String, validFor: Duration): ZIO[Any, String, String] = ZIO
+    .attemptBlocking:
+      val request = PutObjectRequest.builder().bucket(bucket).key(key).build()
+      presigner
+        .presignPutObject(
+          PutObjectPresignRequest
+            .builder()
+            .signatureDuration(java.time.Duration.ofSeconds(validFor.toSeconds))
+            .putObjectRequest(request)
+            .build())
+        .url()
+        .toString
+    .mapError(e => s"Could not presign an upload for $key: ${e.getMessage}")
 
   /** Whether the object is actually there.
     *
     * The video row is written before the upload, so this is what separates "the operator finished"
     * from "the operator walked away" — and it is why the row starts inactive.
     */
+  /** The object's stored content type, or None when there is no object.
+    *
+    * The upload URL is signed without binding the type — the operator has not chosen a file when it
+    * is signed, so there is nothing to bind — which means the browser's PUT decides what S3
+    * records. Reading it back is how the type becomes known, and the only place it can be checked.
+    */
+  def contentTypeOf(key: String): ZIO[Any, String, Option[String]] = ZIO
+    .attemptBlocking:
+      Option(
+        s3.headObject(HeadObjectRequest.builder().bucket(bucket).key(key).build()).contentType())
+    .catchSome { case _: NoSuchKeyException =>
+      ZIO.none
+    }
+    .mapError(e => s"Could not read the type of $key: ${e.getMessage}")
+
   def exists(key: String): ZIO[Any, String, Boolean] = ZIO
     .attemptBlocking:
       s3.headObject(HeadObjectRequest.builder().bucket(bucket).key(key).build())

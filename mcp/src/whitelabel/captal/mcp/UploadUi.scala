@@ -130,12 +130,11 @@ object UploadUi:
                 strong(id := "title", video.fold("")(_.title)),
                 span(cls  := "slug", id := "slug", video.fold("")(_.slug))),
               button(id := "pick", "Subir archivo"),
-              input(
-                id     := "file",
-                `type` := "file",
-                video.map(v => accept := v.contentType).getOrElse(cls := "file")),
-              div(id  := "status"),
-              div(cls := "track", div(id := "bar"))
+              // Any video: the type is whatever the operator picks, and confirm_video_upload
+              // checks what actually arrived rather than trusting a declaration made earlier.
+              input(id := "file", `type` := "file", accept := "video/*"),
+              div(id   := "status"),
+              div(cls  := "track", div(id := "bar"))
             )
           ),
           script(raw(appScript))
@@ -146,7 +145,7 @@ object UploadUi:
   /** What the server knows about a video before the page is opened. The signed URL is deliberately
     * absent: the page reads it when it needs it, so it can read it again when it lapses.
     */
-  final case class PendingVideo(videoId: String, title: String, slug: String, contentType: String)
+  final case class PendingVideo(videoId: String, title: String, slug: String)
 
   /** Escapes for a JS string literal. The values are server-derived, but a file name reaching this
     * unescaped would be an injection into our own page.
