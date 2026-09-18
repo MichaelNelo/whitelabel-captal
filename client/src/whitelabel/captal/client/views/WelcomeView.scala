@@ -97,10 +97,10 @@ object WelcomeView:
     * throttling, suspended device) the answer is the same. If it somehow fires early, the response
     * still says Authorized and the countdown is simply re-seeded.
     */
-  private def authorizedContent(remainingSeconds: Long): HtmlElement =
-    val remaining: Var[Long] = Var(remainingSeconds)
+  private def authorizedContent(remainingSeconds: Int): HtmlElement =
+    val remaining: Var[Int] = Var(remainingSeconds)
     // Ticks only repaint the label — they never decide when access ends.
-    val tickStream = EventStream.periodic(1000).startWith(0L)
+    val tickStream = EventStream.periodic(1000).startWith(0)
     div(
       cls := "welcome-view",
       // Title sits in normal flow right below the brand icon, matching the layout of every
@@ -118,7 +118,7 @@ object WelcomeView:
         )
       ),
       tickStream --> { _ =>
-        remaining.update(s => math.max(0L, s - 1))
+        remaining.update(s => math.max(0, s - 1))
       },
       onMountCallback(_ => scheduleExpiry(remainingSeconds))
     )
@@ -129,18 +129,21 @@ object WelcomeView:
   /** `setTimeout` stores its delay in a signed 32-bit int; anything above this overflows and fires
     * immediately, so the delay is clamped.
     */
-  private val MaxTimeoutMillis: Long = 2147483647L
+  private val MaxTimeoutMillis: Double = 2147483647d
 
-  private def scheduleExpiry(secondsRemaining: Long): Unit =
-    val delayMillis = math.min(math.max(0L, secondsRemaining) * 1000L, MaxTimeoutMillis)
-    js.timers.setTimeout(delayMillis.toDouble)(refreshStatusAfterExpiration())
+  /** The multiplication happens in `Double` rather than `Int`, which would overflow at 24 days of
+    * remaining access — and in `Long`, which is what this used to be and what pulls Scala.js's
+    * 64-bit emulation into the bundle. `setTimeout` takes a Double anyway.
+    */
+  private def scheduleExpiry(secondsRemaining: Int): Unit =
+    val delayMillis = math.min(math.max(0, secondsRemaining).toDouble * 1000d, MaxTimeoutMillis)
+    js.timers.setTimeout(delayMillis)(refreshStatusAfterExpiration())
 
   private def refreshStatusAfterExpiration(): Unit = Runtime.run:
     ApiClient
       .getStatus()
       .map:
         case Right(status) =>
-          AppState.setAccessExpiresAt(status.accessExpiresAt)
           AppState.setSecondsRemaining(status.secondsRemaining)
           AppState.setPhase(status.phase)
           Router.syncWithPhase(status.phase)
@@ -150,10 +153,17 @@ object WelcomeView:
         case Left(err) =>
           ErrorHandler.escalate(err)
 
-  private def formatRemaining(seconds: Long): String =
-    val minutes = seconds / 60
-    val secs = seconds % 60
-    f"$minutes%02d:$secs%02d"
+  /** Written out rather than `f"$minutes%02d:$secs%02d"`, because the `f` interpolator goes through
+    * `java.util.Formatter` — a general-purpose format-string engine that measured at 7.6 KB of the
+    * bundle, to pad two numbers to two digits.
+    */
+  private def formatRemaining(seconds: Int): String =
+    def twoDigits(n: Int): String =
+      if n < 10 then
+        "0" + n.toString
+      else
+        n.toString
+    twoDigits(seconds / 60) + ":" + twoDigits(seconds % 60)
 
   private def step(textSignal: Signal[String], index: Int): HtmlElement = div(
     cls       := "step",

@@ -14,7 +14,7 @@ object AuthorizedSuite:
     zio
       .test
       .suite("Authorized phase + access expiration")(
-        test("Status returns Authorized + accessExpiresAt when session is authorized"):
+        test("Status returns Authorized + secondsRemaining when session is authorized"):
           for
             backend <- testBackend
             cookie  <- createSession(backend)
@@ -26,21 +26,19 @@ object AuthorizedSuite:
           yield
             val body = parse(statusResp.body).toOption.get
             val phase = body.hcursor.downField("phase").as[String].toOption.getOrElse("")
-            val accessExpiresAt = body
-              .hcursor
-              .downField("accessExpiresAt")
-              .focus
-              .getOrElse(io.circe.Json.Null)
-            val secondsRemaining = body.hcursor.downField("secondsRemaining").as[Long].toOption
+            val secondsRemaining = body.hcursor.downField("secondsRemaining").as[Int].toOption
             assertTrue(
               statusResp.code.isSuccess,
               phase == "authorized",
-              !accessExpiresAt.isNull,
-              // Server-computed, so the client's countdown never touches the device clock.
+              // The only expiry the response carries. `accessExpiresAt` used to ride along and was
+              // never read: the countdown is seeded from this, deliberately, so it never touches
+              // the device clock — a captive-portal client has had no internet and may not have
+              // synced NTP. Dropping the absolute instant from the wire took java.time's parser
+              // and Scala.js's 64-bit emulation out of the browser bundle with it.
               secondsRemaining.exists(s => s > 0 && s <= 3600)
             )
         ,
-        test("Status resets session to Welcome when accessExpiresAt is in the past"):
+        test("Status resets session to Welcome when the access expiry is in the past"):
           for
             backend <- testBackend
             cookie  <- createSession(backend)
@@ -53,16 +51,16 @@ object AuthorizedSuite:
           yield
             val body = parse(statusResp.body).toOption.get
             val phase = body.hcursor.downField("phase").as[String].toOption.getOrElse("")
-            val accessExpiresAt = body
+            val secondsRemaining = body
               .hcursor
-              .downField("accessExpiresAt")
+              .downField("secondsRemaining")
               .focus
               .getOrElse(io.circe.Json.Null)
             val sessionAfter = dbState.sessions.find(_.id == sessionId)
             assertTrue(
               statusResp.code.isSuccess,
               phase == "welcome",
-              accessExpiresAt.isNull,
+              secondsRemaining.isNull,
               sessionAfter.exists(_.phase == Phase.Welcome),
               sessionAfter.exists(_.accessExpiresAt.isEmpty),
               sessionAfter.exists(_.userId.isEmpty)
@@ -91,7 +89,7 @@ object AuthorizedSuite:
               sessionAfter.exists(_.phase == Phase.Ready),
               sessionAfter.exists(_.accessExpiresAt.isEmpty))
         ,
-        test("Finish triggers UniFi authorization → /status returns Authorized + accessExpiresAt"):
+        test("Finish triggers UniFi authorization → /status returns Authorized + secondsRemaining"):
           for
             _       <- TestUnifiClient.enable
             _       <- TestFixtures.seedEmailSurvey
@@ -109,16 +107,16 @@ object AuthorizedSuite:
           yield
             val body = parse(statusResp.body).toOption.get
             val phase = body.hcursor.downField("phase").as[String].toOption.getOrElse("")
-            val accessExpiresAt = body
-              .hcursor
-              .downField("accessExpiresAt")
-              .focus
-              .getOrElse(io.circe.Json.Null)
+            val secondsRemaining = body.hcursor.downField("secondsRemaining").as[Int].toOption
             assertTrue(
               finishResp.code.isSuccess,
               statusResp.code.isSuccess,
               phase == "authorized",
-              !accessExpiresAt.isNull)
+              // Presence, not value: TestUnifiClient grants access until the epoch, so the server
+              // floors this at zero. What is under test is that finishing authorizes and that the
+              // status carries the countdown seed at all.
+              secondsRemaining.isDefined
+            )
         ,
         test("Access expiry: scheduler revokes on UniFi, resets the session and logs the event"):
           ZIO.scoped:

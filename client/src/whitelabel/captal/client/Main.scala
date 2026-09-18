@@ -90,7 +90,6 @@ object App:
         .map:
           case Right(status) =>
             i18n.I18nClient.setLocale(status.locale)
-            AppState.setAccessExpiresAt(status.accessExpiresAt)
             AppState.setSecondsRemaining(status.secondsRemaining)
             AppState.setPhase(status.phase)
             Router.syncWithPhase(status.phase)

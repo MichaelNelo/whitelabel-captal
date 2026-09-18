@@ -1,7 +1,5 @@
 package whitelabel.captal.client
 
-import java.time.Instant
-
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.application.commands.{NextAdvertiserSurvey, NextIdentificationSurvey}
@@ -56,9 +54,6 @@ object AppState:
   // Access expiration timestamp when phase == Authorized. WelcomeView uses this to render the
   // countdown; when the timestamp passes, it polls `/api/status` and the server resets the
   // session back to Welcome.
-  private val accessExpiresAtVar: Var[Option[Instant]] = Var(None)
-  val accessExpiresAt: Signal[Option[Instant]] = accessExpiresAtVar.signal
-  def setAccessExpiresAt(t: Option[Instant]): Unit = accessExpiresAtVar.set(t)
 
   /** Seconds left of the granted access, as computed by the server.
     *
@@ -66,7 +61,7 @@ object AppState:
     * counter instead of subtracting from an absolute instant, so it never depends on the device
     * clock. A captive-portal client has had no internet yet and may not have synced NTP.
     */
-  private val secondsRemainingVar: Var[Option[Long]] = Var(None)
-  val secondsRemaining: Signal[Option[Long]] = secondsRemainingVar.signal
-  def setSecondsRemaining(s: Option[Long]): Unit = secondsRemainingVar.set(s)
+  private val secondsRemainingVar: Var[Option[Int]] = Var(None)
+  val secondsRemaining: Signal[Option[Int]] = secondsRemainingVar.signal
+  def setSecondsRemaining(s: Option[Int]): Unit = secondsRemainingVar.set(s)
 end AppState
