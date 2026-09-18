@@ -5,7 +5,13 @@ import whitelabel.captal.core.{survey, video}
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.{AdvertiserRow, AdvertiserVideoRow, LocationRow, SurveyRow}
+import whitelabel.captal.infra.{
+  AdvertiserRow,
+  AdvertiserVideoRow,
+  LocalizedTextRow,
+  LocationRow,
+  SurveyRow
+}
 import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
@@ -82,6 +88,26 @@ object VideoTools:
         "The video stays inactive and out of rotation until confirm_video_upload finds the file.")
       active: Boolean)
 
+  final case class ResumeUploadRequest(
+      @description(
+        "The video to upload. Call list_surveys or read captal://videos/pending for what is waiting.")
+      videoId: String)
+
+  final case class ResumeUploadResponse(
+      @description("The video the page was opened for.")
+      videoId: String,
+      @description("Its title, as stored.")
+      title: String,
+      @description("Where it will be shown.")
+      slug: String,
+      @description(
+        "PUT the file here if the page did not render. Signed fresh on this call, so an older link having lapsed does not matter.")
+      uploadUrl: String,
+      @description("Send exactly this on the PUT; the signature covers the header.")
+      contentType: String,
+      @description("How long this signature lasts.")
+      expiresInSeconds: Long)
+
   final case class ConfirmUploadRequest(
       @description("The video whose upload to check, from create_advertiser_video.")
       videoId: String)
@@ -97,6 +123,8 @@ object VideoTools:
   given Schema[VideoQuestion] = DeriveSchema.gen
   given Schema[CreateVideoRequest] = DeriveSchema.gen
   given Schema[CreateVideoResponse] = DeriveSchema.gen
+  given Schema[ResumeUploadRequest] = DeriveSchema.gen
+  given Schema[ResumeUploadResponse] = DeriveSchema.gen
   given Schema[ConfirmUploadRequest] = DeriveSchema.gen
   given Schema[ConfirmUploadResponse] = DeriveSchema.gen
 
@@ -280,7 +308,56 @@ object VideoTools:
           _ <- Writes.expectOne(affected, s"Activating video '${in.videoId}'")
         yield ConfirmUploadResponse(in.videoId, active = true, videoUrl = row.videoUrl)
 
+  /** Opens the upload page for a video that already exists.
+    *
+    * A tool rather than a resource because a View is instantiated only by calling a tool whose
+    * definition carries `_meta.ui.resourceUri` — the extension has no path for a host to render a
+    * `ui://` resource a user opened on their own. So "let me upload that one" has to be a call, and
+    * the video it names travels in the result, which the host forwards to the page.
+    *
+    * Without it the only way back to an abandoned upload would be create_advertiser_video, which
+    * would make a second video, a second survey and a second set of questions.
+    */
+  def resume(uploadOrigin: String): McpToolHandlerR[QuillSqlite & AssetStore] = McpTool(
+    "resume_video_upload")
+    .description(
+      "Open the upload page for a video created earlier whose file never arrived. Signs a fresh URL; the previous one having expired does not matter. Does not create anything.")
+    .requireScopes(Auth.ContentWrite)
+    .handle: (in: ResumeUploadRequest) =>
+      ZIO.serviceWithZIO[QuillSqlite]: quill =>
+        import quill.*
+        for
+          rows  <- run(videoByIdQuery(lift(in.videoId))).orDie
+          video <- ZIO.succeed(rows.headOption).someOrFail(s"No video with id '${in.videoId}'.")
+          _     <- ZIO
+            .fail(
+              s"Video '${in
+                  .videoId}' is already in rotation. There is nothing to upload; create_advertiser_video makes a new one.")
+            .when(video.isActive == 1)
+          locations <- run(query[LocationRow]).orDie
+          titles    <- run(query[LocalizedTextRow].filter(_.entityId == lift(in.videoId))).orDie
+          store     <- ZIO.service[AssetStore]
+          key = store.keyOf(video.videoUrl)
+          // From the stored key, not from a caller-supplied name: the object already exists.
+          contentType = contentTypeFor(key).getOrElse("video/mp4")
+          url <- store.presignPut(key, contentType, UploadValidFor)
+        yield ResumeUploadResponse(
+          videoId = in.videoId,
+          title = titles.map(_.value).minOption.getOrElse(in.videoId),
+          slug = video
+            .locationId
+            .flatMap(id => locations.find(_.id == id))
+            .map(_.slug)
+            .getOrElse("—"),
+          uploadUrl = url,
+          contentType = contentType,
+          expiresInSeconds = UploadValidFor.toSeconds
+        )
+        end for
+    .withUi(UploadUi.Uri, connectDomains = List(uploadOrigin))
+
   def all(uploadOrigin: String): List[McpToolHandlerR[QuillSqlite & AssetStore]] = List(
     create(uploadOrigin),
+    resume(uploadOrigin),
     confirm)
 end VideoTools
