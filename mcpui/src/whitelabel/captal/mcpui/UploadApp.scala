@@ -21,7 +21,6 @@ object UploadApp:
     def title: String = raw.title.asInstanceOf[String]
     def slug: String = raw.slug.asInstanceOf[String]
     def uploadUrl: String = raw.uploadUrl.asInstanceOf[String]
-    def contentType: String = raw.contentType.asInstanceOf[String]
     def expiresInSeconds: Double = raw.expiresInSeconds.asInstanceOf[Double]
     def styles: js.UndefOr[String] = raw.styles.asInstanceOf[js.UndefOr[String]]
 
@@ -60,7 +59,6 @@ object UploadApp:
     val file = byId("file").asInstanceOf[dom.html.Input]
     val status = byId("status")
     val bar = byId("bar").asInstanceOf[dom.html.Div]
-    file.accept = ticket.contentType
 
     // Re-read before the signature lapses rather than letting the operator discover it at the PUT.
     // Asking again is the whole expiry story: a presigned URL is computed, never allocated, so
@@ -87,31 +85,63 @@ object UploadApp:
           else
             "S3 rechazó la subida (" + code + ")."
 
+    def upload(chosen: dom.File): Unit =
+      button.disabled = true
+      status.textContent = "Subiendo " + chosen.name + "…"
+      put(ticket, chosen, bar).`then`[Unit]: code =>
+        // A 403 is what an expired signature looks like. One re-read and one retry, rather than
+        // telling the operator to reopen the page.
+        if code == 403 then
+          status.textContent = "El enlace había expirado; reintentando…"
+          refresh().`then`[Unit](_ => put(ticket, chosen, bar).`then`[Unit](finish))
+        else
+          finish(code)
+
     button.addEventListener("click", (_: dom.Event) => file.click())
     file.addEventListener(
       "change",
       (_: dom.Event) =>
-        val chosen = file.files
-        if chosen.length > 0 then
-          val f = chosen(0)
-          button.disabled = true
-          status.textContent = "Subiendo " + f.name + "…"
-          put(ticket, f, bar).`then`[Unit]: code =>
-            // A 403 is what an expired signature looks like. One re-read and one retry, rather than
-            // telling the operator to reopen the page.
-            if code == 403 then
-              status.textContent = "El enlace había expirado; reintentando…"
-              refresh().`then`[Unit](_ => put(ticket, f, bar).`then`[Unit](finish))
-            else
-              finish(code)
+        val files = file.files
+        if files.length > 0 then
+          // Checked here so a wrong file costs nothing: no upload, no round trip, and the operator
+          // is told while the file dialog is still fresh in mind. The server checks again at
+          // confirm, because this page is not the only thing holding the signed URL.
+          rejectionFor(files(0)) match
+            case Some(why) =>
+              status.textContent = why
+            case None =>
+              upload(files(0))
     )
   end wire
+
+  /** What the portal can play. The page refuses anything else before uploading; the server checks
+    * again at confirm, because the page is not the only thing holding the signed URL.
+    *
+    * Two comparisons rather than a `Set`: a Set of two strings pulls Scala's immutable collections
+    * into the bundle, which measured at 146 KB against 23 KB for this.
+    */
+  private def playable(mime: String): Boolean = mime == "video/mp4" || mime == "video/webm"
+
+  /** The only thing worth refusing here, and it is not a judgement about the file: an unrecognised
+    * extension leaves `File.type` empty, which would send the PUT with no Content-Type at all and
+    * have S3 record binary/octet-stream. Everything else the browser reports is passed through — it
+    * is a fact about the file the operator chose, and checking it against a list would be guessing
+    * at something already known.
+    */
+  private def rejectionFor(file: dom.File): Option[String] =
+    if file.`type`.isEmpty then
+      Some("No se pudo determinar el tipo del archivo por su extensión. Elegí un .mp4 o un .webm.")
+    else
+      None
 
   private def put(ticket: Ticket, file: dom.File, bar: dom.html.Div): js.Promise[Int] =
     new js.Promise[Int]((resolve, _) =>
       val request = new dom.XMLHttpRequest()
       request.open("PUT", ticket.uploadUrl, true)
-      request.setRequestHeader("Content-Type", ticket.contentType)
+      // Explicitly the file's own type rather than letting XHR infer it, so an empty one is caught
+      // above instead of arriving at S3 as binary/octet-stream. The signature binds no type, so
+      // this is what gets stored.
+      request.setRequestHeader("Content-Type", file.`type`)
       request
         .upload
         .addEventListener(

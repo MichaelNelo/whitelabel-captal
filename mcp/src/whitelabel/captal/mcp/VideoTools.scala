@@ -41,8 +41,6 @@ object VideoTools:
       title: List[LocalizedText],
       @description("Optional blurb under the title.")
       description: Option[List[LocalizedText]],
-      @description("The file name to store it under. Keep the extension; it decides the MIME type.")
-      fileName: String,
       @description("The video's full length. Drives the default for minWatchSeconds.")
       durationSeconds: Int,
       @description(
@@ -74,11 +72,9 @@ object VideoTools:
       surveyId: String,
       @description("The questions created, in the order given.")
       questionIds: List[String],
-      @description("PUT the file here. Send the same Content-Type; the signature covers it.")
-      uploadUrl: String,
       @description(
-        "Send exactly this on the PUT. The signature covers the header, so a different value is rejected as a signature mismatch rather than a bad type.")
-      contentType: String,
+        "PUT the file here. The signature does not bind a Content-Type — there was no file to take one from when it was signed — so send the file's own; confirm_video_upload checks what arrived.")
+      uploadUrl: String,
       @description(
         "How long the signed URL stays valid. After that, call create_advertiser_video again for a fresh one rather than retrying the PUT.")
       expiresInSeconds: Long,
@@ -104,8 +100,6 @@ object VideoTools:
       @description(
         "PUT the file here if the page did not render. Signed fresh on this call, so an older link having lapsed does not matter.")
       uploadUrl: String,
-      @description("Send exactly this on the PUT; the signature covers the header.")
-      contentType: String,
       @description("How long this signature lasts.")
       expiresInSeconds: Long)
 
@@ -141,18 +135,20 @@ object VideoTools:
   /** Derived rather than taken from the caller so two advertisers uploading `promo.mp4` cannot
     * overwrite each other — which is what `captal video add` does today, using the raw file name.
     */
-  private def storageKey(slug: String, videoId: String, fileName: String): String =
-    val extension = fileName.reverse.takeWhile(_ != '.').reverse
-    s"$slug/videos/$videoId.$extension"
+  /** No extension. The operator has not chosen a file when the video is created, so a name to take
+    * one from does not exist yet — and S3 addresses objects by key while browsers and CDNs decide
+    * how to play them from the stored content type, not from the path.
+    */
+  private def storageKey(slug: String, videoId: String): String = s"$slug/videos/$videoId"
 
-  private def contentTypeFor(fileName: String): Either[String, String] =
-    fileName.toLowerCase.reverse.takeWhile(_ != '.').reverse match
-      case "mp4" =>
-        Right("video/mp4")
-      case "webm" =>
-        Right("video/webm")
-      case other =>
-        Left(s"Unsupported video format '.$other'. The portal plays mp4 and webm.")
+  /** Names the survey after the video, for an operator scanning list_surveys. Prefers Spanish and
+    * falls back to whatever locale was given.
+    */
+  private def titleFor(texts: List[LocalizedText]): String = texts
+    .find(_.locale == "es")
+    .orElse(texts.headOption)
+    .map(_.value)
+    .getOrElse("video")
 
   /** Takes the origin rather than reading it, so the CSP the tool advertises and the URL the page
     * is handed come from the same `AssetStore` instead of two readings of the environment.
@@ -197,11 +193,10 @@ object VideoTools:
               ZIO.fail(
                 s"minWatchSeconds must be between 1 and the duration (${in
                     .durationSeconds}), got $minWatch."))
-          contentType <- ZIO.fromEither(contentTypeFor(in.fileName))
           videoId = video.Id.generate
-          key     = storageKey(in.slug, videoId.asString, in.fileName)
+          key     = storageKey(in.slug, videoId.asString)
           store <- ZIO.service[AssetStore]
-          url   <- store.presignPut(key, contentType, UploadValidFor)
+          url   <- store.presignPut(key, UploadValidFor)
           now = java.time.Instant.now.toString
           // Inactive until the file is there. The row has to exist first — the survey references
           // the video — so this is what keeps a half-finished upload out of the rotation.
@@ -224,7 +219,7 @@ object VideoTools:
                     createdAt = now,
                     updatedAt = now
                   )))).orDie
-          _ <- Writes.expectOne(affected, s"Creating video '${in.fileName}'")
+          _ <- Writes.expectOne(affected, s"Creating video '${videoId.asString}'")
           // The portal reads these back keyed on the video id, and the description on the id with
           // a `_desc` suffix — see `VideoRepositoryQuill.fetchLocalizedTexts`. Until this was
           // written the tool validated that a title was supplied and then dropped it, so every
@@ -247,7 +242,7 @@ object VideoTools:
                     Some(location.id),
                     1,
                     now,
-                    Some(s"${advertiser.name} — ${in.fileName}"))))).orDie
+                    Some(s"${advertiser.name} — ${titleFor(in.title)}"))))).orDie
           _           <- Writes.expectOne(surveyWritten, "Creating the video's survey")
           questionIds <-
             ZIO.foreach(in.questions.zipWithIndex): (q, index) =>
@@ -269,7 +264,6 @@ object VideoTools:
           surveyId = surveyId.asString,
           questionIds = questionIds.map(_.questionId),
           uploadUrl = url,
-          contentType = contentType,
           expiresInSeconds = UploadValidFor.toSeconds,
           uploadPageUri = s"${UploadUi.Uri}/${videoId.asString}",
           active = false
@@ -301,11 +295,15 @@ object VideoTools:
             .when(row.status != VideoStatus.Pending)
           store <- ZIO.service[AssetStore]
           key = store.keyOf(row.videoUrl)
+          // A HEAD, not a download: the question is whether the object arrived, and a video can be
+          // hundreds of megabytes. What it was sent as is not checked here — the page puts the
+          // file's own type on the PUT, and re-deciding whether that type is acceptable would be
+          // second-guessing a fact with a list.
           present <- store.exists(key)
           _       <-
             ZIO.when(!present)(
               ZIO.fail(
-                s"Nothing was uploaded to $key. The presigned URL may have expired — create the video again to get a fresh one."))
+                s"Nothing was uploaded to $key. The signed URL may have lapsed — call resume_video_upload for a fresh one."))
           now = java.time.Instant.now.toString
           affected <-
             run(
@@ -350,8 +348,7 @@ object VideoTools:
           store     <- ZIO.service[AssetStore]
           key = store.keyOf(video.videoUrl)
           // From the stored key, not from a caller-supplied name: the object already exists.
-          contentType = contentTypeFor(key).getOrElse("video/mp4")
-          url <- store.presignPut(key, contentType, UploadValidFor)
+          url <- store.presignPut(key, UploadValidFor)
         yield ResumeUploadResponse(
           videoId = in.videoId,
           title = titles.map(_.value).minOption.getOrElse(in.videoId),
@@ -361,7 +358,6 @@ object VideoTools:
             .map(_.slug)
             .getOrElse("—"),
           uploadUrl = url,
-          contentType = contentType,
           expiresInSeconds = UploadValidFor.toSeconds
         )
         end for

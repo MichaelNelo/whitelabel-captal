@@ -84,7 +84,7 @@ object AssetStoreLocalStackSpec extends ZIOSpecDefault:
                   present <- s.exists(s.key("demo", Asset.Styles)).mapError(new RuntimeException(_))
                   missing <- s.exists("demo/nothing-here.mp4").mapError(new RuntimeException(_))
                   signed  <- s
-                    .presignPut("demo/videos/v1.mp4", "video/mp4", 15.minutes)
+                    .presignPut("demo/videos/v1", 15.minutes)
                     .mapError(new RuntimeException(_))
                 yield assertTrue(
                   // Gzipped on the way out and back, which is what the browser expects.
@@ -94,7 +94,13 @@ object AssetStoreLocalStackSpec extends ZIOSpecDefault:
                   !missing,
                   // Path-style, or the browser would resolve a bucket subdomain that does not exist.
                   signed.startsWith(s"$Endpoint/$Bucket/"),
-                  signed.contains("X-Amz-Signature")
+                  signed.contains("X-Amz-Signature"),
+                  // No content type is bound: the operator has not chosen a file when this is
+                  // signed, so there is nothing to bind. The browser's PUT decides what S3 records
+                  // and `confirm_video_upload` checks what arrived — a claim made at creation
+                  // could only ever have been a guess.
+                  signed.contains("X-Amz-SignedHeaders=host"),
+                  !signed.contains("content-type")
                 )
           yield result
       ,

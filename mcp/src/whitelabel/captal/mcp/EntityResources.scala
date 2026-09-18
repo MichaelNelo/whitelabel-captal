@@ -44,7 +44,6 @@ final class EntityResources(upload: UploadUiSource)
       title: String,
       slug: String,
       uploadUrl: String,
-      contentType: String,
       expiresInSeconds: Long,
       styles: Option[String])
 
@@ -197,13 +196,6 @@ final class EntityResources(upload: UploadUiSource)
     .map(v => contents(uri, encode(v)))
     .mapError(ToolError.apply)
 
-  private def videoContentType(key: String): String =
-    key.reverse.takeWhile(_ != '.').reverse.toLowerCase match
-      case "webm" =>
-        "video/webm"
-      case _ =>
-        "video/mp4"
-
   private def pendingVideos(uri: String): ZIO[QuillSqlite, String, Chunk[ResourceContents]] = ZIO
     .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
@@ -244,9 +236,8 @@ final class EntityResources(upload: UploadUiSource)
         locations <- run(query[LocationRow]).orDie
         titles    <- run(query[LocalizedTextRow].filter(_.entityId == lift(videoId))).orDie
         store     <- ZIO.service[AssetStore]
-        key         = store.keyOf(video.videoUrl)
-        contentType = videoContentType(key)
-        url <- store.presignPut(key, contentType, VideoTools.UploadValidFor)
+        key = store.keyOf(video.videoUrl)
+        url <- store.presignPut(key, VideoTools.UploadValidFor)
         slug = video.locationId.flatMap(id => locations.find(_.id == id)).map(_.slug)
         styles <- ZIO.foreach(slug)(store.get(_, Asset.Styles)).map(_.flatten)
         ticket = UploadTicket(
@@ -254,7 +245,6 @@ final class EntityResources(upload: UploadUiSource)
           title = titles.map(_.value).minOption.getOrElse(videoId),
           slug = slug.getOrElse("—"),
           uploadUrl = url,
-          contentType = contentType,
           expiresInSeconds = VideoTools.UploadValidFor.toSeconds,
           styles = styles
         )
