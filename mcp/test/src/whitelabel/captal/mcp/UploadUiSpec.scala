@@ -50,5 +50,19 @@ object UploadUiSpec extends ZIOSpecDefault:
           page.contains("403"),
           page.contains("expiresInSeconds"),
           page.contains("resources/read"))
+      ,
+      test("addressed per video, the id is in the shell and the host is not needed for it"):
+        // `_meta.ui.resourceUri` can only ever name the bare page — it is built before any call has
+        // produced a video. But `resources/list` enumerates one page per pending video, and that
+        // form carries its id, so opening it from the resource picker needs no tool result.
+        val bare = UploadUi.app()
+        val forOne = UploadUi.app(Some("v-42"))
+        assertTrue(
+          forOne.contains("""data-video="v-42""""),
+          // The script reads the attribute either way, so this looks for the attribute itself.
+          !bare.contains("""data-video="""" + "\""),
+          // one video, always: no listing mode left in the page
+          !forOne.contains("captal://videos/pending")
+        )
     )
 end UploadUiSpec

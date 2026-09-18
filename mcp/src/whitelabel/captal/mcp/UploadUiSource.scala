@@ -29,16 +29,15 @@ final class UploadUiSource extends McpResourceSource[QuillSqlite & AssetStore]:
   private inline def locationByIdQuery = quote: (idParam: String) =>
     query[LocationRow].filter(_.id == idParam).take(1)
 
+  /** Not listed here. `EntityResources` enumerates one `ui://upload-video/{id}` per video still
+    * waiting for a file, which is a resource per video rather than one page that lists them — the
+    * listing is the place to answer "which are pending", not the page.
+    *
+    * The bare `ui://upload-video` stays readable because `_meta.ui.resourceUri` has nothing else it
+    * can say: the declaration is built before any call has produced a video.
+    */
   override def listResources(ctx: McpToolContext): ZIO[Any, Nothing, Chunk[ResourceDefinition]] =
-    ZIO.succeed(
-      Chunk(
-        ResourceDefinition(
-          uri = UploadUi.Uri,
-          name = "Upload videos",
-          description = Some(
-            "Every video still waiting for its file, each with a freshly signed URL to PUT it to."),
-          mimeType = Some("text/html")
-        )))
+    ZIO.succeed(Chunk.empty)
 
   override def listResourceTemplates(
       ctx: McpToolContext): ZIO[Any, Nothing, Chunk[ResourceTemplateDefinition]] = ZIO.succeed(
@@ -49,6 +48,10 @@ final class UploadUiSource extends McpResourceSource[QuillSqlite & AssetStore]:
       ctx: McpToolContext): ZIO[QuillSqlite & AssetStore, ToolError, Chunk[ResourceContents]] =
     if uri == UploadUi.Uri then
       ZIO.succeed(Chunk(ResourceContents(uri, Some("text/html"), Some(UploadUi.app()))))
+    else if uri.startsWith(Prefix) then
+      val videoId = uri.stripPrefix(Prefix)
+      ZIO.succeed(
+        Chunk(ResourceContents(uri, Some("text/html"), Some(UploadUi.app(Some(videoId))))))
     else
       ZIO.fail(ToolError(s"Not an upload page: $uri"))
 

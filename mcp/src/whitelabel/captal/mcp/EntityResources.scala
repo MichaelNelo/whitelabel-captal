@@ -74,9 +74,41 @@ final class EntityResources(upload: UploadUiSource)
   private def directory(uri: String, name: String, description: String): ResourceDefinition =
     ResourceDefinition(uri, name, Some(description), Some(Directory))
 
-  override def listResources(ctx: McpToolContext): ZIO[Any, Nothing, Chunk[ResourceDefinition]] =
-    upload
-      .listResources(ctx)
+  /** One upload page per video still waiting for a file, rather than one page that lists them. The
+    * listing is where "which are pending" belongs, and a resource that addresses exactly one video
+    * cannot hand out a signed URL for another.
+    */
+  private def pendingPages: ZIO[QuillSqlite, Nothing, Chunk[ResourceDefinition]] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      for
+        videos    <- run(query[AdvertiserVideoRow].filter(_.isActive == 0)).orDie
+        locations <- run(query[LocationRow]).orDie
+        titles    <- run(query[LocalizedTextRow].filter(_.isActive == 1)).orDie
+        slugOf  = locations.map(l => l.id -> l.slug).toMap
+        titleOf = titles.groupBy(_.entityId).view.mapValues(_.map(_.value).minOption).toMap
+      yield Chunk.fromIterable(
+        videos
+          .toList
+          .map: video =>
+            val id = video.id.toString
+            ResourceDefinition(
+              uri = s"${UploadUi.Uri}/$id",
+              name = titleOf.get(id).flatten.getOrElse(id),
+              description = Some(
+                s"Upload the file for this video${video
+                    .locationId
+                    .flatMap(slugOf.get)
+                    .fold("")(s => s" at $s")}. It stays out of rotation until the file arrives."),
+              mimeType = Some("text/html")
+            )
+          .sortBy(_.name))
+      end for
+
+  override def listResources(
+      ctx: McpToolContext): ZIO[QuillSqlite & AssetStore, Nothing, Chunk[ResourceDefinition]] =
+    pendingPages
+      .zipWith(upload.listResources(ctx))(_ ++ _)
       .map(
         _ ++
           Chunk(

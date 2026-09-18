@@ -27,48 +27,50 @@ object UploadApp:
     def styles: js.UndefOr[String] = raw.styles.asInstanceOf[js.UndefOr[String]]
 
   private def ticketUri(videoId: String) = "captal://videos/" + videoId + "/upload"
-  private val PendingUri = "captal://videos/pending"
 
   private val intro = Var("Cargando…")
-  private val rows = Var(List.empty[Ticket])
+  private val shown = Var(Option.empty[Ticket])
 
   private def readTicket(videoId: String): js.Promise[Ticket] = Bridge
     .readJson(ticketUri(videoId))
     .`then`[Ticket](raw => Ticket(raw))
 
   def main(args: Array[String]): Unit =
+    val container = dom.document.getElementById("app")
+    render(container, page)
+
+    // Addressed per video, the id is in the shell and nothing else is needed. Addressed as the bare
+    // `ui://upload-video` — all `_meta.ui.resourceUri` can say, being declared before any call has
+    // produced a video — the host names it in the result of the call that opened the page.
+    val fromShell = Option(container.getAttribute("data-video")).filter(_.nonEmpty)
     Bridge.listen: params =>
       val structured = params.structuredContent.asInstanceOf[js.UndefOr[js.Dynamic]]
       structured.foreach(s => s.videoId.asInstanceOf[js.UndefOr[String]].foreach(showOne))
 
-    render(dom.document.getElementById("app"), page)
-    Bridge.handshake().`then`[Unit](_ => showPending())
+    Bridge
+      .handshake()
+      .`then`[Unit]: _ =>
+        fromShell match
+          case Some(videoId) =>
+            showOne(videoId)
+          case None =>
+            intro.set(
+              "Abrí esta página desde create_advertiser_video, o elegí un video pendiente en la lista de recursos.")
+  end main
 
   private def page: HtmlElement = div(
     cls := "upload",
     h1("Subir video"),
     p(cls := "intro", child.text <-- intro.signal),
-    div(children <-- rows.signal.map(_.map(row))))
+    child.maybe <-- shown.signal.map(_.map(row)))
 
-  /** Opened by a call: the one video it produced, and nothing else. */
+  /** One video, always. There is no listing mode: `resources/list` enumerates a page per pending
+    * video, so the page never has to answer "which one" — and never holds a signed URL for a video
+    * it was not opened for.
+    */
   private def showOne(videoId: String): Unit =
     intro.set("El video queda fuera de rotación hasta que el archivo llegue.")
-    readTicket(videoId).`then`[Unit](ticket => rows.set(List(ticket)))
-
-  /** Opened on its own: everything still outstanding, still one signed URL per row and none of them
-    * in the markup.
-    */
-  private def showPending(): Unit = Bridge
-    .readJson(PendingUri)
-    .`then`[Unit]: listing =>
-      val videos = listing.videos.asInstanceOf[js.Array[js.Dynamic]]
-      if videos.length == 0 then
-        intro.set("No hay videos esperando archivo. Creá uno con create_advertiser_video.")
-      else
-        intro.set("Cada video queda fuera de rotación hasta que su archivo llegue.")
-        videos.foreach(v =>
-          readTicket(v.videoId.asInstanceOf[String]).`then`[Unit](ticket =>
-            rows.update(_ :+ ticket)))
+    readTicket(videoId).`then`[Unit](ticket => shown.set(Some(ticket)))
 
   private def row(initial: Ticket): HtmlElement =
     var ticket = initial

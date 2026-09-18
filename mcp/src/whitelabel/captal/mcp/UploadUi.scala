@@ -81,7 +81,7 @@ object UploadUi:
     * again, on a timer before it lapses and on a 403 after. The old design could not do that
     * because its URLs arrived baked into the HTML.
     */
-  def app(): String =
+  def app(videoId: Option[String] = None): String =
     "<!doctype html>" +
       html(
         head(
@@ -97,7 +97,10 @@ object UploadUi:
           // Laminar renders into this; the markup lives on the other side now, typed, next to the
           // behaviour that drives it. What stays here is the shell and the stylesheets, because
           // the location's CSS is server-side knowledge.
-          div(id := "app"),
+          // Addressed per video, the id comes baked in and the page needs nothing from the host.
+          // Addressed as `ui://upload-video` — which is all `_meta.ui.resourceUri` can say, since
+          // it is declared before any call has produced a video — it waits for the tool result.
+          div(id := "app", videoId.map(data.video := _).getOrElse(cls := "app")),
           script(raw(appScript))
         )
       ).render
