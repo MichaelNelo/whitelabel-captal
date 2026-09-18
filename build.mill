@@ -546,6 +546,9 @@ end cli
 // Client: JS only (Laminar app)
 // ─────────────────────────────────────────────────────────────────────────────
 
+object mcpui extends BaseJSModule:
+  def mvnDeps = Seq(mvn"org.scala-js::scalajs-dom::2.8.0")
+
 object client extends BaseJSModule:
   def moduleDeps = Seq(`core-js`, `endpoints-js`)
   def mvnDeps = Seq(
@@ -691,6 +694,10 @@ object mcp extends BaseModule:
     os.copy(skillTemplates().path, dest, createFolders = true)
     val names = os.list(dest).filter(os.isDir).map(_.last).sorted
     os.write(dest / "index.txt", names.mkString("\n"))
+    // The MCP App's code, linked from `mcpui` and carried as a resource because the page must be
+    // self-contained: the iframe's CSP blocks every external host, so the script is inlined into
+    // the HTML rather than fetched.
+    os.copy(mcpui.fullLinkJS().dest.path / "main.js", Task.dest / "upload-app.js")
     super.resources() ++ Seq(PathRef(Task.dest))
 
   private val localStackContainer = "localstack-dev"

@@ -20,156 +20,23 @@ import scalatags.Text.tags2.{style as styleTag, title as titleTag}
 object UploadUi:
   val Uri: String = "ui://upload-video"
 
-  /** Deliberately not a framework. One fetch, one input, one PUT — anything more would be a second
-    * frontend to keep working, for a page that uploads a file.
+  /** The page's behaviour, linked from the `mcpui` Scala.js module and inlined here.
+    *
+    * It was 145 lines of JavaScript in a string literal. The move is not cosmetic: the two bugs
+    * that cost this migration a session were a `postMessage` envelope no host reads and a missing
+    * `ui/message`, and neither is the kind of thing a string literal can be wrong about loudly. The
+    * bridge is now a type, and `UploadTicket`'s field names are checked against something.
+    *
+    * Inlined rather than served, because the iframe's CSP blocks every external host.
     */
-  private val appScript =
-    """
-    |let nextId = 1;
-    |const waiting = new Map();
-    |
-    |const call = (method, params) => new Promise((resolve, reject) => {
-    |  const id = nextId++;
-    |  waiting.set(id, { resolve, reject });
-    |  window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
-    |});
-    |const notify = (method, params) =>
-    |  window.parent.postMessage({ jsonrpc: '2.0', method, params }, '*');
-    |
-    |window.addEventListener('message', (event) => {
-    |  const message = event.data;
-    |  if (!message || message.jsonrpc !== '2.0') return;
-    |  if (message.id !== undefined && waiting.has(message.id)) {
-    |    const { resolve, reject } = waiting.get(message.id);
-    |    waiting.delete(message.id);
-    |    message.error ? reject(message.error) : resolve(message.result);
-    |    return;
-    |  }
-    |  // The result of the call that opened this page. The URI cannot carry the video id — it is
-    |  // declared before any call has produced one — so the host hands it over here instead.
-    |  if (message.method === 'ui/notifications/tool-result') {
-    |    const structured = (message.params || {}).structuredContent || {};
-    |    if (structured.videoId) showOne(structured.videoId);
-    |  }
-    |});
-    |
-    |const readJson = async (uri) => {
-    |  const result = await call('resources/read', { uri });
-    |  return JSON.parse(result.contents[0].text);
-    |};
-    |
-    |const el = (tag, attrs, text) => {
-    |  const node = document.createElement(tag);
-    |  for (const k in attrs) node.setAttribute(k, attrs[k]);
-    |  if (text !== undefined) node.textContent = text;
-    |  return node;
-    |};
-    |
-    |async function showOne(videoId) {
-    |  const rows = document.getElementById('rows');
-    |  rows.innerHTML = '';
-    |  document.getElementById('intro').textContent =
-    |    'El video queda fuera de rotación hasta que el archivo llegue.';
-    |  rows.appendChild(await rowFor(videoId));
-    |}
-    |
-    |async function rowFor(videoId) {
-    |  let ticket = await readJson('captal://videos/' + videoId + '/upload');
-    |  if (ticket.styles) document.getElementById('location-css').textContent = ticket.styles;
-    |
-    |  const row = el('div', { class: 'row' });
-    |  const meta = el('div', { class: 'meta' });
-    |  meta.appendChild(el('strong', {}, ticket.title));
-    |  meta.appendChild(el('span', { class: 'slug' }, ticket.slug));
-    |  const button = el('button', {}, 'Subir archivo');
-    |  const input = el('input', { type: 'file', accept: ticket.contentType });
-    |  input.style.display = 'none';
-    |  const status = el('div', { class: 'status' });
-    |  const track = el('div', { class: 'track' });
-    |  const bar = el('div', {});
-    |  track.appendChild(bar);
-    |  row.append(meta, button, input, status, track);
-    |
-    |  // Re-read before the signature lapses rather than letting the operator discover it at the
-    |  // PUT. Reading costs nothing: a signature is computed, not allocated.
-    |  const refresh = async () => { ticket = await readJson('captal://videos/' + videoId + '/upload'); };
-    |  setInterval(refresh, Math.max(60, ticket.expiresInSeconds - 300) * 1000);
-    |
-    |  button.addEventListener('click', () => input.click());
-    |  input.addEventListener('change', async () => {
-    |    const file = input.files[0];
-    |    if (!file) return;
-    |    button.disabled = true;
-    |    status.textContent = 'Subiendo ' + file.name + '…';
-    |
-    |    const put = (url) => new Promise((resolve) => {
-    |      const request = new XMLHttpRequest();
-    |      request.open('PUT', url, true);
-    |      request.setRequestHeader('Content-Type', ticket.contentType);
-    |      request.upload.addEventListener('progress', (event) => {
-    |        if (event.lengthComputable) {
-    |          bar.style.width = Math.round((event.loaded / event.total) * 100) + '%';
-    |        }
-    |      });
-    |      request.addEventListener('load', () => resolve(request.status));
-    |      request.addEventListener('error', () => resolve(0));
-    |      request.send(file);
-    |    });
-    |
-    |    let code = await put(ticket.uploadUrl);
-    |    // A 403 is what an expired signature looks like. One re-read and one retry, rather than
-    |    // telling the operator to reopen the page.
-    |    if (code === 403) {
-    |      status.textContent = 'El enlace había expirado; reintentando…';
-    |      await refresh();
-    |      code = await put(ticket.uploadUrl);
-    |    }
-    |
-    |    if (code >= 200 && code < 300) {
-    |      status.textContent = 'Listo. Confirmando…';
-    |      bar.style.width = '100%';
-    |      await call('tools/call', {
-    |        name: 'confirm_video_upload',
-    |        arguments: { videoId }
-    |      });
-    |      status.textContent = 'Confirmado. El video está en rotación.';
-    |      // A call the page makes is invisible to the model, so the agent would keep waiting on
-    |      // something already done. This is what puts it in the conversation.
-    |      notify('ui/message', {
-    |        role: 'user',
-    |        content: { type: 'text', text: 'Subí el archivo del video ' + videoId + ' y lo confirmé.' }
-    |      });
-    |    } else {
-    |      button.disabled = false;
-    |      status.textContent = code === 0
-    |        ? 'No se pudo conectar con S3.'
-    |        : 'S3 rechazó la subida (' + code + ').';
-    |    }
-    |  });
-    |  return row;
-    |}
-    |
-    |async function start() {
-    |  await call('ui/initialize', {
-    |    appCapabilities: { availableDisplayModes: ['inline', 'fullscreen'] }
-    |  });
-    |  notify('ui/notifications/initialized', {});
-    |
-    |  // Opened on its own rather than by a call: show everything outstanding, still one signed URL
-    |  // per row and none of them in the markup.
-    |  const pending = await readJson('captal://videos/pending');
-    |  const rows = document.getElementById('rows');
-    |  const intro = document.getElementById('intro');
-    |  if (pending.videos.length === 0) {
-    |    intro.textContent = 'No hay videos esperando archivo. Creá uno con create_advertiser_video.';
-    |    return;
-    |  }
-    |  intro.textContent = 'Cada video queda fuera de rotación hasta que su archivo llegue.';
-    |  for (const v of pending.videos) rows.appendChild(await rowFor(v.videoId));
-    |}
-    |
-    |start();
-    |""".stripMargin
+  private lazy val appScript: String =
+    val stream = getClass.getResourceAsStream("/upload-app.js")
+    if stream == null then
+      throw new IllegalStateException(
+        "upload-app.js is missing from the jar. It is produced by `mcpui.fullLinkJS` and copied in `mcp.resources`.")
+    else
+      try new String(stream.readAllBytes(), "UTF-8")
+      finally stream.close()
 
   /** The page's own styling, kept minimal so the location's stylesheet decides how it looks. The
     * variables are the ones `style-reference` documents, so a location that themed the portal
