@@ -85,32 +85,63 @@ object UploadApp:
           else
             "S3 rechazó la subida (" + code + ")."
 
+    def upload(chosen: dom.File): Unit =
+      button.disabled = true
+      status.textContent = "Subiendo " + chosen.name + "…"
+      put(ticket, chosen, bar).`then`[Unit]: code =>
+        // A 403 is what an expired signature looks like. One re-read and one retry, rather than
+        // telling the operator to reopen the page.
+        if code == 403 then
+          status.textContent = "El enlace había expirado; reintentando…"
+          refresh().`then`[Unit](_ => put(ticket, chosen, bar).`then`[Unit](finish))
+        else
+          finish(code)
+
     button.addEventListener("click", (_: dom.Event) => file.click())
     file.addEventListener(
       "change",
       (_: dom.Event) =>
-        val chosen = file.files
-        if chosen.length > 0 then
-          val f = chosen(0)
-          button.disabled = true
-          status.textContent = "Subiendo " + f.name + "…"
-          put(ticket, f, bar).`then`[Unit]: code =>
-            // A 403 is what an expired signature looks like. One re-read and one retry, rather than
-            // telling the operator to reopen the page.
-            if code == 403 then
-              status.textContent = "El enlace había expirado; reintentando…"
-              refresh().`then`[Unit](_ => put(ticket, f, bar).`then`[Unit](finish))
-            else
-              finish(code)
+        val files = file.files
+        if files.length > 0 then
+          // Checked here so a wrong file costs nothing: no upload, no round trip, and the operator
+          // is told while the file dialog is still fresh in mind. The server checks again at
+          // confirm, because this page is not the only thing holding the signed URL.
+          rejectionFor(files(0)) match
+            case Some(why) =>
+              status.textContent = why
+            case None =>
+              upload(files(0))
     )
   end wire
+
+  /** What the portal can play. The page refuses anything else before uploading; the server checks
+    * again at confirm, because the page is not the only thing holding the signed URL.
+    *
+    * Two comparisons rather than a `Set`: a Set of two strings pulls Scala's immutable collections
+    * into the bundle, which measured at 146 KB against 23 KB for this.
+    */
+  private def playable(mime: String): Boolean = mime == "video/mp4" || mime == "video/webm"
+
+  /** The browser's type for the chosen file, which it derives from the extension rather than from
+    * the bytes. Empty when it does not recognise the extension — and an empty type would leave the
+    * PUT with no Content-Type at all, which S3 records as binary/octet-stream.
+    */
+  private def rejectionFor(file: dom.File): Option[String] =
+    if file.`type`.isEmpty then
+      Some("No se pudo determinar el tipo del archivo. Elegí un .mp4 o un .webm.")
+    else if !playable(file.`type`.toLowerCase) then
+      Some(s"El archivo es ${file.`type`}; el portal reproduce mp4 y webm.")
+    else
+      None
 
   private def put(ticket: Ticket, file: dom.File, bar: dom.html.Div): js.Promise[Int] =
     new js.Promise[Int]((resolve, _) =>
       val request = new dom.XMLHttpRequest()
       request.open("PUT", ticket.uploadUrl, true)
-      // Not set: XMLHttpRequest sends the File's own type, and the signature binds none, so what
-      // S3 records is what the operator actually chose. confirm_video_upload checks it.
+      // Explicitly the file's own type rather than letting XHR infer it, so an empty one is caught
+      // above instead of arriving at S3 as binary/octet-stream. The signature binds no type, so
+      // this is what gets stored.
+      request.setRequestHeader("Content-Type", file.`type`)
       request
         .upload
         .addEventListener(
