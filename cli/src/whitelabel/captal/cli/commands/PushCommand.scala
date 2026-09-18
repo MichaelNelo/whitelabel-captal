@@ -69,6 +69,13 @@ object PushCommand:
 
   private val LocationsDir = Paths.get("locations")
 
+  /** The per-location assets this command writes are fetched by fixed relative name, so an unset
+    * Cache-Control leaves the browser guessing from the object's age. Kept equal to what
+    * `client.publishS3` stamps on the bundle: this command overwrites the same two keys, and a push
+    * that dropped the header would silently undo it.
+    */
+  private val AssetCacheControl = "public, max-age=86400"
+
   type Env =
     CaptalConfig & S3Client & EcsClient & ElasticLoadBalancingV2Client & EcrClient &
       CloudFrontClient & CloudWatchLogsClient
@@ -218,7 +225,12 @@ object PushCommand:
     aws("S3 putObject"):
       ZIO.serviceWithZIO[S3Client]: s3 =>
         ZIO.attemptBlocking:
-          val builder = PutObjectRequest.builder().bucket(bucket).key(key).contentType(contentType)
+          val builder = PutObjectRequest
+            .builder()
+            .bucket(bucket)
+            .key(key)
+            .contentType(contentType)
+            .cacheControl(AssetCacheControl)
           encoding.foreach(builder.contentEncoding)
           s3.putObject(builder.build(), file)
 
@@ -231,7 +243,12 @@ object PushCommand:
     aws("S3 putObject"):
       ZIO.serviceWithZIO[S3Client]: s3 =>
         ZIO.attemptBlocking:
-          val builder = PutObjectRequest.builder().bucket(bucket).key(key).contentType(contentType)
+          val builder = PutObjectRequest
+            .builder()
+            .bucket(bucket)
+            .key(key)
+            .contentType(contentType)
+            .cacheControl(AssetCacheControl)
           encoding.foreach(builder.contentEncoding)
           s3.putObject(builder.build(), RequestBody.fromBytes(data))
 
