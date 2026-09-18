@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#6366f1">
+  <title>WiFi Gratis</title>
+  <!-- Same <base> as index.html, and for the same reason twice over: CloudFront rewrites /<slug>/
+       to this file without touching the address bar, so the document URL is still /<slug>/ and
+       every relative URL below has to resolve under it. That is also what gets this page the
+       location's own stylesheet and icon without knowing which location it is standing in for. -->
+  <script>
+    (function () {
+      var slug = location.pathname.split('/').filter(Boolean)[0];
+      if (slug && slug !== 'api') {
+        var b = document.createElement('base');
+        b.href = '/' + slug + '/';
+        document.head.appendChild(b);
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="{{CSS_PATH}}">
+  <link rel="stylesheet" href="./custom-styles.css.gz" onerror="this.remove()">
+</head>
+<body>
+  <div class="initial-loader">
+    <div class="loader-icon brand-pulse">
+      <img src="./brand-icon.svg" class="brand-icon" alt="Loading">
+    </div>
+  </div>
+  <div id="app"></div>
+  <script src="{{JS_PATH}}"></script>
+</body>
+</html>

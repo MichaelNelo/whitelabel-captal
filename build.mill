@@ -602,12 +602,23 @@ object client extends BaseJSModule:
     os.copy(assets / "styles.css", dest / "styles.css")
     os.copy(assets / "brand-icon.svg", dest / "brand-icon.svg")
 
+    // The maintenance page ships inside the same bundle so `copyBundleFromMaster` carries it into
+    // every location prefix alongside index.html. It has to be there before a pause, not put there
+    // by one: the pause is a key the edge reads, and the page it points at must already exist.
+    os.copy(maintenance.fullLinkJS().dest.path / "main.js", dest / "maintenance.js")
+
     // Render index.html from template with relative paths so the browser resolves them
     // against the current directory (which lives at https://<host>/<slug>/ in prod).
     renderIndex(template, dest / "index.html", jsPath = "./main.js.gz", cssPath = "./styles.css.gz")
+    renderIndex(
+      maintenance.maintenanceTemplate().path,
+      dest / "maintenance.html",
+      jsPath = "./maintenance.js.gz",
+      cssPath = "./styles.css.gz")
 
     // Gzip JS and CSS
     gzipFile(dest / "main.js", dest / "main.js.gz")
+    gzipFile(dest / "maintenance.js", dest / "maintenance.js.gz")
     gzipFile(dest / "styles.css", dest / "styles.css.gz")
 
     PathRef(dest)
@@ -638,6 +649,10 @@ object client extends BaseJSModule:
     // (name, content-type, content-encoding, cache-control)
     val files: Seq[(String, String, Option[String], String)] = Seq(
       ("index.html", "text/html; charset=utf-8", None, Revalidate),
+      // Revalidated like index.html, and for the same reason: which of the two the edge serves is
+      // decided per request, and a browser that does not ask cannot be told the answer changed.
+      ("maintenance.html", "text/html; charset=utf-8", None, Revalidate),
+      ("maintenance.js.gz", "application/javascript", Some("gzip"), Day),
       ("brand-icon.svg", "image/svg+xml", None, Day),
       ("main.js.gz", "application/javascript", Some("gzip"), Day),
       ("styles.css.gz", "text/css", Some("gzip"), Day)
@@ -828,3 +843,17 @@ object mcp extends BaseModule:
       println("rqlite mcp test container stopped")
   end test
 end mcp
+
+/** The page the edge serves in place of the portal while a location is paused.
+  *
+  * Its own module rather than a second entrypoint of `client`: two public modules in one linker run
+  * need `ModuleKind.ESModule`, which turns the Closure Compiler off entirely -- measured at 247 KB
+  * gzipped for the portal today against 459 KB that way. Two linker runs each keep Closure, so the
+  * portal is untouched and this costs 54 KB. `moduleDeps` is what preserves the reuse the shared
+  * entrypoint was for: the views and stylesheet are the portal's, and dead-code elimination drops
+  * everything this does not reach.
+  */
+object maintenance extends BaseJSModule:
+  def moduleDeps = Seq(client)
+  def mainClass = Some("whitelabel.captal.maintenance.Maintenance")
+  def maintenanceTemplate: T[PathRef] = Task.Source(moduleDir / "maintenance.html.template")
