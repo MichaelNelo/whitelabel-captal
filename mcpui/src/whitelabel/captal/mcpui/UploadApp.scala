@@ -2,23 +2,22 @@ package whitelabel.captal.mcpui
 
 import scala.scalajs.js
 
-import com.raquo.laminar.api.L.*
 import org.scalajs.dom
 
-/** What `ui://upload-video` runs.
+/** The behaviour behind `ui://upload-video`. The markup is the server's; this signs, uploads, and
+  * tells the host what happened.
   *
-  * The page ships no data: the markup is static and every signed URL is read at the moment it is
-  * needed. That is deliberate — an earlier version embedded one URL per pending video and hid the
-  * rows it had not been opened for, which is not the same as withholding them.
+  * No rendering: one video, one row, already in the HTML. What the page cannot know up front is the
+  * signed URL — deliberately, so it can ask again when the signature lapses — and, when addressed
+  * bare, which video it is at all.
   */
 object UploadApp:
 
   /** Mirrors `EntityResources.UploadTicket`. Field names are the contract between the two, and the
-    * reason this is worth having as a type: the server renames a field and this stops compiling
-    * rather than reading `undefined` at the moment the operator picks a file.
+    * reason this is a type: the server renames a field and this stops compiling rather than reading
+    * `undefined` at the moment the operator picks a file.
     */
   final class Ticket(raw: js.Dynamic):
-    def videoId: String = raw.videoId.asInstanceOf[String]
     def title: String = raw.title.asInstanceOf[String]
     def slug: String = raw.slug.asInstanceOf[String]
     def uploadUrl: String = raw.uploadUrl.asInstanceOf[String]
@@ -26,114 +25,89 @@ object UploadApp:
     def expiresInSeconds: Double = raw.expiresInSeconds.asInstanceOf[Double]
     def styles: js.UndefOr[String] = raw.styles.asInstanceOf[js.UndefOr[String]]
 
+  private def byId(id: String) = dom.document.getElementById(id)
   private def ticketUri(videoId: String) = "captal://videos/" + videoId + "/upload"
 
-  private val intro = Var("Cargando…")
-  private val shown = Var(Option.empty[Ticket])
-
-  private def readTicket(videoId: String): js.Promise[Ticket] = Bridge
-    .readJson(ticketUri(videoId))
-    .`then`[Ticket](raw => Ticket(raw))
-
   def main(args: Array[String]): Unit =
-    val container = dom.document.getElementById("app")
-    render(container, page)
-
-    // Addressed per video, the id is in the shell and nothing else is needed. Addressed as the bare
-    // `ui://upload-video` — all `_meta.ui.resourceUri` can say, being declared before any call has
-    // produced a video — the host names it in the result of the call that opened the page.
-    val fromShell = Option(container.getAttribute("data-video")).filter(_.nonEmpty)
+    val row = byId("row")
     Bridge.listen: params =>
       val structured = params.structuredContent.asInstanceOf[js.UndefOr[js.Dynamic]]
-      structured.foreach(s => s.videoId.asInstanceOf[js.UndefOr[String]].foreach(showOne))
+      structured.foreach(s => s.videoId.asInstanceOf[js.UndefOr[String]].foreach(start))
 
     Bridge
       .handshake()
       .`then`[Unit]: _ =>
-        fromShell match
-          case Some(videoId) =>
-            showOne(videoId)
-          case None =>
-            intro.set(
-              "Abrí esta página desde create_advertiser_video, o elegí un video pendiente en la lista de recursos.")
-  end main
+        // Addressed per video the id is in the markup; addressed bare it arrives with the result of
+        // the call that opened the page, which is the only channel `_meta.ui.resourceUri` leaves.
+        Option(row.getAttribute("data-video")).filter(_.nonEmpty).foreach(start)
 
-  private def page: HtmlElement = div(
-    cls := "upload",
-    h1("Subir video"),
-    p(cls := "intro", child.text <-- intro.signal),
-    child.maybe <-- shown.signal.map(_.map(row)))
+  private def start(videoId: String): Unit = read(videoId).`then`[Unit]: ticket =>
+    val row = byId("row")
+    row.setAttribute("class", "row")
+    byId("title").textContent = ticket.title
+    byId("slug").textContent = ticket.slug
+    byId("intro").textContent = "El video queda fuera de rotación hasta que el archivo llegue."
+    ticket.styles.foreach(css => byId("location-css").textContent = css)
+    wire(videoId, ticket)
 
-  /** One video, always. There is no listing mode: `resources/list` enumerates a page per pending
-    * video, so the page never has to answer "which one" — and never holds a signed URL for a video
-    * it was not opened for.
-    */
-  private def showOne(videoId: String): Unit =
-    intro.set("El video queda fuera de rotación hasta que el archivo llegue.")
-    readTicket(videoId).`then`[Unit](ticket => shown.set(Some(ticket)))
+  private def read(videoId: String): js.Promise[Ticket] = Bridge
+    .readJson(ticketUri(videoId))
+    .`then`[Ticket](raw => Ticket(raw))
 
-  private def row(initial: Ticket): HtmlElement =
+  private def wire(videoId: String, initial: Ticket): Unit =
     var ticket = initial
-    ticket.styles.foreach(css => dom.document.getElementById("location-css").textContent = css)
-
-    val status = Var("")
-    val progress = Var(0)
-    val busy = Var(false)
-    val fileInput = input(cls := "file", tpe := "file", accept := ticket.contentType)
+    val button = byId("pick").asInstanceOf[dom.html.Button]
+    val file = byId("file").asInstanceOf[dom.html.Input]
+    val status = byId("status")
+    val bar = byId("bar").asInstanceOf[dom.html.Div]
+    file.accept = ticket.contentType
 
     // Re-read before the signature lapses rather than letting the operator discover it at the PUT.
     // Asking again is the whole expiry story: a presigned URL is computed, never allocated, so
     // there is nothing to release and nothing for the server to notify about.
-    def refresh(): js.Promise[Unit] = readTicket(ticket.videoId).`then`[Unit](fresh =>
-      ticket = fresh)
+    def refresh(): js.Promise[Unit] = read(videoId).`then`[Unit](fresh => ticket = fresh)
     dom.window.setInterval(() => refresh(), math.max(60.0, ticket.expiresInSeconds - 300) * 1000)
 
     def finish(code: Int): Unit =
       if code >= 200 && code < 300 then
-        progress.set(100)
-        status.set("Listo. Confirmando…")
+        bar.style.width = "100%"
+        status.textContent = "Listo. Confirmando…"
         Bridge
-          .callTool("confirm_video_upload", js.Dynamic.literal(videoId = ticket.videoId))
+          .callTool("confirm_video_upload", js.Dynamic.literal(videoId = videoId))
           .`then`[Unit]: _ =>
-            status.set("Confirmado. El video está en rotación.")
+            status.textContent = "Confirmado. El video está en rotación."
             // A call the page makes is invisible to the model, so the agent would keep waiting on
             // something already done. This is what puts it in the conversation.
-            Bridge.tellTheModel("Subí el archivo del video " + ticket.videoId + " y lo confirmé.")
+            Bridge.tellTheModel("Subí el archivo del video " + videoId + " y lo confirmé.")
       else
-        busy.set(false)
-        status.set(
+        button.disabled = false
+        status.textContent =
           if code == 0 then
             "No se pudo conectar con S3."
           else
-            "S3 rechazó la subida (" + code + ").")
+            "S3 rechazó la subida (" + code + ")."
 
-    def upload(file: dom.File): Unit =
-      busy.set(true)
-      status.set("Subiendo " + file.name + "…")
-      put(ticket, file, progress).`then`[Unit]: code =>
-        // A 403 is what an expired signature looks like. One re-read and one retry, rather than
-        // telling the operator to reopen the page.
-        if code == 403 then
-          status.set("El enlace había expirado; reintentando…")
-          refresh().`then`[Unit](_ => put(ticket, file, progress).`then`[Unit](finish))
-        else
-          finish(code)
-
-    div(
-      cls := "row",
-      div(cls := "meta", strong(ticket.title), span(cls := "slug", ticket.slug)),
-      button(
-        cls := "pick",
-        disabled <-- busy.signal,
-        "Subir archivo",
-        onClick --> (_ => fileInput.ref.click())),
-      fileInput.amend(onChange --> (_ => fileInput.ref.files.headOption.foreach(upload))),
-      div(cls := "status", child.text <-- status.signal),
-      div(cls := "track", div(cls := "bar", width <-- progress.signal.map(_.toString + "%")))
+    button.addEventListener("click", (_: dom.Event) => file.click())
+    file.addEventListener(
+      "change",
+      (_: dom.Event) =>
+        val chosen = file.files
+        if chosen.length > 0 then
+          val f = chosen(0)
+          button.disabled = true
+          status.textContent = "Subiendo " + f.name + "…"
+          put(ticket, f, bar).`then`[Unit]: code =>
+            // A 403 is what an expired signature looks like. One re-read and one retry, rather than
+            // telling the operator to reopen the page.
+            if code == 403 then
+              status.textContent = "El enlace había expirado; reintentando…"
+              refresh().`then`[Unit](_ => put(ticket, f, bar).`then`[Unit](finish))
+            else
+              finish(code)
     )
-  end row
+  end wire
 
-  private def put(ticket: Ticket, file: dom.File, progress: Var[Int]): js.Promise[Int] =
+  private def put(ticket: Ticket, file: dom.File, bar: dom.html.Div): js.Promise[Int] =
     new js.Promise[Int]((resolve, _) =>
       val request = new dom.XMLHttpRequest()
       request.open("PUT", ticket.uploadUrl, true)
@@ -144,7 +118,7 @@ object UploadApp:
           "progress",
           (event: dom.ProgressEvent) =>
             if event.lengthComputable then
-              progress.set(math.round(event.loaded / event.total * 100).toInt))
+              bar.style.width = math.round(event.loaded / event.total * 100).toString + "%")
       request.addEventListener("load", (_: dom.Event) => resolve(request.status))
       request.addEventListener("error", (_: dom.Event) => resolve(0))
       request.send(file))

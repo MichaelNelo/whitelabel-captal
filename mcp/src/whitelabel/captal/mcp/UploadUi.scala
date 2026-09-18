@@ -57,12 +57,14 @@ object UploadUi:
     |.track > div { height: 100%; width: 0; background: var(--color-primary, #2563eb); transition: width .2s; }
     |""".stripMargin
 
-  private val pendingCss =
+  private val rowCss =
     """
     |.row { padding: 1rem 0; border-top: 1px solid var(--color-border, #e5e7eb); }
     |.row .meta { display: flex; justify-content: space-between; margin-bottom: .5rem; }
     |.slug { opacity: .6; font-size: .8rem; }
     |.row .status { margin-top: .5rem; font-size: .8rem; min-height: 1rem; }
+    |.row.hidden { display: none; }
+    |input[type=file] { display: none; }
     |""".stripMargin
 
   /** The page, carrying no data at all.
@@ -81,29 +83,70 @@ object UploadUi:
     * again, on a timer before it lapses and on a 403 after. The old design could not do that
     * because its URLs arrived baked into the HTML.
     */
-  def app(videoId: Option[String] = None): String =
+  /** The page, rendered whole.
+    *
+    * There is nothing dynamic left to build: one video, one row, and the server knows its title and
+    * location when the page is addressed per video. So the markup is markup again, and the module
+    * on the other side holds only behaviour — the signing, the PUT, and the two messages the host
+    * needs to hear.
+    *
+    * Addressed bare — all `_meta.ui.resourceUri` can name, being built before any call has produced
+    * a video — the title and location are blank and the row is hidden until the host says which
+    * video this is.
+    */
+  def app(video: Option[PendingVideo] = None): String =
     "<!doctype html>" +
       html(
         head(
           meta(charset := "utf-8"),
           titleTag("Subir video"),
           styleTag(raw(baseCss)),
-          styleTag(raw(pendingCss)),
+          styleTag(raw(rowCss)),
           // Filled from the video's own resource, so a page opened for one location is themed as
           // that location and never as another's.
           styleTag(id := "location-css")
         ),
         body(
-          // Laminar renders into this; the markup lives on the other side now, typed, next to the
-          // behaviour that drives it. What stays here is the shell and the stylesheets, because
-          // the location's CSS is server-side knowledge.
-          // Addressed per video, the id comes baked in and the page needs nothing from the host.
-          // Addressed as `ui://upload-video` — which is all `_meta.ui.resourceUri` can say, since
-          // it is declared before any call has produced a video — it waits for the tool result.
-          div(id := "app", videoId.map(data.video := _).getOrElse(cls := "app")),
+          div(
+            cls := "upload",
+            h1("Subir video"),
+            p(
+              id := "intro",
+              video.fold(
+                "Abrí esta página desde create_advertiser_video, o elegí un video pendiente en la lista de recursos.")(
+                _ => "El video queda fuera de rotación hasta que el archivo llegue.")
+            ),
+            div(
+              id  := "row",
+              cls := (
+                if video.isDefined then
+                  "row"
+                else
+                  "row hidden"
+              ),
+              video.map(v => data.video := v.videoId).getOrElse(cls := "row hidden"),
+              div(
+                cls := "meta",
+                strong(id := "title", video.fold("")(_.title)),
+                span(cls  := "slug", id := "slug", video.fold("")(_.slug))),
+              button(id := "pick", "Subir archivo"),
+              input(
+                id     := "file",
+                `type` := "file",
+                video.map(v => accept := v.contentType).getOrElse(cls := "file")),
+              div(id  := "status"),
+              div(cls := "track", div(id := "bar"))
+            )
+          ),
           script(raw(appScript))
         )
       ).render
+  end app
+
+  /** What the server knows about a video before the page is opened. The signed URL is deliberately
+    * absent: the page reads it when it needs it, so it can read it again when it lapses.
+    */
+  final case class PendingVideo(videoId: String, title: String, slug: String, contentType: String)
 
   /** Escapes for a JS string literal. The values are server-derived, but a file name reaching this
     * unescaped would be an injection into our own page.

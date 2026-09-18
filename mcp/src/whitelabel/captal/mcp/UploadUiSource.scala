@@ -3,7 +3,9 @@ package whitelabel.captal.mcp
 import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
 import whitelabel.captal.infra.schema.QuillSqlite
-import whitelabel.captal.infra.{AdvertiserVideoRow, LocationRow}
+import whitelabel.captal.infra.schema.core.given
+import whitelabel.captal.infra.schema.given
+import whitelabel.captal.infra.{AdvertiserVideoRow, LocalizedTextRow, LocationRow}
 import zio.*
 import zio.json.ast.Json
 
@@ -49,11 +51,42 @@ final class UploadUiSource extends McpResourceSource[QuillSqlite & AssetStore]:
     if uri == UploadUi.Uri then
       ZIO.succeed(Chunk(ResourceContents(uri, Some("text/html"), Some(UploadUi.app()))))
     else if uri.startsWith(Prefix) then
-      val videoId = uri.stripPrefix(Prefix)
-      ZIO.succeed(
-        Chunk(ResourceContents(uri, Some("text/html"), Some(UploadUi.app(Some(videoId))))))
+      pageFor(uri, uri.stripPrefix(Prefix)).mapError(ToolError.apply)
     else
       ZIO.fail(ToolError(s"Not an upload page: $uri"))
+
+  /** The title and location are rendered into the markup, so the page has them before it asks for
+    * anything. The signed URL is not: that is read at the moment it is needed, which is what lets
+    * it be read again when it lapses.
+    */
+  private def pageFor(uri: String, videoId: String)
+      : ZIO[QuillSqlite, String, Chunk[ResourceContents]] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
+      import quill.*
+      for
+        videos    <- run(videoByIdQuery(lift(videoId))).orDie
+        video     <- ZIO.succeed(videos.headOption).someOrFail(s"No video with id '$videoId'.")
+        locations <- run(query[LocationRow]).orDie
+        titles    <- run(query[LocalizedTextRow].filter(_.entityId == lift(videoId))).orDie
+        key         = video.videoUrl.reverse.takeWhile(_ != '/').reverse
+        contentType =
+          key.reverse.takeWhile(_ != '.').reverse.toLowerCase match
+            case "webm" =>
+              "video/webm"
+            case _ =>
+              "video/mp4"
+        pending = UploadUi.PendingVideo(
+          videoId = videoId,
+          title = titles.map(_.value).minOption.getOrElse(videoId),
+          slug = video
+            .locationId
+            .flatMap(id => locations.find(_.id == id))
+            .map(_.slug)
+            .getOrElse("—"),
+          contentType = contentType
+        )
+      yield Chunk(ResourceContents(uri, Some("text/html"), Some(UploadUi.app(Some(pending)))))
+      end for
 
   override def readDirectory(
       uri: String,

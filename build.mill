@@ -547,7 +547,7 @@ end cli
 // ─────────────────────────────────────────────────────────────────────────────
 
 object mcpui extends BaseJSModule:
-  def mvnDeps = Seq(mvn"com.raquo::laminar::17.2.0")
+  def mvnDeps = Seq(mvn"org.scala-js::scalajs-dom::2.8.0")
 
 object client extends BaseJSModule:
   def moduleDeps = Seq(`core-js`, `endpoints-js`)

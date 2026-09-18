@@ -56,9 +56,14 @@ object UploadUiSpec extends ZIOSpecDefault:
         // produced a video. But `resources/list` enumerates one page per pending video, and that
         // form carries its id, so opening it from the resource picker needs no tool result.
         val bare = UploadUi.app()
-        val forOne = UploadUi.app(Some("v-42"))
+        val forOne = UploadUi.app(
+          Some(UploadUi.PendingVideo("v-42", "Promo de invierno", "bar-norte", "video/mp4")))
         assertTrue(
           forOne.contains("""data-video="v-42""""),
+          // The server knows these before the page opens, so they are markup, not a fetch.
+          forOne.contains("Promo de invierno"),
+          forOne.contains("bar-norte"),
+          forOne.contains("""accept="video/mp4""""),
           // The script reads the attribute either way, so this looks for the attribute itself.
           !bare.contains("""data-video="""" + "\""),
           // one video, always: no listing mode left in the page
