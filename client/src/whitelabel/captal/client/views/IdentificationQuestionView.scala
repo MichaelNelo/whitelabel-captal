@@ -11,6 +11,7 @@ import whitelabel.captal.core.application.{IdentificationSurveyType, Phase}
 import whitelabel.captal.core.survey.Error as SurveyError
 import whitelabel.captal.core.survey.question.{
   AnswerValue,
+  IsoDate,
   QuestionOption,
   QuestionType,
   TextRule,
@@ -347,7 +348,7 @@ object IdentificationQuestionView:
     onInput.mapToValue --> { v =>
       if v.nonEmpty then
         try
-          val date = java.time.LocalDate.parse(v)
+          val date = IsoDate.parse(v)
           answerValue.set(Some(AnswerValue.DateValue(date)))
         catch
           case _: Exception =>

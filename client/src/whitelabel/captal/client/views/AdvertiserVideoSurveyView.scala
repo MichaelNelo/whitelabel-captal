@@ -9,6 +9,7 @@ import whitelabel.captal.core.Op
 import whitelabel.captal.core.application.commands.NextAdvertiserSurvey
 import whitelabel.captal.core.survey.question.{
   AnswerValue,
+  IsoDate,
   QuestionOption,
   QuestionType,
   TextRule,
@@ -275,7 +276,7 @@ object AdvertiserVideoSurveyView:
     onInput.mapToValue --> { v =>
       if v.nonEmpty then
         try
-          val date = java.time.LocalDate.parse(v)
+          val date = IsoDate.parse(v)
           answerValue.set(Some(AnswerValue.DateValue(date)))
         catch
           case _: Exception =>

@@ -52,10 +52,8 @@ final class FinishRoutes(sessionEndpoint: SessionEndpoint):
           yield StatusResponse(
             fresh.phase,
             fresh.locale,
-            fresh.accessExpiresAt,
             Option(fresh.redirectUrl).filter(_.nonEmpty),
-            StatusResponse.secondsRemainingFrom(fresh.accessExpiresAt, now)
-          )
+            StatusResponse.secondsRemainingFrom(fresh.accessExpiresAt, now))
 
   def routes: List[ZServerEndpoint[FullEnv, Any]] = List(finishRoute.widen[FullEnv])
 

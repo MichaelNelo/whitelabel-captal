@@ -137,9 +137,9 @@ object codecs:
       .get[String]("type")
       .flatMap:
         case "min" =>
-          cursor.get[String]("value").map(s => RangeRule.Min(LocalDate.parse(s)))
+          cursor.get[String]("value").map(s => RangeRule.Min(IsoDate.parse(s)))
         case "max" =>
-          cursor.get[String]("value").map(s => RangeRule.Max(LocalDate.parse(s)))
+          cursor.get[String]("value").map(s => RangeRule.Max(IsoDate.parse(s)))
         case other =>
           Left(io.circe.DecodingFailure(s"Unknown range rule: $other", cursor.history))
 
@@ -309,7 +309,7 @@ object codecs:
         case "numeric" =>
           cursor.get[BigDecimal]("value").map(AnswerValue.Numeric(_))
         case "date" =>
-          cursor.get[String]("value").map(s => AnswerValue.DateValue(LocalDate.parse(s)))
+          cursor.get[String]("value").map(s => AnswerValue.DateValue(IsoDate.parse(s)))
         case other =>
           Left(io.circe.DecodingFailure(s"Unknown answer type: $other", cursor.history))
 end codecs

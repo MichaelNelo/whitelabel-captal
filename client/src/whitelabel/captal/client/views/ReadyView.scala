@@ -27,7 +27,6 @@ object ReadyView:
       .map:
         case Right(status) =>
           AppState.setPhase(status.phase)
-          AppState.setAccessExpiresAt(status.accessExpiresAt)
           AppState.setSecondsRemaining(status.secondsRemaining)
           Router.syncWithPhase(status.phase)
         case Left(err) =>

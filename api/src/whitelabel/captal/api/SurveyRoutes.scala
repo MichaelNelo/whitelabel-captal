@@ -302,10 +302,8 @@ final class SurveyRoutes(
                 StatusResponse(
                   session.phase,
                   session.locale,
-                  session.accessExpiresAt,
                   Option(session.redirectUrl).filter(_.nonEmpty),
-                  StatusResponse.secondsRemainingFrom(session.accessExpiresAt, now)
-                )
+                  StatusResponse.secondsRemainingFrom(session.accessExpiresAt, now))
               )
             end if
 
