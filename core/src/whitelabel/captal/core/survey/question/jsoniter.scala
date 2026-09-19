@@ -235,9 +235,6 @@ object jsoniter:
     .withTransientEmpty(false)
     .withTransientDefault(false)
 
-  given JsonValueCodec[LocalizedText] = JsonCodecMaker.make(verbose)
-  given JsonValueCodec[QuestionOption] = JsonCodecMaker.make(verbose)
-
   /** The lists `QuestionType` carries. Spelled out because its codec builds them by hand from the
     * tag, so they have to exist before it rather than be generated inside it.
     */

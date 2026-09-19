@@ -88,9 +88,11 @@ object JsoniterParityTests extends TestSuite:
       )
     yield t
 
+  /** `LocalizedText` and `QuestionOption` have no cases of their own here. They never travel alone
+    * — production reaches them only inside `QuestionType`, whose parity covers them as they
+    * actually appear, nested. A standalone case would exercise a codec nothing emits.
+    */
   val tests = Tests:
-    test("LocalizedText") - checkProp(parity(genLocalizedText))
-    test("QuestionOption") - checkProp(parity(genOption))
     test("QuestionType") - checkProp(parity(genQuestionType))
     test("SelectionRule") - checkProp(parity(genSelectionRule))
     test("TextRule") - checkProp(parity(genTextRule))

@@ -82,12 +82,12 @@ object JsoniterEndpointParityTests extends TestSuite:
       descr    <- Gen.option(Gen.alphaNumStr)
     yield NextVideo(url, duration, title, descr)
 
+  /** The four payload types get no case of their own, and that is deliberate. They never appear as
+    * a JSON object: the unions below flatten their fields into the top level, written by hand. A
+    * standalone case would have checked a derived codec that production does not call — which is
+    * how the four of them turned out to be dead code in the first place.
+    */
   val tests = Tests:
-    test("NextStep") - checkProp(parity(genStep))
-    test("NextIdentificationSurvey") - checkProp(parity(genIdentification))
-    test("NextAdvertiserSurvey") - checkProp(parity(genAdvertiser))
-    test("NextVideo") - checkProp(parity(genVideo))
-
     test("SurveyResponse (tag merged into the payload)"):
       checkProp(
         parity[SurveyResponse](

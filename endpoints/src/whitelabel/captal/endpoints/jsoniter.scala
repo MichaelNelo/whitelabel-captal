@@ -152,11 +152,6 @@ object jsoniter:
     var title: Option[String] = None
     var description: Option[String] = None
 
-  given JsonValueCodec[NextStep] = JsonCodecMaker.make(verbose)
-  given JsonValueCodec[NextIdentificationSurvey] = JsonCodecMaker.make(verbose)
-  given JsonValueCodec[NextAdvertiserSurvey] = JsonCodecMaker.make(verbose)
-  given JsonValueCodec[NextVideo] = JsonCodecMaker.make(verbose)
-
   given JsonValueCodec[SurveyResponse] = taggedCodec(
     {
       case SurveyResponse.Survey(_) =>
