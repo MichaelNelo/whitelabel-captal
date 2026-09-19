@@ -7,6 +7,8 @@ import io.circe.syntax.*
 import org.scalacheck.Prop.forAll
 import org.scalacheck.{Gen, Prop}
 import utest.*
+import whitelabel.captal.core.application.jsoniter.given
+import whitelabel.captal.core.application.{IdentificationSurveyType, Phase}
 import whitelabel.captal.core.generators.*
 import whitelabel.captal.core.survey.question.*
 import whitelabel.captal.core.survey.question.codecs.given
@@ -94,6 +96,24 @@ object JsoniterParityTests extends TestSuite:
     */
   val tests = Tests:
     test("QuestionType") - checkProp(parity(genQuestionType))
+    test("Phase") -
+      checkProp(
+        parity(
+          Gen.oneOf(
+            Phase.Welcome,
+            Phase.IdentificationQuestion,
+            Phase.AdvertiserVideo,
+            Phase.AdvertiserVideoSurvey,
+            Phase.AdvertiserQuestion,
+            Phase.Ready,
+            Phase.Authorized)))
+    test("IdentificationSurveyType") -
+      checkProp(
+        parity(
+          Gen.oneOf(
+            IdentificationSurveyType.Email,
+            IdentificationSurveyType.Profiling,
+            IdentificationSurveyType.Location)))
     test("SelectionRule") - checkProp(parity(genSelectionRule))
     test("TextRule") - checkProp(parity(genTextRule))
     test("CommonRule") - checkProp(parity(genCommonRule))

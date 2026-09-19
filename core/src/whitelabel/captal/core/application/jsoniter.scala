@@ -1,25 +1,23 @@
 package whitelabel.captal.core.application
 
-import com.github.plokhotnyuk.jsoniter_scala.core.{JsonReader, JsonValueCodec, JsonWriter}
+import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
+import com.github.plokhotnyuk.jsoniter_scala.macros.{CodecMakerConfig, JsonCodecMaker}
 
-/** `Phase` and `IdentificationSurveyType` travel as the strings the database uses, not as tagged
-  * objects — so a derived codec would be wrong twice over, in shape and in spelling. Both delegate
-  * to the same `toDbString`/`fromDbString` pair circe's codecs do.
+/** Both enums travel as bare strings, which is what jsoniter writes for cases that carry nothing
+  * once the discriminator is off — and the spelling is already `enforce_snake_case` of the case
+  * name. `IdentificationQuestion` is `identification_question` either way.
+  *
+  * So these agree with `Phase.toDbString` by construction rather than by a table repeated here. If
+  * a case is ever added whose database spelling does not follow, `@named` on that case is where it
+  * goes; the parity test is what would notice.
   */
 object jsoniter:
 
-  given JsonValueCodec[Phase] =
-    new JsonValueCodec[Phase]:
-      def nullValue: Phase = Phase.Welcome
-      def encodeValue(x: Phase, out: JsonWriter): Unit = out.writeVal(Phase.toDbString(x))
-      def decodeValue(in: JsonReader, default: Phase): Phase = Phase.fromDbString(
-        in.readString(null))
+  private inline def dbStrings = CodecMakerConfig
+    .withDiscriminatorFieldName(None)
+    .withAdtLeafClassNameMapper(x =>
+      JsonCodecMaker.enforce_snake_case(JsonCodecMaker.simpleClassName(x)))
 
-  given JsonValueCodec[IdentificationSurveyType] =
-    new JsonValueCodec[IdentificationSurveyType]:
-      def nullValue: IdentificationSurveyType = IdentificationSurveyType.Email
-      def encodeValue(x: IdentificationSurveyType, out: JsonWriter): Unit = out.writeVal(
-        IdentificationSurveyType.toDbString(x))
-      def decodeValue(in: JsonReader, default: IdentificationSurveyType): IdentificationSurveyType =
-        IdentificationSurveyType.fromDbString(in.readString(null))
+  given JsonValueCodec[Phase] = JsonCodecMaker.make(dbStrings)
+  given JsonValueCodec[IdentificationSurveyType] = JsonCodecMaker.make(dbStrings)
 end jsoniter
