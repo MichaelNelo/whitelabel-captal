@@ -551,6 +551,23 @@ object mcpui extends BaseJSModule:
 
 object client extends BaseJSModule:
   def moduleDeps = Seq(`core-js`, `endpoints-js`)
+  /** Two settings the linker defaults leave on the table, and the second is the one that pays.
+    *
+    * `allowBigIntsForLongs` backs `Long` with the browser's own `BigInt` instead of emulating it
+    * with a pair of 32-bit ints, which removes `RuntimeLong` from the bundle entirely — verified,
+    * zero references left. It needs ES2020 for `BigInt` to exist, hence the version bump, which
+    * also lets the emitter use newer syntax and emit less of it.
+    *
+    * The trade is arithmetic speed: `BigInt` is slower than the emulation for hot loops. Nothing
+    * here has one — `Long` survives in a countdown and a few timestamps.
+    */
+  def esFeatures = mill
+    .scalajslib
+    .api
+    .ESFeatures
+    .Defaults
+    .withESVersion(mill.scalajslib.api.ESVersion.ES2021)
+    .withAllowBigIntsForLongs(true)
 
   /** Required for the per-route dynamic imports: `NoModule` emits exactly one module and refuses
     * `js.dynamicImport` outright ("module support is disabled").
@@ -651,7 +668,7 @@ object client extends BaseJSModule:
         "--bundle",
         "--splitting",
         "--format=esm",
-        "--target=es2017",
+        "--target=es2020",
         s"--outdir=$raw"))
 
     for chunk <- os.list(raw) if chunk.ext == "js" do
