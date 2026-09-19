@@ -1,6 +1,7 @@
 package whitelabel.captal.core.survey.question
 
 import java.time.LocalDate
+import java.util.UUID
 
 import scala.annotation.targetName
 
@@ -51,28 +52,29 @@ object jsoniter:
   // IDs: opaque strings that validate on the way in
   // ─────────────────────────────────────────────────────────────────────────────
 
-  private def idCodec[A](
-      parse: String => Option[A],
-      render: A => String,
-      what: String): JsonValueCodec[A] =
+  /** Every id is an `opaque type ... = UUID`, so this hands the work to jsoniter's own UUID reader
+    * rather than reading a `String` and parsing it back — no intermediate allocation, and an id
+    * that is not a UUID fails where jsoniter already knows how to say so.
+    *
+    * circe reached the same place from the other side, with
+    * `Decoder.decodeString.emap(fromString)`. The combinator is what differs: circe ships
+    * `map`/`emap` on its codecs and jsoniter does not, so the wrapper is spelled out once here and
+    * shared by the four.
+    */
+  private def uuidCodec[A](wrap: UUID => A, unwrap: A => UUID): JsonValueCodec[A] =
     new JsonValueCodec[A]:
       def nullValue: A = null.asInstanceOf[A]
-      def decodeValue(in: JsonReader, default: A): A =
-        val s = in.readString(null)
-        parse(s).getOrElse(in.decodeError(s"Invalid $what: $s"))
-      def encodeValue(x: A, out: JsonWriter): Unit = out.writeVal(render(x))
+      def decodeValue(in: JsonReader, default: A): A = wrap(in.readUUID(null))
+      def encodeValue(x: A, out: JsonWriter): Unit = out.writeVal(unwrap(x))
 
   @targetName("codecSurveyId")
-  given JsonValueCodec[survey.Id] = idCodec(survey.Id.fromString, _.asString, "survey id")
+  given JsonValueCodec[survey.Id] = uuidCodec(survey.Id.apply, _.value)
   @targetName("codecQuestionId")
-  given JsonValueCodec[Id] = idCodec(Id.fromString, _.asString, "question id")
+  given JsonValueCodec[Id] = uuidCodec(Id.apply, _.value)
   @targetName("codecOptionId")
-  given JsonValueCodec[OptionId] = idCodec(OptionId.fromString, _.asString, "option id")
+  given JsonValueCodec[OptionId] = uuidCodec(OptionId.apply, _.value)
   @targetName("codecAdvertiserId")
-  given JsonValueCodec[survey.AdvertiserId] = idCodec(
-    survey.AdvertiserId.fromString,
-    _.asString,
-    "advertiser id")
+  given JsonValueCodec[survey.AdvertiserId] = uuidCodec(survey.AdvertiserId.apply, _.value)
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Enums carried as plain strings

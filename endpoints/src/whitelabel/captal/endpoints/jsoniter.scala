@@ -35,24 +35,22 @@ object jsoniter:
     * that buffer corrupts the output: the first attempt emitted
     * `{"phase":"ready"},{"phase":"ready","type":"step"}`.
     *
-    * So the payloads write their fields straight into the writer already in hand. That is what
-    * `writeFields` is for, and why these four codecs are spelled out rather than generated.
+    * So the payloads write their fields straight into the writer already in hand — which is all
+    * `*Fields` below does, one per payload type. `taggedCodec` is parameterised by the union; the
+    * function it takes is what unwraps a case and picks the matching writer.
     */
-  private trait Flat[A]:
-    def writeFields(x: A, out: JsonWriter): Unit
-
   private val question = summon[JsonValueCodec[QuestionToAnswer]]
   private val phase = summon[JsonValueCodec[Phase]]
   private val surveyType = summon[JsonValueCodec[IdentificationSurveyType]]
   private val surveyId = summon[JsonValueCodec[survey.Id]]
   private val advertiserId = summon[JsonValueCodec[survey.AdvertiserId]]
 
-  private val flatStep: Flat[NextStep] =
+  private val stepFields: (NextStep, JsonWriter) => Unit =
     (x, out) =>
       out.writeKey("phase");
       phase.encodeValue(x.phase, out)
 
-  private val flatIdentification: Flat[NextIdentificationSurvey] =
+  private val identificationFields: (NextIdentificationSurvey, JsonWriter) => Unit =
     (x, out) =>
       out.writeKey("surveyId");
       surveyId.encodeValue(x.surveyId, out)
@@ -61,7 +59,7 @@ object jsoniter:
       out.writeKey("question");
       question.encodeValue(x.question, out)
 
-  private val flatAdvertiser: Flat[NextAdvertiserSurvey] =
+  private val advertiserFields: (NextAdvertiserSurvey, JsonWriter) => Unit =
     (x, out) =>
       out.writeKey("surveyId");
       surveyId.encodeValue(x.surveyId, out)
@@ -70,7 +68,7 @@ object jsoniter:
       out.writeKey("question");
       question.encodeValue(x.question, out)
 
-  private val flatVideo: Flat[NextVideo] =
+  private val videoFields: (NextVideo, JsonWriter) => Unit =
     (x, out) =>
       out.writeKey("videoUrl");
       out.writeVal(x.videoUrl)
@@ -161,9 +159,9 @@ object jsoniter:
     },
     {
       case (SurveyResponse.Survey(d), out) =>
-        flatIdentification.writeFields(d, out)
+        identificationFields(d, out)
       case (SurveyResponse.Step(d), out) =>
-        flatStep.writeFields(d, out)
+        stepFields(d, out)
     },
     {
       case ("survey", f) =>
@@ -184,9 +182,9 @@ object jsoniter:
     },
     {
       case (AdvertiserSurveyResponse.Survey(d), out) =>
-        flatAdvertiser.writeFields(d, out)
+        advertiserFields(d, out)
       case (AdvertiserSurveyResponse.Step(d), out) =>
-        flatStep.writeFields(d, out)
+        stepFields(d, out)
     },
     {
       case ("survey", f) =>
@@ -208,9 +206,9 @@ object jsoniter:
     },
     {
       case (VideoResponse.Video(d), out) =>
-        flatVideo.writeFields(d, out)
+        videoFields(d, out)
       case (VideoResponse.Step(d), out) =>
-        flatStep.writeFields(d, out)
+        stepFields(d, out)
     },
     {
       case ("video", f) =>
