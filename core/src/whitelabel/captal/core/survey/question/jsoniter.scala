@@ -199,130 +199,30 @@ object jsoniter:
   // Rules: `"type"` plus an optional `"value"` whose shape follows the tag
   // ─────────────────────────────────────────────────────────────────────────────
 
-  given JsonValueCodec[SelectionRule] =
-    new JsonValueCodec[SelectionRule]:
-      def nullValue: SelectionRule = null.asInstanceOf[SelectionRule]
-      def decodeValue(in: JsonReader, default: SelectionRule): SelectionRule =
-        if !in.isNextToken('{') then
-          in.decodeError("expected '{'")
-        var kind: String = null
-        var value: Int = 0
-        if !in.isNextToken('}') then
-          in.rollbackToken()
-          while
-            in.readKeyAsString() match
-              case "type" =>
-                kind = in.readString(null)
-              case "value" =>
-                value = in.readInt()
-              case _ =>
-                in.skip()
-            in.isNextToken(',') do
-            (
-          )
-          if !in.isCurrentToken('}') then
-            in.decodeError("expected '}'")
-        kind match
-          case "min_selections" =>
-            SelectionRule.MinSelections(value)
-          case "max_selections" =>
-            SelectionRule.MaxSelections(value)
-          case other =>
-            in.decodeError(s"Unknown selection rule: $other")
-      end decodeValue
-      def encodeValue(x: SelectionRule, out: JsonWriter): Unit =
-        out.writeObjectStart()
-        out.writeKey("type")
-        x match
-          case SelectionRule.MinSelections(_) =>
-            out.writeVal("min_selections")
-          case SelectionRule.MaxSelections(_) =>
-            out.writeVal("max_selections")
-        out.writeKey("value")
-        x match
-          case SelectionRule.MinSelections(v) =>
-            out.writeVal(v)
-          case SelectionRule.MaxSelections(v) =>
-            out.writeVal(v)
-        out.writeObjectEnd()
-
-  /** `Email` and `Url` carry no `"value"` at all, so the field is optional here in a way it is not
-    * for the other rule families.
+  /** Both derive. The tags fall out of `enforce_snake_case` over the case names — `MinSelections`
+    * is `min_selections`, `MinLength` is `min_length`, `Email` is `email` — and the payload key is
+    * a rename: these cases call their field `min`, `max` or `regex` where the wire says `"value"`.
+    * The field mapper belongs to this `make` call rather than to the program, so saying it here
+    * touches no other codec.
+    *
+    * `Email` and `Url` carry nothing and come out as `{"type":"email"}`, which is what circe wrote.
     */
-  given JsonValueCodec[TextRule] =
-    new JsonValueCodec[TextRule]:
-      def nullValue: TextRule = null.asInstanceOf[TextRule]
-      def decodeValue(in: JsonReader, default: TextRule): TextRule =
-        if !in.isNextToken('{') then
-          in.decodeError("expected '{'")
-        var kind: String = null
-        var number: Int = 0
-        var text: String = null
-        if !in.isNextToken('}') then
-          in.rollbackToken()
-          while
-            in.readKeyAsString() match
-              case "type" =>
-                kind = in.readString(null)
-              case "value" =>
-                if in.isNextToken('"') then
-                  in.rollbackToken()
-                  text = in.readString(null)
-                else
-                  in.rollbackToken()
-                  number = in.readInt()
-              case _ =>
-                in.skip()
-            in.isNextToken(',') do
-            (
-          )
-          if !in.isCurrentToken('}') then
-            in.decodeError("expected '}'")
-        end if
-        kind match
-          case "min_length" =>
-            TextRule.MinLength(number)
-          case "max_length" =>
-            TextRule.MaxLength(number)
-          case "pattern" =>
-            TextRule.Pattern(text)
-          case "email" =>
-            TextRule.Email
-          case "url" =>
-            TextRule.Url
-          case other =>
-            in.decodeError(s"Unknown text rule: $other")
-      end decodeValue
-      def encodeValue(x: TextRule, out: JsonWriter): Unit =
-        out.writeObjectStart()
-        out.writeKey("type")
-        x match
-          case TextRule.MinLength(_) =>
-            out.writeVal("min_length")
-          case TextRule.MaxLength(_) =>
-            out.writeVal("max_length")
-          case TextRule.Pattern(_) =>
-            out.writeVal("pattern")
-          case TextRule.Email =>
-            out.writeVal("email")
-          case TextRule.Url =>
-            out.writeVal("url")
-        x match
-          case TextRule.MinLength(v) =>
-            out.writeKey("value");
-            out.writeVal(v)
-          case TextRule.MaxLength(v) =>
-            out.writeKey("value");
-            out.writeVal(v)
-          case TextRule.Pattern(v) =>
-            out.writeKey("value");
-            out.writeVal(v)
-          case TextRule.Email =>
-            ()
-          case TextRule.Url =>
-            ()
-        out.writeObjectEnd()
-      end encodeValue
+  inline def taggedAsValue = verbose
+    .withDiscriminatorFieldName(Some("type"))
+    .withAdtLeafClassNameMapper(x =>
+      JsonCodecMaker.enforce_snake_case(JsonCodecMaker.simpleClassName(x)))
+    .withFieldNameMapper {
+      case "min" =>
+        "value"
+      case "max" =>
+        "value"
+      case "regex" =>
+        "value"
+    }
+
+  given JsonValueCodec[SelectionRule] = JsonCodecMaker.make(taggedAsValue)
+  given JsonValueCodec[TextRule] = JsonCodecMaker.make(taggedAsValue)
+
   // ─────────────────────────────────────────────────────────────────────────────
   // Plain records
   // ─────────────────────────────────────────────────────────────────────────────
@@ -342,8 +242,8 @@ object jsoniter:
     * tag, so they have to exist before it rather than be generated inside it.
     */
   given optionList: JsonValueCodec[List[QuestionOption]] = JsonCodecMaker.make(verbose)
-  given selectionList: JsonValueCodec[List[SelectionRule]] = JsonCodecMaker.make(verbose)
-  given textList: JsonValueCodec[List[TextRule]] = JsonCodecMaker.make(verbose)
+  given selectionList: JsonValueCodec[List[SelectionRule]] = JsonCodecMaker.make(taggedAsValue)
+  given textList: JsonValueCodec[List[TextRule]] = JsonCodecMaker.make(taggedAsValue)
   given intRuleList: JsonValueCodec[List[RangeRule[Int]]] = JsonCodecMaker.make(verbose)
   given decimalRuleList: JsonValueCodec[List[RangeRule[BigDecimal]]] = JsonCodecMaker.make(verbose)
   given dateRuleList: JsonValueCodec[List[RangeRule[LocalDate]]] = JsonCodecMaker.make(verbose)
