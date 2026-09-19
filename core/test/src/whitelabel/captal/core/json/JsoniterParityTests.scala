@@ -35,7 +35,67 @@ object JsoniterParityTests extends TestSuite:
     QuestionOption(OptionId.generate, LocalizedText("uno", "es"), 1, None),
     QuestionOption(OptionId.generate, LocalizedText("dos", "es"), 2, None))
 
+  /** Not in `generators`, because nothing else needed them: the other suites build rules by hand
+    * for the case under test. Parity has to cover every branch, including the two that carry no
+    * `"value"` at all.
+    */
+  private val genTextRule: Gen[TextRule] = Gen.oneOf(
+    Gen.chooseNum(0, 100).map(TextRule.MinLength.apply),
+    Gen.chooseNum(0, 100).map(TextRule.MaxLength.apply),
+    Gen.alphaNumStr.map(TextRule.Pattern.apply),
+    Gen.const(TextRule.Email),
+    Gen.const(TextRule.Url)
+  )
+
+  private val genHierarchyLevel: Gen[HierarchyLevel] = Gen.oneOf(
+    HierarchyLevel.State,
+    HierarchyLevel.City,
+    HierarchyLevel.Municipality,
+    HierarchyLevel.Urbanization)
+
+  private val genLocalizedText: Gen[LocalizedText] =
+    for
+      v <- Gen.alphaNumStr
+      l <- Gen.oneOf("es", "en")
+    yield LocalizedText(v, l)
+
+  /** Both with and without the optional parent, because circe writes `null` where jsoniter would
+    * rather omit the field — the config turning that off is what this checks.
+    */
+  private val genOption: Gen[QuestionOption] =
+    for
+      text   <- genLocalizedText
+      order  <- Gen.chooseNum(1, 20)
+      parent <- Gen.option(Gen.const(OptionId.generate))
+    yield QuestionOption(OptionId.generate, text, order, parent)
+
+  private val genQuestionType: Gen[QuestionType] =
+    for
+      opts <- Gen.listOfN(2, genOption)
+      sel  <- Gen.listOfN(1, genSelectionRule)
+      txt  <- Gen.listOfN(1, genTextRule)
+      ints <- Gen.listOfN(1, genRangeRuleInt)
+      dec  <- Gen.listOfN(1, genRangeRuleBigDecimal)
+      dat  <- Gen.listOfN(1, genRangeRuleLocalDate)
+      t    <- Gen.oneOf[QuestionType](
+        QuestionType.Radio(opts),
+        QuestionType.Checkbox(opts, sel),
+        QuestionType.Select(opts),
+        QuestionType.Input(txt),
+        QuestionType.Rating(ints),
+        QuestionType.Numeric(dec),
+        QuestionType.Date(dat)
+      )
+    yield t
+
   val tests = Tests:
+    test("LocalizedText") - checkProp(parity(genLocalizedText))
+    test("QuestionOption") - checkProp(parity(genOption))
+    test("QuestionType") - checkProp(parity(genQuestionType))
+    test("SelectionRule") - checkProp(parity(genSelectionRule))
+    test("TextRule") - checkProp(parity(genTextRule))
+    test("CommonRule") - checkProp(parity(genCommonRule))
+    test("HierarchyLevel") - checkProp(parity(genHierarchyLevel))
     test("RangeRule[Int]") - checkProp(parity(genRangeRuleInt))
     test("RangeRule[BigDecimal]") - checkProp(parity(genRangeRuleBigDecimal))
     test("RangeRule[LocalDate]") - checkProp(parity(genRangeRuleLocalDate))
