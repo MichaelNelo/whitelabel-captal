@@ -615,13 +615,16 @@ object client extends BaseJSModule:
   def clientAssets: T[PathRef] = Task.Source(moduleDir / "assets")
   def clientTemplate: T[PathRef] = Task.Source(moduleDir / "index.html.template")
 
-  /** esbuild and terser, installed into the task's own directory.
+  def viteConfig: T[PathRef] = Task.Source(moduleDir / "vite.config.mjs")
+
+  /** Vite, installed into the task's own directory.
     *
-    * Both are needed because Scala.js emits more than one module for the per-route splitting, and
-    * the Closure Compiler only runs for a single one. esbuild scope-hoists each chunk back into a
-    * single scope — which is what makes the names manglable again — and terser does the mangling,
-    * being markedly better at it than esbuild's own minifier: measured, 253 667 bytes against
-    * 280 254 on the same input.
+    * Needed because Scala.js emits more than one module for the per-route splitting, and the
+    * Closure Compiler only runs for a single one. Vite's production build is Rollup, which
+    * scope-hoists each chunk back into a single scope — that is what makes the names manglable
+    * again — plus terser to mangle them. Measured against esbuild driving the same terser, Rollup
+    * is 1 854 bytes better on the first paint and 7 621 on the total, and folds the eager half into
+    * one chunk instead of two.
     */
   def jsTools: T[PathRef] = Task:
     val result = os
@@ -634,7 +637,7 @@ object client extends BaseJSModule:
         "--silent",
         "--prefix",
         Task.dest.toString,
-        "esbuild@0.24.2",
+        "vite@6.0.7",
         "terser@5.37.0")
       .call(check = false, stderr = os.Pipe)
     if result.exitCode != 0 then
@@ -643,47 +646,32 @@ object client extends BaseJSModule:
 
   /** Build the production bundle. Usage: `./mill client.bundle` Output: out/client/bundle.dest/
     *
-    * Nothing is pre-gzipped any more, and that is a consequence rather than a preference: a browser
-    * loading an ES module imports the chunks by the exact path the linker wrote, so a file cannot
-    * be renamed to `.gz`. CloudFront compresses on the fly instead — its default behaviour already
+    * Nothing is pre-gzipped, and that is a consequence rather than a preference: a browser loading
+    * an ES module imports the chunks by the exact path the linker wrote, so a file cannot be
+    * renamed to `.gz`. CloudFront compresses on the fly instead — its default behaviour already
     * has `compress = true`, and it does brotli, which beats what was being shipped.
     */
   def bundle = Task:
     val linked = fullLinkJS().dest.path
     val assets = clientAssets().path
-    val bin = jsTools().path / "node_modules" / ".bin"
     val dest = Task.dest
-    // Fuera de `dest`: lo que quede ahí se publica, y esto es material intermedio.
-    val raw = os.temp.dir(prefix = "captal-esbuild")
 
-    def run(label: String, args: Seq[String]): Unit =
-      val r = os.proc(args).call(check = false, stderr = os.Pipe)
-      if r.exitCode != 0 then sys.error(s"[bundle] $label failed: ${r.err.trim()}")
+    // Vite builds a project directory, so one is staged: the linker's output as `src/`, the
+    // versioned config beside it, and `node_modules` symlinked from the tool task.
+    val project = os.temp.dir(prefix = "captal-vite")
+    os.makeDir.all(project / "src")
+    for module <- os.list(linked) if module.ext == "js" do
+      os.copy(module, project / "src" / module.last)
+    os.copy(viteConfig().path, project / "vite.config.mjs")
+    os.symlink(project / "node_modules", jsTools().path / "node_modules")
 
-    run(
-      "esbuild",
-      Seq(
-        (bin / "esbuild").toString,
-        (linked / "main.js").toString,
-        "--bundle",
-        "--splitting",
-        "--format=esm",
-        "--target=es2020",
-        s"--outdir=$raw"))
+    val built = os
+      .proc((project / "node_modules" / ".bin" / "vite").toString, "build")
+      .call(cwd = project, check = false, stderr = os.Pipe)
+    if built.exitCode != 0 then sys.error(s"[bundle] vite build failed: ${built.err.trim()}")
 
-    for chunk <- os.list(raw) if chunk.ext == "js" do
-      run(
-        "terser",
-        Seq(
-          (bin / "terser").toString,
-          chunk.toString,
-          "--module",
-          "--compress",
-          "passes=3,unsafe=true",
-          "--mangle",
-          "toplevel=true",
-          "--output",
-          (dest / chunk.last).toString))
+    for output <- os.list(project / "dist") if output.ext == "js" do
+      os.copy(output, dest / output.last)
 
     os.copy(assets / "styles.css", dest / "styles.css")
     os.copy(assets / "brand-icon.svg", dest / "brand-icon.svg")
