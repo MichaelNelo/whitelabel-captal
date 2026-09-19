@@ -2,7 +2,7 @@ package whitelabel.captal.client.views
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.Promises.*
 import whitelabel.captal.client.i18n.I18nClient
-import whitelabel.captal.client.{ApiClient, AppState, ErrorHandler, Router, Runtime}
+import whitelabel.captal.client.{AdvertiserApi, AppState, ErrorHandler, Router, Runtime}
 import whitelabel.captal.core.Op
 import whitelabel.captal.core.application.commands.NextAdvertiserSurvey
 import whitelabel.captal.core.survey.question.{
@@ -77,7 +77,7 @@ object AdvertiserVideoSurveyView:
     div(cls := "questions-list", questionCard(survey)))
 
   private def loadQuestion(): Unit = Runtime.run:
-    ApiClient
+    AdvertiserApi
       .getNextAdvertiserSurvey()
       .map:
         case Right(AdvertiserSurveyResponse.Survey(survey)) =>
@@ -293,7 +293,7 @@ object AdvertiserVideoSurveyView:
       isSubmitting.set(true)
 
       Runtime.run:
-        ApiClient
+        AdvertiserApi
           .answerAdvertiser(answer)
           .map:
             case Right(AdvertiserSurveyResponse.Survey(nextSurvey)) =>

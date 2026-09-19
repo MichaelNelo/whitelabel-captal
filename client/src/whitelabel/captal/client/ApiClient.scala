@@ -6,20 +6,7 @@ import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, parser}
 import org.scalajs.dom
 import whitelabel.captal.client.Promises.*
-import whitelabel.captal.core.i18n.I18n
-import whitelabel.captal.core.survey.question.AnswerValue
-import whitelabel.captal.endpoints.i18n.given
-import whitelabel.captal.endpoints.{
-  AdvertiserSurveyResponse,
-  AnswerRequest,
-  ApiError,
-  MarkVideoWatchedRequest,
-  SetLocaleRequest,
-  StatusResponse,
-  SurveyResponse,
-  VideoResponse,
-  VideoWatchedResponse
-}
+import whitelabel.captal.endpoints.ApiError
 
 object ApiClient:
   /** API base path. In production the page is served at `/<slug>/index.html`, so we extract the
@@ -34,9 +21,9 @@ object ApiClient:
       case _ =>
         "/api"
 
-  private inline def url(path: String): String = s"$apiBase$path"
+  inline def url(path: String): String = s"$apiBase$path"
 
-  private def fetchApi[A: Decoder](
+  def fetchApi[A: Decoder](
       method: String,
       path: String,
       body: Option[io.circe.Json] = None,
@@ -66,68 +53,21 @@ object ApiClient:
             Left(ApiError.InternalError(s"HTTP ${response.status}: $text"))
   end fetchApi
 
-  private def get[A: Decoder](path: String): js.Promise[Either[ApiError, A]] = fetchApi("GET", path)
+  def get[A: Decoder](path: String): js.Promise[Either[ApiError, A]] = fetchApi("GET", path)
 
-  private def post[A: Decoder](path: String): js.Promise[Either[ApiError, A]] = fetchApi(
-    "POST",
-    path)
+  def post[A: Decoder](path: String): js.Promise[Either[ApiError, A]] = fetchApi("POST", path)
 
-  private def postJson[B: Encoder, A: Decoder](
-      path: String,
-      body: B): js.Promise[Either[ApiError, A]] = fetchApi("POST", path, Some(body.asJson))
+  def postJson[B: Encoder, A: Decoder](path: String, body: B): js.Promise[Either[ApiError, A]] =
+    fetchApi("POST", path, Some(body.asJson))
 
-  private def putJson[B: Encoder, A: Decoder](
-      path: String,
-      body: B): js.Promise[Either[ApiError, A]] = fetchApi("PUT", path, Some(body.asJson))
+  def putJson[B: Encoder, A: Decoder](path: String, body: B): js.Promise[Either[ApiError, A]] =
+    fetchApi("PUT", path, Some(body.asJson))
 
-  def getStatus(
-      extraHeaders: Map[String, String] = Map.empty): js.Promise[Either[ApiError, StatusResponse]] =
-    fetchApi("GET", url("/status"), extraHeaders = extraHeaders)
-
-  def getNextSurvey(): js.Promise[Either[ApiError, SurveyResponse]] = get(url("/survey/next"))
-
-  def answerEmail(answer: AnswerValue): js.Promise[Either[ApiError, SurveyResponse]] = postJson(
-    url("/survey/email"),
-    AnswerRequest(answer))
-
-  def answerProfiling(answer: AnswerValue): js.Promise[Either[ApiError, SurveyResponse]] = postJson(
-    url("/survey/profiling"),
-    AnswerRequest(answer))
-
-  def answerLocation(answer: AnswerValue): js.Promise[Either[ApiError, SurveyResponse]] = postJson(
-    url("/survey/location"),
-    AnswerRequest(answer))
-
-  def getLocales(): js.Promise[Either[ApiError, List[String]]] = get(url("/locales"))
-
-  def setLocale(locale: String): js.Promise[Either[ApiError, StatusResponse]] = putJson(
-    url("/session/locale"),
-    SetLocaleRequest(locale))
-
-  def getI18n(locale: String): js.Promise[Either[ApiError, I18n]] = get(url(s"/i18n/$locale"))
-
-  def resetPhase(): js.Promise[Either[ApiError, StatusResponse]] = post(url("/dev/reset-phase"))
-
-  def getNextVideo(): js.Promise[Either[ApiError, VideoResponse]] = get(url("/video/next"))
-
-  def markVideoWatched(
-      durationWatched: Int,
-      completed: Boolean): js.Promise[Either[ApiError, VideoWatchedResponse]] = postJson(
-    url("/video/watched"),
-    MarkVideoWatchedRequest(durationWatched, completed))
-
-  def getNextAdvertiserSurvey(): js.Promise[Either[ApiError, AdvertiserSurveyResponse]] = get(
-    url("/survey/advertiser/next"))
-
-  def answerAdvertiser(
-      answer: AnswerValue): js.Promise[Either[ApiError, AdvertiserSurveyResponse]] = postJson(
-    url("/survey/advertiser"),
-    AnswerRequest(answer))
-
-  /** POST `/api/finish`. Triggers `UnifiAccessHandler` post-commit. The response is a
-    * [[StatusResponse]] reflecting the session **after** UniFi ran: on success, `phase =
-    * Authorized` + `accessExpiresAt = Some(...)`; on UniFi failure / no-config, `phase = Ready` +
-    * `accessExpiresAt = None` (caller can retry by calling `finish()` again).
+  /** The endpoints themselves live in [[ViewApis]], one object per view.
+    *
+    * Not a style choice: a single object referenced from all six views is reachable from startup,
+    * and so is everything it touches — every route and the decoder of every response type. Split by
+    * view, what only one view calls is only reachable from that view, which is what lets the route
+    * split defer it. Measured, that moved 22 KB gzipped out of the first paint.
     */
-  def finish(): js.Promise[Either[ApiError, StatusResponse]] = post(url("/finish"))
 end ApiClient

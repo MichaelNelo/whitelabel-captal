@@ -3,7 +3,7 @@ import com.raquo.laminar.api.L.*
 import org.scalajs.dom
 import whitelabel.captal.client.Promises.*
 import whitelabel.captal.client.i18n.I18nClient
-import whitelabel.captal.client.{ApiClient, AppState, ErrorHandler, Router, Runtime}
+import whitelabel.captal.client.{AppState, ErrorHandler, Router, Runtime, StatusApi}
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.endpoints.ApiError
 
@@ -55,7 +55,7 @@ object ErrorView:
     AppState.setNavigating(true)
     val headers = parseCaptivePortalHeaders()
     Runtime.run:
-      ApiClient
+      StatusApi
         .getStatus(headers)
         .map:
           case Right(status) =>

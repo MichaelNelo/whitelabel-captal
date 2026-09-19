@@ -5,7 +5,7 @@ import org.scalajs.dom.html.{Div, Video}
 import org.scalajs.dom.svg.Circle
 import whitelabel.captal.client.Promises.*
 import whitelabel.captal.client.i18n.I18nClient
-import whitelabel.captal.client.{ApiClient, AppState, ErrorHandler, Router, Runtime}
+import whitelabel.captal.client.{AppState, ErrorHandler, Router, Runtime, VideoApi}
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.application.commands.NextVideo
 import whitelabel.captal.endpoints.VideoResponse
@@ -321,7 +321,7 @@ object AdvertiserVideoView:
       videoData: Var[Option[NextVideo]],
       showIntro: Var[Boolean],
       videoRef: Var[Option[Video]]): Unit = Runtime.run:
-    ApiClient
+    VideoApi
       .getNextVideo()
       .map:
         case Right(VideoResponse.Video(data)) =>
@@ -348,7 +348,7 @@ object AdvertiserVideoView:
   private def markAsWatched(duration: Int, completed: Boolean): Unit =
     AppState.setNavigating(true)
     Runtime.run:
-      ApiClient
+      VideoApi
         .markVideoWatched(duration, completed)
         .map:
           case Right(resp) =>
