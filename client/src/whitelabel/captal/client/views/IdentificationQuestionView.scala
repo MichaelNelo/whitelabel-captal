@@ -2,7 +2,15 @@ package whitelabel.captal.client.views
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.Promises.*
 import whitelabel.captal.client.i18n.I18nClient
-import whitelabel.captal.client.{ApiClient, AppState, ErrorHandler, Router, Runtime}
+import whitelabel.captal.client.{
+  AppState,
+  ErrorHandler,
+  QuestionApi,
+  Router,
+  Runtime,
+  StatusApi,
+  WelcomeApi
+}
 import whitelabel.captal.core.Op
 import whitelabel.captal.core.application.commands.NextIdentificationSurvey
 import whitelabel.captal.core.application.{IdentificationSurveyType, Phase}
@@ -79,7 +87,7 @@ object IdentificationQuestionView:
     div(cls := "questions-list", questionCard(survey)))
 
   private def checkPhaseAndLoad(): Unit = Runtime.run:
-    ApiClient
+    StatusApi
       .getStatus()
       .map:
         case Right(status) if status.phase == Phase.Welcome =>
@@ -94,7 +102,7 @@ object IdentificationQuestionView:
           ErrorHandler.escalate(err)
 
   private def loadQuestion(): Unit = Runtime.run:
-    ApiClient
+    WelcomeApi
       .getNextSurvey()
       .map:
         case Right(SurveyResponse.Survey(survey)) =>
@@ -367,11 +375,11 @@ object IdentificationQuestionView:
       val apiCall =
         survey.surveyType match
           case IdentificationSurveyType.Email =>
-            ApiClient.answerEmail(answer)
+            QuestionApi.answerEmail(answer)
           case IdentificationSurveyType.Profiling =>
-            ApiClient.answerProfiling(answer)
+            QuestionApi.answerProfiling(answer)
           case IdentificationSurveyType.Location =>
-            ApiClient.answerLocation(answer)
+            QuestionApi.answerLocation(answer)
 
       Runtime.run:
         apiCall.map:

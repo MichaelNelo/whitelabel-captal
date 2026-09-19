@@ -5,6 +5,7 @@ import scala.util.Try
 import com.raquo.laminar.api.L.*
 import org.scalajs.dom
 import whitelabel.captal.client.Promises.*
+import whitelabel.captal.client.StatusApi
 
 @main
 def main(): Unit =
@@ -84,7 +85,7 @@ object App:
   def syncPhaseOnLoad(): Unit =
     val headers = parseCaptivePortalHeaders()
     Runtime.run:
-      ApiClient
+      StatusApi
         .getStatus(headers)
         .map:
           case Right(status) =>

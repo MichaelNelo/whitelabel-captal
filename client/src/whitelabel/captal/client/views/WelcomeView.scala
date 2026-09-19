@@ -4,7 +4,7 @@ import scala.scalajs.js
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.Promises.*
 import whitelabel.captal.client.i18n.I18nClient
-import whitelabel.captal.client.{ApiClient, AppState, ErrorHandler, Router, Runtime}
+import whitelabel.captal.client.{AppState, ErrorHandler, Router, Runtime, StatusApi, WelcomeApi}
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.endpoints.SurveyResponse
 
@@ -139,7 +139,7 @@ object WelcomeView:
     js.timers.setTimeout(delayMillis)(refreshStatusAfterExpiration())
 
   private def refreshStatusAfterExpiration(): Unit = Runtime.run:
-    ApiClient
+    StatusApi
       .getStatus()
       .map:
         case Right(status) =>
@@ -174,7 +174,7 @@ object WelcomeView:
     * view only needs the locales list.
     */
   private def loadLocales(): Unit = Runtime.run:
-    ApiClient
+    WelcomeApi
       .getLocales()
       .map:
         case Right(locales) if locales.nonEmpty =>
@@ -183,15 +183,15 @@ object WelcomeView:
           ()
 
   private def setLocaleOnServer(locale: String): Unit = Runtime.run:
-    ApiClient.setLocale(locale)
+    WelcomeApi.setLocale(locale)
 
   private def startFlow(): Unit =
     isStarting.set(true)
     AppState.setNavigating(true)
     Runtime.run:
       for
-        _            <- ApiClient.setLocale(I18nClient.currentLocale)
-        surveyResult <- ApiClient.getNextSurvey()
+        _            <- WelcomeApi.setLocale(I18nClient.currentLocale)
+        surveyResult <- WelcomeApi.getNextSurvey()
       yield
         surveyResult match
           case Right(SurveyResponse.Survey(survey)) =>

@@ -1,7 +1,7 @@
 package whitelabel.captal.client.i18n
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.Promises.*
-import whitelabel.captal.client.{ApiClient, Runtime}
+import whitelabel.captal.client.{I18nApi, Runtime}
 import whitelabel.captal.core.i18n.I18n
 
 object I18nClient:
@@ -38,7 +38,7 @@ object I18nClient:
     load(code)
 
   def load(locale: String): Unit = Runtime.run:
-    ApiClient
+    I18nApi
       .getI18n(locale)
       .map:
         case Right(data) =>

@@ -2,7 +2,7 @@ package whitelabel.captal.client.views
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.Promises.*
 import whitelabel.captal.client.i18n.I18nClient
-import whitelabel.captal.client.{ApiClient, AppState, BuildInfo, ErrorHandler, Router, Runtime}
+import whitelabel.captal.client.{AppState, BuildInfo, ErrorHandler, ReadyApi, Router, Runtime}
 import whitelabel.captal.core.application.Phase
 
 object ReadyView:
@@ -20,7 +20,7 @@ object ReadyView:
     * request is in flight.
     */
   private def callFinish(): Unit = Runtime.run:
-    ApiClient
+    ReadyApi
       .finish()
       .map:
         case Right(status) =>
@@ -34,7 +34,7 @@ object ReadyView:
     isResetting.set(true)
     AppState.setNavigating(true)
     Runtime.run:
-      ApiClient
+      ReadyApi
         .resetPhase()
         .map: result =>
           result match
