@@ -2,7 +2,7 @@ package whitelabel.captal.core.json
 
 import java.time.LocalDate
 
-import com.github.plokhotnyuk.jsoniter_scala.core.{JsonValueCodec, writeToString}
+import com.github.plokhotnyuk.jsoniter_scala.core.{JsonValueCodec, readFromString, writeToString}
 import io.circe.syntax.*
 import org.scalacheck.Prop.forAll
 import org.scalacheck.{Gen, Prop}
@@ -30,8 +30,14 @@ object JsoniterParityTests extends TestSuite:
     val result = prop.apply(Gen.Parameters.default)
     assert(result.success)
 
+  /** Two claims in one, and the second was missing until a hand-rolled decoder turned out not to
+    * accept `"description":null` — a value its own encoder had just written. Comparing what two
+    * encoders emit says nothing about whether either can read it back.
+    */
   private def parity[A: io.circe.Encoder: JsonValueCodec](gen: Gen[A]): Prop =
-    forAll(gen)(a => writeToString(a) == a.asJson.noSpaces)
+    forAll(gen): a =>
+      val written = writeToString(a)
+      written == a.asJson.noSpaces && readFromString[A](written) == a
 
   private val options = List(
     QuestionOption(OptionId.generate, LocalizedText("uno", "es"), 1, None),

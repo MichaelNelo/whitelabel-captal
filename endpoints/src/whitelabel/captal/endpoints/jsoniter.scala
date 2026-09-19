@@ -80,6 +80,18 @@ object jsoniter:
       out.writeKey("description");
       x.description.fold(out.writeNull())(out.writeVal)
 
+  /** `readString` rejects a `null` token outright, and these two fields are written as `null` when
+    * absent — so reading back what we just wrote needs the null checked first. Found by round
+    * tripping, which the parity tests did not do: comparing what two encoders emit says nothing
+    * about whether either can read it.
+    */
+  private def readNullableString(in: JsonReader): Option[String] =
+    if in.isNextToken('n') then
+      in.readNullOrError(None, "expected null")
+    else
+      in.rollbackToken()
+      Some(in.readString(null))
+
   /** Decoding reads the whole object once into a slot per field name across every case, then picks
     * by the tag. `"type"` is written first but JSON does not promise it arrives first.
     */
@@ -120,9 +132,9 @@ object jsoniter:
               case "durationSeconds" =>
                 f.durationSeconds = in.readInt()
               case "title" =>
-                f.title = Option(in.readString(null))
+                f.title = readNullableString(in)
               case "description" =>
-                f.description = Option(in.readString(null))
+                f.description = readNullableString(in)
               case _ =>
                 in.skip()
             end match
