@@ -155,7 +155,7 @@ trait BaseModule extends ScalaModule with ScalafmtModule with ScalafixModule:
 
 trait BaseJSModule extends ScalaJSModule with ScalafmtModule with ScalafixModule:
   def scalaVersion = "3.8.0"
-  def scalaJSVersion = "1.22.0"
+  def scalaJSVersion = "1.20.1"
   def scalacOptions = Seq("-Wunused:imports,locals,explicits,implicits")
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -170,9 +170,7 @@ trait CoreDepsJVM extends ScalaModule:
     mvn"io.circe::circe-parser:0.14.10",
     mvn"io.taig::babel-core:0.5.3",
     mvn"io.taig::babel-generic:0.5.3",
-    mvn"io.taig::babel-circe:0.5.3",
-    mvn"com.github.plokhotnyuk.jsoniter-scala::jsoniter-scala-core:2.40.1",
-    mvn"com.github.plokhotnyuk.jsoniter-scala::jsoniter-scala-macros:2.40.1"
+    mvn"io.taig::babel-circe:0.5.3"
   )
 
 trait CoreDepsJS extends ScalaJSModule:
@@ -184,9 +182,7 @@ trait CoreDepsJS extends ScalaJSModule:
     mvn"io.github.cquiroz::scala-java-time::2.6.0",
     mvn"io.taig::babel-core::0.5.3",
     mvn"io.taig::babel-generic::0.5.3",
-    mvn"io.taig::babel-circe::0.5.3",
-    mvn"com.github.plokhotnyuk.jsoniter-scala::jsoniter-scala-core::2.40.1",
-    mvn"com.github.plokhotnyuk.jsoniter-scala::jsoniter-scala-macros::2.40.1"
+    mvn"io.taig::babel-circe::0.5.3"
   )
 
 object core extends BaseModule with CoreDepsJVM:
@@ -212,13 +208,6 @@ trait EndpointsDepsJS extends ScalaJSModule:
 
 object endpoints extends BaseModule with EndpointsDepsJVM:
   def moduleDeps = Seq(core, infra)
-
-  /** Exists for one reason: the jsoniter codecs claim to reproduce circe's bytes exactly, and that
-    * claim needs somewhere to be checked. The wire types live here, so the check does too.
-    */
-  object test extends ScalaTests with TestModule.Utest with ScalafmtModule with ScalafixModule:
-    def mvnDeps = Seq(mvn"com.lihaoyi::utest:0.8.9", mvn"org.scalacheck::scalacheck:1.18.0")
-    def moduleDeps = super.moduleDeps ++ Seq(core.test)
 
 object `endpoints-js` extends BaseJSModule with EndpointsDepsJS:
   def moduleDeps = Seq(`core-js`)
