@@ -155,7 +155,7 @@ trait BaseModule extends ScalaModule with ScalafmtModule with ScalafixModule:
 
 trait BaseJSModule extends ScalaJSModule with ScalafmtModule with ScalafixModule:
   def scalaVersion = "3.8.0"
-  def scalaJSVersion = "1.20.1"
+  def scalaJSVersion = "1.22.0"
   def scalacOptions = Seq("-Wunused:imports,locals,explicits,implicits")
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -170,7 +170,9 @@ trait CoreDepsJVM extends ScalaModule:
     mvn"io.circe::circe-parser:0.14.10",
     mvn"io.taig::babel-core:0.5.3",
     mvn"io.taig::babel-generic:0.5.3",
-    mvn"io.taig::babel-circe:0.5.3"
+    mvn"io.taig::babel-circe:0.5.3",
+    mvn"com.github.plokhotnyuk.jsoniter-scala::jsoniter-scala-core:2.40.1",
+    mvn"com.github.plokhotnyuk.jsoniter-scala::jsoniter-scala-macros:2.40.1"
   )
 
 trait CoreDepsJS extends ScalaJSModule:
@@ -182,7 +184,9 @@ trait CoreDepsJS extends ScalaJSModule:
     mvn"io.github.cquiroz::scala-java-time::2.6.0",
     mvn"io.taig::babel-core::0.5.3",
     mvn"io.taig::babel-generic::0.5.3",
-    mvn"io.taig::babel-circe::0.5.3"
+    mvn"io.taig::babel-circe::0.5.3",
+    mvn"com.github.plokhotnyuk.jsoniter-scala::jsoniter-scala-core::2.40.1",
+    mvn"com.github.plokhotnyuk.jsoniter-scala::jsoniter-scala-macros::2.40.1"
   )
 
 object core extends BaseModule with CoreDepsJVM:
