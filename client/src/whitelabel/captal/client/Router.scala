@@ -1,5 +1,7 @@
 package whitelabel.captal.client
 
+import scala.scalajs.js
+
 import com.raquo.laminar.api.L.*
 import com.raquo.waypoint.*
 import org.scalajs.dom
@@ -150,13 +152,27 @@ object Router:
       case Phase.Authorized =>
         Page.Welcome // WelcomeView detects Authorized phase + countdown
 
-  // SplitRender for efficient view switching
+  /** Each route behind its own dynamic import, so a view and the API it calls travel in their own
+    * chunk and arrive when the route does.
+    *
+    * `js.dynamicImport` has to be written here rather than passed in from a helper: the split point
+    * is where the expression appears, so handing the view to a by-name parameter would build the
+    * closure outside and leave everything reachable from the main module.
+    *
+    * `collectStatic` takes its argument by name, which is what keeps these from all firing at
+    * startup — the import begins when the route is first rendered.
+    */
+  private def lazily(view: => js.Promise[HtmlElement]): HtmlElement = div(
+    child <-- EventStream.fromJsPromise(view, emitOnce = true))
+
   val splitter: SplitRender[Page, HtmlElement] =
     SplitRender[Page, HtmlElement](router.currentPageSignal)
-      .collectStatic(Page.Welcome)(WelcomeView.render)
-      .collectStatic(Page.IdentificationQuestion)(IdentificationQuestionView.render)
-      .collectStatic(Page.AdvertiserVideo)(AdvertiserVideoView.render)
-      .collectStatic(Page.AdvertiserVideoSurvey)(AdvertiserVideoSurveyView.render)
-      .collectStatic(Page.Ready)(ReadyView.render)
-      .collectStatic(Page.Error)(ErrorView.render)
+      .collectStatic(Page.Welcome)(lazily(js.dynamicImport(WelcomeView.render)))
+      .collectStatic(Page.IdentificationQuestion)(
+        lazily(js.dynamicImport(IdentificationQuestionView.render)))
+      .collectStatic(Page.AdvertiserVideo)(lazily(js.dynamicImport(AdvertiserVideoView.render)))
+      .collectStatic(Page.AdvertiserVideoSurvey)(
+        lazily(js.dynamicImport(AdvertiserVideoSurveyView.render)))
+      .collectStatic(Page.Ready)(lazily(js.dynamicImport(ReadyView.render)))
+      .collectStatic(Page.Error)(lazily(js.dynamicImport(ErrorView.render)))
 end Router

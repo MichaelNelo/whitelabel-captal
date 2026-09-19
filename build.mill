@@ -551,6 +551,16 @@ object mcpui extends BaseJSModule:
 
 object client extends BaseJSModule:
   def moduleDeps = Seq(`core-js`, `endpoints-js`)
+
+  /** Required for the per-route dynamic imports: `NoModule` emits exactly one module and refuses
+    * `js.dynamicImport` outright ("module support is disabled").
+    *
+    * The cost is the Closure Compiler, which Scala.js runs only for a single module — with more
+    * than one it errors outright under CommonJS and silently skips under ESModule. Losing it is
+    * why the bundling step below exists: esbuild scope-hoists each chunk back into one scope and
+    * terser mangles it, which recovers most of what Closure did.
+    */
+  def moduleKind = mill.scalajslib.api.ModuleKind.ESModule
   def mvnDeps = Seq(
     mvn"com.raquo::laminar::17.2.0",
     mvn"com.raquo::waypoint::9.0.0",
@@ -588,38 +598,91 @@ object client extends BaseJSModule:
   def clientAssets: T[PathRef] = Task.Source(moduleDir / "assets")
   def clientTemplate: T[PathRef] = Task.Source(moduleDir / "index.html.template")
 
-  /** Build production bundle and gzip assets. Usage: ./mill client.bundle Output:
-    * out/client/bundle.dest/
+  /** esbuild and terser, installed into the task's own directory.
+    *
+    * Both are needed because Scala.js emits more than one module for the per-route splitting, and
+    * the Closure Compiler only runs for a single one. esbuild scope-hoists each chunk back into a
+    * single scope — which is what makes the names manglable again — and terser does the mangling,
+    * being markedly better at it than esbuild's own minifier: measured, 253 667 bytes against
+    * 280 254 on the same input.
+    */
+  def jsTools: T[PathRef] = Task:
+    val result = os
+      .proc(
+        "npm",
+        "install",
+        "--no-save",
+        "--no-audit",
+        "--no-fund",
+        "--silent",
+        "--prefix",
+        Task.dest.toString,
+        "esbuild@0.24.2",
+        "terser@5.37.0")
+      .call(check = false, stderr = os.Pipe)
+    if result.exitCode != 0 then
+      sys.error(s"[bundle] npm install failed: ${result.err.trim()}")
+    PathRef(Task.dest)
+
+  /** Build the production bundle. Usage: `./mill client.bundle` Output: out/client/bundle.dest/
+    *
+    * Nothing is pre-gzipped any more, and that is a consequence rather than a preference: a browser
+    * loading an ES module imports the chunks by the exact path the linker wrote, so a file cannot
+    * be renamed to `.gz`. CloudFront compresses on the fly instead — its default behaviour already
+    * has `compress = true`, and it does brotli, which beats what was being shipped.
     */
   def bundle = Task:
-    val src = fullLinkJS().dest.path
+    val linked = fullLinkJS().dest.path
     val assets = clientAssets().path
-    val template = clientTemplate().path
+    val bin = jsTools().path / "node_modules" / ".bin"
     val dest = Task.dest
+    // Fuera de `dest`: lo que quede ahí se publica, y esto es material intermedio.
+    val raw = os.temp.dir(prefix = "captal-esbuild")
 
-    // Copy assets
-    os.copy(src / "main.js", dest / "main.js")
+    def run(label: String, args: Seq[String]): Unit =
+      val r = os.proc(args).call(check = false, stderr = os.Pipe)
+      if r.exitCode != 0 then sys.error(s"[bundle] $label failed: ${r.err.trim()}")
+
+    run(
+      "esbuild",
+      Seq(
+        (bin / "esbuild").toString,
+        (linked / "main.js").toString,
+        "--bundle",
+        "--splitting",
+        "--format=esm",
+        "--target=es2017",
+        s"--outdir=$raw"))
+
+    for chunk <- os.list(raw) if chunk.ext == "js" do
+      run(
+        "terser",
+        Seq(
+          (bin / "terser").toString,
+          chunk.toString,
+          "--module",
+          "--compress",
+          "passes=3,unsafe=true",
+          "--mangle",
+          "toplevel=true",
+          "--output",
+          (dest / chunk.last).toString))
+
     os.copy(assets / "styles.css", dest / "styles.css")
     os.copy(assets / "brand-icon.svg", dest / "brand-icon.svg")
 
-    // The maintenance page ships inside the same bundle so `copyBundleFromMaster` carries it into
-    // every location prefix alongside index.html. It has to be there before a pause, not put there
-    // by one: the pause is a key the edge reads, and the page it points at must already exist.
+    // The maintenance page keeps its own linker run, and with it the Closure Compiler: it is a
+    // single module, so nothing about the split applies to it.
     os.copy(maintenance.fullLinkJS().dest.path / "main.js", dest / "maintenance.js")
 
-    // Render index.html from template with relative paths so the browser resolves them
-    // against the current directory (which lives at https://<host>/<slug>/ in prod).
-    renderIndex(template, dest / "index.html", jsPath = "./main.js.gz", cssPath = "./styles.css.gz")
+    // Relative paths so the browser resolves them against the current directory, which in
+    // production is https://<host>/<slug>/.
+    renderIndex(clientTemplate().path, dest / "index.html", "./main.js", "./styles.css")
     renderIndex(
       maintenance.maintenanceTemplate().path,
       dest / "maintenance.html",
-      jsPath = "./maintenance.js.gz",
-      cssPath = "./styles.css.gz")
-
-    // Gzip JS and CSS
-    gzipFile(dest / "main.js", dest / "main.js.gz")
-    gzipFile(dest / "maintenance.js", dest / "maintenance.js.gz")
-    gzipFile(dest / "styles.css", dest / "styles.css.gz")
+      "./maintenance.js",
+      "./styles.css")
 
     PathRef(dest)
 
@@ -640,25 +703,37 @@ object client extends BaseJSModule:
     // *grows* the longer a location goes without a deploy, and nothing here can bound it. A day is
     // the bound.
     //
-    // index.html is the exception, because it is the entrypoint the CloudFront function chooses on
-    // every request. A browser holding it for a day would not ask, so a paused location would keep
-    // serving the portal to devices that had been there before. `s-maxage` still gives CloudFront
-    // its 24h; the invalidation every deploy issues is what clears that copy.
+    // The two HTML files are the exception, because which of them the edge serves is decided per
+    // request and a browser that does not ask cannot be told the answer changed. `s-maxage` still
+    // gives CloudFront its 24h; the invalidation every deploy issues is what clears that copy.
     val Day = "public, max-age=86400"
     val Revalidate = "public, max-age=0, must-revalidate, s-maxage=86400"
-    // (name, content-type, content-encoding, cache-control)
-    val files: Seq[(String, String, Option[String], String)] = Seq(
-      ("index.html", "text/html; charset=utf-8", None, Revalidate),
-      // Revalidated like index.html, and for the same reason: which of the two the edge serves is
-      // decided per request, and a browser that does not ask cannot be told the answer changed.
-      ("maintenance.html", "text/html; charset=utf-8", None, Revalidate),
-      ("maintenance.js.gz", "application/javascript", Some("gzip"), Day),
-      ("brand-icon.svg", "image/svg+xml", None, Day),
-      ("main.js.gz", "application/javascript", Some("gzip"), Day),
-      ("styles.css.gz", "text/css", Some("gzip"), Day)
-    )
-    for (name, ctype, enc, cache) <- files do
-      val baseArgs = Seq(
+
+    // Enumerated from what the build produced rather than listed: the chunk names carry a content
+    // hash chosen at bundle time, so no fixed list could name them. Nothing is pre-gzipped —
+    // CloudFront compresses on the fly, which it must, since an ES module imports its chunks by the
+    // exact path the linker wrote and those cannot be renamed.
+    def contentType(name: String): String =
+      if name.endsWith(".html") then
+        "text/html; charset=utf-8"
+      else if name.endsWith(".js") then
+        "application/javascript"
+      else if name.endsWith(".css") then
+        "text/css"
+      else if name.endsWith(".svg") then
+        "image/svg+xml"
+      else
+        "application/octet-stream"
+
+    val files = os
+      .list(src)
+      .filter(os.isFile)
+      .map(_.last)
+      .sorted
+      .map(name => (name, contentType(name), if name.endsWith(".html") then Revalidate else Day))
+
+    for (name, ctype, cache) <- files do
+      val args = Seq(
         "aws",
         "s3",
         "cp",
@@ -670,7 +745,6 @@ object client extends BaseJSModule:
         ctype,
         "--cache-control",
         cache)
-      val args = enc.fold(baseArgs)(e => baseArgs ++ Seq("--content-encoding", e))
       println(s"[publish] $name -> $destBase/$name")
       val result = os.proc(args).call(check = false, stderr = os.Pipe)
       if result.exitCode != 0 then
