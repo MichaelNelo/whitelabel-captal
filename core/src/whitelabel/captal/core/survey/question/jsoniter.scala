@@ -26,72 +26,26 @@ import whitelabel.captal.core.survey
   */
 object jsoniter:
 
-  /** Discriminated on `"type"`, payload under `"value"`. Shared by the three `RangeRule`
-    * instantiations, which differ only in how the payload is read and written.
+  /** Derived, not written out: `RangeRule`'s field is already called `value`, which is what the
+    * wire calls it, so the discriminator config is the whole difference. The sibling rule families
+    * do not get this — `SelectionRule.MinSelections` names its field `min` and the wire says
+    * `"value"`, and jsoniter's field mapper is global rather than per case.
     */
-  private def rangeRuleCodec[A](
-      read: JsonReader => A,
-      write: (JsonWriter, A) => Unit): JsonValueCodec[RangeRule[A]] =
-    new JsonValueCodec[RangeRule[A]]:
-      def nullValue: RangeRule[A] = null.asInstanceOf[RangeRule[A]]
-
-      def decodeValue(in: JsonReader, default: RangeRule[A]): RangeRule[A] =
-        if !in.isNextToken('{') then
-          in.decodeError("expected '{'")
-        var kind: String = null
-        var value: Option[A] = None
-        if !in.isNextToken('}') then
-          in.rollbackToken()
-          while
-            in.readKeyAsString() match
-              case "type" =>
-                kind = in.readString(null)
-              case "value" =>
-                value = Some(read(in))
-              case _ =>
-                in.skip()
-            in.isNextToken(',') do
-            (
-          )
-          if !in.isCurrentToken('}') then
-            in.decodeError("expected '}'")
-        (kind, value) match
-          case ("min", Some(v)) =>
-            RangeRule.Min(v)
-          case ("max", Some(v)) =>
-            RangeRule.Max(v)
-          case (other, _) =>
-            in.decodeError(s"Unknown range rule: $other")
-      end decodeValue
-
-      def encodeValue(x: RangeRule[A], out: JsonWriter): Unit =
-        out.writeObjectStart()
-        out.writeKey("type")
-        x match
-          case RangeRule.Min(_) =>
-            out.writeVal("min")
-          case RangeRule.Max(_) =>
-            out.writeVal("max")
-        out.writeKey("value")
-        x match
-          case RangeRule.Min(v) =>
-            write(out, v)
-          case RangeRule.Max(v) =>
-            write(out, v)
-        out.writeObjectEnd()
+  inline def tagged = verbose
+    .withDiscriminatorFieldName(Some("type"))
+    .withAdtLeafClassNameMapper(x => JsonCodecMaker.simpleClassName(x).toLowerCase)
 
   @targetName("codecRangeRuleInt")
-  given JsonValueCodec[RangeRule[Int]] = rangeRuleCodec(_.readInt(), (o, v) => o.writeVal(v))
+  given JsonValueCodec[RangeRule[Int]] = JsonCodecMaker.make(tagged)
 
   @targetName("codecRangeRuleBigDecimal")
-  given JsonValueCodec[RangeRule[BigDecimal]] = rangeRuleCodec(
-    _.readBigDecimal(null),
-    (o, v) => o.writeVal(v))
+  given JsonValueCodec[RangeRule[BigDecimal]] = JsonCodecMaker.make(tagged)
 
+  /** Derived too — jsoniter reads and writes `java.time.LocalDate` itself, and does it by hand
+    * rather than through `DateTimeFormatter`, which is what `IsoDate` exists to avoid.
+    */
   @targetName("codecRangeRuleLocalDate")
-  given JsonValueCodec[RangeRule[LocalDate]] = rangeRuleCodec(
-    in => IsoDate.parse(in.readString(null)),
-    (o, v) => o.writeVal(v.toString))
+  given JsonValueCodec[RangeRule[LocalDate]] = JsonCodecMaker.make(tagged)
 
   given JsonValueCodec[AnswerValue] =
     new JsonValueCodec[AnswerValue]:
@@ -231,54 +185,15 @@ object jsoniter:
   // Enums carried as plain strings
   // ─────────────────────────────────────────────────────────────────────────────
 
-  private def stringEnum[A](
-      read: String => Option[A],
-      write: A => String,
-      what: String): JsonValueCodec[A] =
-    new JsonValueCodec[A]:
-      def nullValue: A = null.asInstanceOf[A]
-      def decodeValue(in: JsonReader, default: A): A =
-        val s = in.readString(null)
-        read(s).getOrElse(in.decodeError(s"Unknown $what: $s"))
-      def encodeValue(x: A, out: JsonWriter): Unit = out.writeVal(write(x))
+  /** Both are enums whose cases carry nothing, which jsoniter writes as bare strings once the
+    * discriminator is turned off — the same shape circe produced. Only the spelling needs saying.
+    */
+  inline def bareString = verbose
+    .withDiscriminatorFieldName(None)
+    .withAdtLeafClassNameMapper(x => JsonCodecMaker.simpleClassName(x).toLowerCase)
 
-  given JsonValueCodec[CommonRule] = stringEnum(
-    {
-      case "required" =>
-        Some(CommonRule.Required)
-      case _ =>
-        None
-    },
-    { case CommonRule.Required =>
-      "required"
-    },
-    "common rule")
-
-  given JsonValueCodec[HierarchyLevel] = stringEnum(
-    {
-      case "state" =>
-        Some(HierarchyLevel.State)
-      case "city" =>
-        Some(HierarchyLevel.City)
-      case "municipality" =>
-        Some(HierarchyLevel.Municipality)
-      case "urbanization" =>
-        Some(HierarchyLevel.Urbanization)
-      case _ =>
-        None
-    },
-    {
-      case HierarchyLevel.State =>
-        "state"
-      case HierarchyLevel.City =>
-        "city"
-      case HierarchyLevel.Municipality =>
-        "municipality"
-      case HierarchyLevel.Urbanization =>
-        "urbanization"
-    },
-    "hierarchy level"
-  )
+  given JsonValueCodec[CommonRule] = JsonCodecMaker.make(bareString)
+  given JsonValueCodec[HierarchyLevel] = JsonCodecMaker.make(bareString)
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Rules: `"type"` plus an optional `"value"` whose shape follows the tag
@@ -415,7 +330,7 @@ object jsoniter:
   /** jsoniter omits `None`, empty collections and default values; circe writes them out. Since the
     * point here is to leave the bytes where they are, every one of those is turned off.
     */
-  private[question] inline def verbose = CodecMakerConfig
+  inline def verbose = CodecMakerConfig
     .withTransientNone(false)
     .withTransientEmpty(false)
     .withTransientDefault(false)

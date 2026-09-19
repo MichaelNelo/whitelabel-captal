@@ -213,6 +213,13 @@ trait EndpointsDepsJS extends ScalaJSModule:
 object endpoints extends BaseModule with EndpointsDepsJVM:
   def moduleDeps = Seq(core, infra)
 
+  /** Exists for one reason: the jsoniter codecs claim to reproduce circe's bytes exactly, and that
+    * claim needs somewhere to be checked. The wire types live here, so the check does too.
+    */
+  object test extends ScalaTests with TestModule.Utest with ScalafmtModule with ScalafixModule:
+    def mvnDeps = Seq(mvn"com.lihaoyi::utest:0.8.9", mvn"org.scalacheck::scalacheck:1.18.0")
+    def moduleDeps = super.moduleDeps ++ Seq(core.test)
+
 object `endpoints-js` extends BaseJSModule with EndpointsDepsJS:
   def moduleDeps = Seq(`core-js`)
   def sources = endpoints.sources
