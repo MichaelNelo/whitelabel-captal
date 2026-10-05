@@ -10,6 +10,7 @@ import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
 import McpSchema.given
+import ToolSchema.readOnly
 
 /** Per-location overrides of the two assets a location can replace: its stylesheet and its brand
   * icon.
@@ -38,11 +39,35 @@ object AssetTools:
       @description("The stored SVG document. Absent when there is none.")
       svg: Option[String])
 
+  final case class CssSchemaRequest()
+
+  final case class CssVariable(
+      @description("The custom property, as written — '--color-primary'.")
+      name: String,
+      @description("What the portal uses when a location overrides nothing.")
+      default: String,
+      @description(
+        "What it controls. Empty for a variable the stylesheet declares and nobody has documented yet.")
+      purpose: String)
+
+  final case class CssGroup(
+      @description("The section it belongs to, taken from the stylesheet's own headings.")
+      group: String,
+      @description("Its variables, in the order the stylesheet declares them.")
+      variables: List[CssVariable])
+
+  final case class CssSchemaResponse(
+      @description(
+        "Every section of the stylesheet's `:root` block. A location overrides what it wants on its own `:root`; everything it leaves out keeps the default.")
+      groups: List[CssGroup],
+      @description("How many variables there are in total.")
+      total: Int)
+
   final case class SetStylesRequest(
       @description("Which location to restyle. Only this one changes.")
       slug: String,
       @description(
-        "The full stylesheet. Replaces whatever is there — this is not a patch. Read skill://style-reference/SKILL.md for the variables and class hooks worth overriding.")
+        "The full stylesheet. Replaces whatever is there — this is not a patch. Call get_css_schema for the variables and read_skill('style-reference') for how to use them.")
       css: String)
   final case class SetIconRequest(
       @description("Which location's icon to replace. Only this one changes.")
@@ -59,6 +84,10 @@ object AssetTools:
         "The CloudFront invalidation created, so the change is visible rather than waiting behind the edge cache. 'skipped-no-cdn' when running against a local endpoint, where there is no cache in front.")
       invalidationId: String)
 
+  given Schema[CssSchemaRequest] = DeriveSchema.gen
+  given Schema[CssVariable] = DeriveSchema.gen
+  given Schema[CssGroup] = DeriveSchema.gen
+  given Schema[CssSchemaResponse] = DeriveSchema.gen
   given Schema[GetRequest] = DeriveSchema.gen
   given Schema[GetStylesResponse] = DeriveSchema.gen
   given Schema[GetIconResponse] = DeriveSchema.gen
@@ -120,9 +149,29 @@ object AssetTools:
           ZIO.fail("The SVG carries an event handler attribute. Remove it and try again."))
     yield ()
 
+  /** What there is to theme, as opposed to how. The skill is the how.
+    *
+    * Names, defaults and grouping come from the portal's own stylesheet rather than a list written
+    * here, so a variable that is renamed or dropped cannot keep being recommended. See
+    * [[CssSchema]] — this tool is the door, the derivation is there.
+    */
+  val cssSchema: McpToolHandlerR[Any] = McpTool("get_css_schema")
+    .description(
+      "Every CSS custom property the portal honours, with its default and what it controls, grouped as the stylesheet groups them. Read this before writing a stylesheet with set_location_styles: a location overrides these on `:root`, and a property outside the set is simply never read. Derived from the portal's own stylesheet, so it cannot name a variable that no longer exists.")
+    .readOnly
+    .handle: (_: CssSchemaRequest) =>
+      ZIO.succeed(
+        CssSchemaResponse(
+          groups = CssSchema
+            .groups
+            .map(g =>
+              CssGroup(g.group, g.variables.map(v => CssVariable(v.name, v.default, v.purpose)))),
+          total = CssSchema.all.size))
+
   val getStyles: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("get_location_styles")
     .description(
       "The location's custom stylesheet, or nothing when it has none and is using the base theme.")
+    .readOnly
     .handle: (in: GetRequest) =>
       for
         _     <- requireLocation(in.slug)
@@ -147,6 +196,7 @@ object AssetTools:
   val getIcon: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("get_location_icon")
     .description(
       "The location's brand icon as SVG source, or nothing when it has none and is using the default.")
+    .readOnly
     .handle: (in: GetRequest) =>
       for
         _     <- requireLocation(in.slug)
@@ -165,6 +215,7 @@ object AssetTools:
       yield out
 
   val all: List[McpToolHandlerR[QuillSqlite & AssetStore]] = List(
+    cssSchema,
     getStyles,
     setStyles,
     getIcon,

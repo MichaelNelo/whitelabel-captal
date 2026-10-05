@@ -1,5 +1,6 @@
 package whitelabel.captal.mcp
 
+import com.jamesward.ziohttp.mcp.McpUiUri
 import scalatags.Text.all.*
 import scalatags.Text.tags2.{style as styleTag, title as titleTag}
 
@@ -20,6 +21,11 @@ import scalatags.Text.tags2.{style as styleTag, title as titleTag}
 object UploadUi:
   val Uri: String = "ui://upload-video"
 
+  /** The same URI as the SDK's type, for the places that take one. Validated here, so a typo stops
+    * the server rather than producing a tool nobody can render.
+    */
+  val AppUri: McpUiUri = ToolSchema.uiUri(Uri)
+
   /** The page's behaviour, linked from the `mcpui` Scala.js module and inlined here.
     *
     * It was 145 lines of JavaScript in a string literal. The move is not cosmetic: the two bugs
@@ -38,31 +44,58 @@ object UploadUi:
       try new String(stream.readAllBytes(), "UTF-8")
       finally stream.close()
 
-  /** The page's own styling, kept minimal so the location's stylesheet decides how it looks. The
-    * variables are the ones `style-reference` documents, so a location that themed the portal
-    * themes this too without knowing it exists.
+  /** The page's own styling, kept minimal so the surrounding themes decide how it looks.
+    *
+    * Every colour is a two-step fallback: the location's variable first, then the host's, then a
+    * literal. That order is the whole design. The location's names come from `style-reference`, so
+    * a portal that was themed themes this page too without knowing it exists; the host's come from
+    * Claude's design guidelines, so a page opened for a location with no stylesheet of its own
+    * still belongs to the conversation around it.
+    *
+    * It used to stop at the first step, which looked right only because the literals were light. On
+    * a dark host the page rendered as a white slab: every variable it named was one the host does
+    * not define, so every one fell through to its hardcoded value. A fallback chain that ends in a
+    * colour is not a default — it is a decision to ignore the theme.
     */
   private val baseCss =
     """
-    |body { margin: 0; padding: 2rem; font-family: var(--font-body, system-ui, sans-serif);
-    |       background: var(--color-surface, #fff); color: var(--color-text, #111); }
+    |/* Unpainted on purpose. Every frame the host puts between this page and the conversation is
+    |   already transparent, so leaving the background alone is what lets the chat surface show
+    |   through -- painting one is what made this a white slab inside a dark conversation. A
+    |   location's own stylesheet may still set `--color-surface`, and then it wins. */
+    |html, body { background: var(--color-surface, transparent); }
+    |body { margin: 0; padding: 2rem;
+    |       font-family: var(--font-body, var(--font-sans, system-ui, sans-serif));
+    |       font-size: var(--font-text-md-size, 16px);
+    |       line-height: var(--font-text-md-line-height, 1.4);
+    |       color: var(--color-text, var(--color-text-primary, #111)); }
     |.upload { max-width: 40rem; margin: 0 auto; }
-    |.upload h1 { font-size: 1.25rem; margin: 0 0 .5rem; }
-    |.upload p { margin: 0 0 1.5rem; opacity: .75; font-size: .9rem; }
-    |button { font: inherit; padding: .75rem 1.5rem; border: 0; border-radius: var(--radius-md, .5rem);
-    |         background: var(--color-primary, #2563eb); color: var(--text-inverse, #fff); cursor: pointer; }
+    |.upload h1 { font-size: var(--font-heading-md-size, 1.25rem); margin: 0 0 .5rem; }
+    |.upload p { margin: 0 0 1.5rem; font-size: var(--font-text-sm-size, .9rem);
+    |            color: var(--color-text-secondary, inherit); opacity: var(--secondary-opacity, .75); }
+    |button { font: inherit; padding: .75rem 1.5rem; border: 0;
+    |         border-radius: var(--radius-md, var(--border-radius-md, .5rem));
+    |         font-weight: var(--font-weight-semibold, 600);
+    |         background: var(--color-primary, var(--color-background-inverse, #2563eb));
+    |         color: var(--text-inverse, var(--color-text-inverse, #fff)); cursor: pointer; }
     |button[disabled] { opacity: .6; cursor: default; }
+    |button:focus-visible { outline: 2px solid var(--color-ring-primary, currentColor); outline-offset: 2px; }
     |.track { height: 4px; margin-top: .5rem; border-radius: 2px;
-    |         background: var(--color-border, #e5e7eb); overflow: hidden; }
-    |.track > div { height: 100%; width: 0; background: var(--color-primary, #2563eb); transition: width .2s; }
+    |         background: var(--color-border, var(--color-border-tertiary, #e5e7eb)); overflow: hidden; }
+    |.track > div { height: 100%; width: 0;
+    |               background: var(--color-primary, var(--color-background-inverse, #2563eb));
+    |               transition: width .2s; }
     |""".stripMargin
 
   private val rowCss =
     """
-    |.row { padding: 1rem 0; border-top: 1px solid var(--color-border, #e5e7eb); }
+    |.row { padding: 1rem 0;
+    |       border-top: var(--border-width-regular, 1px) solid
+    |                   var(--color-border, var(--color-border-tertiary, #e5e7eb)); }
     |.row .meta { display: flex; justify-content: space-between; margin-bottom: .5rem; }
-    |.slug { opacity: .6; font-size: .8rem; }
-    |.row .status { margin-top: .5rem; font-size: .8rem; min-height: 1rem; }
+    |.slug { font-size: var(--font-text-xs-size, .8rem); color: var(--color-text-tertiary, inherit); opacity: .6; }
+    |.row .status { margin-top: .5rem; font-size: var(--font-text-xs-size, .8rem);
+    |               color: var(--color-text-secondary, inherit); min-height: 1rem; }
     |.row.hidden { display: none; }
     |input[type=file] { display: none; }
     |""".stripMargin
@@ -99,6 +132,11 @@ object UploadUi:
       html(
         head(
           meta(charset := "utf-8"),
+          // Covers the first paint, before any script runs. A browser gives an iframe document an
+          // opaque canvas — white in light mode — whenever its colour scheme differs from the
+          // embedding page, and that backdrop sits behind everything regardless of what the CSS
+          // says. Declaring both schemes opts this document into whichever one the host is in.
+          meta(name := "color-scheme", content := "light dark"),
           titleTag("Subir video"),
           styleTag(raw(baseCss)),
           styleTag(raw(rowCss)),

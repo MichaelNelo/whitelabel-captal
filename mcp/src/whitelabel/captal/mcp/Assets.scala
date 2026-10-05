@@ -1,7 +1,11 @@
 package whitelabel.captal.mcp
 
-import java.io.ByteArrayOutputStream
-import java.util.zip.GZIPOutputStream
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
+import java.net.URI
+import java.time.Duration as JavaDuration
+import java.util.zip.{GZIPInputStream, GZIPOutputStream}
+
+import scala.util.Try
 
 import software.amazon.awssdk.core.sync.RequestBody
 import software.amazon.awssdk.services.cloudfront.CloudFrontClient
@@ -60,7 +64,7 @@ final case class AssetStore(
     * is close but wrong fails in exactly the same silent way as no declaration at all.
     */
   def uploadOrigin: ZIO[Any, String, String] = presignPut("csp-probe", 1.minute).map: url =>
-    val parsed = java.net.URI.create(url)
+    val parsed = URI.create(url)
     val port =
       if parsed.getPort < 0 then
         ""
@@ -154,15 +158,34 @@ final case class AssetStore(
     */
   def publicUrl(key: String): String = s"${publicBaseUrl.stripSuffix("/")}/$key"
 
-  /** The key behind a stored URL.
+  /** The key behind a stored URL. The inverse of [[publicUrl]], and tested as one.
     *
-    * Taken from the URI path rather than by stripping the configured base, so a row written when
-    * the portal lived on a different domain still resolves.
+    * Two readings, in order. A URL this configuration produced is undone exactly, by removing the
+    * base it was built from — no parsing, no guessing. Anything else falls back to the URI path,
+    * which is what lets a row written when the portal lived on another domain still resolve.
+    *
+    * The fallback has to drop a leading bucket segment, and that is where this went wrong. Against
+    * CloudFront the path is the key, which is what it originally assumed; against a single local
+    * endpoint the addressing is path-style and the bucket is the first segment, so a key came back
+    * as `captal-assets-dev/<slug>/videos/…`. Nothing failed, because that is a perfectly valid key:
+    * the upload went there, `exists` found it there, the video was confirmed, and only the portal's
+    * GET came back 404 — a half-gigabyte object one level deeper than anything will ever look.
+    *
+    * Trying the exact base first is what keeps that repair from creating its own bug: a location
+    * whose slug happened to match the bucket name would otherwise lose its first segment.
     */
-  def keyOf(url: String): String = scala
-    .util
-    .Try(java.net.URI.create(url).getPath.stripPrefix("/"))
-    .getOrElse(url)
+  def keyOf(url: String): String =
+    val base = s"${publicBaseUrl.stripSuffix("/")}/"
+    if url.startsWith(base) then
+      url.stripPrefix(base)
+    else
+      Try:
+        val path = URI.create(url).getPath.stripPrefix("/")
+        if path.startsWith(s"$bucket/") then
+          path.stripPrefix(s"$bucket/")
+        else
+          path
+      .getOrElse(url)
 
   /** A URL the browser can PUT the video to directly.
     *
@@ -184,7 +207,7 @@ final case class AssetStore(
         .presignPutObject(
           PutObjectPresignRequest
             .builder()
-            .signatureDuration(java.time.Duration.ofSeconds(validFor.toSeconds))
+            .signatureDuration(JavaDuration.ofSeconds(validFor.toSeconds))
             .putObjectRequest(request)
             .build())
         .url()
@@ -213,7 +236,7 @@ final case class AssetStore(
     out.toByteArray
 
   private def gunzip(bytes: Array[Byte]): String =
-    val in = new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(bytes))
+    val in = new GZIPInputStream(new ByteArrayInputStream(bytes))
     try new String(in.readAllBytes(), "UTF-8")
     finally in.close()
 end AssetStore
@@ -251,7 +274,7 @@ object AssetStore:
   private[mcp] def s3ClientFor(endpoint: Option[String]): S3Client =
     endpoint match
       case Some(url) =>
-        S3Client.builder().endpointOverride(java.net.URI.create(url)).forcePathStyle(true).build()
+        S3Client.builder().endpointOverride(URI.create(url)).forcePathStyle(true).build()
       case None =>
         S3Client.create()
 
@@ -260,7 +283,7 @@ object AssetStore:
       case Some(url) =>
         S3Presigner
           .builder()
-          .endpointOverride(java.net.URI.create(url))
+          .endpointOverride(URI.create(url))
           // Without this the signed URL names a host the browser cannot resolve, and the failure
           // shows up as a network error at upload time rather than here.
           .serviceConfiguration(

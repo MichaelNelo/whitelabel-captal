@@ -5,7 +5,7 @@
   # env.GREET = "devenv";
 
   # https://devenv.sh/packages/
-  packages = [ pkgs.git pkgs.terraform pkgs.scalafmt pkgs.scalafix ];
+  packages = [ pkgs.git pkgs.terraform pkgs.scalafmt pkgs.scalafix pkgs.cloudflared ];
 
   # https://devenv.sh/languages/
   languages.scala.enable = true;

@@ -36,6 +36,9 @@ object UploadApp:
     Bridge
       .handshake()
       .`then`[Unit]: _ =>
+        // After the handshake, not before: a notification sent to a host that has not acknowledged
+        // the frame has nowhere to land.
+        Bridge.trackSize()
         // Addressed per video the id is in the markup; addressed bare it arrives with the result of
         // the call that opened the page, which is the only channel `_meta.ui.resourceUri` leaves.
         Option(row.getAttribute("data-video")).filter(_.nonEmpty).foreach(start)
@@ -66,17 +69,31 @@ object UploadApp:
     def refresh(): js.Promise[Unit] = read(videoId).`then`[Unit](fresh => ticket = fresh)
     dom.window.setInterval(() => refresh(), math.max(60.0, ticket.expiresInSeconds - 300) * 1000)
 
-    def finish(code: Int): Unit =
+    def finish(code: Int, seconds: Int): Unit =
       if code >= 200 && code < 300 then
         bar.style.width = "100%"
         status.textContent = "Listo. Confirmando…"
-        Bridge
-          .callTool("confirm_video_upload", js.Dynamic.literal(videoId = videoId))
-          .`then`[Unit]: _ =>
-            status.textContent = "Confirmado. El video está en rotación."
-            // A call the page makes is invisible to the model, so the agent would keep waiting on
-            // something already done. This is what puts it in the conversation.
-            Bridge.tellTheModel("Subí el archivo del video " + videoId + " y lo confirmé.")
+        if seconds <= 0 then
+          // The one case the page cannot close by itself. The file is in S3 and the row is still
+          // pending, so nothing is lost — but the duration has to come from somewhere, and the
+          // operator is the only one who knows it. Handing it to the model with the video id is
+          // what lets the conversation finish what the page started.
+          status.textContent = "Subido, pero no pude leer la duración del archivo."
+          Bridge.tellTheModel(
+            "Subí el archivo del video " + videoId +
+              ", pero el navegador no pudo leer su duración. Preguntame cuántos segundos dura y llamá a confirm_video_upload con ese valor.")
+        else
+          Bridge
+            .callTool(
+              "confirm_video_upload",
+              js.Dynamic.literal(videoId = videoId, durationSeconds = seconds))
+            .`then`[Unit]: _ =>
+              status.textContent = "Confirmado: " + seconds + " s. El video está en rotación."
+              // A call the page makes is invisible to the model, so the agent would keep waiting on
+              // something already done. This is what puts it in the conversation.
+              Bridge.tellTheModel(
+                "Subí el archivo del video " + videoId + " (" + seconds + " s) y lo confirmé.")
+        end if
       else
         button.disabled = false
         status.textContent =
@@ -85,7 +102,7 @@ object UploadApp:
           else
             "S3 rechazó la subida (" + code + ")."
 
-    def upload(chosen: dom.File): Unit =
+    def upload(chosen: dom.File, seconds: Int): Unit =
       button.disabled = true
       status.textContent = "Subiendo " + chosen.name + "…"
       put(ticket, chosen, bar).`then`[Unit]: code =>
@@ -93,9 +110,10 @@ object UploadApp:
         // telling the operator to reopen the page.
         if code == 403 then
           status.textContent = "El enlace había expirado; reintentando…"
-          refresh().`then`[Unit](_ => put(ticket, chosen, bar).`then`[Unit](finish))
+          refresh().`then`[Unit](_ =>
+            put(ticket, chosen, bar).`then`[Unit](again => finish(again, seconds)))
         else
-          finish(code)
+          finish(code, seconds)
 
     button.addEventListener("click", (_: dom.Event) => file.click())
     file.addEventListener(
@@ -110,9 +128,52 @@ object UploadApp:
             case Some(why) =>
               status.textContent = why
             case None =>
-              upload(files(0))
+              val chosen = files(0)
+              status.textContent = "Leyendo la duración…"
+              // Measured before the upload rather than after, so the operator sees it next to the
+              // file they just picked. A length that reads wrong here is a wrong file, and that is
+              // worth catching before a hundred megabytes go up.
+              durationOf(chosen).`then`[Unit]: seconds =>
+                if seconds > 0 then
+                  status.textContent = seconds.toString + " s."
+                upload(chosen, seconds)
     )
   end wire
+
+  /** The file's length in whole seconds, or 0 when the browser cannot say.
+    *
+    * Read from the file itself, which is the only place the answer actually lives. It used to be an
+    * argument to `create_advertiser_video`, supplied before any file existed by whoever was
+    * describing the video — and a wrong number there is invisible in the backoffice and visible to
+    * guests as a countdown that ends in the wrong place.
+    *
+    * Rounded down. The survey unlocks at `minWatchSeconds`, which defaults to this, and rounding up
+    * would set it past the end of a video that stops a fraction of a second earlier — a condition
+    * that is never met.
+    *
+    * Zero for the cases the browser genuinely cannot answer: a WebM written as a stream carries no
+    * duration in its header and reports `Infinity`. Reporting that as a number would be worse than
+    * admitting it.
+    */
+  private def durationOf(file: dom.File): js.Promise[Int] =
+    new js.Promise[Int]((resolve, _) =>
+      val probe = dom.document.createElement("video").asInstanceOf[dom.html.Video]
+      val url = dom.URL.createObjectURL(file)
+      def done(seconds: Int): Unit =
+        dom.URL.revokeObjectURL(url)
+        resolve(seconds)
+      probe.preload = "metadata"
+      probe.addEventListener(
+        "loadedmetadata",
+        (_: dom.Event) =>
+          val seconds = probe.duration
+          done(
+            if seconds.isNaN || seconds.isInfinity || seconds <= 0 then
+              0
+            else
+              math.floor(seconds).toInt))
+      probe.addEventListener("error", (_: dom.Event) => done(0))
+      probe.src = url)
 
   /** What the portal can play. The page refuses anything else before uploading; the server checks
     * again at confirm, because the page is not the only thing holding the signed URL.

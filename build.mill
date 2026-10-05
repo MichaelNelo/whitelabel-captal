@@ -136,7 +136,41 @@ private def ensureLocalStack(containerName: String, hostPort: Int, bucket: Strin
   os.proc("docker", "exec", containerName, "awslocal", "s3api", "create-bucket", "--bucket", bucket)
     .call(check = false, stderr = os.Pipe)
 
-  println(s"[localstack] '$containerName' ready on $endpoint, bucket $bucket")
+  // CORS, without which the upload page cannot PUT anything.
+  //
+  // The page sends the file's own `Content-Type`, and `video/mp4` is not one of the three types
+  // CORS treats as safe — so the browser asks permission first with an OPTIONS, and a bucket with
+  // no CORS configuration answers that with a 403. The PUT is never attempted and the failure
+  // arrives after the operator has chosen a file.
+  //
+  // `*` for the origin because the page runs in a sandboxed frame, whose origin is either opaque
+  // (sending `Origin: null`) or a host-generated sandbox domain; naming either one would be
+  // guessing at something that is not ours to pin. This is a local bucket holding test videos.
+  //
+  // The real bucket needs the same configuration and does not get it from here. Until it does,
+  // this works in dev and fails in production — see docs/MCP_IAM.md.
+  val cors =
+    """{"CORSRules":[{"AllowedOrigins":["*"],"AllowedMethods":["PUT","GET","HEAD"],"AllowedHeaders":["*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":3000}]}"""
+  val corsResult = os
+    .proc(
+      "docker",
+      "exec",
+      containerName,
+      "awslocal",
+      "s3api",
+      "put-bucket-cors",
+      "--bucket",
+      bucket,
+      "--cors-configuration",
+      cors)
+    .call(check = false, stderr = os.Pipe)
+  if corsResult.exitCode != 0 then
+    sys.error(
+      s"[localstack] Could not set CORS on '$bucket'; the upload page's PUT would be refused at the preflight: ${corsResult
+          .err
+          .trim()}")
+
+  println(s"[localstack] '$containerName' ready on $endpoint, bucket $bucket (CORS set)")
   endpoint
 end ensureLocalStack
 
@@ -287,24 +321,33 @@ object api extends BaseModule:
     mvn"dev.zio::zio-interop-cats:23.1.0.3"
   )
 
+  // No PROVISION_DIR: the API no longer provisions. Content is written through the MCP backoffice
+  // and read from the database, so a dev server that re-applied a directory on every start would
+  // overwrite whatever was edited since — which is exactly what it used to do.
   override def forkEnv: T[Map[String, String]] = Task:
-    Map(
-      "PROVISION_DIR" -> defaultProvisionDir,
-      "LOCATION_SLUG" -> defaultLocationSlug,
-      "SHARED_DIR"    -> defaultSharedDir) ++ super.forkEnv()
+    Map("LOCATION_SLUG" -> defaultLocationSlug) ++ super.forkEnv()
 
-  // Render index.html from template for local development
+  // Render index.html from template for local development.
+  // CLIENT_LINKER=full points at the bundle Vite processed (fullLinkJS → rollup → terser), which
+  // is what production actually serves; the default `fast` uses fastLinkJS with no post-processing.
   def copyIndex() = Task.Command:
     val root = moduleDir / os.up
+    val jsPath =
+      Task.env.getOrElse("CLIENT_LINKER", "fast") match
+        case "full" =>
+          "/out/client/bundle.dest/main.js"
+        case _ =>
+          "/out/client/fastLinkJS.dest/main.js"
     renderIndex(
       root / "client" / "index.html.template",
       root / "client" / "index.html",
-      jsPath = "/out/client/fastLinkJS.dest/main.js",
+      jsPath = jsPath,
       cssPath = "/assets/styles.css")
 
-  private val devProvisionBase = moduleDir / "resources" / "provision" / "dev"
-  private val defaultProvisionDir = (devProvisionBase / "locations" / "cafe-centro").toString
-  private val defaultSharedDir = (devProvisionBase / "shared").toString
+  // The dev provisioning YAML under `api/resources/provision/dev` is no longer read by anything.
+  // Left on disk rather than deleted here: `ProvisionService`, the `provision` module and the CLI
+  // that writes those files are still present, and removing the data before the code that reads it
+  // would leave a build that compiles and a CLI that cannot run.
   private val defaultLocationSlug = "cafe-centro"
 
   def rqliteSetup() = Task.Command:
@@ -317,27 +360,32 @@ object api extends BaseModule:
   // Compile client before running server
   override def run(args: Task[Args] = Task.Anon(Args())) = Task.Command:
     copyIndex()()
-    client.fastLinkJS()
+    if Task.env.getOrElse("CLIENT_LINKER", "fast") == "full" then
+      client.bundle()
+    else
+      client.fastLinkJS()
     super.run(args)()
 
-  /** Full dev workflow: rqlite + migrations + client + server. Usage: ./mill api.dev ./mill api.dev
-    * --slug basic --dir /path/to/location --shared-dir /path/to/shared
+  /** Full dev workflow: rqlite + migrations + client + server. Usage: ./mill api.dev, or ./mill
+    * api.dev --slug basic to serve another location.
+    *
+    * No longer takes a provisioning directory. The server reads what the backoffice wrote; seeding
+    * a fresh database is `mill mcp.dev` and the tools, not a directory replayed at startup.
     */
-  def dev(
-      slug: String = defaultLocationSlug,
-      dir: String = defaultProvisionDir,
-      sharedDir: String = defaultSharedDir) = Task.Command:
+  def dev(slug: String = defaultLocationSlug) = Task.Command:
     println("[dev] Step 1/3: Ensuring rqlite container...")
     rqliteSetup()()
     println("[dev] Step 2/3: Running migrations...")
     infra.migrate()()
     println(s"[dev] Step 3/3: Starting server (location=$slug)...")
     copyIndex()()
-    client.fastLinkJS()
+    if Task.env.getOrElse("CLIENT_LINKER", "fast") == "full" then
+      client.bundle()
+    else
+      client.fastLinkJS()
     val cp = runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
     val mc = "whitelabel.captal.api.Main"
-    val env =
-      forkEnv() ++ Map("PROVISION_DIR" -> dir, "LOCATION_SLUG" -> slug, "SHARED_DIR" -> sharedDir)
+    val env = forkEnv() ++ Map("LOCATION_SLUG" -> slug)
     os.proc("java", forkArgs(), "-cp", cp, mc)
       .call(env = env, stdin = os.Inherit, stdout = os.Inherit, stderr = os.Inherit)
 
@@ -548,9 +596,23 @@ end cli
 
 object mcpui extends BaseJSModule:
   def mvnDeps = Seq(mvn"org.scala-js::scalajs-dom::2.8.0")
+  def mainClass = Some("whitelabel.captal.mcpui.UploadApp")
+
+/** The second MCP App, linked on its own rather than as another entry point of [[mcpui]].
+  *
+  * Scala.js emits one public module per linker run unless `ModuleKind.ESModule` is on, and Closure
+  * does not run on ESModule output at all — the same trade [[maintenance]] documents. Two runs cost
+  * a second Closure pass and give each page only its own code; one run with two entry points would
+  * cost every page the other's. `moduleDeps` on [[mcpui]] is what keeps `Bridge` shared, so the
+  * host protocol is written once.
+  */
+object `mcpui-unifi` extends BaseJSModule:
+  def moduleDeps = Seq(mcpui)
+  def mainClass = Some("whitelabel.captal.mcpui.unifi.UnifiApp")
 
 object client extends BaseJSModule:
   def moduleDeps = Seq(`core-js`, `endpoints-js`)
+
   /** Two settings the linker defaults leave on the table, and the second is the one that pays.
     *
     * `allowBigIntsForLongs` backs `Long` with the browser's own `BigInt` instead of emulating it
@@ -573,9 +635,9 @@ object client extends BaseJSModule:
     * `js.dynamicImport` outright ("module support is disabled").
     *
     * The cost is the Closure Compiler, which Scala.js runs only for a single module — with more
-    * than one it errors outright under CommonJS and silently skips under ESModule. Losing it is
-    * why the bundling step below exists: esbuild scope-hoists each chunk back into one scope and
-    * terser mangles it, which recovers most of what Closure did.
+    * than one it errors outright under CommonJS and silently skips under ESModule. Losing it is why
+    * the bundling step below exists: esbuild scope-hoists each chunk back into one scope and terser
+    * mangles it, which recovers most of what Closure did.
     */
   def moduleKind = mill.scalajslib.api.ModuleKind.ESModule
   def moduleSplitStyle = mill.scalajslib.api.ModuleSplitStyle.SmallModulesFor("whitelabel.captal")
@@ -649,8 +711,8 @@ object client extends BaseJSModule:
     *
     * Nothing is pre-gzipped, and that is a consequence rather than a preference: a browser loading
     * an ES module imports the chunks by the exact path the linker wrote, so a file cannot be
-    * renamed to `.gz`. CloudFront compresses on the fly instead — its default behaviour already
-    * has `compress = true`, and it does brotli, which beats what was being shipped.
+    * renamed to `.gz`. CloudFront compresses on the fly instead — its default behaviour already has
+    * `compress = true`, and it does brotli, which beats what was being shipped.
     */
   def bundle = Task:
     val linked = fullLinkJS().dest.path
@@ -661,7 +723,10 @@ object client extends BaseJSModule:
     // versioned config beside it, and `node_modules` symlinked from the tool task.
     val project = os.temp.dir(prefix = "captal-vite")
     os.makeDir.all(project / "src")
-    for module <- os.list(linked) if module.ext == "js" do
+    for
+      module <- os.list(linked)
+      if module.ext == "js"
+    do
       os.copy(module, project / "src" / module.last)
     os.copy(viteConfig().path, project / "vite.config.mjs")
     os.symlink(project / "node_modules", jsTools().path / "node_modules")
@@ -669,9 +734,13 @@ object client extends BaseJSModule:
     val built = os
       .proc((project / "node_modules" / ".bin" / "vite").toString, "build")
       .call(cwd = project, check = false, stderr = os.Pipe)
-    if built.exitCode != 0 then sys.error(s"[bundle] vite build failed: ${built.err.trim()}")
+    if built.exitCode != 0 then
+      sys.error(s"[bundle] vite build failed: ${built.err.trim()}")
 
-    for output <- os.list(project / "dist") if output.ext == "js" do
+    for
+      output <- os.list(project / "dist")
+      if output.ext == "js"
+    do
       os.copy(output, dest / output.last)
 
     os.copy(assets / "styles.css", dest / "styles.css")
@@ -736,7 +805,15 @@ object client extends BaseJSModule:
       .filter(os.isFile)
       .map(_.last)
       .sorted
-      .map(name => (name, contentType(name), if name.endsWith(".html") then Revalidate else Day))
+      .map(name =>
+        (
+          name,
+          contentType(name),
+          if name.endsWith(".html") then
+            Revalidate
+          else
+            Day
+        ))
 
     for (name, ctype, cache) <- files do
       val args = Seq(
@@ -774,7 +851,11 @@ end client
 // ─────────────────────────────────────────────────────────────────────────────
 
 object mcp extends BaseModule:
-  def scalaVersion = "3.8.4"
+  // 3.9.0 only because zio-http-mcp is: every release from 0.6.0 on is built with it, so their
+  // TASTy is 28.9 and a 3.8 compiler refuses to read it outright. The dependency on MCP Apps is
+  // what forces the version. Backward compatibility covers the other direction, so `core` and
+  // `infra` stay where they are and this module reads them.
+  def scalaVersion = "3.9.0"
   def moduleDeps = Seq(core, infra)
   // The AWS SDK ships `netty-nio-client` for its *async* clients, and that client pins netty
   // 4.1.x. zio-http is on 4.2.x, where `DefaultHeaders` moved to `netty-codec-base` — so the
@@ -783,7 +864,11 @@ object mcp extends BaseModule:
   // `S3Client`/`CloudFrontClient`/`S3Presigner`, which use `apache-client`, so the async client
   // is dead weight. Excluding it is what keeps the server able to answer at all.
   def mvnDeps = Seq(
-    mvn"com.jamesward::zio-http-mcp:0.5.0",
+    // 0.8.3 rather than 0.5.0 for MCP Apps. `ResourceContents` gained a `_meta` field, which is
+    // where the Apps contract puts the CSP — and without it the upload page's PUT to S3 dies as
+    // `blocked:csp`, with nowhere to declare the bucket's origin. It also brings `McpApps`, which
+    // replaces the `_meta` decorator this repo hand-rolled before the SDK had one.
+    mvn"com.jamesward::zio-http-mcp:0.8.3",
     mvn"software.amazon.awssdk:s3:2.29.51".exclude("software.amazon.awssdk" -> "netty-nio-client"),
     mvn"software.amazon.awssdk:cloudfront:2.29.51".exclude(
       "software.amazon.awssdk" -> "netty-nio-client"),
@@ -797,15 +882,24 @@ object mcp extends BaseModule:
   def skillTemplates: T[PathRef] = Task.Source(
     moduleDir / os.up / "cli" / "resources" / "templates" / "skills")
 
+  /** The portal's own stylesheet, carried so `get_css_schema` derives the variable list from the
+    * file the portal actually reads. A list kept by hand drifts, and the drift is silent: an
+    * operator themes a variable nothing honours any more and sees no change.
+    */
+  def defaultStyles: T[PathRef] = Task.Source(
+    moduleDir / os.up / "client" / "assets" / "styles.css")
+
   def resources: T[Seq[PathRef]] = Task:
     val dest = Task.dest / "skills"
     os.copy(skillTemplates().path, dest, createFolders = true)
     val names = os.list(dest).filter(os.isDir).map(_.last).sorted
     os.write(dest / "index.txt", names.mkString("\n"))
+    os.copy(defaultStyles().path, Task.dest / "default-styles.css")
     // The MCP App's code, linked from `mcpui` and carried as a resource because the page must be
     // self-contained: the iframe's CSP blocks every external host, so the script is inlined into
     // the HTML rather than fetched.
     os.copy(mcpui.fullLinkJS().dest.path / "main.js", Task.dest / "upload-app.js")
+    os.copy(`mcpui-unifi`.fullLinkJS().dest.path / "main.js", Task.dest / "unifi-app.js")
     super.resources() ++ Seq(PathRef(Task.dest))
 
   private val localStackContainer = "localstack-dev"
@@ -856,15 +950,25 @@ object mcp extends BaseModule:
           "DB_URL"           -> dbUrl,
           "MCP_PORT"         -> port.toString,
           "MCP_RESOURCE_URI" -> s"http://localhost:$port/mcp",
-          "MCP_TOKENS"       -> s"$token|dev|i18n:write,content:write",
-          "ASSETS_BUCKET"    -> devBucket,
+          // Seeds the admin row, which holds every scope. Other tokens are issued from it with
+          // `create_token`; a local run only ever needs the one.
+          "MCP_ADMIN_TOKEN" -> token,
+          "ASSETS_BUCKET"   -> devBucket,
           // Never called in this flow — only the asset writes invalidate — but the server refuses to
           // start without it, which is deliberate: in production a missing distribution means writes
           // land and stay invisible.
           "CLOUDFRONT_DISTRIBUTION_ID" -> "E000000000000",
-          "PUBLIC_BASE_URL"            -> s"http://localhost:$port",
-          "AWS_ENDPOINT_URL"           -> endpoint,
-          "AWS_REGION"                 -> "us-east-1",
+          // Where the portal fetches an asset from, which is what gets stored as a video's
+          // `video_url`. In production this is the CloudFront distribution; locally it is the
+          // bucket on LocalStack, path-style.
+          //
+          // It used to be this server's own address, which is a thing no asset is ever served
+          // from: every video created locally was stored with a URL that answers nothing, and the
+          // player would fail on a row that looked perfectly well-formed. The MCP port and the
+          // asset origin have nothing to do with each other.
+          "PUBLIC_BASE_URL"  -> s"$endpoint/$devBucket",
+          "AWS_ENDPOINT_URL" -> endpoint,
+          "AWS_REGION"       -> "us-east-1",
           // LocalStack does not verify signatures; the signer only needs a pair to exist.
           "AWS_ACCESS_KEY_ID"     -> "test",
           "AWS_SECRET_ACCESS_KEY" -> "test"
@@ -874,11 +978,16 @@ object mcp extends BaseModule:
     // arrive through provisioning. `api.dev` seeds `cafe-centro` into this same container on boot,
     // which is the whole reason the two commands share it.
     val seeded =
-      val probe = scala.util.Try:
-        val url = java.net.URI
-          .create(s"http://localhost:$rqliteDevPort/db/query?q=SELECT+COUNT(*)+FROM+locations")
-          .toURL
-        scala.io.Source.fromInputStream(url.openStream()).mkString
+      val probe = scala
+        .util
+        .Try:
+          val url =
+            java
+              .net
+              .URI
+              .create(s"http://localhost:$rqliteDevPort/db/query?q=SELECT+COUNT(*)+FROM+locations")
+              .toURL
+          scala.io.Source.fromInputStream(url.openStream()).mkString
       if probe.toOption.exists(_.contains("[[0]]")) then
         "  No locations in the database yet — run `./mill api.dev` once to seed cafe-centro.\n"
       else
