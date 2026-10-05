@@ -9,22 +9,13 @@ import whitelabel.captal.core.{user, video}
 import whitelabel.captal.infra.*
 import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.schema.{
-  QuillSqlite,
-  castAsReal,
-  castAsRealOpt,
-  nullif,
-  sqliteAbs,
-  sqliteLog,
-  sqliteRandom,
-  strGt
-}
+import whitelabel.captal.infra.schema.{QuillSqlite, castAsReal, castAsRealOpt, nullif, sqliteAbs, sqliteLog, sqliteRandom, strGt}
 import whitelabel.captal.infra.session.SessionContext
 import zio.*
 
 object VideoRepositoryQuill:
 
-  // Helper para seleccionar el texto preferido (locale del usuario > inglés)
+  // Picks the preferred text: the user's locale, falling back to English.
   private def selectPreferredText(
       texts: List[LocalizedTextRow],
       preferredLocale: String): Option[LocalizedText] = texts
@@ -36,28 +27,35 @@ object VideoRepositoryQuill:
     .headOption
     .map(t => LocalizedText(t.value, t.locale))
 
-  // Query DSL para obtener el primer video de propaganda
-  inline def firstPromoQuery = quote:
+  /** The first promo video in rotation order.
+    *
+    * The type arrives as a parameter rather than being written into the quote: `videoType` is the
+    * `VideoType` enum now, and an enum value reaches a query through `lift` — which the
+    * object-level quotes in this file cannot call. Same shape as
+    * `SessionService.pendingExpirationsQuery`, which takes `Phase.Authorized` the same way. The
+    * parameter is always `VideoType.Promo`; the name says so.
+    */
+  inline def firstPromoQuery = quote: (promoParam: VideoType) =>
     query[AdvertiserVideoRow]
-      .filter(v => v.status == "active" && v.videoType == "propaganda")
+      .filter(v => v.status == VideoStatus.Active && v.videoType == promoParam)
       .sortBy(v => (v.priority, v.createdAt))(Ord.asc)
       .take(1)
 
   // Weighted random ad selection — authenticated user (with EXISTS for unanswered surveys)
   inline def nextAdQueryAuthenticated = quote:
-    (userIdParam: user.Id, locationIdParam: Option[String]) =>
+    (userIdParam: user.Id, locationIdParam: Option[String], adParam: VideoType) =>
       val answeredByUser = query[AnswerRow].filter(_.userId == userIdParam).map(_.questionId)
       val advertiserPrioritySum = query[AdvertiserRow].filter(_.isActive == 1).map(_.priority).sum
       query[AdvertiserVideoRow]
         .join(query[AdvertiserRow])
         .on((v, a) => v.advertiserId.contains(a.id) && a.isActive == 1)
         .filter((v, _) =>
-          v.status == "active" && v.videoType == "publicidad" &&
+          v.status == VideoStatus.Active && v.videoType == adParam &&
             locationIdParam.forall(lid => v.locationId.contains(lid)) &&
             query[SurveyRow]
               .filter(s =>
                 s.videoId.exists(_ == sql"${v.id}".as[String]) && s.isActive == 1 &&
-                  s.category == "advertiser")
+                  s.category == SurveyCategory.Advertiser)
               .flatMap(s =>
                 query[QuestionRow].filter(q =>
                   q.surveyId == s.id && q.isActive == 1 && !answeredByUser.contains(q.id)))
@@ -69,7 +67,8 @@ object VideoRepositoryQuill:
                 nullif(
                   castAsRealOpt(
                     query[AdvertiserVideoRow]
-                      .filter(av => av.advertiserId == v.advertiserId && av.status == "active")
+                      .filter(av =>
+                        av.advertiserId == v.advertiserId && av.status == VideoStatus.Active)
                       .map(_.priority)
                       .sum),
                   0.0)
@@ -112,8 +111,9 @@ object VideoRepositoryQuill:
         for
           sessionData <- ctx.getOrFail
           locationId = sessionData.locationId
-          queryResult <- run(nextAdQueryAuthenticated(lift(userId), lift(locationId)))
-          result      <-
+          queryResult <- run(
+            nextAdQueryAuthenticated(lift(userId), lift(locationId), lift(VideoType.Ad)))
+          result <-
             queryResult match
               case Nil =>
                 ZIO.none
@@ -135,11 +135,11 @@ object VideoRepositoryQuill:
                     case Some(currentVideo) =>
                       findNextPromoAfter(currentVideo.priority, currentVideo.createdAt)
                     case None =>
-                      run(firstPromoQuery)
+                      run(firstPromoQuery(lift(VideoType.Promo)))
                 // Fallback to first promo when the cursor walked off the end
                 finalRows <-
                   if candidates.isEmpty then
-                    run(firstPromoQuery)
+                    run(firstPromoQuery(lift(VideoType.Promo)))
                   else
                     ZIO.succeed(candidates)
                 result <-
@@ -152,7 +152,7 @@ object VideoRepositoryQuill:
             program.orDie
 
           case None =>
-            run(firstPromoQuery)
+            run(firstPromoQuery(lift(VideoType.Promo)))
               .flatMap:
                 case Nil =>
                   ZIO.none
@@ -160,12 +160,15 @@ object VideoRepositoryQuill:
                   fetchLocalizedTexts(rows.head, locale).map(Some(_))
               .orDie
 
-      // Helper method con parámetros simples para que Quill pueda parsear lift()
+      // Plain parameters, so Quill can parse the lift() calls.
       private def findNextPromoAfter(
           priority: Int,
           createdAt: String): Task[List[AdvertiserVideoRow]] = run(
         query[AdvertiserVideoRow]
-          .filter(v => v.status == "active" && v.videoType == "propaganda")
+          // `lift` on the status, unlike the quotes above. Quill folds an `inline val` inside a
+          // quoted `inline def` but not inside a `run` written out here — there it reports a
+          // variable originating outside the quote.
+          .filter(v => v.status == lift(VideoStatus.Active) && v.videoType == lift(VideoType.Promo))
           .filter(v =>
             v.priority > lift(priority) ||
               (v.priority == lift(priority) && strGt(v.createdAt, lift(createdAt))))
@@ -194,7 +197,7 @@ object VideoRepositoryQuill:
   private def toAdvertiserVideo(row: AdvertiserVideoRow): AdvertiserVideo = AdvertiserVideo(
     id = row.id,
     advertiserId = row.advertiserId.flatMap(AdvertiserId.fromString),
-    videoType = VideoType.fromDbString(row.videoType),
+    videoType = row.videoType,
     videoUrl = row.videoUrl,
     durationSeconds = row.durationSeconds,
     minWatchSeconds = row.minWatchSeconds,
@@ -209,7 +212,7 @@ object VideoRepositoryQuill:
       description: Option[LocalizedText]): VideoToWatch = VideoToWatch(
     id = row.id,
     advertiserId = row.advertiserId.flatMap(AdvertiserId.fromString),
-    videoType = VideoType.fromDbString(row.videoType),
+    videoType = row.videoType,
     videoUrl = row.videoUrl,
     durationSeconds = row.durationSeconds,
     title = title,

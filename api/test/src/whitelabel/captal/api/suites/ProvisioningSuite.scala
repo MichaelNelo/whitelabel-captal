@@ -4,6 +4,7 @@ import java.nio.file.Paths
 
 import io.getquill.*
 import whitelabel.captal.api.TestFixtures
+import whitelabel.captal.core.video
 import whitelabel.captal.infra.*
 import whitelabel.captal.infra.provision.{IdGenerator, ProvisionService}
 import whitelabel.captal.infra.schema.QuillSqlite
@@ -78,12 +79,12 @@ object ProvisioningSuite:
               videos.exists(v =>
                 v.id.asString == expectedVideoId &&
                   v.videoUrl == "https://cdn.example.com/acme-intro.mp4" &&
-                  v.durationSeconds == 15 && v.videoType == "publicidad" &&
+                  v.durationSeconds == 15 && v.videoType == video.VideoType.Ad &&
                   v.locationId.contains(locationId)),
               videos.exists(v =>
                 v.id.asString == expectedPromoId &&
                   v.videoUrl == "https://cdn.example.com/promo-welcome.mp4" &&
-                  v.videoType == "propaganda"),
+                  v.videoType == video.VideoType.Promo),
               // Surveys: 1 global email + 1 video survey
               surveys.size == 2,
               surveys.exists(s =>

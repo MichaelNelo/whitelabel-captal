@@ -1,5 +1,6 @@
 package whitelabel.captal.infra.provision
 import io.getquill.*
+import whitelabel.captal.core.video.VideoType
 import whitelabel.captal.infra.*
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.core.given
@@ -70,7 +71,7 @@ object EntityWriter:
   def upsertVideo(quill: QuillSqlite)(
       id: String,
       advertiserId: Option[String],
-      videoType: String,
+      videoType: VideoType,
       videoUrl: String,
       durationSeconds: Int,
       minWatchSeconds: Int,

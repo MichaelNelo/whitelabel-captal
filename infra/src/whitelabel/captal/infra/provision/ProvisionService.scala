@@ -3,6 +3,8 @@ package whitelabel.captal.infra.provision
 import java.nio.file.{Files, Path, Paths}
 
 import io.circe.yaml.parser as yamlParser
+import whitelabel.captal.core.video.VideoType
+import whitelabel.captal.infra.SurveyCategory
 import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
 
@@ -293,7 +295,7 @@ object ProvisionService:
         EntityWriter.upsertVideo(quill)(
           videoId,
           Some(advertiserId),
-          "publicidad",
+          VideoType.Ad,
           yaml.url,
           yaml.duration,
           yaml.minWatch,
@@ -338,7 +340,7 @@ object ProvisionService:
       _ <-
         EntityWriter.upsertSurvey(quill)(
           surveyId,
-          "advertiser",
+          SurveyCategory.Advertiser,
           Some(advertiserId),
           Some(videoId),
           Some(locationId),
@@ -366,7 +368,7 @@ object ProvisionService:
         EntityWriter.upsertVideo(quill)(
           videoId,
           None,
-          "propaganda",
+          VideoType.Promo,
           yaml.url,
           yaml.duration,
           yaml.minWatch,
