@@ -11,7 +11,7 @@ CREATE TABLE advertisers (
 CREATE INDEX idx_advertisers_priority ON advertisers(priority);
 CREATE INDEX idx_advertisers_active ON advertisers(is_active);
 
--- Tabla principal de videos
+-- The videos themselves.
 CREATE TABLE advertiser_videos (
     id TEXT PRIMARY KEY,
     advertiser_id TEXT REFERENCES advertisers(id),
@@ -47,6 +47,6 @@ CREATE INDEX idx_video_views_session ON video_views(session_id);
 CREATE INDEX idx_video_views_user ON video_views(user_id);
 CREATE INDEX idx_video_views_user_video ON video_views(user_id, video_id);
 
--- Agregar campos para videos en sessions
+-- The session's video cursors: what is playing, and what the promo rotation last served.
 ALTER TABLE sessions ADD COLUMN current_video_id TEXT REFERENCES advertiser_videos(id);
 ALTER TABLE sessions ADD COLUMN last_propaganda_video_id TEXT REFERENCES advertiser_videos(id);

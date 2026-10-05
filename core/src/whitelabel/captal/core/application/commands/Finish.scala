@@ -13,15 +13,15 @@ import whitelabel.captal.core.user.ops.finish
 
 final case class FinishCommand(occurredAt: Instant)
 
-/** Retry pattern (gratis):
-  *   - `session.phase` sólo pasa Ready → Authorized cuando `UnifiAccessHandler` confirma con el
-  *     Controller.
-  *   - Si UniFi falla / no está configurado, `session.phase` queda en Ready.
-  *   - Una nueva llamada a `/api/finish` vuelve a encontrar el user (mismo `findReadyUser`),
-  *     re-corre `finish`, re-emite `UserFinishedProcess` y el handler post-commit reintenta.
+/** Retries come for free:
+  *   - `session.phase` moves Ready → Authorized only once `UnifiAccessHandler` has confirmation
+  *     from the Controller.
+  *   - If UniFi fails, or is not configured, `session.phase` stays at Ready.
+  *   - A fresh call to `/api/finish` finds the user again through the same `findReadyUser`, re-runs
+  *     `finish`, re-emits `UserFinishedProcess`, and the post-commit handler tries once more.
   *
-  * Una vez que UniFi succeed → phase=Authorized → `findReadyUser` devuelve None → fail con
-  * `UserNotIdentified` (que el cliente interpreta como "ya estás autorizado").
+  * Once UniFi succeeds, phase=Authorized, `findReadyUser` returns None and this fails with
+  * `UserNotIdentified` — which the client reads as "you are already authorized".
   */
 object FinishHandler:
   def apply[F[_]: Monad](userRepo: UserRepository[F]): Handler.Aux[F, FinishCommand, Unit] =
