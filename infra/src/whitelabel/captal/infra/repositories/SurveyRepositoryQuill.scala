@@ -28,7 +28,7 @@ object SurveyRepositoryQuill:
       questionPlaceholder: Option[LocalizedTextRow],
       optionText: Option[LocalizedTextRow])
 
-  // Helper para seleccionar el texto preferido (locale del usuario > inglés)
+  // Picks the preferred text: the user's locale, falling back to English.
   private def selectPreferredText(
       texts: List[LocalizedTextRow],
       preferredLocale: String): Option[LocalizedText] = texts
@@ -40,7 +40,7 @@ object SurveyRepositoryQuill:
     .headOption
     .map(t => LocalizedText(t.value, t.locale))
 
-  // Query con JOINs para textos localizados.
+  // The query, joining in the localized texts.
   //
   // Every child of the question filters on is_active too. Deactivating an option, a rule or a
   // translation has to remove it from the portal, not just from a backoffice listing.
@@ -65,7 +65,7 @@ object SurveyRepositoryQuill:
           .filter(lt => lt.entityId == questionIdStr && lt.isActive == 1)
           .filter(lt => lt.locale == localeParam || lt.locale == "en")
           .leftJoin(_ => true)
-        // JOIN para descripción de pregunta
+        // Joins the question's description.
         questionDesc <- query[LocalizedTextRow]
           .filter(lt => lt.entityId == questionDescIdStr && lt.isActive == 1)
           .filter(lt => lt.locale == localeParam || lt.locale == "en")
@@ -75,7 +75,7 @@ object SurveyRepositoryQuill:
           .filter(lt => lt.entityId == questionPlaceholderIdStr && lt.isActive == 1)
           .filter(lt => lt.locale == localeParam || lt.locale == "en")
           .leftJoin(_ => true)
-        // JOIN para texto de opción - comparamos String con String directamente
+        // Joins the option's text, comparing String against String directly.
         // El MappedEncoding convierte OptionId a String automáticamente
         optionText <- query[LocalizedTextRow].leftJoin(lt =>
           lt.isActive == 1 && optionRow.exists(opt => lt.entityId == sql"${opt.id}".as[String]) &&
@@ -92,7 +92,7 @@ object SurveyRepositoryQuill:
 
   inline def firstEmailSurveyQuery = quote:
     query[SurveyRow]
-      .filter(s => s.isActive == 1 && s.category == "email")
+      .filter(s => s.isActive == 1 && s.category == SurveyCategory.Email)
       .join(query[QuestionRow].filter(_.isActive == 1))
       .on((s, q) => s.id == q.surveyId)
       .sortBy((_, q) => q.displayOrder)(using Ord.asc)
@@ -108,7 +108,7 @@ object SurveyRepositoryQuill:
     // Check if all questions in each category are answered (pool exhausted)
     val hasExhaustedProfiling =
       query[SurveyRow]
-        .filter(s => s.isActive == 1 && s.category == "profiling")
+        .filter(s => s.isActive == 1 && s.category == SurveyCategory.Profiling)
         .join(query[QuestionRow].filter(_.isActive == 1))
         .on((s, q) => s.id == q.surveyId)
         .filter((_, q) => !answeredQuestionIds.contains(q.id))
@@ -116,7 +116,7 @@ object SurveyRepositoryQuill:
 
     val hasExhaustedLocation =
       query[SurveyRow]
-        .filter(s => s.isActive == 1 && s.category == "location")
+        .filter(s => s.isActive == 1 && s.category == SurveyCategory.Location)
         .join(query[QuestionRow].filter(_.isActive == 1))
         .on((s, q) => s.id == q.surveyId)
         .filter((_, q) => !answeredQuestionIds.contains(q.id))
@@ -125,11 +125,12 @@ object SurveyRepositoryQuill:
     query[SurveyRow]
       .filter: surveyRow =>
         surveyRow.isActive == 1 && (
-          (surveyRow.category == "email" && !hasEmail) ||
-            (surveyRow.category == "profiling" && hasEmail && !hasExhaustedProfiling) || (
-              surveyRow.category == "location" && hasEmail && hasExhaustedProfiling &&
-                !hasExhaustedLocation
-            )
+          (surveyRow.category == SurveyCategory.Email && !hasEmail) || (
+            surveyRow.category == SurveyCategory.Profiling && hasEmail && !hasExhaustedProfiling
+          ) || (
+            surveyRow.category == SurveyCategory.Location && hasEmail && hasExhaustedProfiling &&
+              !hasExhaustedLocation
+          )
         )
       .join(query[QuestionRow].filter(_.isActive == 1))
       .on: (surveyRow, questionRow) =>
@@ -138,11 +139,18 @@ object SurveyRepositoryQuill:
       .map((surveyRow, questionRow) =>
         NextIdentificationSurveyRow(surveyRow.id, questionRow.id, surveyRow.category))
 
+  /** The next unanswered question of the survey that follows one video.
+    *
+    * Scoped by `video_id` alone. It used to also require `category = 'advertiser'`, which is
+    * redundant — only a video survey carries a `video_id`, and the three identification categories
+    * are created with none — and wrong, because it reads as though the video's *type* decided
+    * whether its survey is reachable. A promo's survey is a survey like any other; what makes this
+    * query the right one is the video, not who the video belongs to.
+    */
   inline def nextAdvertiserSurveyQuery = quote: (videoIdParam: String, userIdParam: user.Id) =>
     val answeredByUser = query[AnswerRow].filter(_.userId == userIdParam).map(_.questionId)
     query[SurveyRow]
-      .filter(s =>
-        s.isActive == 1 && s.category == "advertiser" && s.videoId.contains(videoIdParam))
+      .filter(s => s.isActive == 1 && s.videoId.contains(videoIdParam))
       .join(query[QuestionRow].filter(_.isActive == 1))
       .on((s, q) => s.id == q.surveyId)
       .filter((_, q) => !answeredByUser.contains(q.id))
@@ -159,8 +167,10 @@ object SurveyRepositoryQuill:
           case Some(sessionData) =>
             sessionData.currentQuestion match
               case Some(question) =>
-                findQuestionWithCategory(question.surveyId, question.questionId, "email")(
-                  State.WithEmailQuestion.apply)
+                findQuestionWithCategory(
+                  question.surveyId,
+                  question.questionId,
+                  SurveyCategory.Email)(State.WithEmailQuestion.apply)
               case None =>
                 ZIO.none
           case None =>
@@ -169,7 +179,7 @@ object SurveyRepositoryQuill:
       def findWithProfilingQuestion(
           surveyId: survey.Id,
           questionId: survey.question.Id): Task[Option[Survey[State.WithProfilingQuestion]]] =
-        findQuestionWithCategory(surveyId, questionId, "profiling")(
+        findQuestionWithCategory(surveyId, questionId, SurveyCategory.Profiling)(
           State.WithProfilingQuestion.apply)
 
       def findWithLocationQuestion(
@@ -191,7 +201,7 @@ object SurveyRepositoryQuill:
             val result: Option[Survey[State.WithLocationQuestion]] =
               for
                 first <- rows.headOption
-                if first.survey.category == "location"
+                if first.survey.category == SurveyCategory.Location
                 question <- buildQuestionToAnswer(first.question, rows, sessionData.locale)
                 hierarchyLevel = first
                   .question
@@ -221,10 +231,15 @@ object SurveyRepositoryQuill:
             val result: Option[Survey[State.WithAdvertiserQuestion]] =
               for
                 first <- rows.headOption
-                if first.survey.category == "advertiser"
-                question     <- buildQuestionToAnswer(first.question, rows, sessionData.locale)
-                advertiserId <- first.survey.advertiserId.flatMap(survey.AdvertiserId.fromString)
-              yield Survey(surveyId, State.WithAdvertiserQuestion(advertiserId, question))
+                // Carrying a video is what makes this a video survey — the same condition
+                // `nextAdvertiserSurveyQuery` selects on. Checking the category instead would let
+                // the two disagree: a survey offered by that query and refused here answers
+                // nothing and reports no reason.
+                if first.survey.videoId.isDefined
+                question <- buildQuestionToAnswer(first.question, rows, sessionData.locale)
+              yield Survey(
+                surveyId,
+                State.WithAdvertiserQuestion(advertiserIdOf(first.survey), question))
             result
         ).orDie
 
@@ -258,10 +273,9 @@ object SurveyRepositoryQuill:
               lift(sessionData.locale)))
         yield
           for
-            first        <- rows.headOption
-            question     <- buildQuestionToAnswer(first.question, rows, sessionData.locale)
-            advertiserId <- first.survey.advertiserId.flatMap(survey.AdvertiserId.fromString)
-          yield NextAdvertiserSurvey(row.surveyId, advertiserId, question)
+            first    <- rows.headOption
+            question <- buildQuestionToAnswer(first.question, rows, sessionData.locale)
+          yield NextAdvertiserSurvey(row.surveyId, advertiserIdOf(first.survey), question)
 
       def findNextIdentificationSurvey(): Task[Option[NextIdentificationSurvey]] = ctx
         .get
@@ -343,7 +357,7 @@ object SurveyRepositoryQuill:
       questionRow: QuestionRow,
       rows: List[QuestionWithDetails],
       locale: String): Option[QuestionToAnswer] =
-    // Obtener textos de pregunta (preferir locale del usuario)
+    // Fetch the question's texts, preferring the user's locale.
     val questionTexts = rows.flatMap(_.questionText).distinctBy(_.id)
     val questionDescs = rows.flatMap(_.questionDesc).distinctBy(_.id)
     val questionPlaceholders = rows.flatMap(_.questionPlaceholder).distinctBy(_.id)
@@ -417,6 +431,19 @@ object SurveyRepositoryQuill:
   private def decodeRules[R: circe.Decoder](rules: List[QuestionRuleRow]): List[R] = rules.flatMap(
     r => decode[R](r.ruleConfig).toOption)
 
+  /** Who the video belonged to, when it belonged to anyone.
+    *
+    * Absent for a promo, and absent for every survey written through the MCP backoffice before it
+    * started copying the video's advertiser onto the survey. Both read the same way here, which is
+    * the point: the question is still asked, and the answer is simply attributed to nobody.
+    *
+    * This used to be bound inside the `Option` comprehensions above, so an absent advertiser threw
+    * away the question along with it.
+    */
+  private def advertiserIdOf(row: SurveyRow): Option[survey.AdvertiserId] = row
+    .advertiserId
+    .flatMap(survey.AdvertiserId.fromString)
+
   private def parseHierarchyLevel(level: String): Option[HierarchyLevel] =
     decode[HierarchyLevel](s"\"$level\"").toOption
 
@@ -425,12 +452,17 @@ object SurveyRepositoryQuill:
       question: QuestionToAnswer): NextIdentificationSurvey =
     val surveyType =
       row.category match
-        case "email" =>
+        case SurveyCategory.Email =>
           IdentificationSurveyType.Email
-        case "profiling" =>
+        case SurveyCategory.Profiling =>
           IdentificationSurveyType.Profiling
-        case "location" =>
+        case SurveyCategory.Location =>
           IdentificationSurveyType.Location
+        // Only the two identification queries feed this, and both filter by category, so nothing
+        // else can arrive. Named rather than left to a MatchError so the reason is in the message.
+        case other =>
+          throw new IllegalStateException(
+            s"'$other' is not an identification category. Only the email, profiling and location surveys reach this conversion.")
 
     NextIdentificationSurvey(row.surveyId, surveyType, question)
 

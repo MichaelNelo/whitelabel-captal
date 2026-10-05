@@ -8,8 +8,13 @@ enum State:
   case WithEmail(email: Email)
   case AnsweringQuestion(surveyId: survey.Id, questionId: survey.question.Id)
   case WatchingVideo(videoId: video.Id)
+
+  /** `advertiserId` is optional for the reason [[survey.State.WithAdvertiserQuestion]] records: a
+    * promo's survey has no advertiser, and requiring one here meant
+    * `UserRepositoryQuill.findAnsweringVideoSurvey` could not rebuild the state to answer it.
+    */
   case AnsweringVideoSurvey(
-      advertiserId: survey.AdvertiserId,
+      advertiserId: Option[survey.AdvertiserId],
       surveyId: survey.Id,
       questionId: survey.question.Id)
   case Ready(
@@ -20,3 +25,4 @@ enum State:
       redirectUrl: String,
       watchedVideoId: Option[video.Id],
       answeredQuestionIds: List[FullyQualifiedQuestionId])
+end State

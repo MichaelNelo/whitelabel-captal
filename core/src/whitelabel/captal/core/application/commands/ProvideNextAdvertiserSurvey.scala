@@ -17,9 +17,12 @@ import whitelabel.captal.core.{Op as CoreOp, survey, video}
 
 final case class ProvideNextAdvertiserSurveyCommand(videoId: video.Id, occurredAt: Instant)
 
+/** `advertiserId` is absent when the video was a promo. The portal renders the question and does
+  * not read it; it travels in the response because this type is shared with the client.
+  */
 final case class NextAdvertiserSurvey(
     surveyId: survey.Id,
-    advertiserId: survey.AdvertiserId,
+    advertiserId: Option[survey.AdvertiserId],
     question: QuestionToAnswer)
 
 object NextAdvertiserSurvey:

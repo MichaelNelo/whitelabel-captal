@@ -25,10 +25,14 @@ enum Event:
       hierarchyLevel: HierarchyLevel,
       answer: QuestionAnswer,
       occurredAt: Instant)
+
+  /** An answer to a question that followed a video. `advertiserId` is absent when that video was a
+    * promo — the venue's own content, which has no advertiser to attribute the answer to.
+    */
   case AdvertiserQuestionAnswered(
       userId: user.Id,
       surveyId: survey.Id,
-      advertiserId: AdvertiserId,
+      advertiserId: Option[AdvertiserId],
       questionId: Id,
       answer: QuestionAnswer,
       occurredAt: Instant)

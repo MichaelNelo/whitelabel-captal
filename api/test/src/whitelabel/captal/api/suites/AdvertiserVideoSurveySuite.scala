@@ -35,9 +35,61 @@ object AdvertiserVideoSurveySuite:
           yield assertTrue(
             surveyResp.code.isSuccess,
             q1.isDefined,
-            q1.get.advertiserId.asString == fixture.advertiserId,
+            q1.get.advertiserId.map(_.asString).contains(fixture.advertiserId),
             answerResp.code.isSuccess,
             isStep, // one question answered → Step(Ready)
+            dbState.sessions.exists(_.phase == Phase.Ready)
+          )
+        ,
+        // The same cycle over a promo, which is the venue's own video and has no advertiser.
+        //
+        // This was broken in three independent places, each of which failed by returning a
+        // successful response carrying no survey — so the guest watched the promo and went
+        // straight to Ready, and nothing anywhere said a question had been skipped:
+        //
+        //   - `nextAdvertiserSurveyQuery` filtered on `category = 'advertiser'` as well as on the
+        //     video, reading as though the video's type decided whether its survey was reachable.
+        //   - `fetchAdvertiserQuestionDetails` bound `survey.advertiser_id` inside an Option
+        //     comprehension, so no advertiser threw away the question with it.
+        //   - `findAnsweringVideoSurvey` required `sessions.current_advertiser_id` to be set
+        //     before it would rebuild the state needed to answer.
+        //
+        // Hence asserting the answer too, not just that the question was served: the second and
+        // third failures are on different sides of the response.
+        test("a promo's survey is served and answered, with no advertiser to attribute it to"):
+          for
+            _       <- TestFixtures.seedEmailSurvey
+            fixture <- TestFixtures.seedAdvertiserWithVideoAndSurvey(
+              questionCount = 1,
+              promo = true,
+              videoTitle = "House Promo")
+            backend <- testBackend
+            cookie  <- createSession(backend)
+            _       <- getNextSurvey(backend, cookie)
+            _       <- postEmailAnswer(backend, cookie, "promo-survey@example.com")
+            // No advertiser exists, so the ad selection finds nothing and the promo is served.
+            videoResp  <- getNextVideo(backend, cookie)
+            _          <- postMarkVideoWatched(backend, cookie, 10, completed = true)
+            surveyResp <- getNextAdvertiserSurvey(backend, cookie)
+            question = parseNextAdvertiserSurvey(surveyResp.body)
+            answerResp <- postAdvertiserAnswer(
+              backend,
+              cookie,
+              fixture.optionIds.head.head.asString)
+            dbState <- TestFixtures.queryDbState
+          yield assertTrue(
+            videoResp.code.isSuccess,
+            surveyResp.code.isSuccess,
+            // The question itself, not merely a 200. The old behaviour was a 200 with a NextStep.
+            question.isDefined,
+            question.map(_.question.id).contains(fixture.questionIds.head),
+            // Empty rather than invented. A promo belongs to the venue, so there is nobody to
+            // attribute the answer to, and the response says so instead of omitting the survey.
+            question.exists(_.advertiserId.isEmpty),
+            answerResp.code.isSuccess,
+            // And the answer was stored. Without this the assertions above would pass against a
+            // path that serves the question and then refuses it.
+            dbState.answers.exists(_.questionId == fixture.questionIds.head),
             dbState.sessions.exists(_.phase == Phase.Ready)
           )
         ,

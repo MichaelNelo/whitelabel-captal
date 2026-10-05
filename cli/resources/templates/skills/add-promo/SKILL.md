@@ -40,6 +40,13 @@ captal video add-promo <location-slug> /path/to/video.mp4
 3. Deploy: `captal locations push <location-slug>`
 
 ## Notes
-- Promo videos have no advertiser and no surveys
+- Promo videos have no advertiser: they belong to the venue itself.
+- **A promo may have a survey.** This file said otherwise, and that was wrong — a promo's survey is
+  served and answered by exactly the same path as an advertiser's. What differs is the *selection*:
+  an advertiser's video is only drawn while its survey still has a question this guest has not
+  answered, so one with nothing left to ask is never shown at all. A promo is shown either way.
+  That is why `create_advertiser_video` requires questions and `create_promo_video` takes them
+  optionally — pass them to create the survey with the video, or call `create_survey` with the
+  promo's id afterwards.
 - They are typically shown with lower priority than advertiser videos
 - The filename (without .yaml) becomes the promo slug

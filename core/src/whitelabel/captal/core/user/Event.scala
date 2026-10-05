@@ -20,9 +20,13 @@ enum Event:
       advertiserId: Option[AdvertiserId],
       videoType: video.VideoType,
       occurredAt: Instant)
+
+  /** `advertiserId` is optional, matching [[VideoAssigned]] directly above — the video it follows
+    * may be a promo, which belongs to the venue rather than to an advertiser.
+    */
   case VideoSurveyAssigned(
       userId: Id,
-      advertiserId: AdvertiserId,
+      advertiserId: Option[AdvertiserId],
       nextQuestion: FullyQualifiedQuestionId,
       occurredAt: Instant)
   case UserFinishedProcess(

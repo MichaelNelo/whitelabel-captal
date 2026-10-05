@@ -131,8 +131,8 @@ object SoftDeleteSuite:
             _          <- postMarkVideoWatched(backend, cookie, 15, completed = true)
             surveyResp <- getNextAdvertiserSurvey(backend, cookie)
             parsed   = parseNextAdvertiserSurvey(surveyResp.body)
-            expected = fixtures.map(f => (f.advertiserId, f.surveyId, f.questionIds(2)))
-            served   = parsed.map(p => (p.advertiserId.asString, p.surveyId, p.question.id))
+            expected = fixtures.map(f => (Some(f.advertiserId), f.surveyId, f.questionIds(2)))
+            served   = parsed.map(p => (p.advertiserId.map(_.asString), p.surveyId, p.question.id))
           yield assertTrue(
             surveyResp.code.isSuccess,
             // This is the assertion that pins the join filter. Without it the query orders by
