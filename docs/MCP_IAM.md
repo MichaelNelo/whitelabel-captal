@@ -56,7 +56,7 @@ loudly on a missing object rather than quietly finding a neighbour's.
 | `CLOUDFRONT_DISTRIBUTION_ID` | Distribution to invalidate |
 | `PUBLIC_BASE_URL` | Origin the portal serves assets from; stored in each video row as its playable URL |
 | `DB_URL` | rqlite endpoint |
-| `MCP_TOKENS` | Operator tokens, `secret\|name\|scope,scope;…` |
+| `MCP_ADMIN_TOKEN` | Seeds the admin row on startup, which holds every scope. Every other token is issued from it with `create_token` and stored hashed in `mcp_tokens`; nothing else reads this. Rotating it and restarting replaces the credential in place. |
 | `MCP_RESOURCE_URI` | The URI this deployment declares itself to be, for RFC 8707 audience binding |
 | `MCP_PORT` | Defaults to 8081 |
 

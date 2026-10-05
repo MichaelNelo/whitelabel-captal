@@ -1,110 +1,136 @@
 package whitelabel.captal.mcp
 
-import com.jamesward.ziohttp.mcp.auth.{AuthError, OauthScope}
+import com.jamesward.ziohttp.mcp.auth.{AuthError, OauthScope, ResourceUri}
+import com.typesafe.config.ConfigFactory
+import io.getquill.*
+import io.getquill.jdbczio.Quill
+import whitelabel.captal.infra.schema.QuillSqlite
+import whitelabel.captal.infra.{Migrate, RqliteDataSource}
+import zio.*
 import zio.test.*
 
+import Tokens.given
+
+/** Authentication against the tokens table.
+  *
+  * What these pin is the part that fails open if it is wrong: that the secret is never stored, that
+  * a revoked token stops working without waiting for a reconnect, and that a principal carries the
+  * token's id rather than a name — [[UiTicket]] keys a page's write on that id, so a principal that
+  * carried something else would sign tickets nobody could verify.
+  */
 object AuthSpec extends ZIOSpecDefault:
-  private val testAudience = com
-    .jamesward
-    .ziohttp
-    .mcp
-    .auth
-    .ResourceUri
-    .unsafe("https://mcp.test/mcp")
-  private val Spec = "s3cret|alice|i18n:write,content:write;other|bob|i18n:write"
+  private val audience = ResourceUri.unsafe("https://mcp.test/mcp")
+
+  /** Through [[Migrate]] rather than a Flyway built here, which is not a shortcut.
+    *
+    * rqlite reports a rejected statement inside an HTTP 200 and the driver turns that into zero
+    * rows, so DDL run without `Migrate`'s DataSource wrapper silently does nothing — and Flyway
+    * records it as applied. That is not hypothetical: writing this spec against a hand-rolled
+    * Flyway produced a history row saying `mcp_tokens` existed, and a database where it did not.
+    *
+    * Both histories, separately, exactly as the two services do it: the API owns the portal's
+    * schema and this server owns only `mcp_tokens`.
+    */
+  private val migrate: Task[Unit] =
+    ZIO
+      .attempt(ConfigFactory.load().getString("database.jdbcUrl"))
+      .flatMap: url =>
+        Migrate.migrateTo(url, "db/migration", "flyway_schema_history") *>
+          Migrate.migrateTo(url, "db/migration-mcp", "flyway_schema_history_mcp")
+      .unit
+
+  private def clear: ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.*
+    quill
+      .run(query[Tokens.Row])
+      .flatMap: owned =>
+        ZIO.foreachDiscard(owned.filter(_.name.startsWith("spec-")).map(_.id)): id =>
+          quill.run(query[Tokens.Row].filter(_.id == lift(id)).delete)
+
+  private def issue(name: String, scopes: Set[OauthScope]) = Tokens
+    .create(name, scopes, "admin")
+    .orDieWith(new RuntimeException(_))
 
   def spec =
-    suite("Auth")(
-      suite("parsing")(
-        test("reads operators and their scopes"):
-          val parsed = Auth.parse(Spec)
-          assertTrue(
-            parsed.isRight,
-            parsed.toOption.get.map(_._2.name) == List("alice", "bob"),
-            parsed.toOption.get.head._2.scopes ==
-              Set(OauthScope("i18n:write"), OauthScope("content:write")),
-            parsed.toOption.get(1)._2.scopes == Set(OauthScope("i18n:write"))
-          )
-        ,
-        test("an operator with no scopes is allowed and gets none"):
-          val parsed = Auth.parse("tok|reader|")
-          assertTrue(parsed.isRight, parsed.toOption.get.head._2.scopes.isEmpty)
-        ,
-        test("a malformed entry fails rather than being skipped"):
-          // A dropped entry would look exactly like a revoked operator.
-          assertTrue(Auth.parse("s3cret|alice").isLeft, Auth.parse("").isLeft)
-        ,
-        test("reusing one secret for two operators is refused"):
-          assertTrue(Auth.parse("same|alice|;same|bob|").isLeft)
-      ),
-      suite("verification")(
-        test("a known token yields a principal carrying its scopes"):
-          val operators = Auth.parse(Spec).toOption.get
-          for principal <- Auth.verifier(operators, testAudience).verify("s3cret")
-          yield assertTrue(
-            principal.subject.contains("alice"),
-            principal.hasScope(OauthScope("content:write")))
-        ,
-        test("bob cannot reach content:write"):
-          val operators = Auth.parse(Spec).toOption.get
-          for principal <- Auth.verifier(operators, testAudience).verify("other")
-          yield assertTrue(
-            principal.hasScope(OauthScope("i18n:write")),
-            !principal.hasScope(OauthScope("content:write")))
-        ,
-        test("an unknown token is rejected without saying why"):
-          val operators = Auth.parse(Spec).toOption.get
-          for result <- Auth.verifier(operators, testAudience).verify("guess").either
-          yield assertTrue(
-            result.isLeft,
-            result
-              .left
-              .toOption
-              .exists {
-                case AuthError.Invalid(reason) =>
-                  // Must not hint at which operator or how close the guess was.
-                  !reason.contains("alice") && !reason.contains("s3cret")
-                case _ =>
-                  false
-              }
-          )
-        ,
-        test("a token that is a prefix of a real one is rejected"):
-          val operators = Auth.parse(Spec).toOption.get
-          for result <- Auth.verifier(operators, testAudience).verify("s3cre").either
-          yield assertTrue(result.isLeft)
-      ),
-      suite("scopes on tools")(
-        test("every write tool declares a scope and every read tool declares none"):
-          val writes = List(
-            I18nTools.setTranslations,
-            I18nTools.removeTranslation,
-            AdvertiserTools.create,
-            AdvertiserTools.update,
-            AdvertiserTools.setActive,
-            SurveyTools.createSurvey,
-            SurveyTools.createQuestion,
-            SurveyTools.setQuestionActive,
-            SurveyTools.reorder
-          )
-          val reads = List(
-            I18nTools.status,
-            AdvertiserTools.list,
-            SurveyTools.list,
-            SurveyTools.get)
-          assertTrue(
-            writes.forall(_.requiredScopes.nonEmpty),
-            // A read needing no scope is what lets an operator find their way around before asking
-            // for more access.
-            reads.forall(_.requiredScopes.isEmpty)
-          )
-        ,
-        test("translation and content writes are separate scopes"):
-          assertTrue(
-            I18nTools.setTranslations.requiredScopes == Set(Auth.I18nWrite),
-            SurveyTools.createQuestion.requiredScopes == Set(Auth.ContentWrite),
-            !I18nTools.setTranslations.requiredScopes.contains(Auth.ContentWrite)
-          )
-      )
-    )
+    suite("Auth against rqlite")(
+      test("the token itself is never stored, only its hash"):
+        for
+          _      <- clear
+          issued <- issue("spec-alice", Set(Auth.ContentWrite))
+          (secret, view) = issued
+          stored <- Tokens.byIdentifier(view.id)
+        yield assertTrue(
+          stored.isDefined,
+          stored.get.tokenSha256 == Tokens.hash(secret),
+          stored.get.tokenSha256 != secret)
+      ,
+      test("a known token yields a principal carrying its id and scopes"):
+        for
+          _      <- clear
+          issued <- issue("spec-alice", Set(Auth.ContentWrite, Auth.I18nWrite))
+          (secret, view) = issued
+          principal <- Auth.verifier(audience).verify(secret)
+        yield assertTrue(
+          // The id, not the name: `create_token` records it as `created_by` and `UiTicket` keys on
+          // it, so a principal carrying anything else would break both.
+          principal.subject.contains(view.id),
+          principal.hasScope(Auth.ContentWrite),
+          principal.hasScope(Auth.I18nWrite),
+          !principal.hasScope(Auth.TokensWrite)
+        )
+      ,
+      test("an unknown token is rejected without saying why"):
+        for
+          _      <- clear
+          result <- Auth.verifier(audience).verify("not-a-token").either
+        yield assertTrue(
+          result.isLeft,
+          result.swap.toOption.get.isInstanceOf[AuthError.Invalid],
+          !result.swap.toOption.get.toString.toLowerCase.contains("revoked"))
+      ,
+      // Revocation has to bite on the next call rather than the next connection, which is why the
+      // verifier reads the row every time instead of caching a principal.
+      test("a revoked token stops authenticating"):
+        for
+          _      <- clear
+          issued <- issue("spec-beto", Set(Auth.ContentWrite))
+          (secret, view) = issued
+          before <- Auth.verifier(audience).verify(secret).either
+          _      <- Tokens.revoke(view.id).orDieWith(new RuntimeException(_))
+          after  <- Auth.verifier(audience).verify(secret).either
+        yield assertTrue(before.isRight, after.isLeft)
+      ,
+      test("seeding the admin twice with the same value changes nothing"):
+        for
+          first  <- Tokens.seedAdmin("admin-secret", "admin").orDieWith(new RuntimeException(_))
+          second <- Tokens.seedAdmin("admin-secret", "admin").orDieWith(new RuntimeException(_))
+          row    <- Tokens.byIdentifier("admin")
+        yield assertTrue(
+          second == false,
+          row.isDefined,
+          row.get.tokenSha256 == Tokens.hash("admin-secret"))
+      ,
+      // Rotation is how a deployment replaces the credential, and it must not produce a second
+      // admin: every token issued points at this id through `created_by`.
+      test("seeding with a new value rotates the same row"):
+        for
+          _       <- Tokens.seedAdmin("admin-secret", "admin").orDieWith(new RuntimeException(_))
+          rotated <- Tokens.seedAdmin("admin-rotated", "admin").orDieWith(new RuntimeException(_))
+          row     <- Tokens.byIdentifier("admin")
+          old     <- Auth.verifier(audience).verify("admin-secret").either
+          fresh   <- Auth.verifier(audience).verify("admin-rotated").either
+        yield assertTrue(
+          rotated,
+          row.get.tokenSha256 == Tokens.hash("admin-rotated"),
+          old.isLeft,
+          fresh.isRight)
+      ,
+      test("the admin holds every scope there is"):
+        for
+          _   <- Tokens.seedAdmin("admin-secret", "admin").orDieWith(new RuntimeException(_))
+          row <- Tokens.byIdentifier("admin")
+        yield assertTrue(Tokens.viewOf(row.get).scopes == Auth.AllScopes)
+    ).provideShared(
+      RqliteDataSource.layer >>> Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase),
+      ZLayer.fromZIO(migrate.unit)) @@ TestAspect.sequential
 end AuthSpec
