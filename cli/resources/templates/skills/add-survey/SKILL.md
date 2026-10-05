@@ -13,10 +13,16 @@ already exists.
 
 1. `list_surveys` — see what is already there. Identification surveys are picked by category alone,
    so a second active survey of the same category is refused.
-2. `create_survey` — category is `email`, `profiling`, `location` or `advertiser`. An advertiser
-   survey names the `videoId` of the video it follows and inherits that video's location; there is
-   no location to pass. The video is verified: naming one that does not exist is refused, since no
-   foreign key would catch it and the survey would simply be unreachable.
+2. Creating it depends on which kind it is, and they are different tools on purpose:
+   - `create_survey` for an advertiser survey. It names the `videoId` of the video it follows and
+     inherits that video's location; there is no location to pass. The video is verified: naming
+     one that does not exist is refused, since no foreign key would catch it and the survey would
+     simply be unreachable.
+   - `create_identification_survey` for `email`, `profiling` or `location`. These are
+     deployment-wide — every guest of every location answers them — so it sits behind the
+     `identity:write` scope rather than `content:write`. A token that edits one location's content
+     cannot reach it, and that is deliberate: replacing one of these changes the identification
+     flow for every portal at once.
 3. `create_question` once per question, in the order you want them asked. Each is appended last.
 4. `reorder_questions` if the order needs changing later. It takes every active question of the
    survey exactly once.
@@ -67,9 +73,13 @@ so an `Input` variant has no `options` field to pass and a `Radio` has no `rules
 | `Radio`, `Dropdown` | `options` |
 | `Checkbox` | `options`, and selection rules: `min_selections`, `max_selections` |
 | `Input` | text rules: `min_length`, `max_length`, `pattern`, `email`, `url` |
-| `Rating` | range rules `min`, `max` — whole numbers |
 | `Numeric` | range rules `min`, `max` — any number |
 | `Date` | range rules `min`, `max` — ISO dates, `yyyy-mm-dd` |
+
+There is no `Rating`, and asking for one is refused. The portal has no input for it — the view
+matches the case and renders the literal text `Rating input - TODO`, which is what a guest would
+read. Ask for a rating as a `Radio` with the points as options: a one-to-five scale is five
+options, and that is something the portal can display today.
 
 Passing a field the variant does not have is refused, as is a rule kind that belongs to another
 type. Neither reaches validation — the shape makes them undecodable — which is why the pairing no

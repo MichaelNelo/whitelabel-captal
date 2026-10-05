@@ -176,7 +176,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           fixture <- seed
           target = fixture.questionIds.head
           result <- SurveyTools
-            .setQuestionActive
+            .setIdentificationQuestionActive
             .call(json("questionId" -> str(target), "active" -> zio.json.ast.Json.Bool(false)))
           stored <- questions
         yield assertTrue(
@@ -192,7 +192,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           fixture <- seed
           reversed = fixture.questionIds.reverse
           result <- SurveyTools
-            .reorder
+            .reorderIdentification
             .call(json("surveyId" -> str(fixture.surveyId), "orderedQuestionIds" -> arr(reversed*)))
           stored <- questions
           byOrder = stored.sortBy(_.displayOrder).map(_.id.asString)
@@ -203,7 +203,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           fixture <- seed
           before  <- questions
           result  <- SurveyTools
-            .reorder
+            .reorderIdentification
             .call(
               json(
                 "surveyId"           -> str(fixture.surveyId),
@@ -219,7 +219,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
         for
           fixture <- seed
           result  <- SurveyTools
-            .reorder
+            .reorderIdentification
             .call(
               json(
                 "surveyId"           -> str(fixture.surveyId),
@@ -239,7 +239,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
         for
           fixture <- seed
           created <- SurveyTools
-            .createQuestion
+            .createIdentificationQuestion
             .call(
               questionJson(
                 fixture.surveyId,
@@ -261,7 +261,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
         for
           fixture <- seed
           result  <- SurveyTools
-            .createQuestion
+            .createIdentificationQuestion
             .call(
               questionJson(
                 fixture.surveyId,
@@ -276,7 +276,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
         for
           fixture <- seed
           result  <- SurveyTools
-            .createQuestion
+            .createIdentificationQuestion
             .call(
               questionJson(
                 fixture.surveyId,
@@ -287,7 +287,9 @@ object SurveyToolsSpec extends ZIOSpecDefault:
       test("a radio question with no options is refused"):
         for
           fixture <- seed
-          result  <- SurveyTools.createQuestion.call(questionJson(fixture.surveyId, "Radio"))
+          result  <- SurveyTools
+            .createIdentificationQuestion
+            .call(questionJson(fixture.surveyId, "Radio"))
         yield assertTrue(
           result.isError.contains(true),
           textOf(result).contains("needs at least one option"))
@@ -296,35 +298,53 @@ object SurveyToolsSpec extends ZIOSpecDefault:
         for
           fixture <- seed
           result  <- SurveyTools
-            .createQuestion
+            .createIdentificationQuestion
             .call(questionJson(fixture.surveyId, "Input", options = Chunk(optionJson("nope"))))
         yield assertTrue(
           result.isError.contains(true),
           // The input variant has no options field, and extra fields are rejected.
           textOf(result).contains("extra field"))
       ,
-      test("a second active survey of the same category is refused"):
+      test("a second active identification survey of the same category is refused"):
         for
           _      <- seed
-          result <- SurveyTools.createSurvey.call(json("category" -> str("profiling")))
+          result <- SurveyTools
+            .createIdentificationSurvey
+            .call(json("category" -> str("profiling")))
         yield assertTrue(result.isError.contains(true), textOf(result).contains("already exists"))
       ,
-      test("an advertiser survey without a video is refused"):
+      // The guard used to live in the handler, which meant the schema advertised a `videoId` the
+      // caller could omit and then be told off for omitting. Now the type says it.
+      test("an advertiser survey without a video is refused by the schema"):
         for
           _      <- seed
-          result <- SurveyTools.createSurvey.call(json("category" -> str("advertiser")))
-        yield assertTrue(
-          result.isError.contains(true),
-          textOf(result).contains("needs the videoId"))
+          result <- SurveyTools.createSurvey.call(json())
+        yield assertTrue(result.isError.contains(true))
+      ,
+      // Splitting the tools is what makes this a schema error rather than prose: there is no
+      // category to pass, so an advertiser survey cannot be created without its video and an
+      // identification survey cannot be created with one.
+      test("an identification survey cannot be asked for as an advertiser one"):
+        for
+          _      <- seed
+          result <- SurveyTools
+            .createIdentificationSurvey
+            .call(json("category" -> str("advertiser")))
+        yield assertTrue(result.isError.contains(true))
+      ,
+      // The reason the split exists at all: a token that can edit one location's content must not
+      // be able to replace the question every guest of every location answers.
+      test("the identification tool is guarded by a different scope than the location one"):
+        assertTrue(
+          SurveyTools.createSurvey.requiredScopes == Set(Auth.ContentWrite),
+          SurveyTools.createIdentificationSurvey.requiredScopes == Set(Auth.IdentityWrite))
       ,
       test("an advertiser survey naming a video that does not exist is refused"):
         // Nothing else would catch it: advertiser_videos has no foreign key from surveys, so the
         // row would store fine and the survey would simply be unreachable forever.
         for
           _      <- seed
-          result <- SurveyTools
-            .createSurvey
-            .call(json("category" -> str("advertiser"), "videoId" -> str("no-such-video")))
+          result <- SurveyTools.createSurvey.call(json("videoId" -> str("no-such-video")))
         yield assertTrue(result.isError.contains(true), textOf(result).contains("No video with id"))
       ,
       test("the listing carries each question's id and wording, so one call finds it"):
@@ -384,5 +404,60 @@ object SurveyToolsSpec extends ZIOSpecDefault:
             textOf(unknown).contains("No location with slug")
           )
           end for
+      ,
+      // The fixture's survey is `profiling`, one of the three deployment-wide ones. Reaching it
+      // through the location-scoped tool is what an operator who looks after one cafe would be
+      // doing when they edit the question every guest of every location answers.
+      test("the location-scoped question tools refuse a deployment-wide survey"):
+        for
+          fixture <- seed
+          created <- SurveyTools.createQuestion.call(questionJson(fixture.surveyId, "Input"))
+          retired <- SurveyTools
+            .setQuestionActive
+            .call(
+              json(
+                "questionId" -> str(fixture.questionIds.head),
+                "active"     -> zio.json.ast.Json.Bool(false)))
+          stored <- questions
+        yield assertTrue(
+          created.isError.contains(true),
+          retired.isError.contains(true),
+          // Names the tool that does take it, because neither call says which kind of survey it
+          // is addressing — one is given a question id and the other a survey id.
+          textOf(created).contains("create_identification_question"),
+          textOf(retired).contains("set_identification_question_active"),
+          // And the refusal is before the write, not after it.
+          stored.size == 3,
+          stored.forall(_.isActive == 1)
+        )
+      ,
+      test("the identification tools take the same survey"):
+        for
+          fixture <- seed
+          created <- SurveyTools
+            .createIdentificationQuestion
+            .call(questionJson(fixture.surveyId, "Input"))
+          stored <- questions
+        yield assertTrue(!created.isError.contains(true), stored.size == 4)
+      ,
+      // The split exists to put the two halves behind different scopes. If a pair shared one, the
+      // six tools would be ceremony around no boundary at all.
+      test("each pair is guarded by a different scope"):
+        assertTrue(
+          SurveyTools.createQuestion.requiredScopes == Set(Auth.ContentWrite),
+          SurveyTools.createIdentificationQuestion.requiredScopes == Set(Auth.IdentityWrite),
+          SurveyTools.setQuestionActive.requiredScopes == Set(Auth.ContentWrite),
+          SurveyTools.setIdentificationQuestionActive.requiredScopes == Set(Auth.IdentityWrite),
+          SurveyTools.reorder.requiredScopes == Set(Auth.ContentWrite),
+          SurveyTools.reorderIdentification.requiredScopes == Set(Auth.IdentityWrite)
+        )
+      ,
+      // Removed from the schema because the portal renders it as the literal "Rating input - TODO".
+      // The enum is what an agent reads to decide what to offer the operator, so leaving it there
+      // is how a question that displays as a to-do note reaches a guest.
+      test("rating cannot be asked for"):
+        val rendered =
+          (SurveyTools.createQuestion.definition.inputSchema: zio.json.ast.Json).toString
+        assertTrue(!rendered.contains("rating"), rendered.contains("numeric"))
     ).provideShared(quillLayer, ZLayer.fromZIO(migrate.unit)) @@ TestAspect.sequential
 end SurveyToolsSpec
