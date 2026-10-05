@@ -1,0 +1,238 @@
+= 05 — Infraestructura de desarrollo
+:toc:
+
+== `mill api.dev` — arrancar el server
+
+Comando principal:
+```
+mill api.dev
+```
+
+Levanta rqlite si no está corriendo, corre migrations, provisiona la
+location, arranca ZIO HTTP server en `:8080`.
+
+=== Toggle `CLIENT_LINKER=fast|full`
+
+Introducido en `build.mill`. Controla qué bundle del cliente sirve el
+server dev:
+
+`fast` (default)::
+  `client.fastLinkJS()` — link rápido (~1s). Sin post-proceso. Perfecto
+  para iterar en desarrollo.
+
+`full`::
+  `client.bundle()` — corre `fullLinkJS()` + Vite (rollup + terser 3
+  passes). Tarda ~15–25s con cache warm, 30-60s cold. Idéntico a lo que
+  sirve producción (mismos chunks, mismo mangling, mismo split-por-ruta).
+  Sirve el bundle desde `/out/client/bundle.dest/main.js` en vez de
+  `/out/client/fastLinkJS.dest/main.js`. El server ya monta ambos paths
+  como static routes (`Main.scala:411`).
+
+```
+CLIENT_LINKER=full mill api.dev
+```
+
+Cambio hecho en `build.mill`:
+* `copyIndex()` — elige `jsPath` según env var
+* `api.run` y `api.dev` — llaman `client.bundle()` o `client.fastLinkJS()`
+
+=== Lanzar detached (útil desde scripts)
+
+Mill 1.1.x tiene bug esporádico donde el mill daemon crashea y mata el
+server hijo. Workaround: `setsid` + redirect stdin/out para desacoplar del
+shell:
+```
+setsid mill api.dev < /dev/null > /tmp/mill.log 2>&1 &
+disown
+```
+Si el mill client crashea, el java del server sobrevive.
+
+=== `mill shutdown`
+
+Cuando el daemon se queda colgado o hay lock:
+```
+mill shutdown
+```
+Los `mill api.dev` que estaban esperando `Another Mill process is running`
+se quedan sin lock y arrancan.
+
+== rqlite en Docker
+
+```
+rqlite-dev       0.0.0.0:4001  (used by api.dev)
+rqlite-mcp-test  0.0.0.0:4012
+rqlite-test      0.0.0.0:4011
+```
+
+Se levantan solos con `mill api.dev` / `mill api.test` (helper
+`ensureRqlite` en `build.mill`).
+
+Detener manualmente:
+```
+mill api.stopRqlite
+mill api.test.stopRqlite
+```
+
+== LocalStack S3 (videos)
+
+Container `localstack-dev` en `:4566`. Bucket `captal-videos` con archivos
+mp4.
+
+Config:
+* Public read (bucket policy)
+* CORS: `AllowedOrigins: ["*"]`, `AllowedMethods: ["GET", "HEAD"]`
+* `Content-Type: video/mp4`
+* Range requests soportadas (206 Partial Content)
+
+Upload:
+```
+awslocal s3 cp video.mp4 s3://captal-videos/video.mp4 --content-type video/mp4
+```
+(via `docker exec localstack-dev awslocal ...`)
+
+=== Throttling issue
+
+LocalStack corre HTTP con Twisted. Bajo throttling agresivo del cliente
+(devtools "Slow 4G", ~400ms latencia + capado bandwidth), Twisted:
+
+* Bufferea la response entera antes de streamear en algunos paths
+* Con range requests + slow drain del cliente, el TCP send buffer se
+  satura y Twisted deja de mandar
+* Firefox timeout socket read para media (`NS_ERR_NET_TIMEOUT` a los 20s
+  aprox)
+
+Con 8.1 Mbps de bandwidth y sin latencia artificial, funciona. Con
+throttling severo, falla.
+
+Aceptación::
+  Es una limitación de LocalStack en dev — no fue diseñada para bandwidth
+  realista. En producción, videos van a venir de S3+CloudFront que
+  streamean bien incluso con clientes lentos.
+
+Workaround para dev (aplicado)::
+  URLs de videos apuntan a `test-videos.co.uk` (CDN público de sample
+  videos) en vez de LocalStack. LocalStack queda vivo para tests futuros
+  de S3 upload flow. Ver `04-backend-provisioning.adoc`.
+
+== Networking WSL2
+
+Modo *mirrored* activo (`~/.wslconfig` en Windows tiene
+`networkingMode=mirrored`). WSL comparte interfaces con Windows.
+
+IP de la máquina en la LAN: `192.168.1.7` (compartida con el ethernet de
+Windows).
+
+Ports:
+* `:8080` — app (ZIO HTTP)
+* `:2222` — dropbear ssh
+* `:2223` — openssh ssh (para waypipe)
+* `:14500`–`:14502` — xpra
+* `:4001`/`:4011`/`:4012` — rqlite dev/test
+* `:4566` — LocalStack
+
+=== Ruteo asymmetric (Tailscale)
+
+Bug encontrado y fix pendiente por parte del user: la ruta
+`192.168.1.0/24 via 100.100.100.100 dev eth4 metric 5` (Tailscale subnet
+router advertising) tiene *mejor prioridad* que la LAN nativa (metric
+281). Al conectar por SSH desde LAN al WSL, WSL responde por Tailscale →
+asymmetric routing → cliente ve timeout.
+
+Fix rápido (efímero):
+```
+sudo ip route del 192.168.1.0/24 via 100.100.100.100 dev eth4
+```
+
+Fix persistente options:
+* `sudo tailscale set --accept-routes=false` en WSL (si no dependés de
+  subnet routes de otros nodos)
+* En el nodo que anuncia (probablemente el propio Windows), quitar
+  `192.168.1.0/24` de advertised routes
+
+== SSH (dropbear + openssh)
+
+dropbear (:2222)::
+  Original. Ligero. Funciona para SSH plano.
+  Configurado en `guix/services/shepherd.scm` o similar.
+
+openssh (:2223)::
+  Agregado *alongside* dropbear porque dropbear NO soporta
+  `Direct-streamlocal@openssh.com` (Unix socket forwarding) y waypipe lo
+  necesita. Config en `~/dotfiles/guix/services/openssh-sshd.scm`:
+  * User-mode (sin root), acepta solo `mknelo`
+  * `UsePAM no`, `StrictModes no`, `PasswordAuthentication no`
+  * `AllowStreamLocalForwarding yes`, `StreamLocalBindUnlink yes`
+  * `SetEnv PATH=$HOME/.guix-home/profile/bin:...` (fix `id: command not found`)
+
+Uso:
+```
+waypipe ssh -p 2223 mknelo@192.168.1.7 firefox
+```
+
+== Waypipe
+
+Instalado como paquete Guix. Sirve para forwardear apps Wayland desde el
+WSL al cliente. Requiere:
+
+* Vulkan en el servidor (`llvmpipe` de mesa-vulkan-drivers apt)
+* `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json` en zshrc (via
+  Guix `zsh.scm`)
+* `XDG_RUNTIME_DIR` heredado en cada SSH login — wrapper en
+  `guix/services/activation.scm` lo exporta
+
+Chrome/Chromium debe correr con:
+```
+--ozone-platform=wayland --disable-gpu
+```
+(vulkan lvpipe no tiene DMA-BUF extensions → `--no-gpu` es más estable).
+
+== Xpra
+
+Setup como alternative a waypipe cuando la app remota no es Wayland-native.
+Xpra hardware NVENC via custom Guix package `xpra-nvenc`. Ver
+`guix/packages/xpra-nvenc.scm` + `xpra-nvenc.scm`, `nv-codec-headers.scm`,
+`libnvidia-encode-stub.scm`.
+
+Config del servicio en `guix/services/xpra.scm`:
+* `--bind-ws=0.0.0.0:14502`
+* `--html=/usr/share/xpra/www` (necesita `apt install xpra-html5` — no
+  incluido en el Guix xpra)
+* Audio: `--pulseaudio=yes --speaker=on`
+* Encoding: `--encoding=auto` (NVENC + x264 fallback)
+
+Cliente HTML5:
+```
+http://192.168.1.7:14502/
+```
+
+== git-crypt en dotfiles
+
+Los archivos en `~/.config/xpra/*` (secrets del server xpra) están
+encriptados con git-crypt. *Antes de commit* de esos archivos verificar
+setup:
+```
+cd ~/dotfiles && git-crypt status
+```
+
+== Guix Home workflow
+
+`~/.config/*` son symlinks a `/gnu/store/...` (readonly). Los edits van a
+`~/dotfiles/.config/*`. Para que tomen efecto:
+```
+cd ~/dotfiles && guix home reconfigure guix/home.scm
+```
+(o el path exacto del entry point).
+
+Servicios shepherd (dropbear, openssh-sshd, xpra, etc.) reciben el reload
+en el reconfigure. `herd status` muestra qué está corriendo.
+
+== Nix (para claude-code)
+
+`nix` instalado alongside guix. `/nix/store` tiene el chromium que uso
+para playwright screenshots. `mill` viene de nix (ver
+`/nix/store/*mill-1.1.2/bin/mill`).
+
+Limpiar:
+```
+nix-collect-garbage -d
+```

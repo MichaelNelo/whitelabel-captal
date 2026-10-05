@@ -1,0 +1,111 @@
+= 01 — Sistema de carga del cliente
+:toc:
+
+== Estado actual
+
+Tres piezas coordinadas:
+
+initial-loader (`index.html.template`)::
+  Markup estático fuera de `#app`. Muestra `.brand-ring` + `<img class="brand-icon">`.
+  Lo remueve `Layout.adopt` cuando la primera vista real monta. Es lo único
+  visible mientras baja `main.js` y el chunk de la primera vista.
+
+nav-loader (`Main.scala` → `App.app`)::
+  Overlay permanente (fixed inset:0) con su propio `BrandLoader`. Nunca se
+  desmonta. Visibility se toggle con clase `.is-visible` bound a
+  `AppState.isNavigating`. Background = gradient del body (opaco) → cubre la
+  vista de fondo durante navegaciones.
+
+Layout + BrandLoader (`views/Layout.scala`, `BrandLoader.scala`)::
+  Cada vista usa `Layout` con un signal `isLoading`. Layout aplica
+  `.loading-state` / `.loaded-state` en el `.layout-view`. BrandLoader es
+  simplemente `<div class="brand-ring"><img class="brand-icon" ...></div>`.
+
+=== Animaciones actuales del icono
+
+Loading state — `breathe`::
+  Solo animación de opacidad (`0.65 ↔ 1`, dur 1.4s, ease-in-out). *Sin
+  scale* (el user pidió específicamente sin cambio de tamaño). Simétrica →
+  cada ciclo empieza y termina en el mismo estado, dos iconos que monten
+  desfasados convergen al mismo reposo sin sincronización.
+
+Loaded state — `brandGlowFlash`::
+  `drop-shadow(0 0 1px white)` que aparece por 0.7s aprox y desaparece
+  (`forwards` termina en `filter: none` — el glow no persiste).
+  ```
+  0%   { filter: none; }
+  20%  { filter: drop-shadow(0 0 1px rgba(255, 255, 255, 1)); }
+  60%  { filter: drop-shadow(0 0 1px rgba(255, 255, 255, 1)); }
+  100% { filter: none; }
+  ```
+
+== Camino recorrido (por qué NO otras opciones)
+
+Ring giratorio (approach original)::
+  Un `<span class="ring-arc">` con `animation: ringSpin ... infinite`.
+  La cabeza del arco es *direccional* — la fase espacial en cada momento
+  es visible. Dos rings en distintos nodos DOM (por ejemplo initial-loader
+  → nav-loader → view) mostraban distintas fases al mount → salto visual.
+  Se intentó resolver con `syncSpin` (copiar `currentTime` entre nodos vía
+  Web Animations API), pero era frágil (necesitaba donor arc siempre
+  presente; en móvil Firefox falló con distintos symptoms). Se descartó
+  cambiando a una animación *no direccional* (`breathe`, halo).
+
+`syncSpin` (código removido pero vale mencionar)::
+  Buscaba cualquier `.ring-arc` en el DOM excluyendo el mounted, hacía
+  `getAnimations()[0].currentTime = donor.currentTime`. Además, cuando
+  mountaba un ring que no pertenecía al nav-loader, removía
+  `.initial-loader` (esto último ahora lo hace `Layout.adopt`). Al eliminar
+  el ring giratorio entero, se eliminó también `syncSpin`.
+
+Ripples circulares con `<mask>`::
+  Máscara SVG con 5 `<circle>` que animaban `r` y `opacity` desde puntos
+  dispersos del icono. Aplicada al layer bright — solo iluminaba paths del
+  icono donde intersectaba un ripple. Se intentó *duplicando los paths* del
+  brand-icon en Scala, pero el user señaló correctamente que el icono es
+  configurable (cada tenant sube su propio SVG) → no se puede hardcodear.
+
+Ripples con `mask-image` (attempt genérico)::
+  Usar CSS `mask-image: url("brand-icon.svg")` sobre un contenedor con capas
+  de color (grayed, ripples animados, full). El brand-icon actúa como shape
+  externo; los ripples son 5 `<circle>` animados via CSS keyframes (`r` +
+  `opacity`). Tuvo dos issues:
+  * URL de `mask-image` en CSS externo se resuelve contra la ruta del CSS
+    (`/assets/`), no contra `<base href="/<slug>/">`. Se resolvió moviendo
+    la declaración a un `<style>` inline en `index.html.template`.
+  * En Firefox el sistema no rendereaba bien las capas superpuestas con
+    máscara. Se descartó volviendo a `<img>` + `breathe`.
+
+Jarra con olas / lluvia (mockups)::
+  Explorados como alternativa "más rica" que el ring. Al final el user
+  decidió que el `breathe` era suficiente y priorizó fix real del `<img>`.
+  Los mocks quedaron en `/tmp/.../scratchpad/jar-loader-mock.html`
+  (efímero, ya se perdió).
+
+Glow layer stacking vs SVG filter vs CSS filter::
+  * SVG `<filter>` con `feGaussianBlur + feColorMatrix + feMerge`: funcionaba
+    en Chromium (verificado con Playwright screenshot) pero en Firefox no
+    se rendereaba consistente al usar SMIL animation al mismo tiempo.
+  * CSS layer stacking (3-4 copias del icono con stroke-width creciente y
+    opacity decreciente): se veía como "anillos concéntricos duros", no
+    como glow degradado.
+  * *CSS `filter: drop-shadow(...)` con animation via `@keyframes`*: el que
+    quedó. Un solo `drop-shadow(0 0 1px white)`. Firefox lo renderea bien.
+
+== Invariantes vigentes
+
+* `nav-loader` permanente — nunca se desmonta, así el icono/animation
+  siempre está listo cuando `AppState.isNavigating=true`.
+* `Layout.adopt` remueve `.initial-loader` cuando el primer Layout monta.
+* `AppState.setNavigating(false)` se llama en `onMountCallback` del `.app-layout`
+  raíz del Layout — cualquier vista que use Layout apaga el nav-loader
+  automáticamente al montar (cover del gap del chunk lazy).
+
+== Archivos tocados
+
+* `client/src/whitelabel/captal/client/BrandLoader.scala`
+* `client/src/whitelabel/captal/client/views/Layout.scala`
+* `client/src/whitelabel/captal/client/Main.scala` (App.app + navigationLoader)
+* `client/assets/styles.css` (`.brand-icon`, `.brand-ring`, `.nav-loader`,
+  `.app-root`, `.route-slot`, keyframes)
+* `client/index.html.template` (initial-loader markup, sin cambios de fondo)

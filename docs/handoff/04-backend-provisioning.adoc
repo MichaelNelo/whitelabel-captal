@@ -1,0 +1,176 @@
+= 04 — Backend, DB, provisioning
+:toc:
+
+== Base de datos (rqlite)
+
+Container `rqlite-dev` en `:4001` (Docker). Además hay `rqlite-mcp-test`
+(:4012) y `rqlite-test` (:4011) para tests.
+
+Queries directas via HTTP:
+```
+curl -s -G http://localhost:4001/db/query --data-urlencode "q=SELECT ..."
+curl -s -X POST http://localhost:4001/db/execute -H "Content-Type: application/json" -d '[["UPDATE ..."]]'
+```
+
+=== Tablas principales
+
+* `locations` — slug, name, unifi_host, unifi_api_token, unifi_site_id, unifi_duration_minutes, unifi_ap_mac, unifi_redirect_url
+* `sessions` — id, user_id, device_id, phase, current_survey_id, current_question_id, current_video_id, access_expires_at, client_mac, ap_mac, click_id
+* `surveys` — id, category (email|profiling|location|advertiser|...), location_id, advertiser_id, video_id, name, is_active
+* `questions` — id, survey_id, question_type (input|radio|dropdown|date), hierarchy_level, display_order
+* `question_options`, `question_rules`
+* `answers` — respuestas de sesiones
+* `user_survey_progress` — dedup por (user, survey)
+* `advertiser_videos`, `advertisers`, `video_views`
+* `event_log`, `devices`, `device_users`, `users`
+* `provision_manifest` — versionado del provisioning
+* `localized_texts`, `flyway_schema_history`
+
+Migraciones vía Flyway al arrancar `api.dev` (`infra.Migrate`).
+
+== Provisioning
+
+=== `runLocation` (parte del flujo `api.dev`)
+
+Provisiona una location con su tree en `api/resources/provision/dev/locations/<slug>/`:
+
+* `location.yaml` — metadata mínima (name, ap_mac)
+* `promo/*.yaml` — videos promo por location
+* `i18n/*.yaml` — textos localizados
+
+Se ejecuta como *idempotent*: 0 create, 0 update, 0 delete, N skip en runs
+subsiguientes.
+
+=== `runShared` (por separado)
+
+Provisiona surveys y advertisers *cross-location*. YAMLs en
+`api/resources/provision/dev/shared/`:
+
+* `surveys/email.yaml` — 1 pregunta input (email)
+* `surveys/profiling.yaml` — 4 preguntas
+* `surveys/location.yaml` — 1 pregunta dropdown
+* `advertisers/*.yaml` — google-play, chromecast
+
+`api.dev` NO lo ejecuta. Hay que correrlo manual:
+```
+SHARED_DIR=$PWD/api/resources/provision/dev/shared \
+  mill infra.runMain whitelabel.captal.infra.SharedProvision
+```
+
+*Sin `runShared`*, no hay email survey → `WelcomeApi.getNextSurvey()`
+salta directo de Welcome a Ready (server-side warning:
+"No active email survey: an unidentified visitor cannot be identified, so
+the flow ends at Ready without granting access").
+
+Después de correr `SharedProvision`, hay 10 surveys totales (7 originales
++ 3 shared).
+
+== Fase Ready sin UniFi
+
+`cafe-centro` tiene *todos los `unifi_*` en NULL*:
+```
+unifi_host, unifi_api_token, unifi_site_id, unifi_duration_minutes,
+unifi_redirect_url, unifi_port, unifi_ap_mac
+```
+
+`UnifiAccess.fromRow` (`infra/src/whitelabel/captal/infra/UnifiAccess.scala`)
+documenta explícito:
+```scala
+/** Build from a LocationRow if all required fields (`host`, `apiToken`,
+  * `siteId`) are present. Returns `None` when any is missing — the handler
+  * then logs and skips, leaving the session in Phase.Ready. */
+```
+
+Consecuencia:
+* Session llega a Phase.Ready al completar el flujo.
+* `access_expires_at` queda NULL → `secondsRemaining` = null en el status
+  response.
+* `callFinish` en ReadyView poll el server pero el handler UniFi no puede
+  autorizar → server siempre responde phase=Ready.
+* User ve "Ya puedes navegar" indefinidamente sin transición a Welcome
+  Authorized.
+
+Comportamiento *por diseño*, no bug.
+
+=== Cómo simular authorized manualmente
+
+Ver a qué sesión afecta:
+```
+curl -s -G http://localhost:4001/db/query \
+  --data-urlencode "q=SELECT s.id, s.phase, s.access_expires_at, u.email FROM sessions s JOIN users u ON s.user_id = u.id WHERE u.email = 'X'"
+```
+
+Update:
+```
+UPDATE sessions
+SET phase = 'authorized',
+    access_expires_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+30 minutes')
+WHERE id = '<session_id>';
+```
+
+El poll de ReadyView (`callFinish`) recibirá phase=Authorized en el
+siguiente tick → `syncWithPhase(Welcome)` → transición a
+WelcomeView en modo Authorized con countdown.
+
+=== Reset a Welcome (para probar flow desde cero)
+
+```
+UPDATE sessions
+SET phase = 'welcome',
+    access_expires_at = NULL,
+    current_survey_id = NULL,
+    current_question_id = NULL,
+    current_video_id = NULL,
+    last_promo_video_id = NULL,
+    current_advertiser_id = NULL
+WHERE id = '<session_id>';
+```
+
+== Dev endpoint `/api/dev/reset-phase`
+
+`LocaleRoutes.scala:66-78`. *Hardcoded a Welcome* — no acepta target phase:
+```scala
+_.setPhase(session.sessionId, Phase.Welcome)
+```
+
+Sirve para volver al inicio del flow durante debugging. En prod está gated
+por `SERVER_DEV_ENDPOINTS=true`.
+
+== ReadyView infinite loop fix (cross-ref con 02)
+
+Ver `docs/handoff/02-layout-navigation.adoc#syncwithphase-dedup`.
+
+`Router.syncWithPhase(Ready)` con misma page llamaba `pushState(Ready)`
+que re-emitía `currentPageSignal`. La SplitRender emitía el view (aunque
+cached por `collectStatic`). Con el dedup:
+```scala
+if router.currentPageSignal.now() != targetPage then
+  router.pushState(targetPage)
+```
+ReadyView no re-mount con cada poll de UniFi.
+
+== Videos de prueba
+
+Ver `docs/handoff/03-video-view.adoc#videos-actuales-en-la-bd`.
+
+Cambio rápido de URL:
+```
+UPDATE advertiser_videos SET video_url = REPLACE(video_url, 'old', 'new');
+```
+
+== Data actual en cafe-centro
+
+* 2 locations (cafe-centro, bar-norte)
+* 10 surveys (7 cafe-centro + 3 shared: email/profiling/location + 1 bar-norte "Test-Spot")
+* 7 questions cafe-centro (radio + input), + 6 questions shared = 13 total
+* 1 advertiser + 6 videos (cyclando a 3 URLs de test-videos.co.uk)
+
+Los cleanup se hicieron en sesiones previas:
+```
+DELETE FROM video_views;
+DELETE FROM answers;
+DELETE FROM user_survey_progress;
+DELETE FROM event_log;
+DELETE FROM sessions;
+```
+`users`, `devices`, `device_users` se dejaron intactas.
