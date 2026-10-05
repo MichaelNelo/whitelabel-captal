@@ -1,6 +1,7 @@
 package whitelabel.captal.mcp
 
 import com.jamesward.ziohttp.mcp.auth.*
+import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
 import zio.json.ast.Json
 
@@ -8,21 +9,66 @@ import zio.json.ast.Json
   *
   * Static tokens rather than OAuth: the SDK supports JWKS and introspection, but neither is worth
   * standing up an identity provider for a handful of operators. The cost is real and worth stating
-  * — these tokens do not expire, and rotating one means editing every `.mcp.json` that carries it.
-  * Moving to OAuth later replaces [[verifier]] and nothing else; scopes and tools do not change.
+  * — these tokens do not expire, so a leaked one is good until somebody revokes it. Moving to OAuth
+  * later replaces [[verifier]] and nothing else; scopes and tools do not change.
+  *
+  * They live in [[Tokens]], hashed, and are issued by [[TokenTools]] rather than by a deployment.
   */
 object Auth:
-  /** The issuer advertised in the RFC 9728 metadata. Meaningless for static tokens, since there is
-    * no authorization server to send a client to, but the field is required and the metadata is
-    * served either way.
+  /** The issuer advertised in the RFC 9728 metadata.
+    *
+    * This server's own origin, because a client that reads the metadata will try to resolve it.
+    * That is the part the previous value got wrong: it was `https://captal.invalid/static-tokens`,
+    * chosen on the reasoning that with static tokens there is no authorization server to send
+    * anyone to, so the field was meaningless. The field was not meaningless — it was unreachable,
+    * which is a different thing and much worse.
+    *
+    * `.invalid` is reserved precisely so that it never resolves, and a name that never resolves
+    * does not fail fast: measured at 10,011 ms per lookup before the resolver gives up.
+    * `mcp-remote` performs discovery on connect, so every Claude Desktop launch spent ~20s in DNS,
+    * Desktop timed the connection out at ~21.7s and closed the transport, and closing it
+    * invalidated the host's resource cache — which is why the model could see this server's tools
+    * and never its resources. One unreachable hostname, four layers away from the symptom.
+    *
+    * Pointing at ourselves makes discovery fail in milliseconds with a 404 instead. There is still
+    * no authorization server; the client now finds that out immediately.
     */
-  private val Issuer = "https://captal.invalid/static-tokens"
+  private def issuerFor(resource: ResourceUri): String =
+    val parsed = java.net.URI.create(resource.toString)
+    val port =
+      if parsed.getPort < 0 then
+        ""
+      else
+        s":${parsed.getPort}"
+    s"${parsed.getScheme}://${parsed.getHost}$port"
 
   /** Reads need only a valid token; writes are split so a translator cannot reshape surveys and
-    * infrastructure stays out of reach of both until Part 3 adds it.
+    * infrastructure stays out of reach of all of them until Part 3 adds it.
     */
   val I18nWrite: OauthScope = OauthScope("i18n:write")
   val ContentWrite: OauthScope = OauthScope("content:write")
+
+  /** Separate from [[ContentWrite]] because what it guards is not a location's content.
+    *
+    * The email, profiling and location surveys are deployment-wide: `SurveyRepositoryQuill` picks
+    * them by category with no location filter anywhere, so there is exactly one of each for every
+    * portal at once. An operator who looks after one cafe has no business replacing the question
+    * every guest of every location answers — and with a single write scope, adding an option to
+    * their own advertiser survey and rewriting the identification flow were the same permission.
+    *
+    * Declared rather than checked inside the tool so `tools/list` stays honest about what each one
+    * needs, which is what Part 6 scopes a token against.
+    */
+  val IdentityWrite: OauthScope = OauthScope("identity:write")
+
+  /** Issuing tokens, and delegable like any other scope: a token that holds it can grant it.
+    *
+    * That is deliberate rather than an oversight. Delegation here attenuates — a token can only
+    * grant scopes it already holds — so passing this along never widens what the chain can reach,
+    * only who may extend it. Making it the one indelegable scope would mean every new operator went
+    * through whoever holds the admin, which is the bottleneck this replaced.
+    */
+  val TokensWrite: OauthScope = OauthScope("tokens:write")
 
   /** The audience minted into every principal, and the resource this server declares itself to be.
     *
@@ -42,78 +88,64 @@ object Auth:
         .fromEither(ResourceUri.parse(raw))
         .mapError(e => new IllegalStateException(s"MCP_RESOURCE_URI is not usable: $e"))
 
-  final case class Operator(name: String, scopes: Set[OauthScope])
-
-  /** `MCP_TOKENS`, as `secret|name|scope,scope;secret|name|scope`.
-    *
-    * Parsed strictly: a malformed entry fails startup rather than being skipped, because a silently
-    * dropped operator looks exactly like a revoked one.
+  /** Every scope there is, which is what the seeded admin holds and the ceiling on what any token
+    * can be granted. Listed rather than derived so adding a scope is a decision about who gets it
+    * rather than something the admin silently acquires.
     */
-  def parse(spec: String): Either[String, List[(String, Operator)]] =
-    val entries = spec.split(";").map(_.trim).filter(_.nonEmpty).toList
-    if entries.isEmpty then
-      Left("MCP_TOKENS is empty. Set at least one entry as secret|name|scope,scope.")
-    else
-      val parsed = entries.map: entry =>
-        // -1 keeps a trailing empty field: "secret|name|" is an operator with no scopes, and the
-        // default split drops it, silently turning a valid entry into a malformed two-field one.
-        entry.split("\\|", -1).map(_.trim).toList match
-          case secret :: name :: scopes :: Nil if secret.nonEmpty && name.nonEmpty =>
-            Right(
-              secret ->
-                Operator(
-                  name,
-                  scopes.split(",").map(_.trim).filter(_.nonEmpty).map(OauthScope.apply).toSet))
-          case _ =>
-            Left(s"Malformed MCP_TOKENS entry '$entry'. Expected secret|name|scope,scope.")
-      parsed.partitionMap(identity) match
-        case (Nil, ok) =>
-          val duplicates = ok.groupBy(_._1).filter(_._2.size > 1).keys
-          if duplicates.nonEmpty then
-            Left("MCP_TOKENS reuses the same secret for more than one operator.")
-          else
-            Right(ok)
-        case (errors, _) =>
-          Left(errors.mkString("; "))
-    end if
-  end parse
+  val AllScopes: Set[OauthScope] = Set(I18nWrite, ContentWrite, IdentityWrite, TokensWrite)
 
-  /** Compares in constant time and over every entry.
+  /** Verifies against the tokens table.
     *
-    * A `Map` lookup would short-circuit on the first differing byte of the hash bucket, and
-    * returning early on a match would leak how far a guess got. Neither matters much against a
-    * remote attacker, but a token is a credential and the linear scan costs nothing at this size.
+    * `subject` carries the token's id rather than its holder's name: it is what `created_by`
+    * records, what `revoke_token` addresses, and what [[UiTicket]] keys a page's write on. The name
+    * is for reading, and rides along in the claims.
+    *
+    * The environment no longer supplies a list. One list in a variable only whoever deploys can
+    * edit, and another in a table operators write to, would be two answers to "who may write" and
+    * they would drift.
     */
-  private def lookup(operators: List[(String, Operator)], presented: String): Option[Operator] =
-    val presentedBytes = presented.getBytes("UTF-8")
-    operators.foldLeft(Option.empty[Operator]): (found, entry) =>
-      val (secret, operator) = entry
-      if java.security.MessageDigest.isEqual(secret.getBytes("UTF-8"), presentedBytes) then
-        found.orElse(Some(operator))
-      else
-        found
+  def verifier(audience: ResourceUri): TokenVerifier[QuillSqlite] = TokenVerifier.fromFunction:
+    raw =>
+      Tokens
+        .authenticate(raw)
+        .flatMap:
+          case Some(row) =>
+            ZIO.succeed(
+              Principal(
+                subject = Some(row.id),
+                clientId = None,
+                scopes = Tokens.viewOf(row).scopes,
+                audience = Set(audience.toString),
+                issuer = None,
+                expiresAt = None,
+                raw = raw,
+                claims = Json.Obj("name" -> Json.Str(row.name))
+              ))
+          case None =>
+            // Deliberately says nothing about which part failed: unknown, revoked and malformed
+            // are one answer.
+            ZIO.fail(AuthError.Invalid("Unknown token."))
 
-  def verifier(operators: List[(String, Operator)], audience: ResourceUri): TokenVerifier[Any] =
-    TokenVerifier.fromFunction: raw =>
-      lookup(operators, raw) match
-        case Some(operator) =>
-          ZIO.succeed(
-            Principal(
-              subject = Some(operator.name),
-              clientId = None,
-              scopes = operator.scopes,
-              audience = Set(audience.toString),
-              issuer = None,
-              expiresAt = None,
-              raw = raw,
-              claims = Json
-                .Obj()
-            ))
-        case None =>
-          // Deliberately says nothing about which part failed.
-          ZIO.fail(AuthError.Invalid("Unknown token."))
+  /** The token behind a call, for the tools that need to know who is asking rather than only
+    * whether they may. [[TokenTools]] attenuates against it and [[UnifiTools]] keys a ticket on it.
+    */
+  def callerId(principal: Option[Principal]): Option[String] = principal.flatMap(_.subject)
 
-  def mcpAuth(operators: List[(String, Operator)], audience: ResourceUri): McpAuth[Any] = McpAuth(
-    AuthorizationServer(Issuer),
-    verifier(operators, audience)).withResourceUri(audience)
+  /** @param audience
+    *   what this server declares itself to be, and what every minted principal is bound to.
+    *
+    * The metadata is filled in rather than left at its defaults. `scopes_supported` was empty, so
+    * the document omitted it and published no hint that these four scopes exist — while the
+    * middleware rejected calls for lacking them. Saying out loud what is enforced costs nothing and
+    * is the only part of this document that was ours to get right: `authorization_servers` is
+    * optional in RFC 9728 and the honest value is no value, which `NonEmptyChunk` in the SDK's
+    * `McpAuth` makes unexpressible.
+    */
+  def mcpAuth(audience: ResourceUri): McpAuth[QuillSqlite] = McpAuth(
+    AuthorizationServer(issuerFor(audience)),
+    verifier(audience))
+    .withResourceUri(audience)
+    .copy(
+      scopesSupported = Chunk.fromIterable(AllScopes.toList.sortBy(_.toString)),
+      resourceName = Some("Captal backoffice"))
 end Auth
