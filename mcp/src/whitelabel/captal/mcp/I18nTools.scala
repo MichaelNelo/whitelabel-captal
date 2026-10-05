@@ -13,6 +13,7 @@ import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
 import McpSchema.given
+import ToolSchema.readOnly
 
 /** Translation tools: the first mutations the backoffice exposes.
   *
@@ -48,9 +49,24 @@ object I18nTools:
         "One entry per locale that has any translation at all. A locale absent here has none, which is why a fresh location reports an empty list.")
       locales: List[LocaleStatus])
 
+  final case class SchemaRequest()
+
+  final case class RequiredKey(
+      @description("The key, dotted — 'welcome.title'.")
+      key: String,
+      @description(
+        "What the string is for: where it appears and what it has to say. Written for whoever is composing the translation, who cannot see the screen.")
+      purpose: String)
+
+  final case class SchemaResponse(
+      @description("Every key the portal reads, in declaration order.")
+      keys: List[RequiredKey],
+      @description("How many there are. A locale missing any of them renders its literal name.")
+      total: Int)
+
   final case class Translation(
       @description(
-        "A required key, dotted — 'welcome.title'. Read i18n://required-keys for the full set and what each one is for; a key outside it is refused.")
+        "A required key, dotted — 'welcome.title'. Call get_i18n_schema for the full set and what each one is for; a key outside it is refused.")
       key: String,
       @description("The text guests see, in this locale.")
       value: String)
@@ -83,6 +99,9 @@ object I18nTools:
       @description("Required keys this locale has no value for, after the removal.")
       stillMissing: List[String])
 
+  given Schema[SchemaRequest] = DeriveSchema.gen
+  given Schema[RequiredKey] = DeriveSchema.gen
+  given Schema[SchemaResponse] = DeriveSchema.gen
   given Schema[LocaleStatus] = DeriveSchema.gen
   given Schema[I18nStatusIn] = DeriveSchema.gen
   given Schema[I18nStatusOut] = DeriveSchema.gen
@@ -171,9 +190,30 @@ object I18nTools:
     yield ()
     end for
 
+  /** The key set itself, which `get_i18n_status` reports coverage against.
+    *
+    * Derived from the `I18n` type and from an instance the compiler forces to be total, so neither
+    * the list nor the explanations can drift from what the portal reads — this replaced a
+    * hand-written enumeration in a skill that had already lost two keys.
+    *
+    * Published as `i18n://required-keys` as well, and the resource came first. But a resource is
+    * not something every host lets a model read: in Claude Desktop they reach the operator's
+    * attachment menu and never the model, so `set_translations` pointed at a document its caller
+    * could not open.
+    */
+  val schema: McpToolHandlerR[Any] = McpTool("get_i18n_schema")
+    .description(
+      "Every translation key the portal requires and what each one is for. Read this before writing translations: set_translations refuses a key outside the set, and a key inside it that nobody writes renders its own name to guests.")
+    .readOnly
+    .handle: (_: SchemaRequest) =>
+      val described = I18nSchema.flatten(I18n.descriptions)
+      val keys = I18nSchema.keys[I18n].map(key => RequiredKey(key, described.getOrElse(key, "")))
+      ZIO.succeed(SchemaResponse(keys, keys.size))
+
   val status: McpToolHandlerR[QuillSqlite] = McpTool("get_i18n_status")
     .description(
-      "Translation coverage for a location: which required keys each locale is missing, and which stored keys are not part of the schema. Covers the portal interface only, not survey question wording. See skill://edit-i18n/SKILL.md.")
+      "Translation coverage for a location: which required keys each locale is missing, and which stored keys are not part of the schema. Covers the portal interface only, not survey question wording. Call read_skill('edit-i18n') first.")
+    .readOnly
     .handle: (in: I18nStatusIn) =>
       for
         locationId <- resolveSlug(in.slug)
@@ -197,7 +237,7 @@ object I18nTools:
 
   val setTranslations: McpToolHandlerR[QuillSqlite] = McpTool("set_translations")
     .description(
-      "Create or update translations for one locale of a location. Keys must belong to the i18n schema; read i18n://required-keys for the list and skill://edit-i18n/SKILL.md for the procedure. Reports which keys are still missing afterwards.")
+      "Create or update translations for one locale of a location. Keys must belong to the i18n schema; call get_i18n_schema for the list and read_skill('edit-i18n') for the procedure. Reports which keys are still missing afterwards.")
     .requireScopes(Auth.I18nWrite)
     .handle: (in: SetTranslationsRequest) =>
       val requiredSet = I18nSchema.keys[I18n].toSet
@@ -209,7 +249,7 @@ object I18nTools:
           ZIO.when(unknown.nonEmpty)(
             ZIO.fail(
               s"Not part of the i18n schema: ${unknown.mkString(
-                  ", ")}. Read i18n://required-keys."))
+                  ", ")}. Call get_i18n_schema for the keys that are."))
         _          <- ZIO.when(in.entries.isEmpty)(ZIO.fail("No entries given."))
         locationId <- resolveSlug(in.slug)
         _ <- ZIO.foreachDiscard(in.entries)(e => upsert(locationId, in.locale, e.key, e.value))
@@ -236,5 +276,9 @@ object I18nTools:
           missing <- missingFor(locationId, in.locale)
         yield RemoveTranslationResponse(affected > 0, missing)
 
-  val all: List[McpToolHandlerR[QuillSqlite]] = List(status, setTranslations, removeTranslation)
+  val all: List[McpToolHandlerR[QuillSqlite]] = List(
+    schema,
+    status,
+    setTranslations,
+    removeTranslation)
 end I18nTools

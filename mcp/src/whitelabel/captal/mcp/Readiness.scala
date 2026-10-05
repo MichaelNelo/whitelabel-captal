@@ -1,5 +1,6 @@
 package whitelabel.captal.mcp
 
+import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
 import whitelabel.captal.core.i18n.{I18n, I18nSchema}
 import whitelabel.captal.infra.schema.QuillSqlite
@@ -17,6 +18,9 @@ import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
+import McpSchema.given
+import ToolSchema.readOnly
+
 /** What a location is still missing before it is worth deploying.
   *
   * Onboarding a location is a sequence — create it, give it translations, register advertisers, add
@@ -29,9 +33,14 @@ import zio.schema.{DeriveSchema, Schema}
   * points at is not read by anything, so there is nothing to protect against. What there is to
   * avoid is an operator who cannot tell where they stopped.
   *
-  * Shared deliberately between the `captal://locations/{slug}` resource and the `onboard-location`
-  * prompt: a second implementation of "what is missing" would drift from this one and the two would
-  * disagree in front of the operator.
+  * Shared deliberately between the `captal://locations/{slug}` resource, the `onboard-location`
+  * prompt and `get_location_readiness`: a second implementation of "what is missing" would drift
+  * from this one and the two would disagree in front of the operator.
+  *
+  * The tool was the last of the three to exist, and its absence was the gap that mattered. A
+  * resource is not something every host lets a model read, and a prompt is invoked by the operator
+  * and never by the model — so the instruction to "re-run it as you go" named the one thing a model
+  * cannot do, in a server whose whole onboarding story is re-reading this between steps.
   */
 object Readiness:
 
@@ -72,9 +81,17 @@ object Readiness:
         "Advertisers active anywhere. They are not scoped to a location, so this is a deployment-wide count; zero means no video can be attributed to anyone.")
       advertisers: Int,
       @description(
+        "Which of the three identification surveys — email, profiling, location — are missing. They are deployment-wide, not this location's, but a guest here cannot be identified without the email one, so a portal without it strands everyone on the first screen. Shared with every other location: creating one fixes it everywhere at once.")
+      missingIdentificationSurveys: List[String],
+      @description(
         "What is left to do, in the order worth doing it. Empty means nothing here blocks a deploy.")
       nextSteps: List[String])
 
+  final case class ReadinessRequest(
+      @description("Which location. Call list_locations for the slugs.")
+      slug: String)
+
+  given Schema[ReadinessRequest] = DeriveSchema.gen
   given Schema[LocaleGap] = DeriveSchema.gen
   given Schema[LocationReadiness] = DeriveSchema.gen
 
@@ -124,7 +141,19 @@ object Readiness:
       else
         List(
           "UniFi is not configured, so the portal cannot authorize guests here. That is set outside this server.")
-    translations ++ advertisers ++ videos ++ branding ++ unifi
+    // First, because it blocks everything after it. Without the email survey a guest never gets
+    // identified, so no video is ever drawn and no advertiser question is ever asked — a location
+    // can be complete in every other respect and still show nobody anything.
+    val identification =
+      if r.missingIdentificationSurveys.isEmpty then
+        Nil
+      else
+        List(
+          s"The ${r
+              .missingIdentificationSurveys
+              .mkString(
+                " and ")} survey(s) do not exist, so a guest is never identified and nothing past the first screen is reached. Call create_identification_survey. They are deployment-wide: this fixes every location at once, and needs identity:write.")
+    identification ++ translations ++ advertisers ++ videos ++ branding ++ unifi
   end steps
 
   def of(slug: String): ZIO[QuillSqlite & AssetStore, String, LocationReadiness] = ZIO
@@ -170,8 +199,26 @@ object Readiness:
             s.category == "advertiser" &&
               questions.exists(q => q.surveyId == s.id && q.isActive == 1)),
           advertisers = advertisers.count(_.isActive == 1),
+          // Deployment-wide, so deliberately not filtered by location: the question is whether the
+          // three exist at all, and an active one anywhere serves every portal.
+          missingIdentificationSurveys = IdentificationCategory
+            .values
+            .toList
+            .map(_.toString)
+            .filterNot(category => surveys.exists(s => s.category == category && s.isActive == 1)),
           nextSteps = Nil
         )
       yield bare.copy(nextSteps = steps(bare))
       end for
+
+  val tool: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("get_location_readiness")
+    .description(
+      "What a location still needs before it is worth deploying: translation gaps per locale, branding, videos, and the advertisers available to draw from. Ends with the next steps in the order worth doing them. Read it between steps rather than tracking the state yourself — every tool writes immediately, so there is no commit step and stopping part way leaves nothing broken.")
+    // Meant to be called repeatedly, between every step. An approval each time would make the
+    // advice it gives — re-read rather than track the state yourself — not worth following.
+    .readOnly
+    .handle: (in: ReadinessRequest) =>
+      of(in.slug.trim)
+
+  val all: List[McpToolHandlerR[QuillSqlite & AssetStore]] = List(tool)
 end Readiness

@@ -12,6 +12,7 @@ import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
 import McpSchema.given
+import ToolSchema.readOnly
 
 /** Location tools.
   *
@@ -108,6 +109,7 @@ object LocationTools:
   val list: McpToolHandlerR[QuillSqlite] = McpTool("list_locations")
     .description(
       "Every location, with the slug the other tools take. Inactive locations are hidden unless asked for. `unifiConfigured` false means the portal cannot authorize guests there yet.")
+    .readOnly
     .handle: (in: ListRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*

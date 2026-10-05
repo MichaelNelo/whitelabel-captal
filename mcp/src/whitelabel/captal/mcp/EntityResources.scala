@@ -13,7 +13,6 @@ import whitelabel.captal.infra.{
   SurveyRow
 }
 import zio.*
-import zio.json.ast.Json
 import zio.schema.codec.JsonCodec as SchemaJsonCodec
 
 /** The entities as readable context, addressed by identity.
@@ -24,16 +23,29 @@ import zio.schema.codec.JsonCodec as SchemaJsonCodec
   * having both ways, so this adds the reading without removing the tools.
   *
   * One hierarchy under `captal://` rather than a scheme per entity, because `readDirectory`
-  * (SEP-2640) makes the hierarchy navigable: `captal://locations` lists its children, a child
-  * marked `inode/directory` can be opened in turn. Flat per-entity schemes would lose the
-  * containment that `list_surveys` had to put back by hand — which survey belongs to which video,
-  * at which location.
+  * (SEP-2640) makes the hierarchy navigable: `captal://locations` lists its children and each child
+  * can be opened in turn. Flat per-entity schemes would lose the containment that `list_surveys`
+  * had to put back by hand — which survey belongs to which video, at which location.
+  *
+  * The collections answer an ordinary `resources/read` as well, because `resources/directory/read`
+  * is an extension and a host without it could not open them at all.
   *
   * Registered as the server's only resource source, since `McpServer` holds one; the upload page is
   * served from here too rather than from a second source that could not be installed.
   */
-final class EntityResources(upload: UploadUiSource)
+final class EntityResources(upload: UploadUiSource, uiOrigin: String)
     extends McpResourceSource[QuillSqlite & AssetStore]:
+
+  /** The UniFi page posts the credentials to this server, so this server's origin is the one thing
+    * it has to be allowed to reach. Declared on the page: the host reads the policy from the
+    * resource and nowhere else, which is why saying it on the tool achieved nothing.
+    */
+  private val unifiMeta = McpAppsResourceMeta(
+    csp = Some(
+      McpAppsCsp(
+        connectDomains = Chunk(uiOrigin),
+        resourceDomains = Chunk("https://assets.claude.ai"))),
+    prefersBorder = Some(false))
 
   /** What the upload page reads for one video. Signed on every read: a presigned URL is arithmetic
     * over the key and the clock, not an allocation, so there is nothing to keep and nothing to
@@ -50,13 +62,20 @@ final class EntityResources(upload: UploadUiSource)
   final case class PendingVideo(videoId: String, title: String, slug: String)
   final case class PendingVideos(videos: List[PendingVideo])
 
+  /** A collection read as a document rather than walked as a directory. Same children, so a host
+    * that only knows `resources/read` sees what one that walks the hierarchy sees.
+    */
+  final case class DirectoryEntry(uri: String, name: String, description: Option[String])
+  final case class DirectoryListing(entries: List[DirectoryEntry])
+
   private val Root = "captal://"
-  private val Directory = "inode/directory"
   private val JsonMime = "application/json"
 
   given zio.schema.Schema[UploadTicket] = zio.schema.DeriveSchema.gen
   given zio.schema.Schema[PendingVideo] = zio.schema.DeriveSchema.gen
   given zio.schema.Schema[PendingVideos] = zio.schema.DeriveSchema.gen
+  given zio.schema.Schema[DirectoryEntry] = zio.schema.DeriveSchema.gen
+  given zio.schema.Schema[DirectoryListing] = zio.schema.DeriveSchema.gen
 
   private inline def locationBySlug = quote: (slugParam: String) =>
     query[LocationRow].filter(_.slug == slugParam).take(1)
@@ -70,39 +89,37 @@ final class EntityResources(upload: UploadUiSource)
       mime: String = JsonMime): Chunk[ResourceContents] = Chunk(
     ResourceContents(uri, Some(mime), Some(body)))
 
+  /** A collection, readable both ways.
+    *
+    * It used to be announced as `inode/directory`, which is this codebase's own convention and not
+    * the SDK's — `resources/directory/read` dispatches to [[readDirectory]] without looking at the
+    * mime type. So the only thing that type did was describe a body no host could obtain: an
+    * ordinary `resources/read` on it failed with "No resource at captal://locations", and attaching
+    * one in Claude Desktop reported "Failed to attach resource" while a `skill://` attached fine.
+    *
+    * Now it says what [[readResource]] actually returns.
+    */
   private def directory(uri: String, name: String, description: String): ResourceDefinition =
-    ResourceDefinition(uri, name, Some(description), Some(Directory))
+    ResourceDefinition(uri, name, Some(description), Some(JsonMime))
 
   /** One upload page per video still waiting for a file, rather than one page that lists them. The
     * listing is where "which are pending" belongs, and a resource that addresses exactly one video
     * cannot hand out a signed URL for another.
     */
-  private def pendingPages: ZIO[QuillSqlite, Nothing, Chunk[ResourceDefinition]] = ZIO
-    .serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      for
-        videos    <- run(query[AdvertiserVideoRow].filter(_.status == "pending")).orDie
-        locations <- run(query[LocationRow]).orDie
-        titles    <- run(query[LocalizedTextRow].filter(_.isActive == 1)).orDie
-        slugOf  = locations.map(l => l.id -> l.slug).toMap
-        titleOf = titles.groupBy(_.entityId).view.mapValues(_.map(_.value).minOption).toMap
-      yield Chunk.fromIterable(
-        videos
-          .toList
+  private def pendingPages: ZIO[QuillSqlite, Nothing, Chunk[ResourceDefinition]] = VideoTools
+    .pending(None)
+    .map: waiting =>
+      Chunk.fromIterable(
+        waiting
           .map: video =>
-            val id = video.id.toString
-            ResourceDefinition(
-              uri = s"${UploadUi.Uri}/$id",
-              name = titleOf.get(id).flatten.getOrElse(id),
-              description = Some(
-                s"Upload the file for this video${video
-                    .locationId
-                    .flatMap(slugOf.get)
-                    .fold("")(s => s" at $s")}. It stays out of rotation until the file arrives."),
-              mimeType = Some("text/html")
+            upload.pageDefinition(
+              videoId = video.videoId,
+              name = video.title,
+              description =
+                s"Upload the file for this video at ${video
+                    .slug}. It stays out of rotation until the file arrives."
             )
           .sortBy(_.name))
-      end for
 
   override def listResources(
       ctx: McpToolContext): ZIO[QuillSqlite & AssetStore, Nothing, Chunk[ResourceDefinition]] =
@@ -122,7 +139,15 @@ final class EntityResources(upload: UploadUiSource)
             directory(
               s"${Root}surveys",
               "Surveys",
-              "Every survey. Only advertiser surveys belong to a location, through their video.")
+              "Every survey. Only advertiser surveys belong to a location, through their video."),
+            // Listed so a host can see the App exists, though opening it here renders nothing
+            // useful: the page needs the ticket only `configure_unifi` can mint.
+            McpApps.resource(
+              UnifiUi.AppUri,
+              "Configurar UniFi",
+              unifiMeta,
+              Some("The credentials form. Opened by configure_unifi, which is what supplies the location and the ticket.")
+            )
           ))
 
   override def listResourceTemplates(
@@ -153,7 +178,11 @@ final class EntityResources(upload: UploadUiSource)
   override def readResource(
       uri: String,
       ctx: McpToolContext): ZIO[QuillSqlite & AssetStore, ToolError, Chunk[ResourceContents]] =
-    if uri.startsWith(UploadUi.Uri) then
+    if uri == UnifiUi.Uri then
+      // Static, unlike the upload page: it carries no data at all, because the ticket and the
+      // location arrive with the result of the call that opened it.
+      ZIO.succeed(Chunk(McpApps.contents(UnifiUi.AppUri, UnifiUi.app(), unifiMeta)))
+    else if uri.startsWith(UploadUi.Uri) then
       upload.readResource(uri, ctx)
     else
       uri.stripPrefix(Root).split('/').toList match
@@ -167,6 +196,16 @@ final class EntityResources(upload: UploadUiSource)
           pendingVideos(uri).mapError(ToolError.apply)
         case "videos" :: id :: "upload" :: Nil =>
           uploadTicket(uri, id).mapError(ToolError.apply)
+        // The collections, served to whoever asks for them the ordinary way. Reusing
+        // `readDirectory` rather than querying again is what keeps the two readings of one
+        // collection from disagreeing about which rows it holds.
+        case ("locations" | "advertisers" | "surveys") :: Nil =>
+          readDirectory(uri, ctx).map: children =>
+            contents(
+              uri,
+              encode(
+                DirectoryListing(
+                  children.toList.map(c => DirectoryEntry(c.uri, c.name, c.description)))))
         case _ =>
           ZIO.fail(ToolError(s"No resource at $uri"))
 
@@ -196,25 +235,19 @@ final class EntityResources(upload: UploadUiSource)
     .map(v => contents(uri, encode(v)))
     .mapError(ToolError.apply)
 
-  private def pendingVideos(uri: String): ZIO[QuillSqlite, String, Chunk[ResourceContents]] = ZIO
-    .serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      for
-        videos    <- run(query[AdvertiserVideoRow].filter(_.status == "pending")).orDie
-        locations <- run(query[LocationRow]).orDie
-        titles    <- run(query[LocalizedTextRow].filter(_.isActive == 1)).orDie
-        slugOf  = locations.map(l => l.id -> l.slug).toMap
-        titleOf = titles.groupBy(_.entityId).view.mapValues(_.map(_.value).minOption).toMap
-        listed  = videos
-          .toList
-          .map: video =>
-            val id = video.id.toString
-            PendingVideo(
-              videoId = id,
-              title = titleOf.get(id).flatten.getOrElse(id),
-              slug = video.locationId.flatMap(slugOf.get).getOrElse("—"))
-          .sortBy(_.title)
-      yield contents(uri, encode(PendingVideos(listed)))
+  /** The same answer `list_pending_uploads` gives, through the other door. Reusing the tool's query
+    * rather than repeating it is what keeps the two from drifting — the drift being invisible,
+    * since nobody compares a resource against a tool.
+    */
+  private def pendingVideos(uri: String): ZIO[QuillSqlite, String, Chunk[ResourceContents]] =
+    VideoTools
+      .pending(None)
+      .map: waiting =>
+        contents(
+          uri,
+          encode(
+            PendingVideos(
+              waiting.map(v => PendingVideo(v.videoId, v.title, v.slug)).sortBy(_.title))))
 
   /** No signed URL is listed alongside the others: one read, one video, one signature. The page
     * used to receive every pending video's URL and hide the ones it was not opened for, which is
@@ -339,7 +372,6 @@ final class EntityResources(upload: UploadUiSource)
       CompletionResult(CompletionValues(values = all.filter(_.startsWith(prefix)).take(100))))
   end complete
 
-  override def capabilities: Map[String, Json.Obj] = upload.capabilities
 end EntityResources
 
 extension [A](self: A)

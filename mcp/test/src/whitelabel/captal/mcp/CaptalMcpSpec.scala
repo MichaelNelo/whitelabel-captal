@@ -79,20 +79,35 @@ object CaptalMcpSpec extends ZIOSpecDefault:
             contents.head.text.exists(_.nonEmpty))
       ),
       suite("instructions")(
-        test("index every skill without inlining any body"):
+        test("point at the tools rather than inlining anything"):
           val bodies = Skills.all.map(_.body)
           assertTrue(
-            Skills.all.forall(s => CaptalMcp.instructions.contains(s.uri)),
-            CaptalMcp.instructions.contains(CaptalMcp.RequiredI18nKeysUri),
-            // The whole point of an index: bodies stay behind the resources.
+            // Loaded in every conversation before any schema, so it stays an index. The skill
+            // bodies are 1937 lines; none of them belongs here.
             bodies.forall(b => !CaptalMcp.instructions.contains(b)),
-            CaptalMcp.instructions.length < 2000
-          )),
+            CaptalMcp.instructions.length < 2000,
+            // The catalogue moved to read_skill's description, where it sits against the thing
+            // that can act on it.
+            CaptalMcp.instructions.contains("read_skill"),
+            CaptalMcp.instructions.contains("get_location_readiness")
+          )
+        ,
+        // The instructions used to order two things this server cannot deliver on its own: read a
+        // `skill://` resource, and re-run a prompt. A host decides whether a model ever sees a
+        // resource, and a prompt is invoked by the operator — so both read as impossible to a
+        // model that only has tools. Every capability named here has to be one it can reach.
+        test("never instruct the model to read a resource or run a prompt"):
+          val text = CaptalMcp.instructions
+          assertTrue(
+            !text.contains("Read the relevant `skill://`"),
+            !text.contains("Re-run it as you go"),
+            Skills.all.forall(s => !text.contains(s"Read ${s.uri}")))
+      ),
       suite("tools")(
-        test("the three i18n tools are registered with stable names"):
+        test("the i18n tools are registered with stable names"):
           assertTrue(
             I18nTools.all.map(_.name.value).sorted ==
-              List("get_i18n_status", "remove_translation", "set_translations"))
+              List("get_i18n_schema", "get_i18n_status", "remove_translation", "set_translations"))
         ,
         test("every tool carries a description and an object input schema"):
           val defs = I18nTools.all.map(_.definition)
@@ -116,27 +131,32 @@ object CaptalMcpSpec extends ZIOSpecDefault:
         test("the write tool points the reader at the derived key list"):
           // Without this the operator has no way to learn which keys are legal, and the tool would
           // reject their input with nowhere to go next.
+          //
+          // It used to name `i18n://required-keys`. The list is still published there, but a
+          // resource is reachable only if the host chooses to pass it on — so what a tool tells its
+          // caller to read next has to be another tool.
           assertTrue(
+            I18nTools.setTranslations.definition.description.exists(_.contains("get_i18n_schema")),
             I18nTools
-              .setTranslations
-              .definition
-              .description
-              .exists(_.contains("i18n://required-keys")))
+              .all
+              .flatMap(_.definition.description)
+              .forall(d => !d.contains("i18n://") && !d.contains("skill://"))
+          )
       ),
       test("the asset tools declare what they need"):
         // Not exercised against S3 here: that would need a bucket and a distribution. What is worth
-        // pinning is the contract — writes are scoped, reads are not, and both stylesheet tools name
-        // the reference an operator has to read before rewriting one.
+        // pinning is the contract — writes are scoped, reads are not, and the stylesheet tool names
+        // what an operator has to read before rewriting one.
+        //
+        // It used to name `skill://style-reference/SKILL.md`, a URI whose reader may never be able
+        // to open it. The reference it points at now is a tool call.
         assertTrue(
           List(AssetTools.setStyles, AssetTools.setIcon).forall(
             _.requiredScopes == Set(Auth.ContentWrite)),
-          List(AssetTools.getStyles, AssetTools.getIcon).forall(_.requiredScopes.isEmpty),
-          AssetTools
-            .setStyles
-            .definition
-            .inputSchema
-            .toString
-            .contains("skill://style-reference/SKILL.md"),
+          List(AssetTools.getStyles, AssetTools.getIcon, AssetTools.cssSchema).forall(
+            _.requiredScopes.isEmpty),
+          AssetTools.setStyles.definition.inputSchema.toString.contains("get_css_schema"),
+          AssetTools.setStyles.definition.inputSchema.toString.contains("read_skill"),
           AssetTools.setStyles.definition.description.exists(_.contains("whole file"))
         )
       ,
@@ -184,12 +204,14 @@ object CaptalMcpSpec extends ZIOSpecDefault:
               Nil
 
         // What the codec puts on the wire for one instance of each case, which is the authority.
+        // No `rating`: `QuestionType.Rating` still exists in core so stored rows decode, but the
+        // portal renders it as the literal "Rating input - TODO", so there is no way to ask for a
+        // new one here.
         val samples = List(
           AnswerFormat.Radio(Nil),
           AnswerFormat.Dropdown(Nil),
           AnswerFormat.Checkbox(Nil, None),
           AnswerFormat.Input(None),
-          AnswerFormat.Rating(None),
           AnswerFormat.Numeric(None),
           AnswerFormat.Date(None)
         )
@@ -214,7 +236,7 @@ object CaptalMcpSpec extends ZIOSpecDefault:
           tagsOf(SurveyTools.createQuestion) == fromCodec,
           // The same enum, nested inside an array of questions. The renderer reaches it wherever it
           // sits, which the per-tool patch it replaced did not.
-          tagsOf(VideoTools.create("https://bucket.s3.amazonaws.com")) == fromCodec
+          tagsOf(VideoTools.create) == fromCodec
         )
       ,
       test("a variant that rejects extra fields says so"):
@@ -272,7 +294,7 @@ object CaptalMcpSpec extends ZIOSpecDefault:
         // this started at 31 of 137 inputs and 3 of 98 outputs documented.
         val tools: List[com.jamesward.ziohttp.mcp.McpToolHandlerR[?]] =
           LocationTools.all ++ I18nTools.all ++ AdvertiserTools.all ++ SurveyTools.all ++
-            AssetTools.all ++ VideoTools.all("https://bucket.s3.amazonaws.com")
+            AssetTools.all ++ VideoTools.all
 
         def undocumented(node: zio.json.ast.Json, path: String): List[String] =
           node match
@@ -312,18 +334,8 @@ object CaptalMcpSpec extends ZIOSpecDefault:
 
         assertTrue(gaps == Nil)
       ,
-      test("the upload tool declares the origin its page has to reach"):
-        // The host defaults `connect-src` to 'self'. Without this the page renders, the operator
-        // picks a file, and the browser blocks the PUT — the first moment anything says so is the
-        // last one. Nothing else in the server would fail.
-        val meta = VideoTools
-          .create("https://captal-assets.s3.us-east-1.amazonaws.com")
-          .definition
-          .meta
-          .map(m => (m: zio.json.ast.Json).toString)
-          .getOrElse("")
-        val resumeMeta = VideoTools
-          .resume("https://captal-assets.s3.us-east-1.amazonaws.com")
+      test("both upload tools name the page that renders them"):
+        def metaOf(tool: com.jamesward.ziohttp.mcp.McpToolHandlerR[?]) = tool
           .definition
           .meta
           .map(m => (m: zio.json.ast.Json).toString)
@@ -332,11 +344,36 @@ object CaptalMcpSpec extends ZIOSpecDefault:
           // Both, because a View is instantiated only by calling a tool that carries this. A
           // resource a user opens is never rendered, so resume_video_upload without it would open
           // nothing and the only way back to an abandoned upload would be creating a second video.
-          resumeMeta.contains("ui://upload-video"),
-          resumeMeta.contains("connectDomains"),
-          meta.contains("connectDomains"),
-          meta.contains("captal-assets.s3.us-east-1.amazonaws.com"),
-          meta.contains("ui://upload-video")
+          metaOf(VideoTools.create).contains("ui://upload-video"),
+          metaOf(VideoTools.resume).contains("ui://upload-video")
+        )
+      ,
+      test("the upload page declares the origin it has to reach"):
+        // The host defaults `connect-src` to 'self'. Without this the page renders, the operator
+        // picks a file, and the browser blocks the PUT — `blocked:csp`, at the last possible
+        // moment, with nothing else in the server failing.
+        //
+        // Asserted on the resource and not on the tool, which is where this lived while it did
+        // nothing: `McpAppsToolMeta` has no field for a policy, so the host never read one there.
+        val origin = "https://captal-assets.s3.us-east-1.amazonaws.com"
+        val source = UploadUiSource(origin)
+        def metaOf(definition: com.jamesward.ziohttp.mcp.ResourceDefinition) = definition
+          .meta
+          .map(m => (m: zio.json.ast.Json).toString)
+          .getOrElse("")
+        val bare = metaOf(source.bareDefinition)
+        val perVideo = metaOf(source.pageDefinition("v1", "A video", "Upload it"))
+        assertTrue(
+          bare.contains("connectDomains"),
+          bare.contains("captal-assets.s3.us-east-1.amazonaws.com"),
+          // Plain `text/html` describes a document to show; this one says the page is an app to
+          // render, and serving the former is what "There was a problem displaying content" was.
+          source.bareDefinition.mimeType.contains("text/html;profile=mcp-app"),
+          // The per-video pages carry the same policy as the bare one. They are listed from
+          // `EntityResources` and served from here, and a page listed with one policy and read
+          // with another is a PUT that works from one entry point and not the other.
+          perVideo.contains("connectDomains"),
+          perVideo.contains("captal-assets.s3.us-east-1.amazonaws.com")
         )
     )
 end CaptalMcpSpec

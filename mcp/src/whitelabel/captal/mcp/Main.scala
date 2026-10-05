@@ -23,43 +23,82 @@ object Main extends ZIOAppDefault:
     .orDie
     .map(_.flatMap(_.toIntOption).getOrElse(DefaultPort))
 
-  /** Refuses to start without tokens rather than falling back to an open server.
+  /** Refuses to start without an admin token rather than generating one.
     *
-    * This server mutates production data. A missing environment variable is a deployment mistake,
-    * and the failure mode of guessing "open" would be silent and total.
+    * A generated token would have to be shown, and the only channel at startup is the log — which
+    * is CloudWatch, the last place a credential holding every scope belongs. Supplied instead by
+    * whoever deploys, where secrets are already handled.
+    *
+    * It is also the recovery path. This database is known to lose data, and a seeded admin means
+    * recovery is a restart: the row is written again from the same value and every `.mcp.json`
+    * still works. A generated one would lock every operator out on each loss.
     */
-  private def operators: ZIO[Any, Throwable, List[(String, Auth.Operator)]] = System
-    .env("MCP_TOKENS")
+  private def adminToken: ZIO[Any, Throwable, String] = System
+    .env("MCP_ADMIN_TOKEN")
     .orDie
+    .map(_.map(_.trim).filter(_.nonEmpty))
     .someOrFail(
       new IllegalStateException(
-        "MCP_TOKENS is not set. Expected secret|name|scope,scope entries separated by ';'. Scopes: i18n:write, content:write."))
-    .flatMap: spec =>
-      ZIO.fromEither(Auth.parse(spec)).mapError(new IllegalStateException(_))
+        "MCP_ADMIN_TOKEN is not set. It seeds the token every other one is issued from; operators get theirs from create_token, not from the environment."))
+
+  /** Scheme, host and port of the address clients reach this server at.
+    *
+    * Derived from `MCP_RESOURCE_URI` rather than configured again: that is already declared as the
+    * address this server answers to, and two settings for one fact is how they end up disagreeing.
+    */
+  private def originOf(resourceUri: String): String =
+    val parsed = java.net.URI.create(resourceUri)
+    val port =
+      if parsed.getPort < 0 then
+        ""
+      else
+        s":${parsed.getPort}"
+    s"${parsed.getScheme}://${parsed.getHost}$port"
 
   def run: ZIO[Any, Throwable, Unit] =
     for
       p        <- port
-      ops      <- operators
+      admin    <- adminToken
       resource <- Auth.resourceUri
+      // Where this server is reached. Its pages post there and declare it in their CSP, so it has
+      // to be the address a browser sees rather than the port we bound — behind an ALB those
+      // differ, and a guess that is close but wrong fails only when the operator presses Save.
+      uiOrigin = originOf(resource.toString)
+      // Counted rather than carrying a literal for the video tools, which is what this did — a
+      // `+ 3` that stayed 3 while the list grew.
       tools =
         LocationTools.all.size + I18nTools.all.size + AdvertiserTools.all.size +
-          SurveyTools.all.size + AssetTools.all.size + 3
-      _ <- ZIO.logInfo(
-        s"MCP backoffice on :$p as $resource — ${Skills.all.size} skills, ${CaptalMcp
-            .resources
-            .size} resources, $tools tools, ${ops.size} operator(s)")
+          SurveyTools.all.size + AssetTools.all.size + UnifiTools.all(uiOrigin).size +
+          TokenTools.all.size + SkillTools.all.size + VideoTools.all.size + Readiness.all.size
+      // Its own schema, and a check that the API has already laid down the rest. Before anything
+      // is served: the first request would otherwise arrive at a tokens table that is not there.
+      _ <- McpMigrate.run
       _ <- ZIO
         .environment[QuillSqlite & AssetStore]
         .flatMap: env =>
-          ZIO
+          val seeded = Tokens
+            .seedAdmin(admin, "admin")
+            .mapError(new IllegalStateException(_))
+            .flatMap: rotated =>
+              ZIO.logInfo(
+                if rotated then
+                  "Admin token seeded from MCP_ADMIN_TOKEN"
+                else
+                  "Admin token already current")
+          val serve = ZIO
             .serviceWithZIO[AssetStore](_.uploadOrigin)
             // Startup, not a request: a server that cannot name the origin its own upload page
             // must reach would serve a page whose PUT the browser blocks, and nothing would say so.
             .mapError(new IllegalStateException(_))
             .flatMap: origin =>
               Server.serve(
-                CaptalMcp.server(Auth.mcpAuth(ops, resource), env, origin).statelessRoutes)
+                UiRoutes.routes ++ OauthMetadata.routes(uiOrigin) ++
+                  CaptalMcp.server(Auth.mcpAuth(resource), env, origin, uiOrigin).statelessRoutes)
+          seeded *>
+            ZIO.logInfo(
+              s"MCP backoffice on :$p as $resource — ${Skills.all.size} skills, ${CaptalMcp
+                  .resources
+                  .size} resources, $tools tools") *> serve
         .provide(
           Server.defaultWithPort(p),
           RqliteDataSource.layer,
