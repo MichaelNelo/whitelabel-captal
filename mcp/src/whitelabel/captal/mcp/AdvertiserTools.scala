@@ -4,14 +4,15 @@ import java.util.UUID
 
 import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
+import whitelabel.captal.infra.AdvertiserRow
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.{AdvertiserRow, AdvertiserVideoRow}
 import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
 import McpSchema.given
+import ToolSchema.readOnly
 
 /** Advertiser tools.
   *
@@ -103,14 +104,6 @@ object AdvertiserTools:
   private inline def byNameQuery = quote: (nameParam: String) =>
     query[AdvertiserRow].filter(_.name == nameParam)
 
-  /** Counted in SQL rather than fetched: the row carries domain-typed columns this module has no
-    * decoders for, and the count is all anyone needs.
-    */
-  private inline def activeVideoCountQuery = quote: (advertiserIdParam: String) =>
-    query[AdvertiserVideoRow]
-      .filter(v => v.advertiserId.contains(advertiserIdParam) && v.status == "active")
-      .size
-
   private def find(id: String): ZIO[QuillSqlite, String, AdvertiserRow] = ZIO.serviceWithZIO[
     QuillSqlite]: quill =>
     import quill.*
@@ -119,10 +112,16 @@ object AdvertiserTools:
       .map(_.headOption)
       .someOrFail(s"No advertiser with id '$id'. Call list_advertisers to see what exists.")
 
-  private def countActiveVideos(id: String): ZIO[QuillSqlite, Nothing, Int] = ZIO.serviceWithZIO[
-    QuillSqlite]: quill =>
-    import quill.*
-    run(activeVideoCountQuery(lift(id))).orDie.map(_.toInt)
+  /** Borrowed from [[VideoTools]], which owns the video table's queries.
+    *
+    * It lived here, as a `.size` over `AdvertiserVideoRow`. Harmless until the row started carrying
+    * the `VideoType` enum: Quill derives the row's decoder while expanding the macro even for a
+    * count, so the query needed `schema.core.given` — and scalafix then stripped that import as
+    * unused, because nothing in the source references it. Keeping the query where the decoders
+    * already are costs nothing and leaves no import to defend.
+    */
+  private def countActiveVideos(id: String): ZIO[QuillSqlite, Nothing, Int] = VideoTools
+    .countActiveFor(id)
 
   private def validateName(name: String): ZIO[Any, String, String] =
     val trimmed = name.trim
@@ -140,6 +139,7 @@ object AdvertiserTools:
   val list: McpToolHandlerR[QuillSqlite] = McpTool("list_advertisers")
     .description(
       "Advertisers with their rotation priority and how many active videos each one has. Inactive advertisers are hidden unless asked for.")
+    .readOnly
     .handle: (in: ListRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*

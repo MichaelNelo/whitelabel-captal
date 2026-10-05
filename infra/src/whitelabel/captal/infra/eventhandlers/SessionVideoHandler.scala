@@ -65,7 +65,8 @@ object SessionVideoHandler:
                 _ <- run(query[VideoViewRow].insertValue(lift(viewRow))).orDie
                 // Don't clear currentVideoId — it's needed during AdvertiserVideoSurvey phase
                 // It will be overwritten when a new video is assigned
-                // Update last propaganda video if applicable
+                // Advance the promo rotation cursor. Only promos have one: advertiser videos are
+                // drawn at weighted random and keep no position.
                 _ <-
                   if viz.videoType == VideoType.Promo then
                     run(

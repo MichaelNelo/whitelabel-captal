@@ -570,7 +570,7 @@ object TestFixtures:
     val videoRow = AdvertiserVideoRow(
       id = videoId,
       advertiserId = Some(advertiserId),
-      videoType = "publicidad",
+      videoType = video.VideoType.Ad,
       videoUrl = videoUrl,
       durationSeconds = durationSeconds,
       minWatchSeconds = 8,
@@ -612,7 +612,7 @@ object TestFixtures:
     val videoRow = AdvertiserVideoRow(
       id = videoId,
       advertiserId = None,
-      videoType = "propaganda",
+      videoType = video.VideoType.Promo,
       videoUrl = videoUrl,
       durationSeconds = durationSeconds,
       minWatchSeconds = 5,
@@ -694,16 +694,32 @@ object TestFixtures:
       questionIds: List[survey.question.Id],
       optionIds: List[List[survey.question.OptionId]])
 
+  /** A video with a survey after it.
+    *
+    * `promo = true` seeds the venue's own video instead of an advertiser's: no advertiser row, no
+    * `advertiser_id` on either the video or the survey, and `video_type = 'promo'`. Everything else
+    * — the survey, its questions, their options and texts — is identical, because the flow after
+    * the video is identical. That shared body is the point: a promo's survey was unreachable for
+    * two separate reasons and no test distinguished the two cases at all.
+    *
+    * `advertiserId` in the returned fixture is empty for a promo, as in [[seedPromoVideo]].
+    */
   def seedAdvertiserWithVideoAndSurvey(
       advertiserName: String = "Test Advertiser",
       videoUrl: String = "https://cdn.example.com/ad.mp4",
       videoTitle: String = "Test Ad",
       durationSeconds: Int = 15,
-      questionCount: Int = 2): ZIO[QuillSqlite, Throwable, AdvertiserVideoSurveyFixture] = ZIO
+      questionCount: Int = 2,
+      promo: Boolean = false): ZIO[QuillSqlite, Throwable, AdvertiserVideoSurveyFixture] = ZIO
     .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
       val now = FixedNow
       val advertiserId = UUID.randomUUID.toString
+      val ownerId =
+        if promo then
+          None
+        else
+          Some(advertiserId)
       val videoId = video.Id.generate
       val surveyId = survey.Id.generate
 
@@ -717,8 +733,13 @@ object TestFixtures:
 
       val videoRow = AdvertiserVideoRow(
         id = videoId,
-        advertiserId = Some(advertiserId),
-        videoType = "publicidad",
+        advertiserId = ownerId,
+        videoType =
+          if promo then
+            video.VideoType.Promo
+          else
+            video.VideoType.Ad
+        ,
         videoUrl = videoUrl,
         durationSeconds = durationSeconds,
         minWatchSeconds = 8,
@@ -742,8 +763,8 @@ object TestFixtures:
 
       val surveyRow = SurveyRow(
         id = surveyId,
-        category = "advertiser",
-        advertiserId = Some(advertiserId),
+        category = SurveyCategory.Advertiser,
+        advertiserId = ownerId,
         videoId = Some(videoId.asString),
         locationId = None,
         isActive = 1,
@@ -802,7 +823,9 @@ object TestFixtures:
         .toList
 
       for
-        _ <- run(query[AdvertiserRow].insertValue(lift(advertiserRow)))
+        // No advertiser row for a promo. Seeding one would leave the ad selection a candidate and
+        // the test would no longer be about the promo path.
+        _ <- ZIO.unless(promo)(run(query[AdvertiserRow].insertValue(lift(advertiserRow))))
         _ <- run(query[AdvertiserVideoRow].insertValue(lift(videoRow)))
         _ <- run(query[LocalizedTextRow].insertValue(lift(titleRow)))
         _ <- run(query[SurveyRow].insertValue(lift(surveyRow)))
@@ -815,7 +838,7 @@ object TestFixtures:
               run(query[QuestionOptionRow].insertValue(lift(opt2Row))) *>
               run(query[LocalizedTextRow].insertValue(lift(opt2TextRow)))
       yield AdvertiserVideoSurveyFixture(
-        advertiserId,
+        ownerId.getOrElse(""),
         videoId,
         videoUrl,
         durationSeconds,
