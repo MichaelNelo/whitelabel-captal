@@ -400,7 +400,6 @@ object IdentificationQuestionView:
             AppState.clearCurrentSurvey()
             AppState.setPhase(nextStep.phase)
             Router.syncWithPhase(nextStep.phase)
-            AppState.setNavigating(false)
           case Left(error) =>
             isSubmitting.set(false)
             ErrorHandler.escalate(error)

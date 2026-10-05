@@ -24,8 +24,10 @@
 </head>
 <body>
   <div class="initial-loader">
-    <div class="loader-icon brand-pulse">
-      <img src="./brand-icon.svg" class="brand-icon" alt="Loading">
+    <div class="brand-ring">
+      <span class="ring-track"></span>
+      <span class="ring-arc"></span>
+      <img src="./brand-icon.svg" class="brand-icon" alt="Cargando">
     </div>
   </div>
   <div id="app"></div>

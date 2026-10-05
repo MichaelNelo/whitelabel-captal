@@ -50,8 +50,7 @@ object Maintenance:
 
   def main(args: Array[String]): Unit =
     // The loader is in the markup so something brand-coloured is on screen before this file
-    // arrives. Removed rather than faded like the portal does: there is no state to wait for here,
-    // and a transition would only delay the one thing this page has to say.
-    Option(dom.document.querySelector(".initial-loader")).foreach(_.remove())
+    // arrives. Nothing to remove it here: [[Layout]] takes over from it on mount, and because this
+    // renders with isLoading false the ring resolves straight into the message.
     render(dom.document.getElementById("app"), view(copyFor(dom.window.navigator.language)))
 end Maintenance

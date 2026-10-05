@@ -122,13 +122,17 @@ object Router:
         }
       )
 
-  // Sync router with server-side phase
+  /** Sync router with server-side phase. Skips `pushState` when the router already sits on the
+    * target page — otherwise, a view that polls its own phase (e.g. `ReadyView.callFinish` while
+    * UniFi keeps returning Ready) re-hits `pushState(SamePage)` every response. Waypoint's
+    * `currentPageSignal` re-emits on every pushState even for the same page (not deduped), which
+    * makes the SplitRender's cached view swap out and back in — `onMountCallback` fires again, the
+    * API call fires again, the loader ring restarts. The check breaks the loop at its source.
+    */
   def syncWithPhase(phase: Phase): Unit =
-    import org.scalajs.dom.console
     val targetPage = phaseToPage(phase)
-    console.log(s"syncWithPhase: phase=$phase, targetPage=$targetPage")
-    router.pushState(targetPage)
-    console.log("pushState done")
+    if router.currentPageSignal.now() != targetPage then
+      router.pushState(targetPage)
 
   /** Navigate to the centralized error page. Sits outside the phase machine — call this from
     * `ErrorHandler.escalate` when an unexpected API or runtime failure occurs.
@@ -162,7 +166,15 @@ object Router:
     * `collectStatic` takes its argument by name, which is what keeps these from all firing at
     * startup — the import begins when the route is first rendered.
     */
+  /** `SplitRender.collectStatic` demands a stable `HtmlElement` slot per route, and Laminar can
+    * only bind a dynamic `child <--` inside a parent — hence the wrapper div. It ends up between
+    * `.app-root` (`display: flex`) and the view's `.app-layout` (`grid`, `max-width`), and without
+    * a rule of its own it inherits neither's layout contract: `.app-layout`'s `max-width` doesn't
+    * center and `min-height: 100%` resolves against an auto-height parent. The `route-slot` class
+    * carries `display: contents` in styles.css so the wrapper becomes invisible to the layout tree.
+    */
   private def lazily(view: => js.Promise[HtmlElement]): HtmlElement = div(
+    cls := "route-slot",
     child <-- EventStream.fromJsPromise(view, emitOnce = true))
 
   val splitter: SplitRender[Page, HtmlElement] =

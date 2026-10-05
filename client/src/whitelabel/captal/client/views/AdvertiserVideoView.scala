@@ -1,5 +1,9 @@
 package whitelabel.captal.client.views
+import scala.concurrent.duration.DurationInt
+import scala.scalajs.js
+
 import com.raquo.laminar.api.L.*
+import com.raquo.laminar.codecs.StringAsIsCodec
 import org.scalajs.dom
 import org.scalajs.dom.html.{Div, Video}
 import org.scalajs.dom.svg.Circle
@@ -11,8 +15,17 @@ import whitelabel.captal.core.application.commands.NextVideo
 import whitelabel.captal.endpoints.VideoResponse
 
 object AdvertiserVideoView:
-  // Max wait time for video preload (in milliseconds)
-  private val PreloadTimeout = 10000
+  // A cap on the intro. If `canplaythrough` has not arrived within this window we start anyway —
+  // the indeterminate bar kept moving, but the user does not wait forever.
+  private val IntroTimeoutMs = 3000
+
+  /** How long the intro takes to dissolve, and how long it stays mounted after being told to go.
+    *
+    * Must match `--video-intro-out` in styles.css: the CSS runs the fade and this decides when the
+    * element is removed, so a shorter value here cuts the transition off mid-way and a longer one
+    * leaves an invisible overlay swallowing clicks.
+    */
+  private val IntroFadeMs = 400
 
   def render: HtmlElement =
     val videoData: Var[Option[NextVideo]] = Var(None)
@@ -22,11 +35,19 @@ object AdvertiserVideoView:
     val videoRef: Var[Option[Video]] = Var(None)
     val isFullscreen: Var[Boolean] = Var(false)
     val containerRef: Var[Option[Div]] = Var(None)
+    // What unmounts the intro: `showIntro=false` once canPlay && minTimeReached.
+    val canPlay: Var[Boolean] = Var(false)
+    val minTimeReached: Var[Boolean] = Var(false)
+    // Set first, and `showIntro` only once the fade has run. Two flags because an element cannot
+    // transition and be unmounted in the same frame — removing it is what the transition is for.
+    val introLeaving: Var[Boolean] = Var(false)
 
     def onMount(el: Div): Unit =
       containerRef.set(Some(el))
-      loadNextVideo(videoData, showIntro, videoRef)
-      // Listen for fullscreen changes (exit via Escape, etc.)
+      loadNextVideo(videoData, showIntro)
+      js.timers
+        .setTimeout(IntroTimeoutMs.millis):
+          minTimeReached.set(true)
       dom
         .document
         .addEventListener(
@@ -34,79 +55,144 @@ object AdvertiserVideoView:
           (_: dom.Event) =>
             val fs = dom.document.fullscreenElement != null
             isFullscreen.set(fs)
-            // Remove controls-visible class when exiting fullscreen
             if !fs then
-              el.classList.remove("controls-visible")
-        )
+              el.classList.remove("controls-visible"))
 
+    // The player and the intro overlay coexist. The `<video>` mounts as soon as there is data and
+    // NEVER changes parent — one mount, one network request. The intro is an overlay on top that
+    // unmounts when `showIntro=false`. The player used to be built imperatively and appendChild'd
+    // on the wrapper's mount: Firefox restarted network activity on re-attach → two requests and a
+    // blink.
     div(
-      cls <--
-        isFullscreen
-          .signal
-          .map: fs =>
-            if fs then
-              "video-hero fullscreen"
-            else
-              "video-hero"
-      ,
       onMountCallback(ctx => onMount(ctx.thisNode.ref.asInstanceOf[Div])),
-      // Intro card (shown after data loads, during intro phase)
-      // While videoData is None, the static HTML loader remains visible
-      child <--
-        videoData
-          .signal
-          .combineWith(showIntro.signal)
-          .map:
-            case (Some(video), true) =>
-              renderIntroCard(video, showIntro)
-            case _ =>
-              emptyNode
+      // canPlay + minTimeReached → the intro dissolves and the video starts. Both have to be true.
+      //
+      // Playback begins here rather than at the player's mount, which is the only moment it can
+      // begin without being hidden: the element mounts behind the intro so it can buffer, and a
+      // video that also played there would be partly or entirely over by the time anyone saw it.
+      // Muted, so no gesture is needed to start it.
+      //
+      // It starts as the fade starts, not after. The video is already moving while the intro
+      // dissolves, so what shows through is the film rather than a frozen first frame — and the
+      // handoff reads as one motion instead of a cut.
+      canPlay
+        .signal
+        .combineWith(minTimeReached.signal)
+        .changes
+        .filter { case (cp, mt) =>
+          cp && mt
+        } -->
+        Observer[(Boolean, Boolean)]: _ =>
+          introLeaving.set(true)
+          videoRef
+            .now()
+            .foreach: v =>
+              val _ = v.play()
+          js.timers
+            .setTimeout(IntroFadeMs.millis):
+              showIntro.set(false)
       ,
-      // Video content (shown after intro)
       child <--
         videoData
           .signal
-          .combineWith(showIntro.signal)
           .map:
-            case (Some(video), false) =>
-              renderVideoContent(
-                video,
+            case Some(v) =>
+              renderVideoHero(
+                v,
+                isFullscreen,
                 videoCompleted,
                 isPlaying,
                 videoRef,
                 containerRef,
-                isFullscreen)
-            case (None, false) =>
-              renderNoVideo()
-            case _ =>
+                canPlay)
+            case None =>
+              emptyNode
+      ,
+      child <--
+        showIntro
+          .signal
+          .map:
+            case true =>
+              renderIntroCard(videoData.signal, introLeaving.signal)
+            case false =>
               emptyNode
     )
   end render
 
-  private def renderIntroCard(video: NextVideo, showIntro: Var[Boolean]): HtmlElement = div(
+  private def renderVideoHero(
+      video: NextVideo,
+      isFullscreen: Var[Boolean],
+      videoCompleted: Var[Boolean],
+      isPlaying: Var[Boolean],
+      videoRef: Var[Option[Video]],
+      containerRef: Var[Option[Div]],
+      canPlay: Var[Boolean]): HtmlElement = div(
+    cls <--
+      isFullscreen
+        .signal
+        .map: fs =>
+          if fs then
+            "video-hero fullscreen"
+          else
+            "video-hero"
+    ,
+    renderVideoContent(
+      video,
+      videoCompleted,
+      isPlaying,
+      videoRef,
+      containerRef,
+      isFullscreen,
+      canPlay)
+  )
+
+  /** The intro, wrapped in `Layout` so it inherits the same loading→loaded machinery as every other
+    * view: the ring adopts from the nav-loader, runs `ringOut` on `.loaded-state`, and the content
+    * fades in staggered through `.view-content.visible > :nth-child`.
+    *
+    * `.video-intro` is what makes it a layer over the player, and dropping it when the `Layout`
+    * went in is what put both on screen at once. The player is `position: fixed; inset: 0`, so
+    * without a fixed, opaque sibling above it the intro simply rendered on top of a visible video —
+    * and with a video shorter than `IntroTimeoutMs`, the whole thing played out behind the card
+    * before it was dismissed.
+    *
+    * The wrapper is only about stacking. The `<video>` is this element's sibling, mounted as soon
+    * as there is data and never re-parented, so it keeps preloading underneath exactly as it does
+    * now — which was the point of moving to `Layout` and is not affected by putting the class back.
+    */
+  private def renderIntroCard(
+      videoDataS: Signal[Option[NextVideo]],
+      leaving: Signal[Boolean]): HtmlElement = div(
     cls := "video-intro",
-    div(
-      cls := "video-intro-card",
-      // Icon
-      div(cls := "video-intro-icon", brandIcon),
-      // Title
-      video
-        .title
-        .map(t => h1(cls := "video-intro-title", t))
-        .getOrElse(h1(cls := "video-intro-title", "Video")),
-      // Warning message
-      p(cls := "video-intro-warning", child.text <-- I18nClient.i18n.map(_.video.payAttention)),
-      // Progress bar — fadeout when animation completes
-      div(
-        cls := "video-intro-pulse",
-        onMountCallback { ctx =>
-          val el = ctx.thisNode.ref
-          el.addEventListener(
-            "animationend",
-            (e: dom.AnimationEvent) =>
-              if e.animationName == "introProgress" then
-                showIntro.set(false))
-        }
+    cls.toggle("leaving") <-- leaving,
+    Layout(
+      isLoading = videoDataS.map(_.isEmpty),
+      footer = div(),
+      content = div(
+        child <--
+          videoDataS.map:
+            case Some(video) =>
+              h1(cls := "video-intro-title", video.title.getOrElse("Video"))
+            case None =>
+              emptyNode
+        ,
+        child <--
+          videoDataS.map:
+            case Some(_) =>
+              p(
+                cls := "video-intro-warning",
+                child.text <-- I18nClient.i18n.map(_.video.payAttention))
+            case None =>
+              emptyNode
+        ,
+        child <--
+          videoDataS.map:
+            // The bar is always indeterminate, a sweeping loop. The intro unmounts when
+            // `loadNextVideo` settles `max(IntroTimeoutMs, canplaythrough)`.
+            case Some(_) =>
+              div(cls := "video-intro-pulse")
+            case None =>
+              emptyNode
       )
     )
   )
@@ -117,38 +203,46 @@ object AdvertiserVideoView:
       isPlaying: Var[Boolean],
       videoRef: Var[Option[Video]],
       containerRef: Var[Option[Div]],
-      isFullscreen: Var[Boolean]): HtmlElement = div(
+      isFullscreen: Var[Boolean],
+      canPlay: Var[Boolean]): HtmlElement = div(
     cls := "video-hero-content",
-    // Video player
     div(
       cls := "video-hero-player",
-      // Toggle controls visibility on tap (only in fullscreen)
       onClick --> { e =>
         if isFullscreen.now() then
           e.stopPropagation()
           containerRef.now().foreach(_.classList.toggle("controls-visible"))
       },
-      // Mount the preloaded video element directly
-      div(
-        cls := "video-hero-video-wrapper",
+      // A Laminar-managed `<video>`: it mounts exactly once, and the mount itself starts the
+      // download (`preload=auto`). Since the parent never changes there is no re-fetch. Listeners
+      // and autoplay are set on mount; `canPlay.set(true)` on `canplaythrough` tells the intro the
+      // video is ready to play.
+      videoTag(
+        cls                                      := "video-hero-video",
+        src                                      := video.videoUrl,
+        htmlAttr("playsinline", StringAsIsCodec) := "",
         onMountCallback { ctx =>
-          videoRef
-            .now()
-            .foreach { videoEl =>
-              videoEl.addEventListener("play", (_: dom.Event) => isPlaying.set(true))
-              videoEl.addEventListener("pause", (_: dom.Event) => isPlaying.set(false))
-              videoEl.addEventListener(
-                "ended",
-                (_: dom.Event) =>
-                  videoCompleted.set(true)
-                  isPlaying.set(false))
-              ctx.thisNode.ref.appendChild(videoEl)
-              videoEl.muted = true
-              videoEl.play()
-            }
+          val v = ctx.thisNode.ref
+          videoRef.set(Some(v))
+          v.muted = true
+          v.preload = "auto"
+          v.addEventListener("play", (_: dom.Event) => isPlaying.set(true))
+          v.addEventListener("pause", (_: dom.Event) => isPlaying.set(false))
+          v.addEventListener(
+            "ended",
+            (_: dom.Event) =>
+              videoCompleted.set(true)
+              isPlaying.set(false))
+          v.addEventListener("canplaythrough", (_: dom.Event) => canPlay.set(true))
+          v.addEventListener(
+            "error",
+            (_: dom.Event) => ErrorHandler.escalateMessage(s"Video load failed: ${v.currentSrc}"))
+          // Deliberately does not play here. `preload = "auto"` is what fills the buffer, and that is
+          // the whole reason this element mounts behind the intro; playing as well meant the video
+          // ran underneath an opaque card, and anything shorter than `IntroTimeoutMs` was over before
+          // the card was dismissed. Playback starts in `render`, when the intro goes.
         }
       ),
-      // Custom controls (includes progress button)
       renderControls(isPlaying, videoRef, containerRef, isFullscreen, videoCompleted)
     )
   )
@@ -317,33 +411,22 @@ object AdvertiserVideoView:
     svg.path(svg.d := "M20 6L9 17l-5-5")
   )
 
-  private def loadNextVideo(
-      videoData: Var[Option[NextVideo]],
-      showIntro: Var[Boolean],
-      videoRef: Var[Option[Video]]): Unit = Runtime.run:
-    VideoApi
-      .getNextVideo()
-      .map:
-        case Right(VideoResponse.Video(data)) =>
-          val videoEl = dom.document.createElement("video").asInstanceOf[Video]
-          videoEl.className = "video-hero-video"
-          videoEl.setAttribute("playsinline", "")
-          videoEl.preload = "auto"
-          videoEl.src = data.videoUrl
-          // Escalate when the browser fails to load/decode the video (404, codec,
-          // network). Without this, the user is stuck on a black player with no feedback.
-          videoEl.addEventListener(
-            "error",
-            (_: dom.Event) =>
-              ErrorHandler.escalateMessage(s"Video load failed: ${videoEl.currentSrc}"))
-          videoEl.load()
-          videoRef.set(Some(videoEl))
-          videoData.set(Some(data))
-        case Right(VideoResponse.Step(nextStep)) =>
-          Router.syncWithPhase(nextStep.phase)
-        case Left(err) =>
-          showIntro.set(false)
-          ErrorHandler.escalate(err)
+  /** The metadata request to the backend, and nothing else. Once `videoData` is set, Laminar's
+    * `<video>` element mounts and starts the preload on its own — from there a single download
+    * under one mount, with no re-attach between parents, which is what caused the second request.
+    */
+  private def loadNextVideo(videoData: Var[Option[NextVideo]], showIntro: Var[Boolean]): Unit =
+    Runtime.run:
+      VideoApi
+        .getNextVideo()
+        .map:
+          case Right(VideoResponse.Video(data)) =>
+            videoData.set(Some(data))
+          case Right(VideoResponse.Step(nextStep)) =>
+            Router.syncWithPhase(nextStep.phase)
+          case Left(err) =>
+            showIntro.set(false)
+            ErrorHandler.escalate(err)
 
   private def markAsWatched(duration: Int, completed: Boolean): Unit =
     AppState.setNavigating(true)
@@ -354,13 +437,7 @@ object AdvertiserVideoView:
           case Right(resp) =>
             val nextPhase = Phase.fromDbString(resp.nextPhase)
             Router.syncWithPhase(nextPhase)
-            AppState.setNavigating(false)
           case Left(err) =>
-            AppState.setNavigating(false)
             ErrorHandler.escalate(err)
 
-  private def brandIcon: HtmlElement = img(
-    src := "brand-icon.svg",
-    cls := "brand-icon",
-    alt := "Captal")
 end AdvertiserVideoView

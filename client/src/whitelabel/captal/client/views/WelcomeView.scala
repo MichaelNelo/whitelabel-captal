@@ -204,6 +204,7 @@ object WelcomeView:
           case Left(err) =>
             ErrorHandler.escalate(err)
         isStarting.set(false)
-        AppState.setNavigating(false)
+        // The nav-loader is deliberately not turned off here: the destination view's Layout does
+        // it on mount, so the overlay covers the gap while the new view's lazy chunk comes down.
   end startFlow
 end WelcomeView

@@ -43,7 +43,6 @@ object ReadyView:
             case Left(err) =>
               ErrorHandler.escalate(err)
           isResetting.set(false)
-          AppState.setNavigating(false)
 
   def render: HtmlElement = Layout(
     content = div(
