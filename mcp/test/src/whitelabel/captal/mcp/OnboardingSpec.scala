@@ -15,6 +15,7 @@ object OnboardingSpec extends ZIOSpecDefault:
       activeVideos: Int = 1,
       pendingVideos: Int = 0,
       advertisers: Int = 1,
+      missingIdentificationSurveys: List[String] = Nil,
       unifi: Boolean = true) = Readiness.LocationReadiness(
     slug = "spec",
     name = "Spec",
@@ -28,6 +29,7 @@ object OnboardingSpec extends ZIOSpecDefault:
     pendingVideos = pendingVideos,
     advertiserSurveys = activeVideos,
     advertisers = advertisers,
+    missingIdentificationSurveys = missingIdentificationSurveys,
     nextSteps = Nil
   )
 
@@ -90,6 +92,31 @@ object OnboardingSpec extends ZIOSpecDefault:
       test("a finished location renders as finished rather than as an empty list"):
         val rendered = Prompts.render(readiness())
         assertTrue(rendered.contains("Nothing here blocks a deploy."))
+      ,
+      // Readiness counted translations, branding, videos and advertisers and never asked whether a
+      // guest could be identified at all. A location could report nothing left to do while every
+      // visitor stopped at the first screen — the one failure here that is not a matter of degree.
+      test("a missing identification survey is the first step, before anything else"):
+        val steps = Readiness.steps(readiness(missingIdentificationSurveys = List("email")))
+        assertTrue(
+          steps.headOption.exists(_.contains("create_identification_survey")),
+          steps.headOption.exists(_.contains("never identified")))
+      ,
+      // Ahead of the translations step, which is the loudest of the others: raw key names are
+      // visible but the portal still works, while this stops the flow outright.
+      test("it outranks a location with no translations either"):
+        val steps = Readiness.steps(
+          readiness(locales = Nil, missingIdentificationSurveys = List("email", "profiling")))
+        assertTrue(
+          steps.size >= 2,
+          steps.head.contains("identification"),
+          steps(1).contains("No translations at all"),
+          // Both named in one step: they are created by the same tool and fixed in one sitting.
+          steps.head.contains("email and profiling")
+        )
+      ,
+      test("all three present leaves no step at all"):
+        assertTrue(Readiness.steps(readiness()).forall(!_.contains("identification")))
     )
 
   extension [A](self: A)

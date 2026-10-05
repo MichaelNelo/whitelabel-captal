@@ -177,7 +177,10 @@ object I18nToolsSpec extends ZIOSpecDefault:
             .content
             .exists {
               case ToolContent.Text(text, _) =>
-                text.contains("welcome.doesNotExist") && text.contains("i18n://required-keys")
+                // Names the offending key and where the legal ones are. That used to be the
+                // `i18n://` URI, and a failure message is the worst place to send someone to a
+                // door that may not open for them.
+                text.contains("welcome.doesNotExist") && text.contains("get_i18n_schema")
               case _ =>
                 false
             }

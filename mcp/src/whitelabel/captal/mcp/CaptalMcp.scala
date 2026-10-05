@@ -6,6 +6,8 @@ import whitelabel.captal.core.i18n.{I18n, I18nSchema}
 import whitelabel.captal.infra.schema.QuillSqlite
 import zio.{Chunk, ZEnvironment, ZIO}
 
+import ToolSchema.visibleTo
+
 /** The read-only half of the backoffice server: everything a host can discover and read before any
   * tool exists to mutate anything.
   *
@@ -24,45 +26,31 @@ object CaptalMcp:
     * would be duplication paid on every single conversation.
     */
   val instructions: String =
-    // The frontmatter name matches the slug for every skill today, so printing it is the URI
-    // repeated back. Kept conditional rather than dropped, since frontmatter is data and a future
-    // skill may well diverge.
-    val catalogue = Skills
-      .all
-      .map: s =>
-        val label =
-          if s.name == s.slug then
-            ""
-          else
-            s" (${s.name})"
-        s"- `${s.uri}`$label"
-      .mkString("\n")
     s"""Backoffice for the Captal whitelabel captive portal.
        |
        |Content is edited here: translations, surveys and questions, advertisers, videos, and each
        |location's stylesheet and brand icon. Deployment — pushing a location, deprovisioning one,
        |bootstrapping infrastructure — still goes through the CLI.
        |
-       |Read the relevant `skill://` resource before acting on a request in its area. Each one is a
-       |procedure, not background reading, and they encode constraints that are not visible from
-       |the data alone. Call `resources/list` for what each one covers.
+       |Call `read_skill` before acting on a request in its area. Each skill is a procedure, not
+       |background reading, and they encode constraints that are not visible from the data alone;
+       |the tool's description lists what each one covers.
        |
-       |Skills:
-       |$catalogue
+       |Start here for a location that is not finished: `get_location_readiness` reads its current
+       |state and names the next steps in order. Call it again between steps rather than tracking
+       |the state yourself — every tool writes immediately, so there is no commit step and stopping
+       |part way leaves nothing broken. The `onboard-location` prompt is the same report, for an
+       |operator who wants to start from it.
        |
-       |Start here for a location that is not finished: the `onboard-location` prompt reads its
-       |current state and names the next step. Re-run it as you go rather than tracking the state
-       |yourself — every tool writes immediately, so there is no commit step and stopping part way
-       |leaves nothing broken.
+       |An upload interrupted halfway leaves a video registered with no file, invisible to guests
+       |and cheap to finish: `list_pending_uploads` finds them and `resume_video_upload` reopens
+       |one. Worth checking when a conversation about videos resumes.
        |
-       |Browse `captal://locations`, `captal://advertisers` and `captal://surveys` for the entities
-       |as context, without a tool call each.
-       |
-       |Other resources:
-       |- `$RequiredI18nKeysUri` — every translation key the portal requires, with what each one is
-       |  for. A locale missing any of these renders the literal key to end users.
+       |This server also publishes resources — the entities under `captal://`, the skills under
+       |`skill://`, `$RequiredI18nKeysUri` — which an operator can attach and some hosts let a model
+       |read. Do not depend on reaching them: every one of them is also answerable by a tool, and in
+       |the host these operators use, resources never reach the model at all.
        |""".stripMargin
-  end instructions
 
   private def skillResource(skill: Skill): McpResourceHandler = McpResource(skill.uri, skill.name)
     .description(skill.description)
@@ -96,26 +84,65 @@ object CaptalMcp:
     * open to anyone who can reach the port.
     */
   def server(
-      auth: McpAuth[Any],
+      // Reaches the database, because tokens live there now rather than in the environment.
+      auth: McpAuth[QuillSqlite],
       // Prompts alone need the services in hand: `McpPromptHandler.get` returns `ZIO[Any, ...]`, so
       // it has no environment to ask a database for. Everything else is resolved by the runtime.
       promptEnv: ZEnvironment[QuillSqlite & AssetStore],
-      // The origin the upload page PUTs to, declared in the App's CSP. Resolved once at startup
-      // from the same store that signs the URLs.
+      // The origin the upload page PUTs to, declared in that page's CSP. Resolved once at startup
+      // from the same store that signs the URLs, so the policy and the URL cannot disagree.
       uploadOrigin: String,
+      // Where this server is reached. The pages it renders post there and declare it in their CSP,
+      // which belongs to them rather than to the protocol; see [[UiRoutes]].
+      uiOrigin: String,
       name: String = "captal-backoffice",
       version: String = "0.1.0"): McpServer[QuillSqlite & AssetStore] =
+    /** Default-deny for the rendered pages: a tool is callable from an App only by being named
+      * here.
+      *
+      * The extension's default is the opposite — a tool with nothing declared is callable by both
+      * the model and any App the host renders. Two pages run in that frame, and one of them exists
+      * precisely to keep a UniFi API token out of the conversation; it has no business being able
+      * to reach `create_token`. The HTML is ours and inlined, so nothing exploits this today. The
+      * point is that the restriction becomes a decision rather than an omission.
+      *
+      * `confirm_video_upload` is the whole list. The upload page calls it with the duration it read
+      * from the file, and the model calls it too, in the one case the page cannot close by itself —
+      * a WebM whose header carries no duration. So it is the one tool that is genuinely both.
+      */
+    def restrictToApps[R](tool: McpToolHandlerR[R]): McpToolHandlerR[R] =
+      if tool.name.value == "confirm_video_upload" then
+        tool.visibleTo(McpAppsVisibility.Model, McpAppsVisibility.App)
+      else
+        tool.visibleTo(McpAppsVisibility.Model)
     val withResources =
       resources.foldLeft(McpServer(name, version).instructions(instructions).auth(auth))(
         _.resource(_))
     val withPrompts = Prompts.all(promptEnv).foldLeft(withResources)(_.prompt(_))
-    val withData = (LocationTools.all ++ I18nTools.all ++ AdvertiserTools.all ++ SurveyTools.all)
-      .foldLeft[McpServer[QuillSqlite]](withPrompts)(_.tool(_))
-    val withAssets = (AssetTools.all ++ VideoTools.all(uploadOrigin)).foldLeft[McpServer[
-      QuillSqlite & AssetStore]](withData)(_.tool(_))
+    val withData = (
+      LocationTools.all ++ I18nTools.all ++ AdvertiserTools.all ++ SurveyTools.all ++
+        UnifiTools.all(uiOrigin) ++ TokenTools.all ++ SkillTools.all
+    ).map(restrictToApps).foldLeft[McpServer[QuillSqlite]](withPrompts)(_.tool(_))
+    val withAssets = (AssetTools.all ++ VideoTools.all ++ Readiness.all)
+      .map(restrictToApps)
+      .foldLeft[McpServer[QuillSqlite & AssetStore]](withData)(_.tool(_))
     // One source for everything: `McpServer` holds a single `resourceSrc`, so the upload page and
     // the entity tree cannot be registered separately. The page is built per video from the row, a
     // freshly signed URL and the location's stylesheet, none of which a static handler can reach.
-    withAssets.resourceSource(EntityResources(UploadUiSource()))
+    val withSource = withAssets.resourceSource(
+      EntityResources(UploadUiSource(uploadOrigin), uiOrigin))
+    // Declares `io.modelcontextprotocol/ui`, which is how a host knows the `ui://` resources are
+    // meant to be rendered rather than read. It used to be announced through the resource source's
+    // `capabilities`, now deprecated in favour of this.
+    //
+    // The registration is an `Either` because extension ids must be unique, and there is exactly
+    // one here. A failure is a programming error that must not be swallowed into a server that
+    // starts and renders nothing.
+    withSource
+      .extension(McpApps.serverExtension)
+      .fold(
+        error =>
+          throw new IllegalStateException(s"Could not declare the MCP Apps extension: $error"),
+        identity)
   end server
 end CaptalMcp
