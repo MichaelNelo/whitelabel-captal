@@ -71,7 +71,7 @@ object ops:
 
   extension (user: User[State.WatchingVideo])
     def assignVideoSurvey(
-        advertiserId: AdvertiserId,
+        advertiserId: Option[AdvertiserId],
         nextQuestion: Option[FullyQualifiedQuestionId],
         terminalPhase: Phase,
         now: Instant): UserOp[User[State.AnsweringVideoSurvey] | NextStep] =
@@ -133,15 +133,15 @@ object ops:
   end extension
 
   extension (user: User[State.Ready])
-    /** Transición Ready → Authorized + emite UserFinishedProcess.
+    /** The Ready → Authorized transition, emitting UserFinishedProcess.
       *
-      * El `User[State.Authorized]` resultante es un valor ephemeral (sólo en memoria) — la
-      * proyección desde DB sigue siendo `State.Ready` mientras `session.phase = Ready`. Una vez que
-      * `UnifiAccessHandler` (post-commit) confirma con el Controller, `session.phase` pasa a
-      * Authorized y el ciclo cierra.
+      * The resulting `User[State.Authorized]` is ephemeral, in memory only — the projection from
+      * the database stays `State.Ready` for as long as `session.phase = Ready`. Once
+      * `UnifiAccessHandler` has confirmation from the Controller, post-commit, `session.phase`
+      * becomes Authorized and the cycle closes.
       *
-      * Si UniFi falla, `session.phase` queda en Ready y `findReadyUser` sigue devolviendo el user —
-      * la próxima llamada a `/api/finish` re-ejecuta `finish` y reintentamos.
+      * If UniFi fails, `session.phase` stays at Ready and `findReadyUser` keeps returning the user
+      * — the next call to `/api/finish` runs `finish` again and the attempt repeats.
       */
     def finish(now: Instant): UserOp[User[State.Authorized]] =
       val authorized = user.copy[State.Authorized](state = State.Authorized(

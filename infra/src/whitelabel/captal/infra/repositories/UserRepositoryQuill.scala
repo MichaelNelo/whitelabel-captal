@@ -98,8 +98,11 @@ object UserRepositoryQuill:
         .flatMap: sessionData =>
           sessionData.userId match
             case Some(userId) =>
-              (sessionData.currentQuestion, sessionData.currentAdvertiserId) match
-                case (Some(question), Some(advertiserId)) =>
+              // The question is what decides whether there is anything to answer. The advertiser
+              // travels along; a promo's survey has none, and requiring both meant the answer was
+              // refused with nothing said about why.
+              sessionData.currentQuestion match
+                case Some(question) =>
                   run(findWithEmailByIdQuery(lift(userId)))
                     .map(
                       _.headOption
@@ -107,11 +110,11 @@ object UserRepositoryQuill:
                           User[State.AnsweringVideoSurvey](
                             u.id,
                             State.AnsweringVideoSurvey(
-                              advertiserId,
+                              sessionData.currentAdvertiserId,
                               question.surveyId,
                               question.questionId))))
                     .orDie
-                case _ =>
+                case None =>
                   ZIO.none
             case None =>
               ZIO.none

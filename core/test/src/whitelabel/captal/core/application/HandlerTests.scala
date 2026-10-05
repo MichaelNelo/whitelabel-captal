@@ -57,10 +57,15 @@ object HandlerTests extends TestSuite:
     survey.Id.generate,
     SurveyState.WithLocationQuestion(question, HierarchyLevel.State))
 
+  /** `advertiserId` defaults to present, which is the advertiser case. Passing `None` gives the
+    * promo case — a video survey with no advertiser, which has to answer the same way.
+    */
   private def makeSurveyWithAdvertiser(
-      question: QuestionToAnswer): Survey[SurveyState.WithAdvertiserQuestion] = Survey(
+      question: QuestionToAnswer,
+      advertiserId: Option[AdvertiserId] = Some(AdvertiserId.generate))
+      : Survey[SurveyState.WithAdvertiserQuestion] = Survey(
     survey.Id.generate,
-    SurveyState.WithAdvertiserQuestion(AdvertiserId.generate, question))
+    SurveyState.WithAdvertiserQuestion(advertiserId, question))
 
   private def makeUserAnswering(
       surveyId: survey.Id,
