@@ -89,7 +89,7 @@ CREATE TABLE user_survey_progress (
 
 CREATE UNIQUE INDEX idx_user_survey_progress_unique ON user_survey_progress(user_id, survey_id);
 
--- Tabla para textos localizados (questions, options, UI del portal)
+-- Localized texts: question wording, option labels, and the portal's own interface.
 CREATE TABLE localized_texts (
     id TEXT PRIMARY KEY,
     entity_id TEXT NOT NULL,

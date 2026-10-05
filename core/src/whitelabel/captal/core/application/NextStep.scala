@@ -2,7 +2,7 @@ package whitelabel.captal.core.application
 
 import io.circe.{Decoder, Encoder}
 
-// DTO que indica el siguiente paso usando Phase existente
+// The DTO naming the next step, in terms of the existing Phase.
 final case class NextStep(phase: Phase)
 
 object NextStep:
