@@ -7,49 +7,41 @@ import org.scalajs.dom
 import whitelabel.captal.client.Promises.*
 import whitelabel.captal.client.StatusApi
 
+/** Mounts at once, and leaves the markup's loader alone: the first view to mount takes over from it
+  * and drops it ([[Layout.adopt]]).
+  *
+  * This used to fade the loader out and mount 300ms later, to match the CSS transition. The timer
+  * had no relation to whether anything was ready, so it removed the only thing on screen at an
+  * arbitrary moment and left a blank page until the view arrived. Worse, `Router.lazily` evaluates
+  * its split point when the route first renders, so the first view's chunk did not even begin
+  * downloading until the timer fired -- the 300ms sat in front of the request rather than
+  * overlapping it.
+  */
 @main
 def main(): Unit =
-  val appContainer = dom.document.getElementById("app")
-  val loader = Option(dom.document.querySelector(".initial-loader"))
-
-  // Fade out initial loader, then mount Laminar
-  loader match
-    case Some(el) =>
-      el.classList.add("fade-out")
-      dom
-        .window
-        .setTimeout(
-          () =>
-            el.remove()
-            render(appContainer, App.app)
-            // Check phase after mount and redirect if needed
-            App.syncPhaseOnLoad()
-          ,
-          300 // Match --transition-slow
-        )
-    case None =>
-      render(appContainer, App.app)
-      App.syncPhaseOnLoad()
+  render(dom.document.getElementById("app"), App.app)
+  // Check phase after mount and redirect if needed
+  App.syncPhaseOnLoad()
 end main
 
 object App:
-  val app: HtmlElement = div(
-    cls := "app-root",
-    child <--
-      AppState
-        .isNavigating
-        .combineWith(Router.splitter.signal)
-        .map:
-          case (true, _) =>
-            navigationLoader
-          case (false, view) =>
-            view)
+  /** The nav-loader is a permanent overlay rather than swapped in via `child <--` for two reasons:
+    *
+    *   - Its `.ring-arc` needs to stay in the DOM continuously so `BrandLoader.syncSpin` on the
+    *     next-mounted view can copy the current spin phase from it. If the loader itself unmounted
+    *     between navigations, the destination ring would find no donor and start at t=0 — the same
+    *     visible jump we're trying to avoid.
+    *   - `child <--` removes the previous view before the next one mounts, so a `false → true →
+    *     false` cycle on `isNavigating` leaves a paint frame with neither view nor loader on
+    *     screen: the "blink". Keeping the outgoing view mounted while the overlay covers it, and
+    *     revealing the incoming view once the overlay hides, removes that gap.
+    */
+  val app: HtmlElement = div(cls := "app-root", child <-- Router.splitter.signal, navigationLoader)
 
   private def navigationLoader: HtmlElement = div(
     cls := "nav-loader",
-    div(
-      cls := "loader-icon brand-pulse",
-      img(src := "brand-icon.svg", cls := "brand-icon", alt := "Loading")))
+    cls("is-visible") <-- AppState.isNavigating,
+    BrandLoader())
 
   /** Extract captive portal params from the UniFi redirect URL.
     *

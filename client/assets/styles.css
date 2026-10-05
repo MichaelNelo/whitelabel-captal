@@ -112,6 +112,18 @@
   --icon-size-lg: 64px;
   --icon-size-md: 48px;
   --control-size: 18px;
+  --loader-ring-gap: 24px;
+  --loader-ring-width: 3px;
+  /* The handoff from "waiting" to "ready", in three beats: the ring leaves, the icon stands alone
+     for an instant, and only then rises with the content behind it. That pause is what makes the
+     end of the wait legible -- without it the ring and the movement compete for the same
+     attention. */
+  --loader-ring-out: 0.3s;
+  --loader-settle: 0.1s;
+  --loader-handoff: calc(var(--loader-ring-out) + var(--loader-settle));
+  /* How long the video intro takes to dissolve into the player. Paired with
+     `AdvertiserVideoView.IntroFadeMs`, which decides when the element is removed. */
+  --video-intro-out: 0.4s;
 
   /* ═══════════════════════════════════════════════════════════════════
      STATE COLORS
@@ -166,31 +178,37 @@ body {
   justify-content: center;
 }
 
+/* Router.lazily() wraps every dynamic-imported view in a div so Laminar has a stable parent for
+   its `child <--` binding. Making it display:contents keeps the wrapper out of the layout tree so
+   .app-layout stays the direct flex child of .app-root. */
+.route-slot {
+  display: contents;
+}
+
 /* ═══════════════════════════════════════════════════════════════════
    INITIAL LOADER
    ═══════════════════════════════════════════════════════════════════ */
+/* Stays on screen until Layout mounts and takes over -- not until a timer expires. It is the only
+   thing visible while the bundle and the first view's chunk come down. */
 .initial-loader {
   position: fixed;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  pointer-events: none;
 }
 
-.initial-loader .loader-icon .brand-icon {
-  width: var(--icon-size-lg);
-  height: var(--icon-size-lg);
-  color: var(--text-inverse);
-}
 
-.initial-loader.fade-out {
-  opacity: 0;
-  transition: opacity var(--transition-slow);
-}
 
 /* ═══════════════════════════════════════════════════════════════════
    NAVIGATION LOADER (between page transitions)
    ═══════════════════════════════════════════════════════════════════ */
+/* Permanent overlay: always in the DOM so the ring's animation keeps ticking and stays a valid
+   donor for `BrandLoader.syncSpin`. Hidden by default; visibility flips on `.is-visible`. Kept out
+   of pointer/AT flow while hidden. Background repeats the body's gradient so once the overlay
+   fades in it opaquely covers the outgoing view, and no content bleeds through until the incoming
+   view has mounted underneath. */
 .nav-loader {
   position: fixed;
   inset: 0;
@@ -198,6 +216,18 @@ body {
   align-items: center;
   justify-content: center;
   z-index: 50;
+  background-color: var(--bg-gradient-end);
+  background-image: linear-gradient(var(--bg-gradient-angle), var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease-out, visibility 0s linear 0.15s;
+}
+
+.nav-loader.is-visible {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.15s ease-out, visibility 0s linear 0s;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -235,6 +265,7 @@ body {
 .layout-footer.visible {
   opacity: 1;
   transform: translateY(0);
+  transition-delay: var(--loader-handoff);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -257,7 +288,6 @@ body {
 
 .layout-view.loading-state .view-icon {
   margin-bottom: 0;
-  opacity: 0;
 }
 
 /* Loaded state - normal layout */
@@ -267,12 +297,15 @@ body {
 
 .layout-view.loaded-state .view-icon {
   margin-bottom: var(--space-sm);
-  animation: slideFromCenter 0.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: slideFromCenter 0.8s cubic-bezier(0.22, 1, 0.36, 1) var(--loader-handoff) both;
 }
 
-/* View icon */
+/* Flex rather than `text-align: center`, so `.brand-ring` is a flex item here exactly as it is in
+ * the markup's loader. As an inline-level box it inherited the line's strut and the icon sat 4px
+ * above centre -- precisely the jump the handoff exists to not have. */
 .view-icon {
-  text-align: center;
+  display: flex;
+  justify-content: center;
 }
 
 .view-icon .brand-icon {
@@ -297,52 +330,76 @@ body {
 .view-content.visible {
   opacity: 1;
   transform: translateY(0);
+  transition-delay: var(--loader-handoff);
 }
 
 /* Staggered animations for content elements */
-.view-content.visible > :nth-child(1) { animation: var(--animate-fade-in-1); }
-.view-content.visible > :nth-child(2) { animation: var(--animate-fade-in-2); }
-.view-content.visible > :nth-child(3) { animation: var(--animate-fade-in-3); }
-.view-content.visible > :nth-child(4) { animation: var(--animate-fade-in-4); }
+.view-content.visible > :nth-child(1) { animation: var(--animate-fade-in-1); animation-delay: calc(var(--loader-handoff) + 0.2s); }
+.view-content.visible > :nth-child(2) { animation: var(--animate-fade-in-2); animation-delay: calc(var(--loader-handoff) + 0.3s); }
+.view-content.visible > :nth-child(3) { animation: var(--animate-fade-in-3); animation-delay: calc(var(--loader-handoff) + 0.4s); }
+.view-content.visible > :nth-child(4) { animation: var(--animate-fade-in-4); animation-delay: calc(var(--loader-handoff) + 0.5s); }
 
 /* Footer fade in when content is visible */
 .app-layout:has(.view-content.visible) .layout-footer {
   animation: var(--animate-fade-in-4);
+  animation-delay: calc(var(--loader-handoff) + 0.5s);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
    BRAND ICON
    ═══════════════════════════════════════════════════════════════════ */
+/* `.brand-icon` is the tenant's icon, rendered by `BrandLoader` as a plain `<img src=
+ * "brand-icon.svg">` and sized here. Whatever a tenant uploads is what shows, so there is nothing
+ * in the code to change per tenant and no variable to override: set_location_icon replaces the
+ * file.
+ *
+ * This used to describe a CSS mask over animated colour layers, driven by a `--brand-icon-url`
+ * variable. None of that is here any more -- no `mask-image`, no layers, no such variable. */
+/* The icon as the loader: it breathes (scale + opacity) during `.loading-state`. `breathe` is
+ * symmetric -- 0% and 100% are the same state -- so two icons that mount out of step converge on
+ * the same resting state with no cross-element synchronisation. */
 .brand-icon {
   width: var(--icon-size-lg);
   height: var(--icon-size-lg);
   color: var(--text-inverse);
+  animation: breathe 1.4s ease-in-out infinite;
 }
 
-/* Brand icon pulse glow animation */
-.brand-pulse .brand-icon {
-  animation: brandFadeIn 0.6s ease-out, pulse 1.5s ease-in-out 0.6s infinite;
+.brand-ring {
+  position: relative;
+  display: inline-flex;
 }
 
-@keyframes brandFadeIn {
-  from {
-    opacity: 0;
-    transform: scale(0.8);
-  }
+.ring-track,
+.ring-arc {
+  display: none;
+}
+
+/* In loaded-state the breathing stops and `brandGlowFlash` starts -- a white `drop-shadow` halo
+ * hugging the edge that appears, holds and fades. `forwards` leaves the filter at `none` when it
+ * ends, so the glow is a pulse rather than something that persists. */
+.layout-view.loaded-state .brand-icon,
+.initial-loader.is-fading .brand-icon {
+  opacity: 1;
+  animation: brandGlowFlash 1.3s ease-out forwards;
+}
+
+@keyframes breathe {
+  0%, 100% { opacity: 0.65; }
+  50%      { opacity: 1;    }
+}
+
+@keyframes brandGlowFlash {
+  0%   { filter: none; }
+  20%  { filter: drop-shadow(0 0 1px rgba(255, 255, 255, 1)); }
+  60%  { filter: drop-shadow(0 0 1px rgba(255, 255, 255, 1)); }
+  100% { filter: none; }
+}
+
+@keyframes ringOut {
   to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-@keyframes pulse {
-  0%, 100% {
-    filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.4));
-    transform: scale(1);
-  }
-  50% {
-    filter: drop-shadow(0 0 20px rgba(255, 255, 255, 0.8));
-    transform: scale(1.05);
+    opacity: 0;
+    scale: 1.3;
   }
 }
 
@@ -387,18 +444,31 @@ body {
   }
 }
 
+/* It only rises. The opacity ramp this used to have made the icon REAPPEAR at the centre, and it
+ * was needed only because the loading state left it invisible. It now arrives visible from the
+ * loader before it. */
 @keyframes slideFromCenter {
   0% {
-    transform: translateY(calc(50vh - var(--space-lg) - var(--space-2xl) - var(--icon-size-lg)));
-    opacity: 0;
-  }
-  40% {
-    transform: translateY(calc(50vh - var(--space-lg) - var(--space-2xl) - var(--icon-size-lg)));
-    opacity: 1;
+    /* Half the icon's height, not all of it: what has to land on the centre of the viewport is the
+       icon's own centre. Subtracting the whole --icon-size-lg starts it 32px above where the
+       waiting state left it, and the handoff jumps. It went unnoticed while the animation began
+       immediately and the movement covered the jump; with the --loader-settle pause it is in plain
+       sight. */
+    /* `dvh` and not `vh`: the markup's loader is `position: fixed; inset: 0`, so it centres on the
+       CURRENT viewport. On mobile `vh` resolves against the large viewport -- as if the browser bar
+       were hidden -- so with the bar visible `50vh > 50dvh`, the offset is too large and the JS
+       icon lands a few pixels below the one it replaces. `dvh` follows the real viewport and makes
+       them coincide. The first declaration is the fallback for browsers without dvh (before 2022),
+       where the two units are the same. */
+    transform: translateY(
+      calc(50vh - var(--space-lg) - var(--space-2xl) - var(--icon-size-lg) / 2)
+    );
+    transform: translateY(
+      calc(50dvh - var(--space-lg) - var(--space-2xl) - var(--icon-size-lg) / 2)
+    );
   }
   100% {
     transform: translateY(0);
-    opacity: 1;
   }
 }
 
@@ -1248,37 +1318,37 @@ body {
 /* ═══════════════════════════════════════════════════════════════════
    VIDEO INTRO CARD
    ═══════════════════════════════════════════════════════════════════ */
+/* The layer the intro sits on, over the player.
+ *
+ * Only stacking and an opaque ground: the `Layout` inside does its own centring and animation, so
+ * the flex alignment this used to carry — written for a `.video-intro-card` that no longer exists —
+ * would now shrink-wrap a full view. `.video-hero` is `position: fixed; inset: 0`, so without the
+ * opaque background here the video is visible straight through the intro. */
 .video-intro {
   position: fixed;
   inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding-bottom: 20vh;
-  background: linear-gradient(var(--bg-gradient-angle), var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
   z-index: 10;
+  background: linear-gradient(var(--bg-gradient-angle), var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
+  transition: opacity var(--video-intro-out) ease-out;
 }
 
-.video-intro-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: var(--space-2xl);
-  max-width: 320px;
+/* Dissolving. The element is unmounted after `AdvertiserVideoView.IntroFadeMs`, which has to match
+ * `--video-intro-out`: shorter and the fade is cut off, longer and an invisible overlay keeps
+ * swallowing clicks. `pointer-events: none` makes that second case harmless rather than silent. */
+.video-intro.leaving {
+  opacity: 0;
+  pointer-events: none;
 }
 
-.video-intro-icon {
-  margin-bottom: var(--space-lg);
-  animation: videoIntroIconSlide 0.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
-}
+/* `.video-intro-card`, `.video-intro-icon` and `.video-intro.is-loaded` lived here and are gone.
+ * They described the intro before it was a `Layout`: its own card, its own icon, and a ring driven
+ * by an `is-loaded` class. Layout brings all three — `.view-icon`, the ring, and the
+ * `.loading-state`/`.loaded-state` pair — and nothing has set `is-loaded` since, so those rules
+ * were styling elements that no longer exist and reacting to a class nobody writes. */
 
-.video-intro-icon .brand-icon {
-  width: var(--icon-size-lg);
-  height: var(--icon-size-lg);
-  color: var(--text-inverse);
-}
-
+/* The intro's text. Layout handles loading→loaded (a complete hide/show via `.view-content`), so
+ * the intro's animations run straight from mount with a delay -- the same staggered feel as
+ * everywhere else, with no gate of their own. */
 .video-intro-title {
   font-size: var(--font-size-2xl);
   font-weight: var(--font-weight-bold);
@@ -1301,6 +1371,7 @@ body {
 .video-intro-pulse {
   width: 60px;
   height: 4px;
+  margin: 0 auto;
   background: rgba(255, 255, 255, 0.3);
   border-radius: var(--radius-full);
   overflow: hidden;
@@ -1309,37 +1380,27 @@ body {
   animation: fadeIn 0.5s ease-out 1s forwards;
 }
 
+/* Always indeterminate: the real duration is set by `IntroTimeoutMs` and `canplaythrough`
+ * together, and a determinate progress bar over 3s would communicate a proportion that is not
+ * true. The sweeping loop says "loading" without pretending to be calibrated. */
 .video-intro-pulse::after {
   content: '';
   position: absolute;
   top: 0;
-  left: 0;
   height: 100%;
-  width: 0%;
+  width: 40%;
   background: var(--text-inverse);
   border-radius: var(--radius-full);
-  animation: introProgress 4s linear 1s forwards;
+  animation: introSweep 1.1s ease-in-out infinite alternate;
 }
 
-@keyframes introProgress {
-  from { width: 0%; }
-  to { width: 100%; }
+@keyframes introSweep {
+  from { left: 0%;  }
+  to   { left: 60%; }
 }
 
-@keyframes videoIntroIconSlide {
-  0% {
-    transform: translateY(calc(10vh + var(--space-2xl) + var(--space-lg) + var(--icon-size-lg) / 2));
-    opacity: 0;
-  }
-  40% {
-    transform: translateY(calc(10vh + var(--space-2xl) + var(--space-lg) + var(--icon-size-lg) / 2));
-    opacity: 1;
-  }
-  100% {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
+/* `videoIntroIconSlide` was here and is gone with the rules that referenced it. The intro's icon
+ * is Layout's now, and Layout slides it with `slideFromCenter`. */
 
 /* ═══════════════════════════════════════════════════════════════════
    VIDEO CONTROLS

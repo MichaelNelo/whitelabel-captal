@@ -21,10 +21,14 @@
   <link rel="stylesheet" href="./custom-styles.css.gz" onerror="this.remove()">
 </head>
 <body>
-  <!-- Initial loader - outside #app, removed by JS -->
+  <!-- Fuera de #app y con el mismo markup que el estado de carga de Layout, para que el relevo no
+       mueva nada. Lo borra Layout al montar, no un timer: esto es lo unico en pantalla mientras
+       bajan main.js y el chunk de la primera vista. -->
   <div class="initial-loader">
-    <div class="loader-icon brand-pulse">
-      <img src="./brand-icon.svg" class="brand-icon" alt="Loading">
+    <div class="brand-ring">
+      <span class="ring-track"></span>
+      <span class="ring-arc"></span>
+      <img src="./brand-icon.svg" class="brand-icon" alt="Cargando">
     </div>
   </div>
   <div id="app"></div>

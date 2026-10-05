@@ -10,6 +10,10 @@ import whitelabel.captal.endpoints.ApiError
   */
 object ErrorHandler:
   def escalate(error: ApiError): Unit =
+    // Turn the nav-loader on before navigating to Error: ErrorView's lazy chunk takes a moment to
+    // come down, and without the overlay the user keeps seeing the view the error happened in (or
+    // an empty frame) until Error mounts. ErrorView's Layout.onMount turns it off on its own.
+    AppState.setNavigating(true)
     AppState.setError(Some(error))
     Router.navigateToError()
 

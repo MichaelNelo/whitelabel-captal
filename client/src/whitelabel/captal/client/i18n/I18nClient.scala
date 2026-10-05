@@ -32,6 +32,7 @@ object I18nClient:
 
   def current: I18n = i18nVar.now()
   def currentLocale: String = localeVar.now()
+  def isLoadedNow: Boolean = isLoadedVar.now()
 
   def setLocale(code: String): Unit =
     localeVar.set(code)
