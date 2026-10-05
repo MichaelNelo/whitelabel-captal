@@ -129,7 +129,7 @@ questions:
 | `radio`    | Single choice. Requires `options` (≥2).              |
 | `checkbox` | Multi choice. Requires `options` (≥2).               |
 | `dropdown` | Single dropdown. Requires `options`. Supports `hierarchyLevel`. |
-| `rating`   | Numeric rating (e.g. 1–5 stars).                     |
+| `rating`   | **Not available.** The portal renders it as the literal text `Rating input - TODO`, so it reaches guests as a to-do note. The backoffice refuses to create one. Use `radio` with the points as options. |
 | `numeric`  | Numeric input.                                       |
 | `date`     | Date picker.                                         |
 

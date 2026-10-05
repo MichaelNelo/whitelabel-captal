@@ -16,6 +16,7 @@ import whitelabel.captal.infra.{
   QuestionOptionRow,
   QuestionRow,
   QuestionRuleRow,
+  SurveyCategory as StoredCategory,
   SurveyRow
 }
 import zio.*
@@ -23,6 +24,7 @@ import zio.schema.annotation.{description, discriminatorName, rejectExtraFields}
 import zio.schema.{DeriveSchema, Schema}
 
 import McpSchema.given
+import ToolSchema.readOnly
 
 // The case names are the wire values, lowercase and underscored, which is why they break Scala
 // naming convention. `@caseName` is not an option: the JSON codec honours it but JsonSchemaGen
@@ -37,6 +39,56 @@ enum SurveyCategory:
 
 object SurveyCategory:
   given Schema[SurveyCategory] = DeriveSchema.gen
+
+  extension (c: SurveyCategory)
+    /** The stored word, by way of [[StoredCategory]] rather than `toString`.
+      *
+      * `toString` would give the same four strings today, which is precisely why this exists: the
+      * wire value and the stored value agreeing is a fact nobody checked. An exhaustive match
+      * against the constants `surveys.category` is actually written with makes a divergence a
+      * compile error instead of a survey the portal never finds.
+      */
+    def stored: String =
+      c match
+        case SurveyCategory.email =>
+          StoredCategory.Email
+        case SurveyCategory.profiling =>
+          StoredCategory.Profiling
+        case SurveyCategory.location =>
+          StoredCategory.Location
+        case SurveyCategory.advertiser =>
+          StoredCategory.Advertiser
+end SurveyCategory
+
+/** The three surveys that exist once for the whole deployment rather than once per location.
+  *
+  * A type of its own so `create_identification_survey` cannot be handed `advertiser`. The two are
+  * not variants of one operation: one belongs to a location through its video, the other belongs to
+  * nobody, and they are guarded by different scopes for that reason.
+  */
+enum IdentificationCategory:
+  case email
+  case profiling
+  case location
+
+object IdentificationCategory:
+  given Schema[IdentificationCategory] = DeriveSchema.gen
+
+  extension (c: IdentificationCategory)
+    /** The stored word, for the reason [[SurveyCategory.stored]] gives. */
+    def stored: String =
+      c match
+        case IdentificationCategory.email =>
+          StoredCategory.Email
+        case IdentificationCategory.profiling =>
+          StoredCategory.Profiling
+        case IdentificationCategory.location =>
+          StoredCategory.Location
+
+  /** The stored words of the three, which is what `surveys.category` holds. Read by
+    * `isIdentification`, which is handed a stored value and not a wire one.
+    */
+  val storedValues: Set[String] = values.map(_.stored).toSet
 
 enum Hierarchy:
   case state
@@ -95,8 +147,7 @@ final case class SelectionRule(
 final case class RangeRule(
     @description("Which end of the range to set.")
     kind: RangeRuleKind,
-    @description(
-      "A whole number for rating, any number for numeric, an ISO date (yyyy-mm-dd) for date.")
+    @description("Any number for numeric, an ISO date (yyyy-mm-dd) for date.")
     value: String)
 
 /** What varies by question type, and only that.
@@ -131,10 +182,13 @@ enum AnswerFormat:
       @description(
         "What the text must satisfy: min_length, max_length, pattern, email, url. Omit for none.")
       rules: Option[List[TextRule]])
-  @rejectExtraFields
-  case Rating(
-      @description("The bounds of the scale: min, max, as whole numbers. Omit for the default.")
-      rules: Option[List[RangeRule]])
+  // No `rating`. `QuestionType.Rating` exists in core and the portal does not render it: the view
+  // matches the case and emits the literal string "Rating input - TODO", which is what a guest
+  // would read. Everything around it is built — codecs, range validation, `RatingOutOfRange`, the
+  // `ratingOutOfRange` message — and the one missing piece is the input itself.
+  //
+  // Removed from this schema rather than from core, which is the wire contract with the portal: a
+  // stored row of that type still has to decode. What is closed here is the way to make a new one.
   @rejectExtraFields
   case Numeric(
       @description("The accepted range: min, max. Any number. Omit for unbounded.")
@@ -338,6 +392,7 @@ object SurveyTools:
   val list: McpToolHandlerR[QuillSqlite] = McpTool("list_surveys")
     .description(
       "Every survey with the questions in it, enough of each to find one and act on it. Categories are email, profiling, location and advertiser; only advertiser surveys belong to a location, through their video. Call get_survey for a question's options, rules and answer count.")
+    .readOnly
     .handle: (in: ListRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
@@ -429,17 +484,70 @@ object SurveyTools:
   val get: McpToolHandlerR[QuillSqlite] = McpTool("get_survey")
     .description(
       "The full contents of a survey: every question in display order with its texts, options, validation rules and how many answers reference it. Retired questions and options are included, marked inactive.")
+    .readOnly
     .handle((in: GetRequest) => viewOf(in.surveyId))
 
-  val setQuestionActive: McpToolHandlerR[QuillSqlite] = McpTool("set_question_active")
+  /** Which half of the server a survey belongs to.
+    *
+    * The three identification categories are deployment-wide: `SurveyRepositoryQuill` picks them by
+    * category with no location filter, so there is one of each for every portal at once. Everything
+    * else hangs off a video and therefore off a location.
+    *
+    * That difference is the whole reason the question tools come in pairs. An operator who looks
+    * after one cafe may write their own advertiser questions all day; the question every guest of
+    * every location is asked before being identified is not theirs to touch.
+    */
+  private def isIdentification(category: String): Boolean = IdentificationCategory
+    .storedValues
+    .contains(category)
+
+  /** Refuses a question that belongs to the other half, naming the tool that does take it.
+    *
+    * `set_question_active` and `reorder_questions` are addressed by question and survey id, and
+    * neither says which kind it is — so a caller that guesses wrong gets a sentence telling it
+    * where to go, rather than a scope error that reads like a permissions problem.
+    */
+  private def requireCategory(
+      category: String,
+      wantIdentification: Boolean,
+      otherTool: String): ZIO[Any, String, Unit] =
+    ZIO
+      .when(isIdentification(category) != wantIdentification)(
+        ZIO.fail(
+          if wantIdentification then
+            s"That question belongs to a '$category' survey, which is scoped to a location. Use $otherTool."
+          else
+            s"That question belongs to the deployment-wide '$category' survey, asked of every guest of every location. Use $otherTool, which requires identity:write."))
+      .unit
+
+  private def setActive(
+      wantIdentification: Boolean,
+      otherTool: String): McpToolHandlerR[QuillSqlite] = McpTool(
+    if wantIdentification then
+      "set_identification_question_active"
+    else
+      "set_question_active")
     .description(
-      "Retire a question or bring it back. Never deletes: answers reference questions, so a retired question keeps resolving for everything already recorded. Reports how many answers that is. See skill://add-survey/SKILL.md.")
-    .requireScopes(Auth.ContentWrite)
+      if wantIdentification then
+        "Retire a question from one of the three deployment-wide identification surveys, or bring it back. Every guest of every location is asked these, so this is not a per-location change. Never deletes: answers reference questions, so a retired one keeps resolving for everything already recorded."
+      else
+        "Retire a question from an advertiser's survey, or bring it back. Never deletes: answers reference questions, so a retired question keeps resolving for everything already recorded. Reports how many answers that is.")
+    .requireScopes(
+      if wantIdentification then
+        Auth.IdentityWrite
+      else
+        Auth.ContentWrite)
     .handle: (in: SetQuestionActiveRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         for
           question <- findQuestion(in.questionId)
+          surveys  <- run(query[SurveyRow]).orDie
+          category = surveys
+            .find(_.id.asString == question.surveyId.asString)
+            .map(_.category)
+            .getOrElse("")
+          _ <- requireCategory(category, wantIdentification, otherTool)
           flag =
             if in.active then
               1
@@ -464,14 +572,41 @@ object SurveyTools:
         yield SetQuestionActiveResponse(in.questionId, in.active, answers, remaining)
         end for
 
-  val reorder: McpToolHandlerR[QuillSqlite] = McpTool("reorder_questions")
+  val setQuestionActive: McpToolHandlerR[QuillSqlite] = setActive(
+    wantIdentification = false,
+    otherTool = "set_identification_question_active")
+
+  val setIdentificationQuestionActive: McpToolHandlerR[QuillSqlite] = setActive(
+    wantIdentification = true,
+    otherTool = "set_question_active")
+
+  private def reorderQuestions(
+      wantIdentification: Boolean,
+      otherTool: String): McpToolHandlerR[QuillSqlite] = McpTool(
+    if wantIdentification then
+      "reorder_identification_questions"
+    else
+      "reorder_questions")
     .description(
-      "Set the order questions are asked in. Give every active question of the survey exactly once; display_order is rewritten to match the list.")
-    .requireScopes(Auth.ContentWrite)
+      if wantIdentification then
+        "Set the order the questions of a deployment-wide identification survey are asked in. Give every active question of the survey exactly once; display_order is rewritten to match. This is the order every guest of every location sees."
+      else
+        "Set the order an advertiser survey's questions are asked in. Give every active question of the survey exactly once; display_order is rewritten to match the list.")
+    .requireScopes(
+      if wantIdentification then
+        Auth.IdentityWrite
+      else
+        Auth.ContentWrite)
     .handle: (in: ReorderRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         for
+          surveys <- run(query[SurveyRow]).orDie
+          survey_ <- ZIO
+            .succeed(surveys.find(_.id.asString == in.surveyId))
+            .someOrFail(
+              s"No survey with id '${in.surveyId}'. Call list_surveys to see what exists.")
+          _    <- requireCategory(survey_.category, wantIdentification, otherTool)
           rows <- run(questionsOfQuery(lift(in.surveyId))).orDie
           _    <-
             ZIO.when(rows.isEmpty)(
@@ -498,6 +633,14 @@ object SurveyTools:
         yield ReorderResponse(in.surveyId, in.orderedQuestionIds)
         end for
 
+  val reorder: McpToolHandlerR[QuillSqlite] = reorderQuestions(
+    wantIdentification = false,
+    otherTool = "reorder_identification_questions")
+
+  val reorderIdentification: McpToolHandlerR[QuillSqlite] = reorderQuestions(
+    wantIdentification = true,
+    otherTool = "reorder_questions")
+
   // ───────────────────────────────────────────────────────────────────────────
   // Creation
   //
@@ -509,13 +652,20 @@ object SurveyTools:
 
   final case class CreateSurveyRequest(
       @description(
-        "What the survey is for. Identification surveys are asked before a guest has a location; the others belong to one.")
-      category: SurveyCategory,
+        "The video this survey follows. Required: it is what findNextAdvertiserSurvey matches on, and the survey inherits that video's location.")
+      videoId: String,
       @description("Label for operators. Not shown to guests; safe to omit.")
-      name: Option[String],
+      name: Option[String])
+
+  /** Its own request type rather than a category on the one above, so the schema refuses
+    * `advertiser` outright instead of the handler explaining afterwards that it needed a video.
+    */
+  final case class CreateIdentificationSurveyRequest(
       @description(
-        "Required for advertiser surveys and rejected for the others: the video this survey follows. The survey inherits that video's location.")
-      videoId: Option[String])
+        "Which of the three identification surveys this is. There is one of each for the whole deployment.")
+      category: IdentificationCategory,
+      @description("Label for operators. Not shown to guests; safe to omit.")
+      name: Option[String])
   final case class CreateSurveyResponse(
       @description(
         "Pass to create_question to add questions. A survey with none is served to nobody.")
@@ -555,6 +705,7 @@ object SurveyTools:
   given Schema[LocalizedText] = DeriveSchema.gen
   given Schema[AnswerOption] = DeriveSchema.gen
   given Schema[CreateSurveyRequest] = DeriveSchema.gen
+  given Schema[CreateIdentificationSurveyRequest] = DeriveSchema.gen
   given Schema[CreateSurveyResponse] = DeriveSchema.gen
   given Schema[CreateQuestionRequest] = DeriveSchema.gen
   given Schema[CreateQuestionResponse] = DeriveSchema.gen
@@ -585,8 +736,6 @@ object SurveyTools:
         ("checkbox", options, selection(rules))
       case AnswerFormat.Input(rules) =>
         ("input", Nil, text(rules))
-      case AnswerFormat.Rating(rules) =>
-        ("rating", Nil, range(rules))
       case AnswerFormat.Numeric(rules) =>
         ("numeric", Nil, range(rules))
       case AnswerFormat.Date(rules) =>
@@ -676,57 +825,105 @@ object SurveyTools:
         .orDie
         .flatMap(Writes.expectOne(_, s"Text for '$entityId' (${t.locale})"))
 
+  /** The one place a survey row is written by these tools.
+    *
+    * Both tools land here so the uniqueness guard cannot be bypassed by whichever of them grows a
+    * second code path later. `create_advertiser_video` writes its own row, which is deliberate: it
+    * builds the video and its survey in one call and the survey is unambiguous by construction — it
+    * belongs to the video it just created.
+    */
+  private def insertSurvey(
+      category: String,
+      videoId: Option[String],
+      locationId: Option[String],
+      /** Copied from the video, like `locationId`, so answers to an advertiser's questions are
+        * attributed to that advertiser in the event log. It was being written as `None` for every
+        * survey, which is correct for a promo and loses the attribution for an ad.
+        */
+      advertiserId: Option[String],
+      name: Option[String],
+      global: Boolean)
+      : ZIO[QuillSqlite, String, CreateSurveyResponse] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.*
+    for
+      existing <- run(query[SurveyRow]).orDie
+      // Identification surveys are chosen by category alone, with no location filter anywhere in
+      // SurveyRepositoryQuill, so a second active one of the same category makes which gets
+      // served depend on display_order across unrelated surveys.
+      clashes = existing.filter(s => global && s.isActive == 1 && s.category == category)
+      _ <-
+        ZIO.when(clashes.nonEmpty)(
+          ZIO.fail(
+            s"An active '$category' survey already exists (id ${clashes
+                .head
+                .id
+                .asString}). Identification surveys are global and picked by category, so two would be ambiguous."))
+      now = java.time.Instant.now.toString
+      id  = survey.Id.generate
+      affected <-
+        run(
+          query[SurveyRow].insertValue(
+            lift(SurveyRow(id, category, advertiserId, videoId, locationId, 1, now, name)))).orDie
+      _ <- Writes.expectOne(affected, s"Creating $category survey")
+    yield CreateSurveyResponse(id.asString, category)
+    end for
+
+  /** Identification surveys live in [[createIdentificationSurvey]], behind a different scope. This
+    * one is a location's, through the video it follows — whether that video is an advertiser's or a
+    * promo. The selection only requires an *advertiser's* video to still have a question left; a
+    * promo plays regardless, and its survey, if it has one, is asked afterwards the same way.
+    */
   val createSurvey: McpToolHandlerR[QuillSqlite] = McpTool("create_survey")
     .description(
-      "Create a survey. Advertiser surveys name the video they follow and inherit its location; identification surveys are global and are picked by category. Read skill://add-survey/SKILL.md first.")
+      "Create the survey shown after a video — an advertiser's or one of the venue's own promos. It inherits the video's location and advertiser, so there is nothing to say about where it belongs or whose it is. Read skill://add-survey/SKILL.md first.")
     .requireScopes(Auth.ContentWrite)
     .handle: (in: CreateSurveyRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
-        val category = in.category.toString
         for
-          // The video is what findNextAdvertiserSurvey matches on; without it the survey exists but
-          // is unreachable.
-          _ <-
-            ZIO.when(in.category == SurveyCategory.advertiser && in.videoId.isEmpty)(
-              ZIO.fail("An advertiser survey needs the videoId of the video it follows."))
-          _ <-
-            ZIO.when(in.category != SurveyCategory.advertiser && in.videoId.isDefined)(
-              ZIO.fail(s"Only advertiser surveys attach to a video; this one is '$category'."))
           // Verified rather than trusted: a survey pointing at a video that does not exist is
           // reachable by nothing, and the foreign key will not say so.
-          video <-
-            ZIO.foreach(in.videoId): videoId =>
-              run(videoByIdQuery(lift(videoId)))
-                .orDie
-                .map(_.headOption)
-                .someOrFail(s"No video with id '$videoId'.")
-          // Taken from the video rather than asked for. Advertiser surveys are scoped to a location
-          // through their video — the selection filters videos by location and the survey follows —
-          // so a location_id of its own could only ever disagree with it.
-          locationId = video.flatMap(_.locationId)
-          existing <- run(query[SurveyRow]).orDie
-          // Identification surveys are chosen by category alone, with no location filter anywhere in
-          // SurveyRepositoryQuill, so a second active one of the same category makes which gets
-          // served depend on display_order across unrelated surveys.
-          clashes = existing.filter(s =>
-            s.isActive == 1 && s.category == category && in.category != SurveyCategory.advertiser)
-          _ <-
-            ZIO.when(clashes.nonEmpty)(
-              ZIO.fail(
-                s"An active '$category' survey already exists (id ${clashes
-                    .head
-                    .id
-                    .asString}). Identification surveys are global and picked by category, so two would be ambiguous."))
-          now = java.time.Instant.now.toString
-          id  = survey.Id.generate
-          affected <-
-            run(
-              query[SurveyRow].insertValue(
-                lift(SurveyRow(id, category, None, in.videoId, locationId, 1, now, in.name)))).orDie
-          _ <- Writes.expectOne(affected, s"Creating $category survey")
-        yield CreateSurveyResponse(id.asString, category)
+          video <- run(videoByIdQuery(lift(in.videoId)))
+            .orDie
+            .map(_.headOption)
+            .someOrFail(s"No video with id '${in.videoId}'.")
+          // Both taken from the video rather than asked for. A video survey is scoped to a location
+          // through its video — the selection filters videos by location and the survey follows —
+          // so a location_id of its own could only ever disagree with it, and the same holds for
+          // the advertiser. A promo's video carries neither; the survey then carries neither, and
+          // is served and answered all the same.
+          response <- insertSurvey(
+            category = SurveyCategory.advertiser.stored,
+            videoId = Some(in.videoId),
+            locationId = video.locationId,
+            advertiserId = video.advertiserId,
+            name = in.name,
+            global = false
+          )
+        yield response
         end for
+
+  /** Behind [[Auth.IdentityWrite]] rather than `content:write`, which is the whole point of it
+    * being a separate tool.
+    *
+    * These three are asked of every guest of every location — `SurveyRepositoryQuill` picks them by
+    * category with no location filter — so replacing one changes the identification flow for the
+    * entire deployment. An operator trusted with a cafe's videos should not be able to do that by
+    * holding the same token, and a scope declared on the tool is what lets `tools/list` say so.
+    */
+  val createIdentificationSurvey: McpToolHandlerR[QuillSqlite] = McpTool(
+    "create_identification_survey")
+    .description(
+      "Create one of the three deployment-wide surveys asked before a guest is identified: email, profiling or location. Not scoped to any location — there is one of each for every portal at once, and creating a second of the same kind is refused. Read skill://add-survey/SKILL.md first.")
+    .requireScopes(Auth.IdentityWrite)
+    .handle: (in: CreateIdentificationSurveyRequest) =>
+      insertSurvey(
+        category = in.category.stored,
+        videoId = None,
+        locationId = None,
+        advertiserId = None,
+        name = in.name,
+        global = true)
 
   /** Writes one question with its texts, options and rules.
     *
@@ -820,10 +1017,23 @@ object SurveyTools:
     yield CreateQuestionResponse(questionId.asString, displayOrder, optionIds)
     end for
 
-  val createQuestion: McpToolHandlerR[QuillSqlite] = McpTool("create_question")
+  private def addQuestion(
+      wantIdentification: Boolean,
+      otherTool: String): McpToolHandlerR[QuillSqlite] = McpTool(
+    if wantIdentification then
+      "create_identification_question"
+    else
+      "create_question")
     .description(
-      "Add a question to a survey. Appended last; use reorder_questions to move it. Only the wording has to come from the operator — the question shape carries what varies by type, and everything else has a default. Read skill://add-survey/SKILL.md for the locale constraints, which the schema cannot express.")
-    .requireScopes(Auth.ContentWrite)
+      if wantIdentification then
+        "Add a question to one of the three deployment-wide identification surveys. Every guest of every location answers it before being identified, so this is not a per-location change. Appended last; use reorder_identification_questions to move it. Call read_skill('add-survey') for the locale constraints, which the schema cannot express."
+      else
+        "Add a question to an advertiser's survey. Appended last; use reorder_questions to move it. Only the wording has to come from the operator — the question shape carries what varies by type, and everything else has a default. Call read_skill('add-survey') for the locale constraints, which the schema cannot express.")
+    .requireScopes(
+      if wantIdentification then
+        Auth.IdentityWrite
+      else
+        Auth.ContentWrite)
     .handle: (in: CreateQuestionRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
@@ -833,6 +1043,7 @@ object SurveyTools:
             .succeed(surveys.find(_.id.asString == in.surveyId))
             .someOrFail(
               s"No survey with id '${in.surveyId}'. Call list_surveys to see what exists.")
+          _        <- requireCategory(survey_.category, wantIdentification, otherTool)
           siblings <- run(questionsOfQuery(lift(in.surveyId))).orDie
           written  <- writeQuestion(
             surveyId = survey_.id,
@@ -850,11 +1061,32 @@ object SurveyTools:
         yield written
         end for
 
+  val createQuestion: McpToolHandlerR[QuillSqlite] = addQuestion(
+    wantIdentification = false,
+    otherTool = "create_identification_question")
+
+  val createIdentificationQuestion: McpToolHandlerR[QuillSqlite] = addQuestion(
+    wantIdentification = true,
+    otherTool = "create_question")
+
+  /** Six tools where there were three, in pairs that differ only in which surveys they accept and
+    * what they require to use them.
+    *
+    * The alternative was one tool each, declaring `content:write` and quietly demanding
+    * `identity:write` once it saw the survey's category. That reads better at the call site and
+    * makes `tools/list` lie: a tool would publish one requirement and enforce another, which is the
+    * failure this codebase has spent the day finding in other forms.
+    */
   val all: List[McpToolHandlerR[QuillSqlite]] = List(
     list,
     get,
     setQuestionActive,
+    setIdentificationQuestionActive,
     reorder,
+    reorderIdentification,
     createSurvey,
-    createQuestion)
+    createIdentificationSurvey,
+    createQuestion,
+    createIdentificationQuestion
+  )
 end SurveyTools
