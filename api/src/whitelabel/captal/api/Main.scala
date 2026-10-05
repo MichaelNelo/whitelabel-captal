@@ -28,7 +28,6 @@ import whitelabel.captal.infra.eventhandlers.{
   UnifiAccessHandler,
   UserPersistenceHandler
 }
-import whitelabel.captal.infra.provision.ProvisionService
 import whitelabel.captal.infra.repositories.{
   SurveyRepositoryQuill,
   UserRepositoryQuill,
@@ -376,22 +375,45 @@ object Main extends ZIOAppDefault:
                 ZIO.logError(
                   s"${request.method} ${request.url.path} -> ERROR (${duration}ms): $error")
 
-  private def devStaticRoutes: Routes[Any, Response] = Routes(
-    Method.GET / "assets" / "styles.css" ->
-      zio.http.Handler.fromFile(java.io.File("client/assets/styles.css")),
-    Method.GET / "brand-icon.svg" ->
-      zio.http.Handler.fromFile(java.io.File("client/assets/brand-icon.svg")),
-    Method.GET / "out" / "client" / "fastLinkJS.dest" / "main.js" ->
-      zio.http.Handler.fromFile(java.io.File("out/client/fastLinkJS.dest/main.js")),
-    Method.GET / "out" / "client" / "fastLinkJS.dest" / "main.js.map" ->
-      zio.http.Handler.fromFile(java.io.File("out/client/fastLinkJS.dest/main.js.map")),
-    Method.GET / "out" / "client" / "fullLinkJS.dest" / "main.js" ->
-      zio.http.Handler.fromFile(java.io.File("out/client/fullLinkJS.dest/main.js")),
-    Method.GET / "out" / "client" / "fullLinkJS.dest" / "main.js.map" ->
-      zio.http.Handler.fromFile(java.io.File("out/client/fullLinkJS.dest/main.js.map"))
-  ).handleError(e => Response.internalServerError(e.getMessage))
+  /** Under the slug as well as at the root, because `index.html` sets `<base href="/<slug>/">` and
+    * its `./brand-icon.svg` resolves against it. In production that is right -- the assets live at
+    * `<slug>/` in S3 -- so dev has to answer there too or the icon is a broken image.
+    */
+  private def devStaticRoutes(locationSlug: Option[String]): Routes[Any, Response] =
+    val styles = zio.http.Handler.fromFile(java.io.File("client/assets/styles.css"))
+    val icon = zio.http.Handler.fromFile(java.io.File("client/assets/brand-icon.svg"))
+    val atRoot = Routes(
+      Method.GET / "assets" / "styles.css" -> styles,
+      Method.GET / "brand-icon.svg"        -> icon)
+    val all =
+      locationSlug.fold(atRoot): slug =>
+        atRoot ++
+          Routes(
+            Method.GET / slug / "assets" / "styles.css" -> styles,
+            Method.GET / slug / "brand-icon.svg"        -> icon)
+    all.handleError(e => Response.internalServerError(e.getMessage))
 
-  private def spaCatchAllRoutes: Routes[Any, Response] =
+  /** The linker's output directories, served whole.
+    *
+    * These used to be four routes naming `main.js` and its source map, from when the client linked
+    * to a single file. It does not any more: `ModuleKind.ESModule` with `SmallModulesFor` emits one
+    * module per class -- 169 of them at the time of writing -- and `main.js` pulls the rest in by
+    * relative path. Naming files here meant every one of those imports 404'd and the client never
+    * booted, while `main.js` itself still served 200 and made it look like the build was fine.
+    *
+    * Both directories, so dev can run against either build: `fastLinkJS.dest` is what `api.dev`
+    * renders `index.html` against by default because it links in about a second, and `bundle.dest`
+    * is the real artefact -- Vite, terser, hashed chunk names -- for when the question is about the
+    * thing production actually serves.
+    */
+  private def devLinkerOutput(routes: Routes[FullEnv, Response]): Routes[FullEnv, Response] =
+    Seq("fastLinkJS.dest", "bundle.dest").foldLeft(routes): (acc, dir) =>
+      acc @@
+        Middleware.serveDirectory(
+          Path.empty / "out" / "client" / dir,
+          java.io.File(s"out/client/$dir"))
+
+  private def spaCatchAllRoutes(locationSlug: Option[String]): Routes[Any, Response] =
     val serveIndex = zio
       .http
       .Handler
@@ -404,13 +426,27 @@ object Main extends ZIOAppDefault:
               body = Body.fromArray(bytes),
               headers = Headers(Header.ContentType(MediaType.text.html))))
           .orElse(ZIO.succeed(Response.notFound))
-    Routes(
+    val atRoot = Routes(
       Method.GET / ""         -> serveIndex,
       Method.GET / "question" -> serveIndex,
       Method.GET / "video"    -> serveIndex,
       Method.GET / "survey"   -> serveIndex,
       Method.GET / "ready"    -> serveIndex
     )
+    // Also under the slug, because that is where the API is. `endpoints` prefixes every route with
+    // the location slug when one is configured, and `api.dev` always configures one -- so a page
+    // served from `/` computes `apiBase = "/api"` (ApiClient takes the first path segment) and
+    // every call 404s. Serving it from `/<slug>/` too is what production does: CloudFront puts the
+    // portal at `/<slug>/` and the ALB takes `/<slug>/api/*`.
+    locationSlug.fold(atRoot): slug =>
+      atRoot ++
+        Routes(
+          Method.GET / slug              -> serveIndex,
+          Method.GET / slug / "question" -> serveIndex,
+          Method.GET / slug / "video"    -> serveIndex,
+          Method.GET / slug / "survey"   -> serveIndex,
+          Method.GET / slug / "ready"    -> serveIndex
+        )
   end spaCatchAllRoutes
 
   private def routes(
@@ -432,7 +468,7 @@ object Main extends ZIOAppDefault:
       finishRoutes)
     val baseRoutes =
       if devMode then
-        devStaticRoutes ++ api ++ spaCatchAllRoutes
+        devLinkerOutput(devStaticRoutes(locationSlug) ++ api ++ spaCatchAllRoutes(locationSlug))
       else
         api
     baseRoutes @@ loggingMiddleware
@@ -440,24 +476,27 @@ object Main extends ZIOAppDefault:
 
   // ─── App layer composition ────────────────────────────────────────────────────
 
-  /** LocationService layer that runs location provisioning first, ensuring the location exists in
-    * the DB before any slug resolution. Shared provisioning (surveys + advertisers) is handled
-    * exclusively by the ephemeral task launched from `captal shared push`.
+  /** Reads the locations the backoffice writes, and provisions nothing.
+    *
+    * This layer used to apply the YAML under `PROVISION_DIR` before resolving a slug, which made
+    * starting a container a write to the database — on every deploy, scale-out, task replacement
+    * and OOM restart. Once the backoffice writes those same tables, that makes the result of an
+    * edit a function of when a container last happened to start: an untouched YAML leaves it alone,
+    * an edited one overwrites it, and a lost `provision_manifest` re-creates the location from disk
+    * and sets every `is_active` back to 1. Not "the file wins" or "the tool wins" — whichever ran
+    * last, for reasons unrelated to either.
+    *
+    * So the data stops travelling with the artifact, which was the point of the migration rather
+    * than a detail of it. Content is edited through the MCP server and read from here, and updating
+    * the system becomes re-deploying an image instead of re-applying a directory.
+    *
+    * `LOCATION_SLUG` still does real work: it names which location this task serves.
+    * `PROVISION_DIR` and `SHARED_DIR` are now read and ignored, and the task definitions that set
+    * them should drop them — a variable that configures nothing is a promise that something still
+    * reads it.
     */
-  private val locationServiceWithProvisioning
-      : ZLayer[ServerSettings & QuillSqlite, Throwable, LocationService] = ZLayer.fromZIO:
-    for
-      settings <- ZIO.service[ServerSettings]
-      quill    <- ZIO.service[QuillSqlite]
-      _        <-
-        (settings.provisionDir, settings.locationSlug) match
-          case (Some(dir), Some(slug)) =>
-            ProvisionService.run(quill, dir, slug)
-          case (Some(_), None) =>
-            ZIO.fail(new RuntimeException("PROVISION_DIR set but LOCATION_SLUG is missing"))
-          case _ =>
-            ZIO.logInfo("No PROVISION_DIR configured, skipping provisioning")
-    yield LocationService(quill)
+  private val locationServiceLayer: ZLayer[QuillSqlite, Nothing, LocationService] = ZLayer.fromZIO:
+    ZIO.serviceWith[QuillSqlite](LocationService(_))
 
   /** `JobRunner` sits outside `FullEnv` on purpose: it is consumed by `run` to start the scheduler
     * fibers, not by the endpoints, so it has no business in the routes' environment.
@@ -467,7 +506,7 @@ object Main extends ZIOAppDefault:
       SessionContext.make,
       RqliteDataSource.layer,
       Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase),
-      locationServiceWithProvisioning,
+      locationServiceLayer,
       sessionServiceLayer,
       localeServiceLayer,
       sessionCookieConfigLayer,
