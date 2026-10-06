@@ -875,7 +875,7 @@ object SurveyTools:
     */
   val createSurvey: McpToolHandlerR[QuillSqlite] = McpTool("create_survey")
     .description(
-      "Create the survey shown after a video — an advertiser's or one of the venue's own promos. It inherits the video's location and advertiser, so there is nothing to say about where it belongs or whose it is. Read skill://add-survey/SKILL.md first.")
+      "Create the survey shown after a video — an advertiser's or one of the venue's own promos. It inherits the video's location and advertiser, so there is nothing to say about where it belongs or whose it is. Call read_skill('add-survey') first.")
     .requireScopes(Auth.ContentWrite)
     .handle: (in: CreateSurveyRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
@@ -914,7 +914,7 @@ object SurveyTools:
   val createIdentificationSurvey: McpToolHandlerR[QuillSqlite] = McpTool(
     "create_identification_survey")
     .description(
-      "Create one of the three deployment-wide surveys asked before a guest is identified: email, profiling or location. Not scoped to any location — there is one of each for every portal at once, and creating a second of the same kind is refused. Read skill://add-survey/SKILL.md first.")
+      "Create one of the three deployment-wide surveys asked before a guest is identified: email, profiling or location. Not scoped to any location — there is one of each for every portal at once, and creating a second of the same kind is refused. Call read_skill('add-survey') first.")
     .requireScopes(Auth.IdentityWrite)
     .handle: (in: CreateIdentificationSurveyRequest) =>
       insertSurvey(

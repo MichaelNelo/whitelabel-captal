@@ -1,20 +1,22 @@
 ---
 name: style-reference
-description: Reference for the CSS variables, class hooks, and per-screen DOM structure a location can override through set_location_styles. Lists the theming API (recommended), the per-page class anatomy, and shared/state modifiers. Use when customizing branding, colors, typography, layout, or specific screens (welcome, question, video, video-survey, ready). Triggers on "custom styles", "branding", "theme", "css variables", "override styles", "style screen", "estilos", "marca", "colores", "personalizar pantalla".
-version: 2.0.0
+description: How to theme a location's portal through set_location_styles — the per-screen DOM structure, the class hooks, the state modifiers, and which variable drives which part. Call get_css_schema for the variable list itself; it is derived from the portal's stylesheet and this document is not. Use when customizing branding, colors, typography, layout, or specific screens (welcome, question, video, video-survey, ready). Triggers on "custom styles", "branding", "theme", "css variables", "override styles", "style screen", "estilos", "marca", "colores", "personalizar pantalla".
+version: 2.1.0
 ---
 
 # Style customization reference
 
 Each location can override the SPA's look with its own stylesheet, written through the backoffice:
 
-1. `get_location_styles` — what is deployed today, or nothing when the location uses the base theme.
-2. `set_location_styles` — replaces it. **The whole file, not a patch**: read first when editing,
+1. `get_css_schema` — every custom property the portal honours, with its default and what it
+   controls, grouped as the stylesheet groups them. Read it before writing one: this document is
+   the *how*, that tool is the *what*, and it is the only list of variables that cannot be stale.
+2. `get_location_styles` — what is deployed today, or nothing when the location uses the base theme.
+3. `set_location_styles` — replaces it. **The whole file, not a patch**: read first when editing,
    or the rest of the stylesheet is lost.
 
-The write also invalidates the CDN for that one file, so the change is visible immediately without
-a deploy. `captal locations push` invalidates too, but only as part of a full push — it syncs the
-bundle and clears `/<slug>/*`. Changing a stylesheet no longer costs that.
+The write also invalidates the CDN for that one file, so the change is visible immediately. There is
+no deploy step and nothing else to push.
 
 The stylesheet is loaded AFTER the base one, so any selector or variable defined in it overrides
 the default by cascade order. A location without one is normal — the link element carries
@@ -41,7 +43,7 @@ That re-skins the whole SPA. Keep customization at the variable level whenever p
 
 ## Screen-by-screen anatomy
 
-Every screen sits inside the **Layout** wrapper. The layout owns the loading-state choreography, the brand pulse during i18n fetch, and the footer slot. Once content is loaded, individual screens populate `.view-content` and (some) `.layout-footer`.
+Every screen sits inside the **Layout** wrapper. The layout owns the loading-state choreography, the brand icon's waiting animation during the i18n fetch, and the footer slot. Once content is loaded, individual screens populate `.view-content` and (some) `.layout-footer`.
 
 ### Layout wrapper (always present)
 
@@ -52,8 +54,9 @@ Source: `client/src/whitelabel/captal/client/views/Layout.scala`
 └── .app-layout
     ├── .layout-content
     │   └── .layout-view (.loading-state | .loaded-state)
-    │       ├── .view-icon (.brand-pulse during loading)
-    │       │   └── img.brand-icon            ← from assets/brand-icon.svg
+    │       ├── .view-icon
+    │       │   └── .brand-ring
+    │       │       └── img.brand-icon        ← from assets/brand-icon.svg
     │       └── .view-content (.hidden | .visible)
     │           └── [SCREEN CONTENT]
     └── .layout-footer (.hidden | .visible)
@@ -62,10 +65,16 @@ Source: `client/src/whitelabel/captal/client/views/Layout.scala`
 
 State flow: `.loading-state` → `.loaded-state` once translations are fetched. `.view-content` and `.layout-footer` flip from `.hidden` to `.visible` with the staggered fade-in animations (`--animate-fade-in-1..5`).
 
-The `.brand-pulse` modifier on `.view-icon` runs the loading pulse animation. Override its `@keyframes` if you want a different rhythm:
+`.view-icon` carries no per-state class of its own: the waiting animation is driven by
+`.loading-state` / `.loaded-state` on the parent `.layout-view`, so the icon is one element across
+the whole transition. While waiting, `img.brand-icon` runs `@keyframes breathe` (opacity, and
+symmetric — `0%` and `100%` are the same state, which is what lets two icons that mount out of step
+converge without synchronisation). On `.loaded-state` the breathing stops and `brandGlowFlash`
+plays once. Override either keyframe for a different rhythm:
 ```css
-.view-icon.brand-pulse .brand-icon { animation: my-pulse 1.5s ease-in-out infinite; }
-@keyframes my-pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.1); } }
+.brand-icon { animation: my-wait 1.5s ease-in-out infinite; }
+.layout-view.loaded-state .brand-icon { animation: none; }
+@keyframes my-wait { 0%,100% { transform: scale(1); } 50% { transform: scale(1.1); } }
 ```
 
 ### Welcome screen
@@ -79,16 +88,35 @@ The first screen the user sees once i18n is loaded. Full-bleed gradient backgrou
 └── .welcome-view
     ├── .welcome-title          (h1) — i18n key welcome.title
     ├── .welcome-subtitle       (p)  — i18n key welcome.subtitle
-    ├── .welcome-steps
-    │   └── .step ×3
-    │       ├── (numeric badge / icon, styled by ::before or inline)
-    │       └── .step-text       (span) — i18n keys welcome.steps.step1..3
-    │       (inline animation-delay: 0.1s × index for stagger)
-    └── .welcome-button          (button) — i18n key welcome.button.start / .connecting
+    └── .welcome-steps
+        └── .step ×3
+            ├── (numeric badge / icon, styled by ::before or inline)
+            └── .step-text       (span) — i18n keys welcome.steps.step1..3
+            (inline animation-delay: 0.1s × index for stagger)
 
 .layout-footer
-└── .locale-button               (select) — language picker
+├── .locale-button               (select) — language picker
+└── .welcome-button              (button) — i18n key welcome.button.start / .connecting
 ```
+
+**Authorized variant.** Once a guest already has access, the same route renders a second
+`.welcome-view` with the expiry countdown instead of the steps and the CTA:
+
+```
+.view-content
+└── .welcome-view
+    ├── .welcome-title                  (h1) — i18n key welcome.authorized.title
+    └── .welcome-countdown-wrapper
+        └── .welcome-countdown-card
+            ├── .welcome-countdown      (p) — the formatted time remaining
+            └── .welcome-countdown-label (p) — i18n key welcome.authorized.remaining
+
+.layout-footer                           — empty in this state: no locale picker, no CTA
+```
+
+The switch is driven by `Phase.Authorized` on the app state, not by a class on `.welcome-view`, so
+there is no selector that distinguishes the two variants. Target the children that only one of them
+has (`.welcome-steps` vs `.welcome-countdown-wrapper`).
 
 **Key variables for this screen:**
 - `--bg-gradient-start`, `--bg-gradient-end`, `--bg-gradient-angle` — full-bleed background
@@ -119,7 +147,10 @@ The first screen the user sees once i18n is loaded. Full-bleed gradient backgrou
 
 Source: `client/src/whitelabel/captal/client/views/IdentificationQuestionView.scala`
 
-Used for email, profiling, and location surveys (categories defined in `shared/surveys/*.yaml`). The same template renders any question type via runtime branches.
+Used for the three deployment-wide identification surveys — email, profiling and location. They are
+rows in the database, created with `create_identification_survey` and listed by `list_surveys`; they
+are picked by category with no location filter, so they are not per-location content. The same
+template renders any question type via runtime branches.
 
 ```
 .view-content
@@ -210,38 +241,47 @@ Used for email, profiling, and location surveys (categories defined in `shared/s
 
 Source: `client/src/whitelabel/captal/client/views/AdvertiserVideoView.scala`
 
-Two-phase: intro card → playback. Supports fullscreen. Most visually dense screen.
+Two layers, not two phases: the player mounts first and buffers underneath while the intro covers
+it, then the intro fades out. The two are **siblings**, and the intro is the overlay.
 
 ```
-.view-content
-└── .video-hero (.fullscreen — when fullscreen API active)
-    │
-    ├── PHASE 1: .video-intro (initial 2–3s)
-    │   └── .video-intro-card
-    │       ├── .video-intro-icon
-    │       │   └── img.brand-icon
-    │       ├── .video-intro-title              (h1) — video.yaml's title
-    │       ├── .video-intro-warning            (p)  — i18n key video.payAttention
-    │       └── .video-intro-pulse              (div, animated bar)
-    │
-    └── PHASE 2: .video-hero-content (after intro)
-        └── .video-hero-player (toggle .controls-visible on click in fullscreen)
-            ├── .video-hero-video-wrapper
-            │   └── video.video-hero-video
-            └── .video-controls
-                ├── button.video-control-btn ×2  (play/pause + fullscreen)
-                │   └── svg.control-icon
-                └── button.video-progress-btn (.active when complete)
-                    ├── svg.progress-ring
-                    │   ├── circle.progress-ring-bg
-                    │   └── circle.progress-ring-progress  (--offset CSS var animated)
-                    └── span.progress-checkmark
+[view root]
+├── .video-hero (.fullscreen — when fullscreen API active)
+│   └── .video-hero-content
+│       └── .video-hero-player (toggle .controls-visible on click in fullscreen)
+│           ├── video.video-hero-video
+│           └── .video-controls
+│               ├── button.video-control-btn ×2  (play/pause + fullscreen)
+│               │   └── svg.control-icon
+│               └── button.video-progress-btn (.active when complete)
+│                   ├── svg.progress-ring
+│                   │   ├── circle.progress-ring-bg
+│                   │   └── circle.progress-ring-progress  (--offset CSS var animated)
+│                   └── span.progress-checkmark
+│
+└── .video-intro (.leaving while it dissolves; unmounts after)
+    └── .app-layout  ← a nested Layout, same brand icon and stagger as every other screen
+        └── .view-content
+            ├── .video-intro-title            (h1) — the video's stored title, per locale
+            ├── .video-intro-warning          (p)  — i18n key video.payAttention
+            └── .video-intro-pulse            (div, indeterminate sweep bar)
 ```
+
+A video's title is a localized string set when the video is registered (`create_advertiser_video`
+or `create_promo_video`) and falls back to the literal `Video` when none was stored for the active
+locale. It is content, not styling — nothing in a stylesheet changes it.
+
+`.video-intro` must stay opaque and above the player. Both it and `.video-hero` are
+`position: fixed; inset: 0`; the intro wins on `z-index: 10` and paints the same gradient as a
+ground. Give it a transparent background and the video plays visibly straight through the intro.
 
 **Key variables:**
-- `--surface-primary`, `--text-primary` — intro card colors
-- `--shadow-lg` — intro card elevation
-- `--radius-lg` — intro card corners
+- `--bg-gradient-start`, `--bg-gradient-end`, `--bg-gradient-angle` — both layers paint this
+  gradient; the intro needs an opaque one to cover the player
+- `--text-inverse` — intro text, which sits on that gradient
+- `--video-intro-out` — how long the intro takes to dissolve. Must match
+  `AdvertiserVideoView.IntroFadeMs`, which decides when the element is removed: shorter and the
+  fade is cut off, longer and the overlay lingers invisibly.
 - `--color-primary` — progress ring stroke color
 - Custom: `--offset` is set inline by JS to animate the progress arc
 
@@ -283,13 +323,16 @@ If you want different visuals between identification and video surveys, target t
 
 Source: `client/src/whitelabel/captal/client/views/ReadyView.scala`
 
-Final "thank you" screen. Two text elements with staggered animation.
+Final "thank you" screen, shown while `/api/finish` is in flight. The spinner stays up for as long
+as the view is alive; on success the router unmounts it and renders the authorized Welcome.
 
 ```
 .view-content
 └── .ready-view
-    ├── .ready-title       (h1, animation-delay: 1000ms)  — i18n key ready.title
-    └── .ready-subtitle    (p,  animation-delay: 1200ms)  — i18n key ready.subtitle
+    ├── .ready-title              (h1, animation-delay: 1000ms)  — i18n key ready.title
+    └── .ready-loader-wrapper
+        ├── .spinner.spinner--large
+        └── .ready-subtitle       (p, animation-delay: 1200ms)   — i18n key ready.subtitle
 
 .layout-footer
 └── .dev-reset-button       (button, ONLY when ENVIRONMENT=dev) — i18n key ready.resetButton
@@ -306,15 +349,24 @@ Final "thank you" screen. Two text elements with staggered animation.
 
 Source: `client/index.html.template` (NOT a Scala.js view)
 
-Shown for the first ~300ms before Scala.js boots. The class is `.initial-loader` and it fades out via `.fade-out`.
+The only thing on screen while the bundle and the first view's chunk come down. It is **removed by
+Layout on mount**, not dismissed by a timer and not faded by a class the SPA sets — so there is no
+exit state to style. Its markup deliberately mirrors the Layout loading state, so the handoff moves
+nothing.
 
 ```html
 <div class="initial-loader">
-  <div class="loader-icon brand-pulse">
-    <img src="brand-icon.svg" class="brand-icon" alt="Loading">
+  <div class="brand-ring">
+    <span class="ring-track"></span>
+    <span class="ring-arc"></span>
+    <img src="./brand-icon.svg" class="brand-icon" alt="Cargando">
   </div>
 </div>
 ```
+
+`.ring-track` and `.ring-arc` are `display: none` in the base stylesheet: the waiting animation is
+currently the icon breathing, not a ring. They are still in the markup, so a stylesheet that wants
+a ring back has those two hooks and the `--loader-ring-*` variables to do it with.
 
 If you want the loader background to match your gradient before JS even runs, override:
 ```css
@@ -329,12 +381,15 @@ Shown briefly between phase transitions when `AppState.isNavigating` is true (e.
 
 ```
 .app-root
-└── .nav-loader
-    └── .loader-icon.brand-pulse
+└── .nav-loader (.is-visible while navigating)
+    └── .brand-ring
         └── img.brand-icon
 ```
 
-Same pulse animation as the layout's loading state.
+Always in the DOM; `.is-visible` is what flips opacity and visibility. Its background repeats the
+body gradient so that while visible it opaquely covers the outgoing view — keep it opaque or the
+old screen bleeds through mid-transition. Same `breathe` animation on the icon as the layout's
+loading state.
 
 ---
 
@@ -342,8 +397,8 @@ Same pulse animation as the layout's loading state.
 
 | Class                  | Where rendered                       | Type           | Purpose                                       |
 |------------------------|--------------------------------------|----------------|-----------------------------------------------|
-| `.brand-icon`          | Layout, Video, Main                  | image          | Logo (sourced from `assets/brand-icon.svg`)   |
-| `.brand-pulse`         | Layout (loading), Main (nav)         | animation hook | Pulsing scale animation                       |
+| `.brand-icon`          | Layout, Video intro, Main, index.html | image         | Logo (sourced from `assets/brand-icon.svg`)   |
+| `.brand-ring`          | Layout, Main (nav), index.html       | container      | Wraps the icon; ring hooks live inside it     |
 | `.text-input`          | Question, Video Survey               | input          | Text/email field                              |
 | `.radio-group/.option` | Question, Video Survey               | input          | Single-select set                             |
 | `.checkbox-group/.option` | Question, Video Survey            | input          | Multi-select set                              |
@@ -367,13 +422,15 @@ Apply these as conditional classes (set by the SPA at runtime):
 | `.loaded-state`       | `.layout-view`          | i18n loaded, content ready                       |
 | `.hidden`             | `.view-content`, `.layout-footer` | during loading                       |
 | `.visible`            | same                    | post-load (triggers stagger animation)           |
-| `.fade-out`           | `.initial-loader`       | once Scala.js mounts (HTML-managed)              |
-| `.brand-pulse`        | `.view-icon`, `.loader-icon` | continuous loader animation              |
+| `.is-visible`         | `.nav-loader`           | a navigation is in flight                        |
 | `.card-valid`         | `.question-card`        | input passes all validation rules                |
 | `.card-error`         | `.question-card`        | input fails validation                           |
 | `.fullscreen`         | `.video-hero`           | fullscreen API active                            |
 | `.controls-visible`   | `.video-hero-player`    | tap-to-show controls in fullscreen               |
+| `.leaving`            | `.video-intro`          | intro dissolving into the player                 |
 | `.active`             | `.video-progress-btn`   | video has been watched (duration met)            |
+
+The `.initial-loader` has no exit modifier: Layout removes the element on mount.
 
 ## Animations exposed as variables
 
@@ -389,9 +446,17 @@ The `@keyframes fadeInUp` is defined in the base stylesheet. Redefine it if you 
 
 ---
 
-## Full CSS variable reference
+## CSS variable groups
 
-(Same as before — abbreviated here, full table in the previous version.)
+**This list is orientation, not the reference. `get_css_schema` is.** That tool reads the portal's
+own `client/assets/styles.css` — the file `mcp.resources` copies into the server's jar — so it
+answers with the variables that exist today, their real defaults and what each one controls. This
+document is prose maintained by hand and has already fallen behind the stylesheet once; treat it as
+a map of the territory and the tool as the inventory. Never hand an operator a variable name from
+here without having seen it in `get_css_schema`.
+
+The groups below are the same ones the schema groups by, which is what makes the two easy to read
+side by side.
 
 #### Colors
 `--color-primary`, `--color-primary-dark`, `--color-primary-light`, `--color-success`, `--color-error`, `--color-warning`, `--color-disabled`, `--color-success-disabled`
@@ -414,16 +479,18 @@ The `@keyframes fadeInUp` is defined in the base stylesheet. Redefine it if you 
 #### Shadows
 `--shadow-{sm,md,lg}`, `--shadow-button-hover`, `--shadow-success`, `--shadow-success-hover`, `--shadow-focus`
 
-#### Glass overlays (welcome locale, video controls)
-`--glass-bg`, `--glass-text`, `--glass-border`, `--glass-focus`
+#### Glass / overlay colors (welcome locale, video controls, states over the gradient)
+`--glass-bg`, `--glass-text`, `--glass-border`, `--glass-focus`, `--error-bg-transparent`, `--error-text-light`, `--success-bg-transparent`
 
 #### Sizing
-`--icon-size-{lg,md}`, `--control-size`, `--content-max-width`, `--content-padding`
+`--icon-size-{lg,md}`, `--control-size`, `--content-max-width`, `--content-padding`, `--loader-ring-{gap,width,out}`, `--loader-settle`, `--loader-handoff`, `--video-intro-out`
 
 #### Transitions / animations
 `--transition-{fast,base,slow}`, `--animate-fade-in-{1..5}`
 
-For exact default values check `client/assets/styles.css:1-100` (`:root { ... }` block).
+For the exact defaults, call `get_css_schema` — it carries the declared value of every variable.
+The declarations themselves are the `:root { ... }` block at the top of
+`client/assets/styles.css`.
 
 ---
 
@@ -432,10 +499,13 @@ For exact default values check `client/assets/styles.css:1-100` (`:root { ... }`
 An SVG, written with `get_location_icon` and `set_location_icon` — the whole document, not a patch.
 Scripts and `on*` handlers are refused.
 
-Rendered through an `img` element at small sizes, on every screen:
-- `.view-icon` — layout icon, all screens
-- `.video-intro-icon` — advertiser video intro
-- `.loader-icon` — initial loader and navigation overlay
+Rendered through an `img.brand-icon` inside a `.brand-ring`, at small sizes, in three places:
+- `.view-icon` — the Layout icon, so every screen including the advertiser video intro
+- `.nav-loader` — the navigation overlay between phases
+- `.initial-loader` — the static loader in `index.html`, before the bundle arrives
+
+Because all three use the same two classes, a rule on `.brand-icon` alone reaches every one of
+them. Scope it under `.view-icon` / `.nav-loader` / `.initial-loader` when you want them to differ.
 
 **Format**: must be SVG (`<svg>...</svg>`). PNG/JPG with `.svg` extension won't render.
 
@@ -455,25 +525,34 @@ Rendered through an `img` element at small sizes, on every screen:
 - **No CSS preprocessing**: the file is served verbatim (gzipped). No SCSS, no PostCSS.
 - **Mobile-first**: the base stylesheet uses fluid units and mobile-first breakpoints. Test at 360px width minimum.
 - **Don't restyle `.app-root` margins/padding**: the layout depends on them being controlled via `--space-*` and `--content-*` variables.
-- **Don't break `.brand-pulse`**: at minimum keep some animation on `.view-icon.brand-pulse` so users see motion during the loading phase. If the i18n fetch is slow (>1s), a static icon looks frozen.
+- **Don't leave the brand icon static while loading**: keep some animation on `.brand-icon` during
+  `.loading-state`, or override `@keyframes breathe`. If the i18n fetch is slow (>1s), a frozen
+  icon reads as a hung page.
 
 ## Testing locally
 
 1. `./mill clean client.generatedSources`
 2. `ENVIRONMENT=dev ./mill client.bundle`
-3. `get_location_styles <slug>` and write the result to
-   `out/client/bundle.dest/custom-styles.css`. That is the deployed stylesheet; a copy sitting in a
-   workspace may be older.
-4. `./mill api.dev --slug <slug> --dir locations/<slug> --shared-dir shared`.
-5. Open `http://localhost:8080/<slug>/`.
+3. `./mill api.dev --slug <slug>` — the whole dev workflow: rqlite, migrations, client, server. It
+   takes no provisioning directory; the server reads whatever the backoffice wrote to the database.
+4. Open `http://localhost:8080/<slug>/`.
+
+What the dev server shows is the **base** theme. It serves `client/assets/styles.css` at
+`/assets/styles.css` and nothing at `/<slug>/custom-styles.css.gz`, which is where the location's
+override lives in production — so a local run never picks one up. To eyeball a stylesheet before
+publishing it, paste the rules into `client/assets/styles.css` temporarily and revert afterwards;
+they are not a location's content and must not be committed.
 
 Once it looks right, `set_location_styles` publishes it. There is no deploy step.
 
 ## Source of truth
 
-`client/assets/styles.css` is the authoritative list of variables and class hooks. View source
-files (`client/src/whitelabel/captal/client/views/*.scala`) are authoritative for which class is
-rendered on which screen — grep for `cls := "..."` to find any class.
+`get_css_schema` is the authoritative list of variables, derived from `client/assets/styles.css`
+itself — `mcp.resources` copies that file into the server's jar so the two cannot disagree. The
+stylesheet is also the authority for class hooks, which nothing derives yet; this document is a
+hand-maintained reading of it. View source files
+(`client/src/whitelabel/captal/client/views/*.scala`) are authoritative for which class is rendered
+on which screen — grep for `cls := "..."` to find any class.
 
 What a location currently has is whatever `get_location_styles` returns. A `styles.css` left over
 in an operator's workspace is not authoritative and may predate edits made through the backoffice.

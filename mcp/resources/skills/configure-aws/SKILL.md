@@ -1,245 +1,109 @@
 ---
 name: configure-aws
-description: Use this skill when configuring captal.yaml, setting up AWS credentials, or asking about AWS infrastructure parameters. Triggers on "configure aws", "setup aws", "captal.yaml", "aws credentials", "ecs cluster", "alb listener", "s3 bucket".
-version: 1.0.0
+description: Use this skill for the backoffice deployment itself — its environment variables, its AWS permissions, where the infrastructure lives, and the operator tokens it issues. Triggers on "configure aws", "setup aws", "env vars", "variables de entorno", "MCP_ADMIN_TOKEN", "assets bucket", "cloudfront distribution", "iam permissions", "terraform", "tofu", "infra", "create token", "nuevo operador", "dar acceso", "revoke token", "revocar token".
+version: 2.0.0
 ---
 
-# Configure captal.yaml with AWS CLI
+# Configure the backoffice deployment
 
-This skill guides you through configuring `shared/captal.yaml` using AWS CLI commands to automatically discover infrastructure parameters.
+There is no `captal.yaml` and no `captal` CLI. Nothing reads configuration out of an operator's
+workspace: content is written by this server's tools straight to rqlite and S3, and the deployment
+itself is configured through environment variables and the infrastructure repository.
 
-## Prerequisites
+## Where the infrastructure lives
 
-- AWS CLI installed and configured (`aws configure`)
-- Appropriate IAM permissions to describe resources
+A separate repository, `whitelabel-captal-infrastructure`, in OpenTofu/Terraform. Modules under
+`modules/`, per-environment values under `environments/{dev,prod}/`. Clone it when you need it.
 
-## Quick Setup Script
+It is deliberately **not** reachable as an MCP tool. This server runs inside the VPC that repo
+creates, so it cannot stand up its own prerequisites, and what Terraform contributes here is the
+state file and the plan.
 
-Run this to gather most parameters automatically:
-
-```bash
-# Set your region
-REGION=$(aws configure get region)
-echo "Region: $REGION"
-
-# Get default VPC
-VPC_ID=$(aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --query "Vpcs[0].VpcId" --output text)
-echo "VPC: $VPC_ID"
-
-# Get subnets in the VPC
-aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query "Subnets[*].[SubnetId,AvailabilityZone]" --output table
-
-# Get security groups
-aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" --query "SecurityGroups[*].[GroupId,GroupName]" --output table
-
-# List ECS clusters
-aws ecs list-clusters --query "clusterArns[*]" --output table
-
-# List ALB listeners
-aws elbv2 describe-load-balancers --query "LoadBalancers[*].[LoadBalancerArn,LoadBalancerName]" --output table
-
-# Get ECS execution role
-aws iam list-roles --query "Roles[?contains(RoleName, 'ecsTaskExecution')].[Arn,RoleName]" --output table
-
-# List S3 buckets
-aws s3 ls
-
-# List ECR repositories
-aws ecr describe-repositories --query "repositories[*].[repositoryUri,repositoryName]" --output table
+```sh
+tofu init -backend-config=environments/dev/backend.tfvars
+tofu plan  -var-file=environments/dev/terraform.tfvars
 ```
 
-## Parameter Reference
+`tofu plan` is the single source of truth for what is deployed — believe it over any document,
+including this one. Run it before closing a session in which you edited that repo: an edit without
+an apply leaves the Lambda, the distribution and the task definitions behind the code.
 
-### aws.region
-```bash
-aws configure get region
-```
-Default region for all AWS operations.
+## Environment this server reads
 
-### image (ECR URI)
-```bash
-# List ECR repositories
-aws ecr describe-repositories --query "repositories[*].repositoryUri" --output text
+Startup fails outright when any of the first five is missing, which is deliberate — each one is
+something a tool would otherwise discover halfway through a write.
 
-# Get latest image tag
-REPO_NAME="captal"
-aws ecr describe-images --repository-name $REPO_NAME --query "sort_by(imageDetails,&imagePushedAt)[-1].imageTags[0]" --output text
-```
-Format: `<account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag>`
+| Variable | Value | Notes |
+|---|---|---|
+| `DB_URL` | `tofu output rqlite_url` | JDBC rqlite URL, read through `application.conf` |
+| `ASSETS_BUCKET` | `tofu output assets_bucket_name` | Per-location assets and videos, all under `<slug>/` |
+| `CLOUDFRONT_DISTRIBUTION_ID` | `tofu output cloudfront_distribution_id` | Invalidated on every asset write |
+| `PUBLIC_BASE_URL` | `https://` + `tofu output cloudfront_domain_name` | The origin the portal fetches assets from, stored in each video row as its playable URL. A wrong value produces well-formed rows whose URL answers nothing, and the failure shows up in the player |
+| `MCP_ADMIN_TOKEN` | chosen by whoever deploys | Seeds the admin row. See below |
+| `MCP_RESOURCE_URI` | the address clients reach this server at | RFC 8707 audience binding, and the origin the MCP App pages post to and declare in their CSP. Behind an ALB this is the public address, not the bound port |
+| `MCP_PORT` | optional, default `8081` | |
+| `AWS_ENDPOINT_URL` | optional | Points S3 at LocalStack for local work; brings path-style addressing with it |
 
-### s3.bucket
-```bash
-# List buckets
-aws s3 ls
+Locally, `./mill mcp.dev` supplies all of them against a dev rqlite container and LocalStack, with
+`dev-token` as the admin token.
 
-# Create a new bucket if needed
-aws s3 mb s3://captal-assets-<account-id>
-```
-Used for storing client assets (JS, CSS, videos).
+## AWS credentials
 
-### ecs.cluster
-```bash
-# List clusters
-aws ecs list-clusters --output text
+None are configured anywhere. The task runs as its ECS task role and the SDK's default provider
+chain picks it up — no key in the image, the task definition or the environment.
 
-# Create cluster if needed
-aws ecs create-cluster --cluster-name captal
-```
+The policy is `modules/mcp-iam` in the infrastructure repo; what needs each permission is
+`docs/MCP_IAM.md` in this one. **They have to move together**: a tool that needs a permission
+missing from the module fails at runtime, in front of an operator, with an SDK error that names the
+API call and not the fix. `s3:ListBucket` is deliberately absent — nothing enumerates the bucket.
 
-### ecs.subnets
-```bash
-# Get VPC ID first
-VPC_ID=$(aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --query "Vpcs[0].VpcId" --output text)
+To run the server outside ECS, set `create_test_user = true` in that repo; it creates an identity
+carrying the same policy but no access key, because `aws_iam_access_key` would write the secret into
+Terraform state. Make one out of band and delete it when the testing is done:
 
-# List subnets with public IP auto-assign (required for Fargate)
-aws ec2 describe-subnets \
-  --filters "Name=vpc-id,Values=$VPC_ID" \
-  --query "Subnets[?MapPublicIpOnLaunch==\`true\`].[SubnetId,AvailabilityZone]" \
-  --output table
-```
-Use at least 2 subnets in different AZs for high availability.
-
-### ecs.securityGroups
-```bash
-# List security groups
-aws ec2 describe-security-groups \
-  --filters "Name=vpc-id,Values=$VPC_ID" \
-  --query "SecurityGroups[*].[GroupId,GroupName,Description]" \
-  --output table
-
-# Create a security group for captal if needed
-aws ec2 create-security-group \
-  --group-name captal-ecs \
-  --description "Security group for captal ECS tasks" \
-  --vpc-id $VPC_ID
-
-# Allow inbound HTTP from ALB
-aws ec2 authorize-security-group-ingress \
-  --group-name captal-ecs \
-  --protocol tcp \
-  --port 8080 \
-  --source-group <alb-security-group-id>
+```sh
+aws iam create-access-key --user-name captal-dev-mcp-local
 ```
 
-### ecs.executionRoleArn
-```bash
-# Find existing ECS execution role
-aws iam list-roles \
-  --query "Roles[?contains(RoleName, 'ecsTaskExecution')].[Arn,RoleName]" \
-  --output table
+## Operator tokens
 
-# Or get the AWS managed role
-aws iam get-role --role-name ecsTaskExecutionRole --query "Role.Arn" --output text
-```
-If no role exists, create one with `AmazonECSTaskExecutionRolePolicy` attached.
+`MCP_ADMIN_TOKEN` seeds exactly one row in `mcp_tokens` — the admin, holding every scope. Nothing
+else reads the variable, so **rotating it is a restart**: the row is rewritten in place at a fixed
+id, so the tokens pointing at it through `created_by` do not move. It is also the recovery path for
+a database known to lose data, which is why it is supplied rather than generated.
 
-### alb.listenerArn
-```bash
-# List load balancers
-aws elbv2 describe-load-balancers \
-  --query "LoadBalancers[*].[LoadBalancerArn,LoadBalancerName,DNSName]" \
-  --output table
+Every other operator gets their own token from a tool:
 
-# Get listeners for a specific ALB
-ALB_ARN="<your-alb-arn>"
-aws elbv2 describe-listeners \
-  --load-balancer-arn $ALB_ARN \
-  --query "Listeners[*].[ListenerArn,Port,Protocol]" \
-  --output table
-```
-Use the HTTPS (443) listener ARN.
+- **`create_token`** — a name and a list of scopes (`i18n_write`, `content_write`, `identity_write`,
+  `tokens_write`). The token is shown once and stored only as a SHA-256 hash, so a lost one is
+  replaced, never recovered. Hand it over privately: repeating it in the conversation puts it in the
+  transcript the host keeps.
+- **`list_tokens`** — who holds what, who issued it, whether it is revoked. Never the token itself.
+  Revoked tokens stay listed, because they are what the tokens they issued point at.
+- **`revoke_token`** — takes effect on the next call, and invalidates any configuration page that
+  token had open. You may revoke what you issued; the admin may revoke anything. You cannot revoke
+  your own — ask another operator — and the admin token cannot be revoked at all.
 
-### alb.vpcId
-```bash
-# Get default VPC
-aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --query "Vpcs[0].VpcId" --output text
+Delegation only ever attenuates: a token may grant only scopes it already holds. That is what makes
+handing someone `tokens_write` safe — they can extend the chain, never widen it.
 
-# Or list all VPCs
-aws ec2 describe-vpcs --query "Vpcs[*].[VpcId,CidrBlock,Tags[?Key=='Name'].Value|[0]]" --output table
-```
+| Scope | Unlocks |
+|---|---|
+| `i18n_write` | `set_translations`, `remove_translation` |
+| `content_write` | locations, advertisers, videos, styles and icon, advertiser surveys and their questions, `configure_unifi` |
+| `identity_write` | the three deployment-wide identification surveys and their questions |
+| `tokens_write` | `create_token`, `revoke_token` |
 
-### database.url
-This depends on your database setup. Common formats:
+Read-only tools need no scope, only a valid token. `create_location` sits under `content_write`
+today because that is the only write scope this server has, so a translator holding it can stand up
+a portal — a known rough edge rather than an intention.
 
-```yaml
-# RQLite (recommended for development)
-database:
-  url: "jdbc:rqlite:http://rqlite.example.com:4001"
+## Verify
 
-# PostgreSQL RDS
-database:
-  url: "jdbc:postgresql://<rds-endpoint>:5432/captal?user=admin&password=xxx"
-
-# SQLite (local only)
-database:
-  url: "jdbc:sqlite:/path/to/captal.db"
-```
-
-For RDS:
-```bash
-aws rds describe-db-instances \
-  --query "DBInstances[*].[DBInstanceIdentifier,Endpoint.Address,Endpoint.Port]" \
-  --output table
-```
-
-## Example Complete Configuration
-
-```yaml
-aws:
-  region: us-east-1
-
-image: "123456789.dkr.ecr.us-east-1.amazonaws.com/captal:latest"
-
-s3:
-  bucket: "captal-assets-123456789"
-
-ecs:
-  cluster: "captal"
-  cpu: "256"
-  memory: "512"
-  desiredCount: 1
-  subnets:
-    - "subnet-abc123"
-    - "subnet-def456"
-  securityGroups:
-    - "sg-xyz789"
-  executionRoleArn: "arn:aws:iam::123456789:role/ecsTaskExecutionRole"
-
-alb:
-  listenerArn: "arn:aws:elasticloadbalancing:us-east-1:123456789:listener/app/captal-alb/abc/def"
-  vpcId: "vpc-123abc"
-  domain: captal.app
-  healthCheckPath: /health
-
-database:
-  url: "jdbc:rqlite:http://rqlite.internal:4001"
-
-server:
-  devMode: false
-  devEndpoints: false
-
-unifi:
-  # Optional. HTTP proxy URL used by the API to reach the on-premise UniFi Controller.
-  # In cloud deploys, the API runs on ECS Fargate and cannot reach the customer's LAN
-  # directly — point this at a tinyproxy (ECS daemon) behind a Tailscale subnet router.
-  # Empty/omitted → direct connection (only viable in same-LAN dev setups).
-  proxyUrl: "http://tinyproxy.captal-dev.local:8888"
-```
-
-## Validation
-
-After configuring, validate your setup:
-
-```bash
-# Test AWS credentials
+```sh
 aws sts get-caller-identity
-
-# Test ECR access
-aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_URI
-
-# Test S3 access
-aws s3 ls s3://$BUCKET
-
-# Test ECS cluster
-aws ecs describe-clusters --clusters $CLUSTER
+aws s3 ls s3://$ASSETS_BUCKET/
 ```
+
+Then call `list_tokens` — the cheapest proof that the server is up, authenticated and reaching the
+database.

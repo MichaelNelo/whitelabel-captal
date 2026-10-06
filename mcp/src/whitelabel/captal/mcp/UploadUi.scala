@@ -150,8 +150,12 @@ object UploadUi:
             h1("Subir video"),
             p(
               id := "intro",
+              // No "elegí un video en la lista de recursos": los hosts que usan estos operadores no
+              // le ofrecen los resources al modelo, que es la razón por la que existe
+              // `resume_video_upload`. Mandar al operador a una lista que nunca va a ver es peor
+              // que no decirle nada.
               video.fold(
-                "Abrí esta página desde create_advertiser_video, o elegí un video pendiente en la lista de recursos.")(
+                "Abrí esta página desde create_advertiser_video o create_promo_video. Para retomar una subida a medio camino, pedí resume_video_upload — list_pending_uploads enumera las que esperan archivo.")(
                 _ => "El video queda fuera de rotación hasta que el archivo llegue.")
             ),
             div(

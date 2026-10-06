@@ -14,10 +14,13 @@ already exists.
 1. `list_surveys` — see what is already there. Identification surveys are picked by category alone,
    so a second active survey of the same category is refused.
 2. Creating it depends on which kind it is, and they are different tools on purpose:
-   - `create_survey` for an advertiser survey. It names the `videoId` of the video it follows and
-     inherits that video's location; there is no location to pass. The video is verified: naming
-     one that does not exist is refused, since no foreign key would catch it and the survey would
-     simply be unreachable.
+   - `create_survey` for the survey that follows a video — an advertiser's or one of the venue's
+     own promos; both are stored under the `advertiser` category. It names the `videoId` of the
+     video it follows and inherits that video's location and advertiser; there is nothing to pass
+     about either. The video is verified: naming one that does not exist is refused, since no
+     foreign key would catch it and the survey would simply be unreachable.
+     `create_advertiser_video` and `create_promo_video` already create it, so reach for this only
+     to give an existing promo its first survey.
    - `create_identification_survey` for `email`, `profiling` or `location`. These are
      deployment-wide — every guest of every location answers them — so it sits behind the
      `identity:write` scope rather than `content:write`. A token that edits one location's content
@@ -27,16 +30,23 @@ already exists.
 4. `reorder_questions` if the order needs changing later. It takes every active question of the
    survey exactly once.
 
+**Steps 3 and 4 come in pairs, and the identification half has its own.** Use
+`create_identification_question`, `reorder_identification_questions` and
+`set_identification_question_active` for an `email`, `profiling` or `location` survey; the
+unsuffixed names only accept a video's survey, and each refuses the other half by naming the tool
+that does take it. The split is the scope: the identification tools require `identity:write`, so a
+tool cannot publish one requirement in `tools/list` and enforce another.
+
 ## What to ask the operator, and what not to
 
 **Only the wording has to come from them.** The schema marks three fields required —
-`surveyId`, `text` and `question` — and everything else has a default or follows from the type. Do not ask about an optional field unless the operator raises it.
+`surveyId`, `text` and `answer` — and everything else has a default or follows from the type. Do not ask about an optional field unless the operator raises it.
 
 | Field | Where it comes from |
 |---|---|
 | `text` | the operator; nothing else can supply it |
 | `answer.kind` | how the answer is collected — infer it |
-| `question.options` | the operator, and only where the variant has the field |
+| `answer.options` | the operator, and only where the variant has the field |
 | `required` | defaults to true |
 | `points` | defaults to 10, which is what every existing question uses |
 | `displayOrder` | automatic; the question is appended last |
@@ -119,6 +129,9 @@ many remain so that is visible rather than discovered through an empty flow.
 
 ## Related
 
+- `skill://add-video/SKILL.md` — `create_advertiser_video` writes the survey and its questions in
+  the same call, and requires them
+- `skill://add-promo/SKILL.md` — a promo's survey is optional, and why
 - `skill://add-advertiser/SKILL.md` — advertiser surveys attach to a video, which belongs to an
   advertiser
 - `skill://edit-i18n/SKILL.md` — the portal's own interface text, a separate category
