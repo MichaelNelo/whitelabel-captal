@@ -213,12 +213,6 @@ final case class LocationRow(
     unifiDurationMinutes: Option[Int] = None,
     unifiRedirectUrl: Option[String] = None)
 
-final case class ProvisionManifestRow(
-    entityKey: String,
-    locationId: Option[String],
-    contentHash: String,
-    provisionedAt: String)
-
 final case class EventLogRow(
     id: String,
     eventType: String,

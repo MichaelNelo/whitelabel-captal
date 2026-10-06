@@ -1,8 +1,0 @@
-url: "{{url}}"
-duration: 10
-minWatch: 3
-showCountdown: false
-priority: 1
-title:
-  es: "TODO"
-  en: "TODO"

@@ -76,7 +76,7 @@ object VideoTools:
         "PUT the file here. The signature does not bind a Content-Type — there was no file to take one from when it was signed — so send the file's own; confirm_video_upload checks what arrived.")
       uploadUrl: String,
       @description(
-        "How long the signed URL stays valid. After that, call create_advertiser_video again for a fresh one rather than retrying the PUT.")
+        "How long the signed URL stays valid. After that, call resume_video_upload for a fresh one — not create_advertiser_video, which would make a second video, survey and set of questions for one file.")
       expiresInSeconds: Long,
       @description(
         "The upload page for this video, when the host renders MCP Apps. Otherwise PUT to uploadUrl directly.")
@@ -120,7 +120,7 @@ object VideoTools:
         "A promo stays out of rotation until confirm_video_upload finds the file, so an abandoned upload costs nothing.")
       active: Boolean,
       @description(
-        "The survey created for it, absent when no questions were given. Pass it to add_question to extend the survey later.")
+        "The survey created for it, absent when no questions were given. Pass it to create_question to extend the survey later.")
       surveyId: Option[String],
       @description("The questions written, in the order given.")
       questionIds: List[String])
@@ -195,7 +195,8 @@ object VideoTools:
       expiresInSeconds: Long)
 
   final case class ConfirmUploadRequest(
-      @description("The video whose upload to check, from create_advertiser_video.")
+      @description(
+        "The video whose upload to check. Comes from create_advertiser_video, create_promo_video, resume_video_upload or list_pending_uploads.")
       videoId: String,
       @description(
         "The file's length in whole seconds. The upload page reads it from the file itself and sends it; supply it by hand only when the page could not — some WebM files carry no duration in their header. It is not a preference: a wrong value makes the player count down to the wrong place.")
@@ -286,7 +287,7 @@ object VideoTools:
   private def createTool: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool(
     "create_advertiser_video")
     .description(
-      "Register an advertiser video together with the survey shown after it, and hand back a URL to upload the file to. Does not ask for the video's length: that is read from the file at confirm_video_upload, so do not ask the operator for it. The video stays out of rotation until confirm_video_upload finds the file, so an abandoned upload costs nothing. Read skill://add-video/SKILL.md first.")
+      "Register an advertiser video together with the survey shown after it, and hand back a URL to upload the file to. Does not ask for the video's length: that is read from the file at confirm_video_upload, so do not ask the operator for it. The video stays out of rotation until confirm_video_upload finds the file, so an abandoned upload costs nothing. Call read_skill('add-video') first.")
     .requireScopes(Auth.ContentWrite)
     .handle: (in: CreateVideoRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
@@ -521,7 +522,12 @@ object VideoTools:
                   required = q.required.getOrElse(true),
                   points = q.points.getOrElse(10),
                   hierarchyLevel = None,
-                  displayOrder = index,
+                  // `index + 1`, matching `create_advertiser_video` above. This wrote `index`, so a
+                  // promo's questions started at 0 and an advertiser's at 1 — harmless, since
+                  // nothing compares the two and `reorder_questions` rewrites to 1-based anyway,
+                  // but two paths disagreeing about the same column is how the harmless kind
+                  // becomes the other kind.
+                  displayOrder = index + 1,
                   now = now
                 )
         yield CreatePromoResponse(
