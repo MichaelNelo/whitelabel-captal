@@ -248,20 +248,11 @@ object `endpoints-js` extends BaseJSModule with EndpointsDepsJS:
   def sources = endpoints.sources
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Provision: JVM-only YAML schema models (lightweight, no DB)
-// Shared by CLI and infra; allows CLI to depend on a tiny module instead of all infra.
-// ─────────────────────────────────────────────────────────────────────────────
-
-object provision extends BaseModule:
-  def moduleDeps = Seq()
-  def mvnDeps = Seq(mvn"io.circe::circe-core:0.14.10", mvn"io.circe::circe-generic:0.14.10")
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Infra: JVM only
 // ─────────────────────────────────────────────────────────────────────────────
 
 object infra extends BaseModule:
-  def moduleDeps = Seq(core, provision)
+  def moduleDeps = Seq(core)
   def mvnDeps = Seq(
     mvn"dev.zio::zio:2.1.14",
     mvn"dev.zio::zio-http:3.0.1",
@@ -276,37 +267,11 @@ object infra extends BaseModule:
   def migrate() = Task.Command:
     runMain("whitelabel.captal.infra.Migrate")()
 
-  /** Build production base image captal-provision. Usage: ./mill infra.dockerBuild <ecr-repo-uri>
-    * <tag>
-    */
-  def dockerBuild(repoUri: String, tag: String) = Task.Command:
-    val root = moduleDir / os.up
-    val fullTag = s"$repoUri:$tag"
-    println(s"[docker] Building $fullTag ...")
-    val result = os
-      .proc(
-        "docker",
-        "build",
-        "-f",
-        (root / "Dockerfile.provision").toString,
-        "-t",
-        fullTag,
-        root.toString)
-      .call(check = false, stderr = os.Pipe)
-    if result.exitCode != 0 then
-      sys.error(s"[docker] Build failed:\n${result.err.trim()}")
-    println(s"[docker] Built $fullTag")
-
-  /** Push image to ECR. Operator must run `aws ecr get-login-password | docker login` first. Usage:
-    * ./mill infra.dockerPush <ecr-repo-uri> <tag>
-    */
-  def dockerPush(repoUri: String, tag: String) = Task.Command:
-    val fullTag = s"$repoUri:$tag"
-    println(s"[docker] Pushing $fullTag ...")
-    val result = os.proc("docker", "push", fullTag).call(check = false, stderr = os.Pipe)
-    if result.exitCode != 0 then
-      sys.error(s"[docker] Push failed:\n${result.err.trim()}")
-    println(s"[docker] Pushed $fullTag")
+  // `dockerBuild` and `dockerPush` built and shipped `captal-provision`, an image whose only
+  // process was `SharedProvision`. With the ephemeral provisioning task gone there is nothing to
+  // run in it. The ECR repositories `captal-provision-{env}` and `captal-shared-{env}` are now
+  // unreferenced; emptying and removing them is a `tofu apply` in the infrastructure repo, not
+  // something this build can do.
 end infra
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -474,121 +439,6 @@ end api
 // ─────────────────────────────────────────────────────────────────────────────
 // Client: JS only (Laminar app)
 // ─────────────────────────────────────────────────────────────────────────────
-
-// ─────────────────────────────────────────────────────────────────────────────
-// CLI: JVM only (captal command-line tool)
-// ─────────────────────────────────────────────────────────────────────────────
-
-object cli extends BaseModule:
-  def moduleDeps = Seq(provision)
-  def mvnDeps = Seq(
-    mvn"dev.zio::zio-cli:0.8.0",
-    mvn"io.circe::circe-yaml:0.16.0",
-    mvn"software.amazon.awssdk:s3:2.29.51",
-    mvn"software.amazon.awssdk:ecs:2.29.51",
-    mvn"software.amazon.awssdk:elasticloadbalancingv2:2.29.51",
-    mvn"software.amazon.awssdk:ecr:2.29.51",
-    mvn"software.amazon.awssdk:cloudfront:2.29.51",
-    mvn"com.lihaoyi::scalatags:0.13.1",
-    mvn"software.amazon.awssdk:cloudwatchlogs:2.29.51",
-    mvn"com.lihaoyi::scalatags:0.13.1",
-    mvn"org.slf4j:slf4j-nop:1.7.36"
-  )
-  def mainClass = Some("whitelabel.captal.cli.Main")
-
-  // Wrappers swap a freshly-downloaded captal.jar.new into place BEFORE launching Java.
-  // Required on Windows where the running JVM locks the jar so `captal update` can't
-  // replace it in-place; safe no-op on Linux/macOS.
-  private val bashWrapper = """#!/usr/bin/env bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$SCRIPT_DIR/captal.jar.new" ]; then
-  mv -f "$SCRIPT_DIR/captal.jar.new" "$SCRIPT_DIR/captal.jar"
-fi
-exec java -jar "$SCRIPT_DIR/captal.jar" "$@"
-"""
-
-  private val batWrapper = """@echo off
-setlocal
-set "SCRIPT_DIR=%~dp0"
-if exist "%SCRIPT_DIR%captal.jar.new" (
-  move /Y "%SCRIPT_DIR%captal.jar.new" "%SCRIPT_DIR%captal.jar" >nul
-)
-java -jar "%SCRIPT_DIR%captal.jar" %*
-"""
-
-  /** Bundle CLI release artifacts (JAR + cross-platform wrappers). Output:
-    * out/cli/releaseAssets.dest/{captal.jar, captal, captal.bat}
-    */
-  def releaseAssets = Task:
-    val dest = Task.dest
-    os.copy.over(assembly().path, dest / "captal.jar")
-    os.write.over(dest / "captal", bashWrapper)
-    os.perms.set(dest / "captal", "rwxr-xr-x")
-    os.write.over(dest / "captal.bat", batWrapper)
-    PathRef(dest)
-
-  /** Publish CLI release to S3 under both versioned and latest prefixes. Usage: ./mill
-    * cli.publishS3 --bucket captal-cli-releases --version 1.0.0 Operator must run `aws sso login`
-    * or have AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY set.
-    */
-  def publishS3(bucket: String, version: String) = Task.Command:
-    val src = releaseAssets().path
-    val files = Seq(
-      "captal.jar" -> "application/java-archive",
-      "captal"     -> "text/x-shellscript",
-      "captal.bat" -> "application/bat")
-    val prefixes = Seq(s"s3://$bucket/v$version", s"s3://$bucket/latest")
-    for
-      prefix        <- prefixes
-      (name, ctype) <- files
-    do
-      val args = Seq(
-        "aws",
-        "s3",
-        "cp",
-        (src / name).toString,
-        s"$prefix/$name",
-        "--content-type",
-        ctype)
-      println(s"[publish] $name -> $prefix/$name")
-      val result = os.proc(args).call(check = false, stderr = os.Pipe)
-      if result.exitCode != 0 then
-        sys.error(s"[publish] aws s3 cp failed for $name: ${result.err.trim()}")
-
-    // Publish version.txt at both prefixes — read by `captal update` to detect new releases.
-    val versionFile = src / "version.txt"
-    os.write.over(versionFile, version)
-    for prefix <- prefixes do
-      val args = Seq(
-        "aws",
-        "s3",
-        "cp",
-        versionFile.toString,
-        s"$prefix/version.txt",
-        "--content-type",
-        "text/plain")
-      println(s"[publish] version.txt -> $prefix/version.txt")
-      val result = os.proc(args).call(check = false, stderr = os.Pipe)
-      if result.exitCode != 0 then
-        sys.error(s"[publish] aws s3 cp failed for version.txt: ${result.err.trim()}")
-    println(s"[publish] uploaded captal v$version to $bucket")
-
-  /** Install the CLI locally to ~/.local/bin/ (Linux/macOS) for development convenience. Usage:
-    * ./mill cli.installLocal
-    */
-  def installLocal() = Task.Command:
-    val src = releaseAssets().path
-    val target = os.home / ".local" / "bin"
-    os.makeDir.all(target)
-    os.copy.over(src / "captal.jar", target / "captal.jar")
-    os.copy.over(src / "captal", target / "captal")
-    os.perms.set(target / "captal", "rwxr-xr-x")
-    println(s"[installLocal] captal installed to $target")
-    println(s"[installLocal] ensure $target is on your PATH")
-
-  object test extends ScalaTests with TestModule.Utest with ScalafmtModule with ScalafixModule:
-    def mvnDeps = Seq(mvn"com.lihaoyi::utest:0.8.9")
-end cli
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Client: JS only (Laminar app)
@@ -876,11 +726,17 @@ object mcp extends BaseModule:
     mvn"org.slf4j:slf4j-nop:1.7.36"
   )
 
-  /** Declared as a Task.Source so Mill both permits the read and reinvalidates the copy whenever a
-    * skill changes.
+  /** Where the skills live, for the index below to enumerate.
+    *
+    * `mcp/resources/skills/`, so `super.resources()` puts them on the classpath at the
+    * `/skills/<slug>/SKILL.md` that `Skills.load` reads — no copy in the task at all.
+    *
+    * They were under `cli/resources/templates/`, because the CLI scaffolded them into the
+    * operator's workspace, and this module reached across with `os.up` to borrow them. That made
+    * deleting the CLI break `read_skill` silently: the server compiles fine and answers every
+    * `read_skill` call with "no such skill". This server is the only thing that serves them now.
     */
-  def skillTemplates: T[PathRef] = Task.Source(
-    moduleDir / os.up / "cli" / "resources" / "templates" / "skills")
+  def skillSources: T[PathRef] = Task.Source(moduleDir / "resources" / "skills")
 
   /** The portal's own stylesheet, carried so `get_css_schema` derives the variable list from the
     * file the portal actually reads. A list kept by hand drifts, and the drift is silent: an
@@ -890,9 +746,16 @@ object mcp extends BaseModule:
     moduleDir / os.up / "client" / "assets" / "styles.css")
 
   def resources: T[Seq[PathRef]] = Task:
+    // Only the index is generated. The skills themselves are already on the classpath through
+    // `super.resources()`, and `/skills/index.txt` merges into the same logical directory from
+    // here — which is the whole reason this is a list of PathRefs.
+    //
+    // Generated rather than written by hand because `read_skill` advertises the catalogue in its
+    // description: an index that disagrees with the directory is a skill the model is told to read
+    // and cannot, or one that exists and is never mentioned.
     val dest = Task.dest / "skills"
-    os.copy(skillTemplates().path, dest, createFolders = true)
-    val names = os.list(dest).filter(os.isDir).map(_.last).sorted
+    os.makeDir.all(dest)
+    val names = os.list(skillSources().path).filter(os.isDir).map(_.last).sorted
     os.write(dest / "index.txt", names.mkString("\n"))
     os.copy(defaultStyles().path, Task.dest / "default-styles.css")
     // The MCP App's code, linked from `mcpui` and carried as a resource because the page must be

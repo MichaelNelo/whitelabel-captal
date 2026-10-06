@@ -387,7 +387,6 @@ object TestFixtures:
         stmt.execute("DELETE FROM advertisers")
         stmt.execute("DELETE FROM users")
         stmt.execute("DELETE FROM locations")
-        stmt.execute("DELETE FROM provision_manifest")
         stmt.close()
       finally
         conn.close()

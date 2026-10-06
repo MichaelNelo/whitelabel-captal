@@ -48,7 +48,5 @@ package object schema:
   inline given SchemaMeta[AdvertiserVideoRow] = schemaMeta[AdvertiserVideoRow]("advertiser_videos")
   inline given SchemaMeta[VideoViewRow] = schemaMeta[VideoViewRow]("video_views")
   inline given SchemaMeta[LocationRow] = schemaMeta[LocationRow]("locations")
-  inline given SchemaMeta[ProvisionManifestRow] = schemaMeta[ProvisionManifestRow](
-    "provision_manifest")
   inline given SchemaMeta[EventLogRow] = schemaMeta[EventLogRow]("event_log")
 end schema

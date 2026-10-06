@@ -8,7 +8,15 @@ import zio.test.*
   * resource path) fails here rather than at runtime in front of an operator.
   */
 object CaptalMcpSpec extends ZIOSpecDefault:
-  private val ExpectedSkillCount = 14
+  /** 12, down from 14. `yaml-reference` documented the directory layout and the YAML schema;
+    * `deploy-shared` documented `captal shared push`. Both described things that no longer exist,
+    * and a skill describing a deleted feature is worse than a missing one — the model follows it.
+    *
+    * A bare count rather than a list of slugs: this catches a packaging mistake, which is what the
+    * suite is for. It cannot catch staleness, and the remaining twelve still need rewriting around
+    * tools instead of files.
+    */
+  private val ExpectedSkillCount = 12
 
   def spec =
     suite("CaptalMcp")(
