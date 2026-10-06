@@ -1,11 +1,10 @@
 package whitelabel.captal.mcp
 
 import com.jamesward.ziohttp.mcp.auth.{AuthError, OauthScope, ResourceUri}
-import com.typesafe.config.ConfigFactory
 import io.getquill.*
 import io.getquill.jdbczio.Quill
+import whitelabel.captal.infra.RqliteDataSource
 import whitelabel.captal.infra.schema.QuillSqlite
-import whitelabel.captal.infra.{Migrate, RqliteDataSource}
 import zio.*
 import zio.test.*
 
@@ -20,24 +19,6 @@ import Tokens.given
   */
 object AuthSpec extends ZIOSpecDefault:
   private val audience = ResourceUri.unsafe("https://mcp.test/mcp")
-
-  /** Through [[Migrate]] rather than a Flyway built here, which is not a shortcut.
-    *
-    * rqlite reports a rejected statement inside an HTTP 200 and the driver turns that into zero
-    * rows, so DDL run without `Migrate`'s DataSource wrapper silently does nothing — and Flyway
-    * records it as applied. That is not hypothetical: writing this spec against a hand-rolled
-    * Flyway produced a history row saying `mcp_tokens` existed, and a database where it did not.
-    *
-    * Both histories, separately, exactly as the two services do it: the API owns the portal's
-    * schema and this server owns only `mcp_tokens`.
-    */
-  private val migrate: Task[Unit] =
-    ZIO
-      .attempt(ConfigFactory.load().getString("database.jdbcUrl"))
-      .flatMap: url =>
-        Migrate.migrateTo(url, "db/migration", "flyway_schema_history") *>
-          Migrate.migrateTo(url, "db/migration-mcp", "flyway_schema_history_mcp")
-      .unit
 
   private def clear: ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*
@@ -130,7 +111,10 @@ object AuthSpec extends ZIOSpecDefault:
           _   <- Tokens.seedAdmin("admin-secret", "admin").orDieWith(new RuntimeException(_))
           row <- Tokens.byIdentifier("admin")
         yield assertTrue(Tokens.viewOf(row.get).scopes == Auth.AllScopes)
+      // Both histories are laid down once by `mcp.test` before forking — see `migratedRqliteUrl` in
+      // build.mill, which runs `Migrate` and then `McpMigrate` for the reasons this spec used to
+      // carry in a comment here.
     ).provideShared(
-      RqliteDataSource.layer >>> Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase),
-      ZLayer.fromZIO(migrate.unit)) @@ TestAspect.sequential
+      RqliteDataSource.layer >>> Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)) @@
+      TestAspect.sequential
 end AuthSpec

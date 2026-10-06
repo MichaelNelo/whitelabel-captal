@@ -1,39 +1,18 @@
 package whitelabel.captal.mcp
 
 import com.jamesward.ziohttp.mcp.{CallToolResult, ToolContent}
-import com.typesafe.config.ConfigFactory
-import fly4s.Fly4s
-import fly4s.data.{Fly4sConfig, Location, MigrationVersion}
 import io.getquill.*
 import io.getquill.jdbczio.Quill
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.given
 import whitelabel.captal.infra.{AdvertiserRow, RqliteDataSource}
 import zio.*
-import zio.interop.catz.*
 import zio.test.*
 
 /** `advertisers` has no unique constraint at all, so everything these tools promise about identity
   * is enforced in Scala. These exercise that, against a real rqlite instance.
   */
 object AdvertiserToolsSpec extends ZIOSpecDefault:
-
-  private val migrate: Task[Unit] = ZIO
-    .attempt(RqliteDataSource.create(ConfigFactory.load().getString("database.jdbcUrl")))
-    .flatMap: ds =>
-      Fly4s
-        .makeFor[Task](
-          ZIO.succeed(ds),
-          config = Fly4sConfig
-            .default
-            .copy(
-              locations = List(Location("db/migration")),
-              baselineOnMigrate = true,
-              baselineVersion = MigrationVersion("0"),
-              cleanOnValidationError = true)
-        )
-        .use(_.migrate)
-        .unit
 
   private def clear: ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*
@@ -145,5 +124,8 @@ object AdvertiserToolsSpec extends ZIOSpecDefault:
           stored.head.isActive == 0,
           // Hidden from the default listing once retired.
           !textOf(listed).contains(id))
-    ).provideShared(quillLayer, ZLayer.fromZIO(migrate.unit)) @@ TestAspect.sequential
+      // No migration layer. `mcp.test` lays the schema down once before forking — see
+      // `migratedRqliteUrl` in build.mill. A Flyway run per spec raced, and since V22 rebuilds a
+      // table the race deleted it.
+    ).provideShared(quillLayer) @@ TestAspect.sequential
 end AdvertiserToolsSpec

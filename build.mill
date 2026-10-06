@@ -881,14 +881,68 @@ object mcp extends BaseModule:
     private val rqlitePort = 4012
     private val rqliteContainer = "rqlite-mcp-test"
 
-    // Task.Input so every run re-checks the container is actually alive, rather than caching a URL
-    // that points at something the operator removed in between.
-    def rqliteUrl: T[String] = Task.Input:
-      ensureRqlite(rqliteContainer, rqlitePort)
+    /** The container's id and URL, as one input.
+      *
+      * `Task.Input` so every run re-checks the container is actually alive, rather than caching a
+      * URL that points at something the operator removed in between.
+      *
+      * The id is in here because the URL alone is not enough to invalidate [[migratedRqliteUrl]]:
+      * it is the same string for a container that was removed and recreated, so a plain `Task`
+      * downstream would reuse its cached result and skip the migration. The id is what actually
+      * changes, and a `docker rm` followed by a run that touched no source has to re-migrate — or
+      * the suite tests against an empty database and fails in a way that looks like the schema
+      * rather than the cache.
+      */
+    private def rqliteStamp: T[String] = Task.Input:
+      val url = ensureRqlite(rqliteContainer, rqlitePort)
+      val id = os.proc("docker", "ps", "-q", "-f", s"name=$rqliteContainer").call().out.trim()
+      s"$id $url"
+
+    def rqliteUrl: T[String] = Task:
+      rqliteStamp().split(" ").last
+
+    /** The same URL, with the schema already laid down.
+      *
+      * Migrating here rather than in each spec, because Flyway cannot migrate concurrently on
+      * SQLite and logs that it is not even trying: "Unable to lock flyway_schema_history as SQLite
+      * does not support locking. No concurrent migration supported." Mill forks a JVM per spec, so
+      * five specs each ran their own Flyway against one rqlite at once.
+      *
+      * That was survivable while every migration only added things — the race produced "already
+      * exists" warnings and nothing else. V22 rebuilds `advertiser_videos` (SQLite cannot alter a
+      * CHECK), so the race became destructive: one runner dropped the table while another had
+      * already renamed its replacement over it, and the suite deleted its own schema. The symptom
+      * is "No result set returned" from whichever spec reads that table next, which names neither
+      * the table nor the cause.
+      *
+      * Two processes, in order, because the second checks the first has run: the API owns every
+      * table the portal reads, and the backoffice owns only its tokens.
+      *
+      * Through `Migrate` and `McpMigrate` rather than a Flyway assembled here, which is not a
+      * matter of taste. rqlite reports a rejected statement inside an HTTP 200 and the driver turns
+      * that into zero rows, so DDL run without `Migrate`'s DataSource wrapper does nothing and
+      * Flyway records it as applied. The four specs that assembled their own also set
+      * `cleanOnValidationError`, which drops every table — so a history those silent no-ops had
+      * corrupted would wipe the database on the next run and call it recovery.
+      */
+    def migratedRqliteUrl: T[String] = Task:
+      // The stamp, not `rqliteUrl`, so a recreated container invalidates this.
+      val url = rqliteStamp().split(" ").last
+      val env = Map("DB_URL" -> url)
+      def migrate(label: String, classPath: Seq[PathRef], mainClass: String): Unit =
+        println(s"[migrate] $label ...")
+        val result = os
+          .proc("java", "-cp", classPath.map(_.path).mkString(":"), mainClass)
+          .call(env = env, check = false, stderr = os.Pipe, stdout = os.Pipe)
+        if result.exitCode != 0 then
+          sys.error(s"[migrate] $label failed:\n${result.err.text().trim}")
+      migrate("api schema", infra.runClasspath(), "whitelabel.captal.infra.Migrate")
+      migrate("backoffice schema", runClasspath(), "whitelabel.captal.mcp.McpMigrate")
+      url
 
     // RqliteDataSource reads `database.jdbcUrl`, which infra's application.conf overrides from DB_URL.
     override def forkEnv: T[Map[String, String]] = Task:
-      super.forkEnv() ++ Map("DB_URL" -> rqliteUrl())
+      super.forkEnv() ++ Map("DB_URL" -> migratedRqliteUrl())
 
     def stopRqlite() = Task.Command:
       os.proc("docker", "rm", "-f", rqliteContainer).call(check = false)
