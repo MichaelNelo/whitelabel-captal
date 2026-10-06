@@ -3,16 +3,12 @@ package whitelabel.captal.mcp
 import java.util.UUID
 
 import com.jamesward.ziohttp.mcp.ToolContent
-import com.typesafe.config.ConfigFactory
-import fly4s.Fly4s
-import fly4s.data.{Fly4sConfig, Location, MigrationVersion}
 import io.getquill.*
 import io.getquill.jdbczio.Quill
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.given
 import whitelabel.captal.infra.{LocalizedTextRow, LocationRow, RqliteDataSource}
 import zio.*
-import zio.interop.catz.*
 import zio.test.*
 
 /** Exercises the tools against a real rqlite instance.
@@ -27,24 +23,6 @@ object I18nToolsSpec extends ZIOSpecDefault:
   private val Locale = "es"
   private val SomeKey = "welcome.title"
   private val OtherKey = "welcome.subtitle"
-
-  private val migrate: Task[Unit] = ZIO
-    .attempt:
-      RqliteDataSource.create(ConfigFactory.load().getString("database.jdbcUrl"))
-    .flatMap: ds =>
-      Fly4s
-        .makeFor[Task](
-          ZIO.succeed(ds),
-          config = Fly4sConfig
-            .default
-            .copy(
-              locations = List(Location("db/migration")),
-              baselineOnMigrate = true,
-              baselineVersion = MigrationVersion("0"),
-              cleanOnValidationError = true)
-        )
-        .use(_.migrate)
-        .unit
 
   private def resetFixture: ZIO[QuillSqlite, Throwable, String] = ZIO.serviceWithZIO[QuillSqlite]:
     quill =>
@@ -229,5 +207,7 @@ object I18nToolsSpec extends ZIOSpecDefault:
           forKey.size == 1,
           forKey.head.value == "uno"
         )
-    ).provideShared(quillLayer, ZLayer.fromZIO(migrate.unit)) @@ TestAspect.sequential
+      // The schema is laid down once by `mcp.test` before forking — see `migratedRqliteUrl` in
+      // build.mill. A Flyway run per spec raced.
+    ).provideShared(quillLayer) @@ TestAspect.sequential
 end I18nToolsSpec

@@ -3,8 +3,6 @@ package whitelabel.captal.api
 import java.util.UUID
 
 import com.typesafe.config.ConfigFactory
-import fly4s.Fly4s
-import fly4s.data.{Fly4sConfig, Location, MigrationVersion}
 import io.getquill.*
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.{survey, user, video}
@@ -13,7 +11,6 @@ import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.given
 import zio.*
-import zio.interop.catz.*
 
 object TestFixtures:
   // Deterministic timestamp matching what ZIOSpecDefault's TestClock returns by default
@@ -25,27 +22,24 @@ object TestFixtures:
   private val FixedNow: String = java.time.Instant.EPOCH.toString
 
   private val testConfig = ConfigFactory.load("test.conf")
-  // TODO: disable Flyway's ResourceNameValidator in the E2E test config. With
-  // the default settings, fly4s walks every migration filename and runs the
-  // validator (logs flood with `Validating V11__...sql` lines and there's a
-  // ~5s pause per file in some environments). The test fixture doesn't need
-  // the strict naming check — turn it off via Fly4sConfig once fly4s exposes
-  // the flag, or by setting `validateMigrationNaming = false` on the Flyway
-  // builder directly.
-  private val fly4sConfig = Fly4sConfig
-    .default
-    .copy(
-      locations = List(Location("db/migration")),
-      baselineOnMigrate = true,
-      baselineVersion = MigrationVersion("0"),
-      cleanOnValidationError = true)
 
-  def migrate: ZIO[Any, Throwable, Unit] = ZIO
-    .attempt:
-      val url = testConfig.getString("database.jdbcUrl")
-      RqliteDataSource.create(url)
-    .flatMap: ds =>
-      Fly4s.makeFor[Task](ZIO.succeed(ds), config = fly4sConfig).use(_.migrate).unit
+  /** Through [[Migrate]] rather than a Flyway assembled here, which is not a style preference.
+    *
+    * rqlite reports a rejected statement inside an HTTP 200 and the driver turns that into zero
+    * rows. DDL run without `Migrate`'s DataSource wrapper therefore does nothing while Flyway
+    * records it as applied — and V22 rebuilds `advertiser_videos`, so a rejected statement there
+    * leaves a half-built table and a history that says otherwise.
+    *
+    * It also drops `cleanOnValidationError`, which was set here. That flag means "if the history
+    * does not match the files, drop every table and start over" — defensible for a throwaway
+    * database right up to the moment it fires for a reason nobody intended. A checksum mismatch now
+    * fails the run with Flyway's own message, and the fix is to remove the container deliberately.
+    */
+  def migrate: ZIO[Any, Throwable, Unit] =
+    ZIO
+      .attempt(testConfig.getString("database.jdbcUrl"))
+      .flatMap(url => Migrate.migrateTo(url, "db/migration", Migrate.ApiHistoryTable))
+      .unit
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Survey Fixtures

@@ -15,7 +15,12 @@ import zio.*
   * tables the API created and migrates only its own. Hence the check rather than a migration — it
   * needs the API to have run, and it must not be the one to run it.
   */
-object McpMigrate:
+/** A `ZIOAppDefault` as well as something [[Main]] calls, so the schema can be laid down without
+  * starting a server. `mcp.test` runs it that way before forking: Flyway cannot migrate
+  * concurrently on SQLite — it says so in the log — and the only reliable answer is for a single
+  * process to finish first.
+  */
+object McpMigrate extends ZIOAppDefault:
 
   private val Location = "db/migration-mcp"
   private val HistoryTable = "flyway_schema_history_mcp"
@@ -54,8 +59,8 @@ object McpMigrate:
           new IllegalStateException(
             s"No API migrations have run against this database. Start the API first: it creates every table the backoffice reads, and this server deliberately does not."))
 
-  /** Own schema only, after the check. */
-  def run: ZIO[Any, Throwable, Unit] =
+  /** Own schema only, after the check. Also this app's entry point. */
+  override def run: ZIO[Any, Throwable, Unit] =
     for
       url      <- jdbcUrl
       _        <- requireApiSchema(url)

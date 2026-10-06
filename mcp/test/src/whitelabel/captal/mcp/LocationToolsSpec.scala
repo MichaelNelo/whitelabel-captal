@@ -1,16 +1,12 @@
 package whitelabel.captal.mcp
 
 import com.jamesward.ziohttp.mcp.{CallToolResult, ToolContent}
-import com.typesafe.config.ConfigFactory
-import fly4s.Fly4s
-import fly4s.data.{Fly4sConfig, Location, MigrationVersion}
 import io.getquill.*
 import io.getquill.jdbczio.Quill
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.given
 import whitelabel.captal.infra.{LocationRow, RqliteDataSource}
 import zio.*
-import zio.interop.catz.*
 import zio.test.*
 
 /** `locations.slug` is UNIQUE and rqlite does enforce it — but it reports the rejection as a field
@@ -24,23 +20,6 @@ import zio.test.*
   */
 object LocationToolsSpec extends ZIOSpecDefault:
   private val Prefix = "loc-spec"
-
-  private val migrate: Task[Unit] = ZIO
-    .attempt(RqliteDataSource.create(ConfigFactory.load().getString("database.jdbcUrl")))
-    .flatMap: ds =>
-      Fly4s
-        .makeFor[Task](
-          ZIO.succeed(ds),
-          config = Fly4sConfig
-            .default
-            .copy(
-              locations = List(Location("db/migration")),
-              baselineOnMigrate = true,
-              baselineVersion = MigrationVersion("0"),
-              cleanOnValidationError = true)
-        )
-        .use(_.migrate)
-        .unit
 
   /** Filtered in Scala rather than SQL: Quill's SQLite dialect has no `startsWith`, and the handful
     * of rows a test writes makes the round trip irrelevant.
@@ -190,7 +169,9 @@ object LocationToolsSpec extends ZIOSpecDefault:
           // operator assume the portal can authorize guests there.
           textOf(listed).contains("\"unifiConfigured\":false")
         )
+      // The schema is laid down once by `mcp.test` before forking — see `migratedRqliteUrl` in
+      // build.mill. A Flyway run per spec raced.
     ).provideShared(
-      RqliteDataSource.layer >>> Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase),
-      ZLayer.fromZIO(migrate.unit)) @@ TestAspect.sequential
+      RqliteDataSource.layer >>> Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)) @@
+      TestAspect.sequential
 end LocationToolsSpec
