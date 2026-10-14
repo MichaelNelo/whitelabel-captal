@@ -349,6 +349,45 @@ object SurveyTools:
   given Schema[SurveySummary] = DeriveSchema.gen
   given Schema[ListResponse] = DeriveSchema.gen
   given Schema[GetRequest] = DeriveSchema.gen
+
+  /** What a question can be corrected to after it exists.
+    *
+    * Not the question's type, and not its options. The type decides which rules and options are
+    * even representable, so changing it would invalidate rows hanging off it and the answers
+    * already recorded against it — retire and create instead. Options are a list with their own
+    * ids, texts and answers, which is a different operation from fixing a sentence.
+    *
+    * Every field is optional and an omitted one is left alone, so correcting a typo cannot reset
+    * the points to a default nobody asked for.
+    */
+  final case class UpdateQuestionRequest(
+      @description("Which question. Call get_survey for the ids in a survey.")
+      questionId: String,
+      @description(
+        "The corrected wording, one entry per locale. Only the locales given are rewritten; the others are left as they are. Ask the operator for it — never invent copy a guest will read.")
+      text: Option[List[LocalizedText]],
+      @description("Help text under the question. Same per-locale rules as `text`.")
+      description: Option[List[LocalizedText]],
+      @description(
+        "Placeholder inside the input. Same per-locale rules as `text`. Only means anything for the types that take free input.")
+      placeholder: Option[List[LocalizedText]],
+      @description("Whether an answer is mandatory.")
+      required: Option[Boolean],
+      @description("Points awarded for answering.")
+      points: Option[Int])
+
+  final case class UpdateQuestionResponse(
+      @description("The question changed.")
+      questionId: String,
+      @description(
+        "Which fields this call actually wrote. Empty means the request asked for nothing.")
+      updated: List[String],
+      @description(
+        "Answers already recorded against it. Editing the wording does not touch them, which is worth knowing before rewording: the answers were given to the old text.")
+      answersPreserved: Int)
+
+  given Schema[UpdateQuestionRequest] = DeriveSchema.gen
+  given Schema[UpdateQuestionResponse] = DeriveSchema.gen
   given Schema[SetQuestionActiveRequest] = DeriveSchema.gen
   given Schema[SetQuestionActiveResponse] = DeriveSchema.gen
   given Schema[ReorderRequest] = DeriveSchema.gen
@@ -380,6 +419,15 @@ object SurveyTools:
     QuillSqlite]: quill =>
     import quill.*
     run(answerCountQuery(lift(questionId))).orDie.map(_.toInt)
+
+  /** Zero is allowed and negative is not, matching `AdvertiserTools.validatePriority`. A question
+    * worth no points is a reasonable thing to want; one worth less than nothing is a typo.
+    */
+  private def validatePoints(points: Option[Int]): ZIO[Any, String, Unit] =
+    ZIO
+      .fail(s"Points must be zero or greater, got ${points.getOrElse(0)}.")
+      .when(points.exists(_ < 0))
+      .unit
 
   private def findQuestion(id: String): ZIO[QuillSqlite, String, QuestionRow] = ZIO.serviceWithZIO[
     QuillSqlite]: quill =>
@@ -519,6 +567,102 @@ object SurveyTools:
           else
             s"That question belongs to the deployment-wide '$category' survey, asked of every guest of every location. Use $otherTool, which requires identity:write."))
       .unit
+
+  /** Correcting a question that is already being asked.
+    *
+    * Paired by scope like the rest, for the reason `requireCategory` records: the three
+    * identification surveys are asked of every guest of every location, so rewording one is not a
+    * per-location change and must not be reachable with a location's token.
+    *
+    * Until this existed the only way to fix a typo was to retire the question and create a new one.
+    * That is not equivalent: `answers.question_id` keeps pointing at the retired question, so the
+    * history splits in two and nothing says the halves are the same question. Rewording in place
+    * keeps them together — at the cost that answers recorded before the edit were given to the old
+    * wording, which the response says out loud rather than leaving to be inferred.
+    */
+  private def update(wantIdentification: Boolean, otherTool: String): McpToolHandlerR[QuillSqlite] =
+    McpTool(
+      if wantIdentification then
+        "update_identification_question"
+      else
+        "update_question")
+      .description(
+        if wantIdentification then
+          "Correct a question in one of the three deployment-wide identification surveys: its wording, help text, placeholder, whether it is required, or its points. Every guest of every location is asked these. Omitted fields are left alone. Cannot change the question's type or its options — retire it and create a new one for that."
+        else
+          "Correct a question in a video's survey: its wording, help text, placeholder, whether it is required, or its points. Omitted fields are left alone. Cannot change the question's type or its options — retire it and create a new one for that. Answers already given are kept and still point at this question, so they were answers to the old wording.")
+      .requireScopes(
+        if wantIdentification then
+          Auth.IdentityWrite
+        else
+          Auth.ContentWrite)
+      .handle: (in: UpdateQuestionRequest) =>
+        ZIO.serviceWithZIO[QuillSqlite]: quill =>
+          import quill.*
+          for
+            question <- findQuestion(in.questionId)
+            surveys  <- run(query[SurveyRow]).orDie
+            category = surveys
+              .find(_.id.asString == question.surveyId.asString)
+              .map(_.category)
+              .getOrElse("")
+            _   <- requireCategory(category, wantIdentification, otherTool)
+            _   <- validatePoints(in.points)
+            now <- Clock.instant.map(_.toString)
+            // The texts first and the row second, so a rejected `points` cannot leave the wording
+            // rewritten against the old value. Both are idempotent, so a failure part way is
+            // recoverable by calling again — there is no transaction to lean on here.
+            _ <- ZIO.foreachDiscard(in.text)(replaceTexts(in.questionId, _, now))
+            _ <- ZIO.foreachDiscard(in.description)(replaceTexts(s"${in.questionId}_desc", _, now))
+            _ <-
+              ZIO.foreachDiscard(in.placeholder)(
+                replaceTexts(s"${in.questionId}_placeholder", _, now))
+            rowFields =
+              List(
+                in.required
+                  .map(r =>
+                    "required" -> (
+                      if r then
+                        1
+                      else
+                        0
+                    )),
+                in.points.map("points" -> _)).flatten
+            _ <-
+              ZIO.when(rowFields.nonEmpty):
+                val required =
+                  in.required
+                    .fold(question.isRequired)(r =>
+                      if r then
+                        1
+                      else
+                        0)
+                val points = in.points.getOrElse(question.pointsAwarded)
+                run(
+                  questionByIdQuery(lift(in.questionId)).update(
+                    _.isRequired    -> lift(required),
+                    _.pointsAwarded -> lift(points)))
+                  .orDie
+                  .flatMap(Writes.expectOne(_, s"Updating question '${in.questionId}'"))
+            count <- answerCount(in.questionId)
+            written =
+              List(
+                in.text.map(_ => "text"),
+                in.description.map(_ => "description"),
+                in.placeholder.map(_ => "placeholder"),
+                in.required.map(_ => "required"),
+                in.points.map(_ => "points")
+              ).flatten
+          yield UpdateQuestionResponse(in.questionId, written, count)
+          end for
+
+  val updateQuestion: McpToolHandlerR[QuillSqlite] = update(
+    wantIdentification = false,
+    otherTool = "update_identification_question")
+
+  val updateIdentificationQuestion: McpToolHandlerR[QuillSqlite] = update(
+    wantIdentification = true,
+    otherTool = "update_question")
 
   private def setActive(
       wantIdentification: Boolean,
@@ -825,6 +969,57 @@ object SurveyTools:
         .orDie
         .flatMap(Writes.expectOne(_, s"Text for '$entityId' (${t.locale})"))
 
+  private inline def backendTextQuery = quote: (entityIdParam: String, localeParam: String) =>
+    query[LocalizedTextRow].filter(t =>
+      t.entityId == entityIdParam && t.locale == localeParam && t.category == "backend")
+
+  /** The editing counterpart of [[writeTexts]], upserting on `(entity_id, locale)`.
+    *
+    * `writeTexts` inserts blind, which is right exactly once — when the entity is being created and
+    * cannot have texts yet. Every later write has to find the existing row: V12's unique index
+    * covers `(entity_id, locale, location_id)`, so a second blind insert for the same locale is
+    * rejected, and rqlite reports that rejection inside an HTTP 200 as zero rows. An editing tool
+    * built on `writeTexts` would therefore report success and change nothing.
+    *
+    * Only the locales given are touched. Omitting one leaves it alone rather than deleting it, so
+    * correcting the Spanish wording of a question cannot silently drop its English.
+    */
+  private[mcp] def replaceTexts(
+      entityId: String,
+      texts: List[LocalizedText],
+      now: String): ZIO[QuillSqlite, String, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.*
+    ZIO.foreachDiscard(texts): t =>
+      for
+        existing <- run(backendTextQuery(lift(entityId), lift(t.locale))).orDie.map(_.headOption)
+        affected <-
+          existing match
+            case Some(row) =>
+              run(
+                query[LocalizedTextRow]
+                  .filter(_.id == lift(row.id))
+                  // isActive -> 1 for the reason `I18nTools.upsert` gives: rewriting a text undoes
+                  // an earlier retirement rather than leaving a row nobody can see.
+                  .update(_.value -> lift(t.value), _.updatedAt -> lift(now), _.isActive -> 1))
+                .orDie
+            case None =>
+              run(
+                query[LocalizedTextRow].insertValue(
+                  lift(
+                    LocalizedTextRow(
+                      id = UUID.randomUUID.toString,
+                      entityId = entityId,
+                      locale = t.locale,
+                      value = t.value,
+                      category = "backend",
+                      createdAt = now,
+                      updatedAt = now,
+                      locationId = None,
+                      isActive = 1
+                    )))).orDie
+        _ <- Writes.expectOne(affected, s"Text for '$entityId' (${t.locale})")
+      yield ()
+
   /** The one place a survey row is written by these tools.
     *
     * Both tools land here so the uniqueness guard cannot be bypassed by whichever of them grows a
@@ -1087,6 +1282,8 @@ object SurveyTools:
     createSurvey,
     createIdentificationSurvey,
     createQuestion,
-    createIdentificationQuestion
+    createIdentificationQuestion,
+    updateQuestion,
+    updateIdentificationQuestion
   )
 end SurveyTools

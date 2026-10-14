@@ -7,25 +7,32 @@
 - **Dominio**: `production.captal.centauroads.com` (CloudFront) y `staging.captal.centauroads.com` (ALB legacy).
 
 **Primer paso para cualquier tarea — leer la skill relevante**:
-- Skills **operacionales** (deploy, troubleshoot, agregar location/video/survey): `cli/resources/templates/skills/<name>/SKILL.md` (también se distribuyen al operador vía `captal init` + `captal skills update`).
-- Skills **de desarrollo** (agregar endpoint / phase / migración, release del API o CLI, correr local): `.agents/skills/<name>/SKILL.md` (solo viven en este repo).
+- Skills **operacionales** (agregar location/video/survey, troubleshoot, recuperar datos): viven en
+  `mcp/resources/skills/<name>/SKILL.md` y se sirven al modelo con la tool `read_skill`. Ya no se
+  distribuyen a un workspace: el operador no tiene archivos, tiene tools.
+- Skills **de desarrollo** (agregar endpoint / phase / migración, correr local): `.agents/skills/<name>/SKILL.md` (solo viven en este repo).
 
 **Comandos de descubrimiento del estado real** (más rápido que confiar en este doc):
 
 ```bash
-# Última versión de la CLI publicada
-curl -s https://captal-cli-releases-dev.s3.us-east-1.amazonaws.com/latest/version.txt
-
-# Última imagen API/Provision en ECR
+# Última imagen API en ECR
 aws ecr describe-images --repository-name captal-api-dev --region us-east-1 \
   --query 'sort_by(imageDetails[?imageTags!=null],&imagePushedAt)[-1].imageTags[0]'
 
-# Locations activas (TGs en el ALB)
+# Target groups en el ALB
 aws elbv2 describe-target-groups --region us-east-1 \
   --query 'TargetGroups[?starts_with(TargetGroupName,`captal-`)].TargetGroupName'
 ```
 
 Para cualquier task concreta — leé la skill primero, después AGENTS.md, después el código.
+
+> **La CLI `captal` y el provisioning por archivos ya no existen.** Se borraron enteros: el binario,
+> los YAML, el árbol `locations/<slug>/` y `shared/`, el motor de diff, las imágenes derivadas y el
+> bundle de OpenTofu que la CLI extraía. El contenido se escribe hoy por las tools del servidor MCP
+> directamente a la base, y la infraestructura vive en un repo aparte
+> (`../whitelabel-captal-infrastructure/`) que se clona cuando hace falta. Si este documento o una
+> skill menciona `captal <algo>`, es un resto que sobrevivió a la limpieza y hay que tratarlo como un
+> bug, no como instrucción — el modelo obedece la documentación.
 
 ---
 
@@ -117,25 +124,18 @@ Layout actual del repo (paths relativos a la raíz):
 │           ├── AdvertiserVideoView, AdvertiserVideoSurveyView
 │           ├── ReadyView, ErrorView
 │
-├── cli/                                 # captal CLI (zio-cli + AWS SDK)
-│   ├── resources/templates/
-│   │   ├── shared/                      # YAML templates para `captal init`
-│   │   ├── location/                    # YAML templates para `captal locations add`
-│   │   ├── video/                       # YAML templates para `captal video add`
-│   │   ├── dockerfiles/                 # Dockerfile.shared, Dockerfile.locations (derived)
-│   │   └── skills/                      # OPERATOR-facing skills (distribuidas a usuarios)
-│   └── src/whitelabel/captal/cli/
-│       ├── Main.scala                   # CaptalCommand enum + cliApp
-│       ├── CaptalConfig.scala           # shared/captal.yaml loader
-│       ├── CliError.scala, Output.scala
-│       ├── AwsLayers.scala              # ZLayer factories for S3/ECS/ELBv2/ECR/...
-│       ├── docker/DockerImageBuilder.scala
-│       ├── templates/                   # Catalog, TemplateWriter, Template
-│       └── commands/
-│           ├── InitCommand, SharedPushCommand
-│           ├── LocationsAddCommand, PushCommand, PushAllCommand
-│           ├── VideoCommand
-│           ├── SkillsUpdateCommand, UpdateCommand
+├── mcp/                                 # Servidor MCP — el backoffice
+│   ├── resources/
+│   │   ├── db/migration-mcp/            # Historial propio: V1__mcp_tokens.sql
+│   │   └── skills/                      # Las 12 skills operacionales, servidas por read_skill
+│   └── src/whitelabel/captal/mcp/
+│       ├── Main.scala, CaptalMcp.scala  # Wiring, instructions, visibilidad de tools
+│       ├── Auth.scala, Tokens.scala     # Scopes y tokens hasheados en mcp_tokens
+│       ├── *Tools.scala                 # Las 40 tools, por entidad
+│       ├── UploadUi.scala, UnifiUi.scala  # MCP Apps renderizadas server-side
+│       └── UiRoutes.scala, UiTicket.scala # El POST de las páginas, firmado con HMAC
+│
+├── mcpui/, mcpui-unifi/                 # El JS de esas páginas (Scala.js, linkeado aparte)
 │
 ├── .agents/skills/                      # DEV-facing skills (solo en este repo)
 │   ├── add-migration, add-api-endpoint, add-event-handler, add-phase
@@ -156,15 +156,15 @@ Layout actual del repo (paths relativos a la raíz):
 Cosas que NUNCA deben violarse — usadas como checklist mental al editar:
 
 - **Una `Phase` siempre tiene** una entrada en `Router.phaseToPage`, un caso en `SessionPhaseHandler` (si tiene transition), y validación vía `sessionEndpoint.secured(allowedPhases = ...)` en los endpoints que la requieran.
-- **Todo YAML schema vive en `provision/src/.../models.scala`**, no en `infra/` ni `cli/`. Mantiene `provision/` reusable cross-CLI/API.
-- **`users` es global** — no tiene `location_id`. El resto de entidades provisionables (`surveys`, `advertiser_videos`, `localized_texts`) sí están scopeadas por location.
-- **IDs son uuid5 determinístico** de un seed string en `IdGenerator`. Reproducible: el mismo slug + content siempre da el mismo id → upserts idempotentes.
+- **`users` es global** — no tiene `location_id`. El resto de entidades (`surveys`, `advertiser_videos`, `localized_texts`) sí están scopeadas por location.
+- **IDs son UUID aleatorio.** Eran uuid5 determinístico de un seed string, y eso **ya no es cierto**: existía para que re-aplicar el mismo YAML fuera un upsert y no un duplicado, y con CRUD explícito no tiene sentido. Consecuencia que importa: `IdGenerator` era el guardián implícito de las claves naturales de **todas** las entidades, así que la unicidad hay que validarla en Scala antes de escribir — es lo que hacen `create_advertiser` con el nombre y `create_location` con el slug.
+- **Las escrituras verifican filas afectadas.** rqlite reporta una sentencia rechazada dentro de un HTTP 200 y el driver lo convierte en cero filas, así que una constraint violada **no** llega como excepción. `Writes.expectOne` es la red; sin él una escritura rechazada reporta éxito.
 - **Cookie de sesión**: name = `captal_session_<slug>`, `Path=/<slug>`. **NUNCA** usar `session_id` global (sesiones se mezclarían entre locations).
 - **Cookie user cross-location**: name = `captal_user`, `Path=/`. Identifica al usuario entre locations para skip de email.
-- **Imágenes derivadas son inmutables** — `captal-shared-dev:<tag>` y `captal-locations-dev:<tag>` se construyen con timestamp; re-push con mismo tag puede romper deploys en curso. Cada `captal locations push` genera tag nuevo.
-- **Migraciones Flyway son inmutables** post-merge. Bug en `V<n>__*.sql` ya aplicada → nuevo `V<n+1>__fix_*.sql`, nunca editar la vieja.
+- **No hay imágenes derivadas.** Eran `captal-shared-dev:<tag>` y `captal-locations-dev:<tag>`, construidas por location con el contenido horneado dentro. Desaparecieron con el provisioning por archivos: hoy hay una sola imagen base y el contenido viaja por la base. Los repos ECR siguen existiendo sin que nada los escriba.
+- **Migraciones Flyway son inmutables** post-merge. Bug en `V<n>__*.sql` ya aplicada → nuevo `V<n+1>__fix_*.sql`, nunca editar la vieja. Y **Flyway no migra concurrente sobre SQLite** — lo dice en el log y sigue igual; un rebuild de tabla corrido dos veces a la vez borra la tabla. Por eso `mcp.test` migra una vez antes de forkear.
 - **`captal_session_<slug>`/`captal_user`/`X-Click-Id`** — `X-Click-Id` requerido en CREATE de sesión nueva (sin él → `SessionMissing`). En requests subsecuentes con cookie ya seteada, se ignora.
-- **`localized_texts` se borra en hard-delete** (no tiene `is_active`). El resto de entidades soft-delete via `is_active=0`.
+- **Todo es soft-delete, `localized_texts` incluido.** V20 le agregó `is_active` junto a `questions`, `question_options` y `question_rules`, precisamente porque un backoffice necesita retirar una pregunta sin desactivar la encuesta entera. Antes esta línea decía que se borraba en hard-delete; ya no. **Y la otra mitad es el filtro en la lectura**: una columna que ninguna query consulta es un borrado que no borra, y el síntoma es que la tool reporta éxito y el portal sigue mostrando la pregunta.
 
 ---
 
@@ -381,13 +381,12 @@ Dato colateral: el authorize *"cancels existing active authorization (if exists)
 | Síntoma | Primero |
 |---|---|
 | `401 SessionMissing` inesperado en `/api/status` | ¿El request lleva `X-Client-Mac` Y `X-Click-Id`? Ambos requeridos en CREATE flow. |
-| Frontend muestra `[welcome.title]` literal | Location no provisionada (i18n rows missing) o cookie apunta a location distinta. `captal locations push <slug>`. |
-| Video da 403 al cargarse | URL del `video.yaml` apunta a `<bucket>.s3.amazonaws.com/...` (bucket privado). Cambiar a `https://production.captal.centauroads.com/<slug>/<filename>` (vía CloudFront). |
-| `survey.yaml` muestra "TODO" en prod | El operador no editó el placeholder de `captal video add`. Editar in-place (preserva respuestas) o borrar (soft-delete real desde API v1.3.0+). |
-| API task no arranca, exit code 1 | Logs `/ecs/captal-<slug>`: probable `ProvisionService.run` con `PROVISION_DIR` o `LOCATION_SLUG` missing/inválido. |
-| `captal locations push` falla en createService 400 "no associated load balancer" | TG creado pero ALB rule no — bug histórico. Verificar que `upsertAlbRule` corre ANTES de `createOrUpdateService` (orden: step 3 = ALB, step 4 = ECS). |
-| `captal update` falla en Windows con "process cannot access the file" | Wrapper viejo (pre-1.5.3) sin lógica de swap. Bajar nuevo `captal.bat` manualmente. |
-| rqlite queries devuelven 500 `no result set returned` después de redeploy | Fargate ephemeral perdió data. `aws ecs update-service ... --force-new-deployment` API services + `captal shared push` + `captal locations push-all`. Skill: `recover-data`. |
+| Frontend muestra `[welcome.title]` literal | Faltan filas de i18n, o la cookie apunta a otra location. `get_i18n_status` dice qué claves faltan por locale; `set_translations` las escribe. Un `[key]` entre corchetes con la clave **sí** existente es otra cosa: la fila está retirada (`remove_translation` es soft-delete). |
+| Video da 403 al cargarse | `video_url` apunta al bucket directo en vez de a CloudFront. `AssetStore.publicUrl` lo deriva de `PUBLIC_BASE_URL`, así que el 403 suele ser esa env var apuntando al lugar equivocado — ver `AssetUrlSpec`. |
+| Una pregunta muestra texto equivocado o viejo | `update_question` la corrige en su lugar y conserva las respuestas. Retirar y crear de nuevo también funciona pero parte el historial: `answers.question_id` sigue apuntando a la retirada. |
+| API task no arranca, exit code 1 | Logs `/ecs/captal-<slug>`: `LOCATION_SLUG` missing o con un slug que no existe en la tabla `locations` — `currentLocationLayer` falla con `LocationNotFound` y el arranque muere. (`PROVISION_DIR` ya no se lee.) |
+| Una location nueva no responde nada | No hay ECS service, target group ni regla de ALB para ese slug: `create_location` sólo escribe la fila. Los creaba `captal locations push`, que se borró, y no tienen reemplazo. Ver la sección CLI. |
+| rqlite queries devuelven 500 `no result set returned` después de redeploy | En prod, Fargate efímero perdió data y **no hay replay desde archivos**: el contenido tiene una sola copia. En dev hay EFS montado en `/rqlite/file`. Skill: `recover-data`. Ojo que el mismo mensaje aparece cuando la tabla no existe, no sólo cuando la fila falta. |
 | Cookies no se isolan entre locations | Verificar en DevTools: nombre debe ser `captal_session_<slug>` con `Path=/<slug>`. Si dice solo `session_id`, API en versión vieja (< v1.1.0). |
 | SPA muestra error page sin razón clara | `Runtime.run` escala fallos de Future. Revisar consola del browser para el error original. |
 
@@ -1020,45 +1019,36 @@ Si la fase no coincide, retorna `ApiError.WrongPhase(current, expected)`.
 
 ---
 
-## Provisioning System
+## Provisioning System — eliminado
 
-El sistema de provisioning sincroniza configuracion declarativa (YAML) con la base de datos al arranque del servidor. Es **idempotente** y soporta **soft-delete** mediante un manifest hashed.
+Hubo un motor que sincronizaba YAML con la base al arranque del servidor, con diff de tres vías
+contra una tabla `provision_manifest`. Se borró entero (commit `240efd6`), junto con la CLI que
+escribía esos archivos, y `provision_manifest` se dropeó en V23.
 
-### Estructura Esperada
+La razón no fue limpieza: corría en **cada** arranque de contenedor —deploy, scale-out, OOM,
+reemplazo de task— y decidía qué hacer con el contenido escrito desde el último. Un YAML sin tocar
+sobrevivía una mutación; uno editado la pisaba; y un manifest perdido trataba todo como nuevo,
+re-upserteando la location desde disco y poniendo `is_active = 1` sobre cada fila retirada a
+propósito. Con el backoffice escribiendo a la misma base, dos escritores sin árbitro no es algo que
+se deje andando.
 
-```
-provision/<env>/
-├── shared/                      # Recursos globales (compartidos entre locations)
-│   ├── surveys/                 # email.yaml, profiling.yaml, location.yaml
-│   └── advertisers/             # <slug>.yaml
-└── locations/<slug>/            # Por location
-    ├── location.yaml
-    ├── i18n/{en,es}.yaml
-    ├── promo/<slug>.yaml        # Videos promocionales (sin advertiser)
-    └── videos/<slug>/
-        ├── video.yaml           # Referencia a advertiser + slug
-        └── surveys/<slug>.yaml  # Encuestas atadas a este video
-```
-
-### Flujo de Provisioning
-
-`ProvisionService.runShared` y `ProvisionService.run`:
-
-1. Escanea YAMLs en disco, calcula hash de cada entidad
-2. Lee manifest actual de la BD (filtrado por location)
-3. Compara → genera `Action.Create | Update | Delete | Skip`
-4. Ejecuta upserts (creates+updates) y soft-deletes en transaccion
-5. Actualiza el manifest con los nuevos hashes
-
-**Nota**: El shared provisioning es **aditivo** (no borra). El por-location SI puede borrar, pero solo entidades cuyo `location_id` coincide.
+**Hoy el API sólo lee.** El contenido se escribe por las tools del servidor MCP.
 
 ---
 
-## CLI (`captal`)
+## CLI (`captal`) — eliminada
 
-CLI implementado con zio-cli en el modulo `cli/`. Permite inicializar proyectos, agregar locations, subir videos a S3, y deployar a AWS (ECS + S3 + ALB).
+<details>
+<summary>Lo que hacía <code>captal locations push &lt;slug&gt;</code>, conservado porque todavía no
+tiene reemplazo</summary>
 
-### Comandos
+Estos diez pasos levantaban el portal de un slug. Los pasos 5 a 9 **no existen hoy en ningún lado**:
+el repo de infra crea el cluster, los log groups y un único target group compartido, y
+`aws_ecs_service` sólo aparece en `modules/rqlite` y `modules/tailscale-proxy`. `create_location`
+escribe la fila en la base y nada en AWS la sirve. Es la especificación pendiente de
+`deploy_location`.
+
+### Comandos (históricos)
 
 ```bash
 captal init [--claude]                          # Crea shared/, locations/, .agents/skills/
@@ -1121,9 +1111,11 @@ Tras cada invocación de cualquier `captal`, un hook en `Main.scala::run` compar
 9. Upsert ALB rule path-pattern `/<slug>/api/*` → target group
 10. CloudFront `createInvalidation` para `/<slug>/*`
 
-### Bug conocido de zio-cli
+Los pasos 1 y 2 los cubre hoy `./mill client.publishS3` más las tools de assets
+(`set_location_styles`, `set_location_icon`, que sí invalidan). El 3 y el 4 desaparecen: no hay
+imagen derivada por location, el contenido ya no viaja en el artefacto. **Del 5 al 10 no hay nada.**
 
-`captal --help` no lista todos los subcomandos (Issue zio-cli #448). Workaround: usar `CliConfig.default.copy(finalCheckBuiltIn = false)` en `Main.scala`. Ejecutar `captal` sin args muestra todos los comandos correctamente.
+</details>
 
 ### Caveats operativos descubiertos en deploy
 
@@ -1136,21 +1128,36 @@ Tras cada invocación de cualquier `captal`, un hook en `Main.scala::run` compar
 
 ## Skills (Cross-agent)
 
-Las skills viven en `.agents/skills/<name>/SKILL.md` con frontmatter YAML (`name`, `description`, `version`). Esta ubicacion es reconocida por **Claude Code** y **OpenCode**. Con `captal init --claude` se crea ademas el symlink `.claude/skills → ../.agents/skills`.
+Hay dos conjuntos y viven en lugares distintos:
+
+**Operacionales** — `mcp/resources/skills/<name>/SKILL.md`. Las sirve el servidor MCP al modelo con
+la tool `read_skill`, y `mcp.resources` las pone en el classpath en `/skills/<slug>/SKILL.md` más un
+`index.txt` generado. No se distribuyen a ningún workspace: el operador no tiene archivos.
+
+**De desarrollo** — `.agents/skills/<name>/SKILL.md`, reconocidas por Claude Code y OpenCode. Sólo
+viven en este repo.
+
+Las doce operacionales, todas reescritas alrededor de tools:
 
 | Skill | Proposito |
 |-------|-----------|
-| `configure-aws` | Llenar `captal.yaml` con comandos AWS CLI |
-| `add-survey` | Agregar surveys a `shared/surveys/` |
-| `add-advertiser` | Agregar advertisers a `shared/advertisers/` |
-| `deploy-shared` | Ejecutar `captal shared push` |
-| `add-video` | Subir video con `captal video add` |
-| `add-promo` | Subir promo con `captal video add-promo` |
-| `edit-i18n` | Editar `i18n/{en,es}.yaml` por location |
-| `deploy-location` | Ejecutar `captal locations push` |
-| `add-location` | Onboarding end-to-end de una location nueva (compone init + i18n + assets + videos + push) |
-| `recover-data` | Recuperar el SPA cuando rqlite perdió datos: force-deploy + re-correr shared/locations push |
-| `troubleshoot-deployment` | Diagnosticar problemas comunes (target unhealthy, 500s, CloudFront cache, ECS DRAINING, etc.) |
+| `add-location` | Onboarding de una location, con `get_location_readiness` como ciclo |
+| `add-advertiser` | `create_advertiser` / `update_advertiser` / `set_advertiser_active` |
+| `add-video` | `create_advertiser_video` y la mitad de subida: página, PUT firmado, `confirm_video_upload` |
+| `add-promo` | `create_promo_video`. Un promo **puede** tener encuesta; lo que cambia es la selección |
+| `add-survey` | `create_survey` y los pares de questions, separados por scope |
+| `edit-i18n` | `get_i18n_status` → `set_translations` → `remove_translation` |
+| `i18n-reference` | Las claves que el portal exige, derivadas del tipo `I18n` por `get_i18n_schema` |
+| `style-reference` | Variables CSS y estructura de clases. La referencia viva es `get_css_schema` |
+| `configure-aws` | El repo de infra, las env vars que el server lee, y los tokens de operador |
+| `deploy-location` | Las tres cosas que "deploy" puede significar. La tercera no está implementada |
+| `troubleshoot-deployment` | Síntoma → causa → arreglo |
+| `recover-data` | Recuperación tras pérdida de datos en rqlite. **Ya no hay replay desde archivos** |
+
+`yaml-reference` y `deploy-shared` se borraron: documentaban el árbol de YAML y `captal shared push`.
+Una skill que describe algo borrado es peor que una ausente, porque el modelo la obedece —
+`CaptalMcpSpec` pinea el conteo en 12 para que agregar o quitar una sea una decisión y no un
+descuido.
 
 ---
 

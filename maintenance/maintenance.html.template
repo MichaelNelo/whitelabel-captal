@@ -24,9 +24,8 @@
 </head>
 <body>
   <div class="initial-loader">
+    <!-- Los spans del anillo se fueron con el approach descartado; ver index.html.template. -->
     <div class="brand-ring">
-      <span class="ring-track"></span>
-      <span class="ring-arc"></span>
       <img src="./brand-icon.svg" class="brand-icon" alt="Cargando">
     </div>
   </div>

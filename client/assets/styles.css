@@ -112,12 +112,16 @@
   --icon-size-lg: 64px;
   --icon-size-md: 48px;
   --control-size: 18px;
-  --loader-ring-gap: 24px;
-  --loader-ring-width: 3px;
-  /* The handoff from "waiting" to "ready", in three beats: the ring leaves, the icon stands alone
-     for an instant, and only then rises with the content behind it. That pause is what makes the
-     end of the wait legible -- without it the ring and the movement compete for the same
-     attention. */
+  /* The handoff from "waiting" to "ready", in two beats: the waiting state ends, the icon stands
+     alone for an instant, and only then rises with the content behind it. That pause is what makes
+     the end of the wait legible -- without it the two compete for the same attention.
+
+     `--loader-ring-gap` and `--loader-ring-width` used to sit here, from a spinning ring that was
+     tried and dropped. They were declared and read by nothing, and `get_css_schema` derives what
+     an operator may theme from these declarations -- so the tool recommended two variables that
+     could not change anything, and an operator who set them would see no effect and have nothing
+     to blame. The names below keep "ring" for compatibility with any stylesheet that already
+     overrides them; what they actually control is the two halves of `--loader-handoff`. */
   --loader-ring-out: 0.3s;
   --loader-settle: 0.1s;
   --loader-handoff: calc(var(--loader-ring-out) + var(--loader-settle));
@@ -204,8 +208,9 @@ body {
 /* ═══════════════════════════════════════════════════════════════════
    NAVIGATION LOADER (between page transitions)
    ═══════════════════════════════════════════════════════════════════ */
-/* Permanent overlay: always in the DOM so the ring's animation keeps ticking and stays a valid
-   donor for `BrandLoader.syncSpin`. Hidden by default; visibility flips on `.is-visible`. Kept out
+/* Permanent overlay, hidden by default; visibility flips on `.is-visible`. It used to be permanent
+   so the ring's animation kept ticking as a donor for `BrandLoader.syncSpin` — both are gone. What
+   keeps it permanent now is the blink described below. Kept out
    of pointer/AT flow while hidden. Background repeats the body's gradient so once the overlay
    fades in it opaquely covers the outgoing view, and no content bleeds through until the incoming
    view has mounted underneath. */
@@ -365,14 +370,13 @@ body {
   animation: breathe 1.4s ease-in-out infinite;
 }
 
+/* A wrapper, not a ring any more. The name survives because the markup uses it; the ring it was
+   named for was replaced by `@keyframes breathe` on the icon itself. The `.ring-track` and
+   `.ring-arc` rules that lived here only set `display: none`, and no markup emits either class --
+   they were the last trace of the dropped approach. */
 .brand-ring {
   position: relative;
   display: inline-flex;
-}
-
-.ring-track,
-.ring-arc {
-  display: none;
 }
 
 /* In loaded-state the breathing stops and `brandGlowFlash` starts -- a white `drop-shadow` halo
