@@ -25,9 +25,12 @@
        mueva nada. Lo borra Layout al montar, no un timer: esto es lo unico en pantalla mientras
        bajan main.js y el chunk de la primera vista. -->
   <div class="initial-loader">
+    <!-- Sin los <span class="ring-track"> y <span class="ring-arc"> que estaban aca: eran los
+         hooks del anillo giratorio que se probo y se descarto. La animacion de espera es `breathe`
+         sobre el icono. Quedaban vacios y ocultos por una regla `display: none`, y `BrandLoader`
+         -- que renderiza este mismo bloque desde Laminar -- ya no los emitia, asi que el markup
+         estatico y el dinamico habian divergido. -->
     <div class="brand-ring">
-      <span class="ring-track"></span>
-      <span class="ring-arc"></span>
       <img src="./brand-icon.svg" class="brand-icon" alt="Cargando">
     </div>
   </div>

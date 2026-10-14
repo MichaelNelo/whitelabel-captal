@@ -90,11 +90,15 @@ object CssSchema:
     "--icon-size-md" -> "The brand icon where it appears smaller.",
     "--control-size" ->
       "Radio and checkbox size. Below about 18px they become hard to hit on a phone.",
-    "--loader-ring-gap"   -> "Distance from the brand icon to the spinning ring around it.",
-    "--loader-ring-width" -> "Thickness of that ring.",
-    "--loader-ring-out"   -> "How long the ring takes to leave once loading ends.",
-    "--loader-settle"     ->
-      "The pause between the ring leaving and the icon rising. It is what makes the end of the wait legible; at zero the two movements compete.",
+    // `--loader-ring-gap` and `--loader-ring-width` were described here and are gone from the
+    // stylesheet: they belonged to a spinning ring that was dropped, and nothing read them. They
+    // are the case this map cannot catch on its own — the names and defaults are derived from the
+    // declarations, so a variable that is declared and unread still appears, and only the prose
+    // can say so. Which is why these two read as "still named ring, no longer a ring".
+    "--loader-ring-out" ->
+      "First half of --loader-handoff: how long the waiting state takes to leave. Named for a ring that no longer exists; the waiting animation is now `breathe` on the icon itself.",
+    "--loader-settle" ->
+      "Second half of --loader-handoff: the pause between the wait ending and the icon rising with the content. It is what makes the end of the wait legible; at zero the two movements compete.",
     "--loader-handoff" ->
       "When the icon starts rising. Derived from the two above — override those, not this.",
     "--color-success-disabled" -> "The advance button before the answer is valid.",

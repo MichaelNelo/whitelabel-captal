@@ -357,16 +357,17 @@ nothing.
 ```html
 <div class="initial-loader">
   <div class="brand-ring">
-    <span class="ring-track"></span>
-    <span class="ring-arc"></span>
     <img src="./brand-icon.svg" class="brand-icon" alt="Cargando">
   </div>
 </div>
 ```
 
-`.ring-track` and `.ring-arc` are `display: none` in the base stylesheet: the waiting animation is
-currently the icon breathing, not a ring. They are still in the markup, so a stylesheet that wants
-a ring back has those two hooks and the `--loader-ring-*` variables to do it with.
+`.brand-ring` is a wrapper, not a ring. A spinning ring was tried and dropped; the waiting
+animation is `@keyframes breathe` on the icon itself, giving way to `brandGlowFlash` in
+`.loaded-state`. The `.ring-track` / `.ring-arc` spans and the `--loader-ring-gap` /
+`--loader-ring-width` variables were the last of it and are gone — a stylesheet wanting a ring back
+writes its own markup and variables rather than inheriting half a scaffold. `--loader-ring-out`
+survives under a misleading name: it is the first half of `--loader-handoff`.
 
 If you want the loader background to match your gradient before JS even runs, override:
 ```css

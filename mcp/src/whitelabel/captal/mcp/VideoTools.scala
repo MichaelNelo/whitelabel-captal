@@ -51,7 +51,10 @@ object VideoTools:
       priority: Option[Int],
       @description(
         "Asked after the video. At least one — a video whose survey has nothing left to ask is never served.")
-      questions: List[VideoQuestion])
+      questions: List[VideoQuestion],
+      @description(
+        "The client's own campaign id for this video, if they gave one. Opaque to us: nothing here parses, validates or joins on it — it exists so a client can match our reporting against their campaign. Ask the operator; omit it if there is none. Promos have no equivalent, since a promo is the venue's own.")
+      productCampaignId: Option[String])
 
   final case class VideoQuestion(
       @description(
@@ -219,6 +222,66 @@ object VideoTools:
         "Present when the requested minWatchSeconds was longer than the video and was lowered to its length. Not an error — a survey that unlocks after the video ends never unlocks at all.")
       minWatchAdjustedFrom: Option[Int])
 
+  /** What a video can be corrected to after it exists.
+    *
+    * Not the file and not the location. The file is addressed by a key derived from the video's id
+    * and S3 is written by the upload page, so replacing it means a new video; the location is in
+    * that key and in the survey hanging off it, so moving one would orphan both.
+    *
+    * `durationSeconds` is absent for the same reason `create_advertiser_video` does not take it: it
+    * is read from the file, and a hand-supplied value is a countdown that ends in the wrong place.
+    * `minWatchSeconds` is here, and is re-checked against the stored duration.
+    */
+  final case class UpdateVideoRequest(
+      @description("Which video. Call list_videos for the ids.")
+      videoId: String,
+      @description(
+        "Corrected title, one entry per locale. Only the locales given are rewritten. Ask the operator — never invent copy a guest will read.")
+      title: Option[List[LocalizedText]],
+      @description("Corrected blurb under the title. Same per-locale rules as `title`.")
+      description: Option[List[LocalizedText]],
+      @description(
+        "How long the guest must watch. Lowered to the video's length if it exceeds it, the same way confirm_video_upload does — a survey that unlocks after the video ends never unlocks.")
+      minWatchSeconds: Option[Int],
+      @description("Rotation weight for an advertiser's video, or position for a promo.")
+      priority: Option[Int],
+      @description(
+        "Seconds before the same guest sees it again. Only means anything for a promo; setting it on an advertiser's video is accepted and ignored by the selection.")
+      noRepeatSeconds: Option[Int],
+      @description(
+        "The client's own campaign id. Pass an empty string to clear it. Opaque to us — nothing parses or joins on it.")
+      productCampaignId: Option[String])
+
+  final case class UpdateVideoResponse(
+      @description("The video changed.")
+      videoId: String,
+      @description(
+        "Which fields this call actually wrote. Empty means the request asked for nothing.")
+      updated: List[String],
+      @description(
+        "Present when the requested minWatchSeconds was longer than the video and was lowered to its length.")
+      minWatchAdjustedFrom: Option[Int])
+
+  final case class SetVideoActiveRequest(
+      @description("Which video to retire or bring back.")
+      videoId: String,
+      @description(
+        "False retires it: the file stays, the answers to its survey keep resolving, and the rotation stops drawing it. True returns it to rotation.")
+      active: Boolean)
+
+  final case class SetVideoActiveResponse(
+      @description("The video changed.")
+      videoId: String,
+      @description("Its status after the change — `active` or `retired`.")
+      status: String,
+      @description(
+        "Videos still in rotation at this location. Zero means a guest gets past identification and is shown nothing.")
+      activeAtLocation: Int)
+
+  given Schema[UpdateVideoRequest] = DeriveSchema.gen
+  given Schema[UpdateVideoResponse] = DeriveSchema.gen
+  given Schema[SetVideoActiveRequest] = DeriveSchema.gen
+  given Schema[SetVideoActiveResponse] = DeriveSchema.gen
   given Schema[CreatePromoRequest] = DeriveSchema.gen
   given Schema[CreatePromoResponse] = DeriveSchema.gen
   given Schema[ListVideosRequest] = DeriveSchema.gen
@@ -350,7 +413,10 @@ object VideoTools:
                     status = VideoStatus.Pending,
                     priority = in.priority.getOrElse(10),
                     createdAt = now,
-                    updatedAt = now
+                    updatedAt = now,
+                    // Carried through untouched. The column has existed since V15 and nothing ever
+                    // wrote it, so every video created by this server until now has none.
+                    productCampaignId = in.productCampaignId.map(_.trim).filter(_.nonEmpty)
                   )))).orDie
           _ <- Writes.expectOne(affected, s"Creating video '${videoId.asString}'")
           // The portal reads these back keyed on the video id, and the description on the id with
@@ -782,11 +848,138 @@ object VideoTools:
         end for
     .withUi(UploadUi.AppUri)
 
+  val update: McpToolHandlerR[QuillSqlite] = McpTool("update_video")
+    .description(
+      "Correct a video after it exists: its title, blurb, minWatchSeconds, priority, noRepeatSeconds or the client's campaign id. Omitted fields are left alone. Cannot replace the file or move the video to another location — the S3 key is derived from the video's id and the survey hangs off it, so both of those mean a new video.")
+    .requireScopes(Auth.ContentWrite)
+    .handle: (in: UpdateVideoRequest) =>
+      ZIO.serviceWithZIO[QuillSqlite]: quill =>
+        import quill.*
+        for
+          row <- run(videoByIdQuery(lift(in.videoId)))
+            .orDie
+            .map(_.headOption)
+            .someOrFail(s"No video with id '${in.videoId}'. Call list_videos to see what exists.")
+          _ <-
+            ZIO.when(in.minWatchSeconds.exists(_ <= 0))(
+              ZIO.fail("minWatchSeconds must be at least 1."))
+          _ <- ZIO.when(in.priority.exists(_ < 0))(ZIO.fail("priority must be zero or greater."))
+          _ <-
+            ZIO.when(in.noRepeatSeconds.exists(_ < 0))(
+              ZIO.fail("noRepeatSeconds cannot be negative."))
+          now <- Clock.instant.map(_.toString)
+          // Re-resolved against the stored duration, which `confirm_video_upload` read off the
+          // file. A pending video has duration zero and nothing to clamp against, so the request
+          // stands as given and confirm will clamp it later.
+          resolved = in
+            .minWatchSeconds
+            .map: requested =>
+              if row.durationSeconds > 0 then
+                resolveMinWatch(requested, row.durationSeconds)
+              else
+                requested
+          adjusted = in
+            .minWatchSeconds
+            .zip(resolved)
+            .collect {
+              case (requested, applied) if applied != requested =>
+                requested
+            }
+          _ <- ZIO.foreachDiscard(in.title)(SurveyTools.replaceTexts(in.videoId, _, now))
+          _ <-
+            ZIO.foreachDiscard(in.description)(
+              SurveyTools.replaceTexts(s"${in.videoId}_desc", _, now))
+          rowChanged =
+            in.minWatchSeconds.isDefined || in.priority.isDefined || in.noRepeatSeconds.isDefined ||
+              in.productCampaignId.isDefined
+          _ <-
+            ZIO.when(rowChanged):
+              val minWatch = resolved.getOrElse(row.minWatchSeconds)
+              val priority = in.priority.getOrElse(row.priority)
+              val noRepeat = in.noRepeatSeconds.orElse(row.noRepeatSeconds)
+              // An empty string clears it, which is the only way to say "there is no campaign any
+              // more" through a field that is already optional for "do not touch".
+              val campaign =
+                in.productCampaignId
+                  .map(_.trim)
+                  .fold(row.productCampaignId)(v => Option.when(v.nonEmpty)(v))
+              run(
+                videoByIdQuery(lift(in.videoId)).update(
+                  _.minWatchSeconds   -> lift(minWatch),
+                  _.priority          -> lift(priority),
+                  _.noRepeatSeconds   -> lift(noRepeat),
+                  _.productCampaignId -> lift(campaign),
+                  _.updatedAt         -> lift(now)
+                )).orDie.flatMap(Writes.expectOne(_, s"Updating video '${in.videoId}'"))
+          written =
+            List(
+              in.title.map(_ => "title"),
+              in.description.map(_ => "description"),
+              in.minWatchSeconds.map(_ => "minWatchSeconds"),
+              in.priority.map(_ => "priority"),
+              in.noRepeatSeconds.map(_ => "noRepeatSeconds"),
+              in.productCampaignId.map(_ => "productCampaignId")
+            ).flatten
+        yield UpdateVideoResponse(in.videoId, written, adjusted)
+        end for
+
+  /** The off switch V21 made representable and nothing could set.
+    *
+    * `retired` and `pending` are different states on purpose: `pending` never had a file, `retired`
+    * has one and was taken out of rotation deliberately. Before V21 both were `is_active = 0`,
+    * which let `confirm_video_upload` find a retired video's file and put it back into rotation
+    * through a path meant for uploads, without anyone asking.
+    *
+    * So this refuses a pending video rather than activating it. There is nothing to serve, and the
+    * only thing that may make a video active is `confirm_video_upload`, once the file is there.
+    */
+  val setActive: McpToolHandlerR[QuillSqlite] = McpTool("set_video_active")
+    .description(
+      "Retire a video from rotation, or bring it back. The file and the answers to its survey are kept either way — this is the only removal there is. Refuses a video still waiting for its file: that one becomes active through confirm_video_upload, which is what checks the file is actually there.")
+    .requireScopes(Auth.ContentWrite)
+    .handle: (in: SetVideoActiveRequest) =>
+      ZIO.serviceWithZIO[QuillSqlite]: quill =>
+        import quill.*
+        for
+          row <- run(videoByIdQuery(lift(in.videoId)))
+            .orDie
+            .map(_.headOption)
+            .someOrFail(s"No video with id '${in.videoId}'. Call list_videos to see what exists.")
+          _ <-
+            ZIO.when(row.status == VideoStatus.Pending)(
+              ZIO.fail(
+                s"Video '${in
+                    .videoId}' is still waiting for its file, so there is nothing to put into rotation. Upload it and call confirm_video_upload, or call resume_video_upload for a fresh signed URL."))
+          target =
+            if in.active then
+              VideoStatus.Active
+            else
+              VideoStatus.Retired
+          now <- Clock.instant.map(_.toString)
+          _   <- run(
+            videoByIdQuery(lift(in.videoId)).update(
+              _.status    -> lift(target),
+              _.updatedAt -> lift(now)))
+            .orDie
+            .flatMap(Writes.expectOne(_, s"Setting video '${in.videoId}' active=${in.active}"))
+          siblings <- run(query[AdvertiserVideoRow]).orDie
+          activeHere = siblings.count(v =>
+            v.locationId == row.locationId && (
+              if v.id.asString == in.videoId then
+                target == VideoStatus.Active
+              else
+                v.status == VideoStatus.Active
+            ))
+        yield SetVideoActiveResponse(in.videoId, target, activeHere)
+        end for
+
   val all: List[McpToolHandlerR[QuillSqlite & AssetStore]] = List(
     create,
     createPromo,
     resume,
     confirm,
     list,
-    listPending)
+    listPending,
+    update,
+    setActive)
 end VideoTools

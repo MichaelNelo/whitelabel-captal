@@ -25,12 +25,13 @@ def main(): Unit =
 end main
 
 object App:
-  /** The nav-loader is a permanent overlay rather than swapped in via `child <--` for two reasons:
+  /** The nav-loader is a permanent overlay rather than swapped in via `child <--`.
     *
-    *   - Its `.ring-arc` needs to stay in the DOM continuously so `BrandLoader.syncSpin` on the
-    *     next-mounted view can copy the current spin phase from it. If the loader itself unmounted
-    *     between navigations, the destination ring would find no donor and start at t=0 — the same
-    *     visible jump we're trying to avoid.
+    * There were two reasons and one of them has expired. The first was that `.ring-arc` had to stay
+    * in the DOM so `BrandLoader.syncSpin` could copy the spin phase from it on the next mount —
+    * both the spinning ring and `syncSpin` are gone, and the waiting animation is `breathe` on the
+    * icon, which carries no phase to hand over. The reason that still holds:
+    *
     *   - `child <--` removes the previous view before the next one mounts, so a `false → true →
     *     false` cycle on `isNavigating` leaves a paint frame with neither view nor loader on
     *     screen: the "blink". Keeping the outgoing view mounted while the overlay covers it, and
