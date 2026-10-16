@@ -92,6 +92,12 @@ end ensureRqlite
   * signatures, so the dummy credentials below are enough for the SDK's signer and are never
   * checked.
   */
+/** Shared by `mcp` (which starts the container) and `mcpui` (which publishes into it), so the two
+  * cannot disagree about where dev assets live.
+  */
+private val localStackContainer = "localstack-dev"
+private val devBucket = "captal-assets-dev"
+
 private def ensureLocalStack(containerName: String, hostPort: Int, bucket: String): String =
   val endpoint = s"http://localhost:$hostPort"
   val running = os.proc("docker", "ps", "-q", "-f", s"name=$containerName").call().out.trim()
@@ -552,26 +558,42 @@ object mcpui extends BaseJSModule:
       if entries.isEmpty then
         sys.error(s"[publish] no entries in $src — expected upload.js and unifi.js")
 
+      // Two transports for one operation. Against LocalStack the copy runs *inside* the container
+      // with `awslocal`, which is what `ensureLocalStack` already does and for the same reason:
+      // `aws` is not on the PATH Mill gives a subprocess, so a dev loop that needed it would work
+      // only on a machine that happens to have it. `docker cp` first, since `docker exec` cannot
+      // read a host file.
+      val local = endpoint.nonEmpty
       def put(name: String, cache: String): Unit =
-        val args = Seq("aws") ++
-          Option.when(endpoint.nonEmpty)(Seq("--endpoint-url", endpoint)).getOrElse(Nil) ++
-          Seq(
-            "s3",
-            "cp",
-            (src / name).toString,
-            s"s3://$bucket/$uiPrefix/$name",
-            "--region",
-            region,
-            "--content-type",
-            "application/javascript",
-            "--cache-control",
-            cache,
-            "--metadata-directive",
-            "REPLACE")
-        println(s"[publish] $name -> s3://$bucket/$uiPrefix/$name")
-        val result = os.proc(args).call(check = false, stderr = os.Pipe)
+        val target = s"s3://$bucket/$uiPrefix/$name"
+        val metadata = Seq(
+          "--content-type",
+          "application/javascript",
+          "--cache-control",
+          cache,
+          "--metadata-directive",
+          "REPLACE")
+        println(s"[publish] $name -> $target")
+        val result =
+          if local then
+            val staged = s"/tmp/$name"
+            val copied = os
+              .proc("docker", "cp", (src / name).toString, s"$localStackContainer:$staged")
+              .call(check = false, stderr = os.Pipe)
+            if copied.exitCode != 0 then
+              sys.error(s"[publish] docker cp failed for $name: ${copied.err.trim()}")
+            os.proc(
+              Seq("docker", "exec", localStackContainer, "awslocal", "s3", "cp", staged, target) ++
+                metadata)
+              .call(check = false, stderr = os.Pipe)
+          else
+            os.proc(
+              Seq("aws", "s3", "cp", (src / name).toString, target, "--region", region) ++
+                metadata)
+              .call(check = false, stderr = os.Pipe)
         if result.exitCode != 0 then
-          sys.error(s"[publish] aws s3 cp failed for $name: ${result.err.trim()}")
+          sys.error(s"[publish] s3 cp failed for $name: ${result.err.trim()}")
+      end put
 
       chunks.foreach(put(_, Immutable))
       entries.foreach(put(_, Revalidate))
@@ -890,9 +912,7 @@ object mcp extends BaseModule:
     // artifact.
     super.resources() ++ Seq(PathRef(Task.dest))
 
-  private val localStackContainer = "localstack-dev"
   private val localStackPort = 4566
-  private val devBucket = "captal-assets-dev"
   private val devPort = 8081
 
   def localStackSetup() = Task.Command:

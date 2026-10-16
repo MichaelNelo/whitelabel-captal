@@ -76,6 +76,22 @@ object Main extends ZIOAppDefault:
       _ <- ZIO
         .environment[QuillSqlite & AssetStore]
         .flatMap: env =>
+          // Asked rather than assumed, because the answer is otherwise found by an operator opening
+          // a page that renders and does nothing. A warning and not a failure: the artifact belongs
+          // to `mcpui.publish`, so refusing to start would make this server depend on something it
+          // does not own — and a new environment reaches here before that has ever run.
+          val checkScript = env
+            .get[AssetStore]
+            .verifyScriptDelivery
+            // Its own client, scoped to the check. Building it can fail, and that failure is the
+            // same kind of news as a 404: something to report, never a reason not to serve.
+            .provide(zio.http.Client.default)
+            .catchAll(e => ZIO.succeed(Some(s"could not be checked: ${e.getMessage}")))
+            .flatMap:
+              case Some(problem) =>
+                ZIO.logWarning(s"The MCP App pages' script $problem")
+              case None =>
+                ZIO.logInfo("MCP App script reachable with CORS")
           val seeded = Tokens
             .seedAdmin(admin, "admin")
             .mapError(new IllegalStateException(_))
@@ -99,7 +115,7 @@ object Main extends ZIOAppDefault:
                   CaptalMcp
                     .server(Auth.mcpAuth(resource), env, origin, scriptOrigin, uiOrigin)
                     .statelessRoutes)
-          seeded *>
+          seeded *> checkScript *>
             ZIO.logInfo(
               s"MCP backoffice on :$p as $resource — ${Skills.all.size} skills, ${CaptalMcp
                   .resources

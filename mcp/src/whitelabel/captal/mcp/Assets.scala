@@ -24,6 +24,7 @@ import software.amazon.awssdk.services.s3.model.{
 import software.amazon.awssdk.services.s3.presigner.S3Presigner
 import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest
 import zio.*
+import zio.http.{Client, Request, URL}
 
 /** One asset a location can override, and how it has to be stored.
   *
@@ -167,6 +168,54 @@ final case class AssetStore(
     * by the browser against this URL, which is why they are published flat beside it.
     */
   def scriptUrl(name: String): String = publicUrl(s"ui/$name")
+
+  /** Checks the one thing about the MCP App pages that fails without a word.
+    *
+    * A module script is fetched in CORS mode, so the CDN has to answer
+    * `Access-Control-Allow-Origin` or the browser blocks it — and the page then renders, lays out,
+    * and does nothing. No console entry the operator would see, no failed tool call, nothing in
+    * this server's logs. The same shape of failure as the upload PUT being refused at the
+    * preflight, except that one at least happens while they are looking at the screen.
+    *
+    * So it is asked at startup, by fetching what the page will fetch. A warning and not a failure:
+    * the first deploy of a new environment reaches this before `mcpui.publish` has ever run, and
+    * refusing to start would make the server depend on an artifact it does not own. The point is
+    * that the answer is in the log before an operator finds it by opening a dead page.
+    *
+    * Neither this nor anything else here configures it; see docs/MCP_IAM.md.
+    */
+  def verifyScriptDelivery: ZIO[Client, Nothing, Option[String]] =
+    val target = scriptUrl("upload.js")
+    val probe =
+      for
+        url <- ZIO.fromEither(URL.decode(target)).mapError(e => new RuntimeException(e.getMessage))
+        // Without an `Origin` the response carries no CORS headers whether or not any are
+        // configured, so asking without one proves nothing. A browser would send the sandbox
+        // origin; any value distinguishes a configured `*` from silence.
+        request = Request.get(url).addHeader("Origin", "https://probe.invalid")
+        response <- ZIO.serviceWithZIO[Client](_.batched(request))
+        // Drained rather than ignored. `batched` has already read the body, and leaving the
+        // response unconsumed is how a client ends up holding connections at startup.
+        _ <- response.body.asString
+      yield (response.status.code, response.rawHeader("access-control-allow-origin"))
+    probe
+      // Bounded, because this is in the startup path: a CDN that hangs must not stop the server
+      // from serving, and the timeout is itself an answer worth logging.
+      .timeoutFail(new RuntimeException("timed out after 5s"))(5.seconds)
+      .fold(
+        e => Some(s"could not be reached ($target): ${e.getMessage}"),
+        (status, allowOrigin) =>
+          if status == 404 then
+            Some(s"is not published yet ($target). Run `mill mcpui.publish`.")
+          else if status != 200 then
+            Some(s"answered HTTP $status ($target).")
+          else if allowOrigin.isEmpty then
+            Some(
+              s"is served but without Access-Control-Allow-Origin ($target), so a browser will block it as a module and the page will render inert. See docs/MCP_IAM.md.")
+          else
+            None
+      )
+  end verifyScriptDelivery
 
   /** The origin those scripts come from, for `_meta.ui.csp.resourceDomains` — which maps to
     * `script-src` among the static-resource directives. Without it the module is blocked and the

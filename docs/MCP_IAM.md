@@ -63,6 +63,44 @@ loudly on a missing object rather than quietly finding a neighbour's.
 Startup fails when any of these is missing rather than degrading: an unauthenticated server or one
 writing to the wrong bucket is worse than one that does not start.
 
+## CORS, which is not an IAM permission and fails the same way
+
+Two browser-to-AWS paths need a header that no role grants, and both fail mute — the operator sees
+a page that renders and does nothing. Neither is configured by this server; both live in the
+infrastructure repo.
+
+**The upload PUT, browser to S3 directly.** The presigned URL points at the bucket, and the page
+sends the file's own `Content-Type`. `video/mp4` is not one of the three CORS-safelisted types, so
+the browser sends a preflight `OPTIONS` first, and a bucket with no CORS configuration answers that
+with a 403. The PUT is never attempted, and the failure arrives at the moment the operator picks a
+file. The bucket needs:
+
+```json
+{"CORSRules":[{"AllowedOrigins":["*"],"AllowedMethods":["PUT","GET","HEAD"],
+  "AllowedHeaders":["*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":3000}]}
+```
+
+`ensureLocalStack` applies exactly this for dev. Production does not get it from there.
+
+**The MCP Apps' modules, browser to CloudFront.** Since the pages stopped inlining their script,
+each loads `<script type="module" src="<PUBLIC_BASE_URL>/ui/upload.js">`. A module script is fetched
+in CORS mode where a classic one is not, so without `Access-Control-Allow-Origin` the module is
+blocked and the page is inert.
+
+This one is **not** solved by the bucket's CORS. These objects are served through CloudFront, and S3
+only emits CORS headers when the request carries an `Origin` it can match — which CloudFront does
+not forward by default. Two ways, and they are not equivalent:
+
+- A **Response Headers Policy** on the distribution with `Access-Control-Allow-Origin: *` for the
+  `ui/*` behaviour. Independent of the cache key, so nothing about caching changes.
+- Forwarding `Origin` through an **Origin Request Policy** and letting S3 answer. This adds `Origin`
+  to the cache key, so the same file is cached once per requesting origin — and the sandbox origin is
+  derived per server URL, so that is churn for no gain.
+
+The policy is the one to use. `*` rather than the sandbox origin: three public JavaScript files with
+no credentials and no data, and the sandbox origin is a hash of our own server URL, so pinning it
+adds a way to break without adding protection.
+
 ## Coming, per the migration plan
 
 Deployment operations move to the server in Part 3. They will need considerably more than the
