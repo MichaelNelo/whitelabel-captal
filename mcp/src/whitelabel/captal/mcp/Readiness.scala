@@ -3,6 +3,7 @@ package whitelabel.captal.mcp
 import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
 import whitelabel.captal.core.i18n.{I18n, I18nSchema}
+import whitelabel.captal.core.video.VideoType
 import whitelabel.captal.infra.schema.QuillSqlite
 import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.given
@@ -12,7 +13,10 @@ import whitelabel.captal.infra.{
   LocalizedTextRow,
   LocationRow,
   QuestionRow,
-  SurveyRow
+  SurveyCategory as StoredCategory,
+  SurveyRow,
+  UnifiAccess,
+  VideoStatus
 }
 import zio.*
 import zio.schema.annotation.description
@@ -58,7 +62,7 @@ object Readiness:
       @description("A retired location serves nothing, whatever else is complete.")
       active: Boolean,
       @description(
-        "False means no UniFi host is set. Everything else can be finished and the portal still cannot authorize a guest. Configured outside this server.")
+        "True only when all three of host, siteId and apiToken are stored — which is what UnifiAccess needs to build. Any one missing and the portal completes the whole flow and then authorizes nobody: the handler logs and skips, and the guest is left at Ready. Call get_unifi_config for which field is missing, configure_unifi to set it.")
       unifiConfigured: Boolean,
       @description(
         "Locales with at least one translation, and how many required keys each still lacks. A locale absent here has none at all; an empty list means the portal would render raw key names to every guest.")
@@ -75,13 +79,19 @@ object Readiness:
       @description("Videos created but still waiting for their file, so out of rotation.")
       pendingVideos: Int,
       @description(
-        "Advertiser surveys scoped to this location. One per video, created with it — a count below activeVideos means a video is in rotation with nothing to ask afterwards.")
+        "Video surveys scoped to this location that still have an active question. Compare against adVideos, not activeVideos: an advertiser's video is only ever drawn while its survey has something left to ask, so a count below adVideos means a video that can never be served. A promo is drawn either way and may legitimately have none.")
       advertiserSurveys: Int,
+      @description(
+        "Of the videos in rotation here, how many are an advertiser's. The rest are promos, which belong to the venue and need neither an advertiser nor a survey.")
+      adVideos: Int,
+      @description(
+        "Advertiser videos in rotation here whose advertiser is retired or missing. The selection joins advertisers and filters on active, so these are drawn by nothing — the location looks stocked and serves only promos. Bring the advertiser back with set_advertiser_active, or retire the videos with set_video_active.")
+      strandedAdVideos: Int,
       @description(
         "Advertisers active anywhere. They are not scoped to a location, so this is a deployment-wide count; zero means no video can be attributed to anyone.")
       advertisers: Int,
       @description(
-        "Which of the three identification surveys — email, profiling, location — are missing. They are deployment-wide, not this location's, but a guest here cannot be identified without the email one, so a portal without it strands everyone on the first screen. Shared with every other location: creating one fixes it everywhere at once.")
+        "Which of the three identification surveys — email, profiling, location — are unusable: absent, retired, or active with no active question left. The last case matters as much as the first, because the query that serves them joins questions, so a survey whose questions were all retired returns nothing and the guest is never identified. Deployment-wide rather than this location's, but a guest here cannot be identified without the email one; creating or reviving it fixes every location at once.")
       missingIdentificationSurveys: List[String],
       @description(
         "What is left to do, in the order worth doing it. Empty means nothing here blocks a deploy.")
@@ -128,6 +138,21 @@ object Readiness:
           s"${r.pendingVideos} video(s) are waiting for their file. Upload to the signed URL, then call confirm_video_upload.")
       else
         Nil
+    // Separate from the count of advertisers: there can be plenty active and none of them the owner
+    // of a video here.
+    val stranded =
+      if r.strandedAdVideos > 0 then
+        List(
+          s"${r.strandedAdVideos} advertiser video(s) in rotation here belong to a retired advertiser, so the selection never draws them. Call list_advertisers, then set_advertiser_active to bring the advertiser back, or set_video_active to retire the videos.")
+      else
+        Nil
+    val surveys =
+      if r.adVideos > r.advertiserSurveys then
+        List(
+          s"${r.adVideos -
+              r.advertiserSurveys} advertiser video(s) have no survey with an active question, and an advertiser's video is only drawn while its survey has something left to ask — so those are never served. Call get_survey for the video's survey, then create_question. Promos are not counted here: they play with or without one.")
+      else
+        Nil
     val branding =
       List(
         Option.when(!r.hasStyles)(
@@ -140,7 +165,7 @@ object Readiness:
         Nil
       else
         List(
-          "UniFi is not configured, so the portal cannot authorize guests here. That is set outside this server.")
+          "UniFi is not fully configured — host, siteId and apiToken are all three required — so the portal completes the flow and then authorizes nobody, leaving every guest at Ready. Call get_unifi_config to see which field is missing and configure_unifi to set it.")
     // First, because it blocks everything after it. Without the email survey a guest never gets
     // identified, so no video is ever drawn and no advertiser question is ever asked — a location
     // can be complete in every other respect and still show nobody anything.
@@ -153,7 +178,8 @@ object Readiness:
               .missingIdentificationSurveys
               .mkString(
                 " and ")} survey(s) do not exist, so a guest is never identified and nothing past the first screen is reached. Call create_identification_survey. They are deployment-wide: this fixes every location at once, and needs identity:write.")
-    identification ++ translations ++ advertisers ++ videos ++ branding ++ unifi
+    identification ++ translations ++ advertisers ++ videos ++ stranded ++ surveys ++ branding ++
+      unifi
   end steps
 
   def of(slug: String): ZIO[QuillSqlite & AssetStore, String, LocationReadiness] = ZIO
@@ -172,8 +198,10 @@ object Readiness:
         store       <- ZIO.service[AssetStore]
         styles      <- store.exists(store.key(slug, Asset.Styles))
         icon        <- store.exists(store.key(slug, Asset.BrandIcon))
-        mine   = videos.filter(_.locationId.contains(row.id))
-        scoped = surveys.filter(s => s.locationId.contains(row.id) && s.isActive == 1)
+        mine                = videos.filter(_.locationId.contains(row.id))
+        inRotation          = mine.filter(_.status == VideoStatus.Active)
+        activeAdvertiserIds = advertisers.filter(_.isActive == 1).map(_.id).toSet
+        scoped              = surveys.filter(s => s.locationId.contains(row.id) && s.isActive == 1)
         // Counted per locale against the derived key list rather than against whatever is stored,
         // which is the whole point of deriving them: a key nobody remembered to add is missing, not
         // absent from the comparison.
@@ -188,24 +216,45 @@ object Readiness:
           slug = row.slug,
           name = row.name,
           active = row.isActive == 1,
-          unifiConfigured = row.unifiHost.exists(_.trim.nonEmpty),
+          // All three, not just the host. `UnifiAccess.fromRow` is a for-comprehension over
+          // `unifiHost`, `unifiApiToken` and `unifiSiteId`, and answers `None` if any is absent —
+          // at which point the handler logs and leaves the session at Ready. Reporting on the host
+          // alone made this field say "configured" about a location that authorizes nobody, which
+          // is the exact failure the whole tool exists to surface.
+          unifiConfigured = UnifiAccess.fromRow(row).isDefined,
           locales = byLocale,
           requiredKeys = requiredKeys.size,
           hasStyles = styles,
           hasIcon = icon,
-          activeVideos = mine.count(_.status == "active"),
-          pendingVideos = mine.count(_.status == "pending"),
+          activeVideos = mine.count(_.status == VideoStatus.Active),
+          pendingVideos = mine.count(_.status == VideoStatus.Pending),
           advertiserSurveys = scoped.count(s =>
-            s.category == "advertiser" &&
+            s.category == StoredCategory.Advertiser &&
               questions.exists(q => q.surveyId == s.id && q.isActive == 1)),
+          adVideos = inRotation.count(_.videoType == VideoType.Ad),
+          // The join the ad selection does, counted here: `nextAdQueryAuthenticated` requires the
+          // advertiser to be active, so a video whose advertiser was retired is drawn by nothing.
+          // `advertisers` below cannot show this — it counts active advertisers across the whole
+          // deployment, so a location full of stranded videos reads as healthy beside it.
+          strandedAdVideos = inRotation.count(v =>
+            v.videoType == VideoType.Ad && !v.advertiserId.exists(activeAdvertiserIds.contains)),
           advertisers = advertisers.count(_.isActive == 1),
           // Deployment-wide, so deliberately not filtered by location: the question is whether the
           // three exist at all, and an active one anywhere serves every portal.
+          // Usable, not merely present. `firstEmailSurveyQuery` and
+          // `nextIdentificationSurveyQuery` both join `questions` and filter on active, so a
+          // survey whose questions were all retired returns no rows and the guest is never
+          // identified — `SurveyRepositoryQuill` even logs that its "questions may have been
+          // retired". This checked only that the row existed, while the advertiser count two lines
+          // up already checked for a live question. The asymmetry was an oversight.
           missingIdentificationSurveys = IdentificationCategory
             .values
             .toList
-            .map(_.toString)
-            .filterNot(category => surveys.exists(s => s.category == category && s.isActive == 1)),
+            .map(_.stored)
+            .filterNot(category =>
+              surveys.exists(s =>
+                s.category == category && s.isActive == 1 &&
+                  questions.exists(q => q.surveyId == s.id && q.isActive == 1))),
           nextSteps = Nil
         )
       yield bare.copy(nextSteps = steps(bare))
