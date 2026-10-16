@@ -92,6 +92,9 @@ object CaptalMcp:
       // The origin the upload page PUTs to, declared in that page's CSP. Resolved once at startup
       // from the same store that signs the URLs, so the policy and the URL cannot disagree.
       uploadOrigin: String,
+      // Where the pages' own modules come from, declared in their `resourceDomains`. The same CDN
+      // the portal's assets are served from; `mcpui.publish` puts them under `ui/`.
+      scriptOrigin: String,
       // Where this server is reached. The pages it renders post there and declare it in their CSP,
       // which belongs to them rather than to the protocol; see [[UiRoutes]].
       uiOrigin: String,
@@ -130,7 +133,7 @@ object CaptalMcp:
     // the entity tree cannot be registered separately. The page is built per video from the row, a
     // freshly signed URL and the location's stylesheet, none of which a static handler can reach.
     val withSource = withAssets.resourceSource(
-      EntityResources(UploadUiSource(uploadOrigin), uiOrigin))
+      EntityResources(UploadUiSource(uploadOrigin, scriptOrigin), uiOrigin, scriptOrigin))
     // Declares `io.modelcontextprotocol/ui`, which is how a host knows the `ui://` resources are
     // meant to be rendered rather than read. It used to be announced through the resource source's
     // `capabilities`, now deprecated in favour of this.

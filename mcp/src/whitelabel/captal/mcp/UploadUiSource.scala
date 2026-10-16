@@ -21,24 +21,35 @@ import zio.*
   * The URL is signed at read time rather than reused from the tool result, so reopening the page
   * after the first signature expired works instead of failing at the PUT.
   */
-final class UploadUiSource(uploadOrigin: String)
+/** @param scriptOrigin
+  *   Where the page's own module comes from. Taken in the constructor rather than read off
+  *   `AssetStore` where it is used, because the CSP goes into the resource *definition* too, and
+  *   `listResources` runs with no environment to ask.
+  */
+final class UploadUiSource(uploadOrigin: String, scriptOrigin: String)
     extends McpResourceSource[QuillSqlite & AssetStore]:
   private val Prefix = s"${UploadUi.Uri}/"
 
   /** What the page may reach, declared on the page rather than on the tool that opens it.
     *
     * The host blocks every origin by default, so without this the PUT fails as `blocked:csp` at the
-    * moment the operator picks a file and nowhere earlier. One origin: the bucket. The page cannot
-    * widen this itself, which is the point of declaring it server-side.
+    * moment the operator picks a file and nowhere earlier. The page cannot widen this itself, which
+    * is the point of declaring it server-side.
     */
   private val appMeta = McpAppsResourceMeta(
     csp = Some(
       McpAppsCsp(
         connectDomains = Chunk(uploadOrigin),
-        // Where the host serves Anthropic Sans from. Without it the `@font-face` rules handed over
-        // in the handshake cannot load, and the page sits beside a conversation in a different
-        // typeface.
-        resourceDomains = Chunk("https://assets.claude.ai")
+        // `resourceDomains` maps to `script-src` as well as to images, styles, fonts and media —
+        // which is what lets the page load its module from the CDN instead of carrying it inline.
+        // Miss the origin out and the module is blocked and the page renders inert, with no error
+        // the operator can see; it is a worse failure than the PUT being blocked, which at least
+        // happens while they are looking.
+        //
+        // `assets.claude.ai` is where the host serves Anthropic Sans from. Without it the
+        // `@font-face` rules handed over in the handshake cannot load, and the page sits beside a
+        // conversation in a different typeface.
+        resourceDomains = Chunk(scriptOrigin, "https://assets.claude.ai")
       )),
     // No card around the widget. Claude is already borderless by default, but other hosts are not,
     // and a page that paints no background of its own looks wrong inside a border it did not ask
@@ -95,7 +106,7 @@ final class UploadUiSource(uploadOrigin: String)
       uri: String,
       ctx: McpToolContext): ZIO[QuillSqlite & AssetStore, ToolError, Chunk[ResourceContents]] =
     if uri == UploadUi.Uri then
-      ZIO.succeed(page(uri, UploadUi.app()))
+      ZIO.serviceWith[AssetStore](store => page(uri, UploadUi.app(store.scriptUrl)))
     else if uri.startsWith(Prefix) then
       pageFor(uri, uri.stripPrefix(Prefix)).mapError(ToolError.apply)
     else
@@ -105,9 +116,10 @@ final class UploadUiSource(uploadOrigin: String)
     * anything. The signed URL is not: that is read at the moment it is needed, which is what lets
     * it be read again when it lapses.
     */
-  private def pageFor(uri: String, videoId: String)
-      : ZIO[QuillSqlite, String, Chunk[ResourceContents]] = ZIO.serviceWithZIO[QuillSqlite]:
-    quill =>
+  private def pageFor(
+      uri: String,
+      videoId: String): ZIO[QuillSqlite & AssetStore, String, Chunk[ResourceContents]] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
       for
         videos    <- run(videoByIdQuery(lift(videoId))).orDie
@@ -123,7 +135,8 @@ final class UploadUiSource(uploadOrigin: String)
             .map(_.slug)
             .getOrElse("—")
         )
-      yield page(uri, UploadUi.app(Some(pending)))
+        store <- ZIO.service[AssetStore]
+      yield page(uri, UploadUi.app(store.scriptUrl, Some(pending)))
       end for
 
   override def readDirectory(

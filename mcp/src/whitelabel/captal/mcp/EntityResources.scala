@@ -33,18 +33,22 @@ import zio.schema.codec.JsonCodec as SchemaJsonCodec
   * Registered as the server's only resource source, since `McpServer` holds one; the upload page is
   * served from here too rather than from a second source that could not be installed.
   */
-final class EntityResources(upload: UploadUiSource, uiOrigin: String)
+final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrigin: String)
     extends McpResourceSource[QuillSqlite & AssetStore]:
 
   /** The UniFi page posts the credentials to this server, so this server's origin is the one thing
-    * it has to be allowed to reach. Declared on the page: the host reads the policy from the
+    * it has to be allowed to *reach*. Declared on the page: the host reads the policy from the
     * resource and nowhere else, which is why saying it on the tool achieved nothing.
+    *
+    * `scriptOrigin` is separate and is where the page's own module is loaded *from* —
+    * `resourceDomains` covers `script-src`. The two are different directives and different hosts:
+    * the server for the POST, the CDN for the script.
     */
   private val unifiMeta = McpAppsResourceMeta(
     csp = Some(
       McpAppsCsp(
         connectDomains = Chunk(uiOrigin),
-        resourceDomains = Chunk("https://assets.claude.ai"))),
+        resourceDomains = Chunk(scriptOrigin, "https://assets.claude.ai"))),
     prefersBorder = Some(false))
 
   /** What the upload page reads for one video. Signed on every read: a presigned URL is arithmetic
@@ -181,7 +185,8 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String)
     if uri == UnifiUi.Uri then
       // Static, unlike the upload page: it carries no data at all, because the ticket and the
       // location arrive with the result of the call that opened it.
-      ZIO.succeed(Chunk(McpApps.contents(UnifiUi.AppUri, UnifiUi.app(), unifiMeta)))
+      ZIO.serviceWith[AssetStore](store =>
+        Chunk(McpApps.contents(UnifiUi.AppUri, UnifiUi.app(store.scriptUrl), unifiMeta)))
     else if uri.startsWith(UploadUi.Uri) then
       upload.readResource(uri, ctx)
     else

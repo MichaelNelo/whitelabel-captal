@@ -158,6 +158,29 @@ final case class AssetStore(
     */
   def publicUrl(key: String): String = s"${publicBaseUrl.stripSuffix("/")}/$key"
 
+  /** Where an MCP App's script is served from, under a name that never changes.
+    *
+    * Built from the same base the portal's assets use, because the page has to name its script
+    * without knowing anything about its content — that is what keeps the script out of the server's
+    * resources, the same way the content itself stopped travelling in the deploy artifact.
+    * `mcpui.publish` is what puts the file there. The hashed chunks the entry imports are resolved
+    * by the browser against this URL, which is why they are published flat beside it.
+    */
+  def scriptUrl(name: String): String = publicUrl(s"ui/$name")
+
+  /** The origin those scripts come from, for `_meta.ui.csp.resourceDomains` — which maps to
+    * `script-src` among the static-resource directives. Without it the module is blocked and the
+    * page renders inert, with nothing the operator can see.
+    */
+  def scriptOrigin: String =
+    val parsed = URI.create(publicBaseUrl)
+    val port =
+      if parsed.getPort < 0 then
+        ""
+      else
+        s":${parsed.getPort}"
+    s"${parsed.getScheme}://${parsed.getHost}$port"
+
   /** The key behind a stored URL. The inverse of [[publicUrl]], and tested as one.
     *
     * Two readings, in order. A URL this configuration produced is undone exactly, by removing the

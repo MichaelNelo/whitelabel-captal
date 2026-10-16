@@ -364,7 +364,11 @@ object CaptalMcpSpec extends ZIOSpecDefault:
         // Asserted on the resource and not on the tool, which is where this lived while it did
         // nothing: `McpAppsToolMeta` has no field for a policy, so the host never read one there.
         val origin = "https://captal-assets.s3.us-east-1.amazonaws.com"
-        val source = UploadUiSource(origin)
+        // Distinct from the PUT origin on purpose: they land in different CSP directives —
+        // `connect-src` for the bucket, `script-src` for the CDN — and asserting with one value
+        // for both could not tell a swap from a correct policy.
+        val scriptOrigin = "https://d111.cloudfront.net"
+        val source = UploadUiSource(origin, scriptOrigin)
         def metaOf(definition: com.jamesward.ziohttp.mcp.ResourceDefinition) = definition
           .meta
           .map(m => (m: zio.json.ast.Json).toString)
