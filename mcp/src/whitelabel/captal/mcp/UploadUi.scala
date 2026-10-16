@@ -26,23 +26,20 @@ object UploadUi:
     */
   val AppUri: McpUiUri = ToolSchema.uiUri(Uri)
 
-  /** The page's behaviour, linked from the `mcpui` Scala.js module and inlined here.
+  /** The entry the page loads, by name. `AssetStore.scriptUrl` turns it into a URL.
     *
-    * It was 145 lines of JavaScript in a string literal. The move is not cosmetic: the two bugs
-    * that cost this migration a session were a `postMessage` envelope no host reads and a missing
-    * `ui/message`, and neither is the kind of thing a string literal can be wrong about loudly. The
-    * bridge is now a type, and `UploadTicket`'s field names are checked against something.
+    * It used to be the script itself, read out of the jar and inlined, on the reading that the
+    * iframe's CSP blocks every external host. It does not: `resourceDomains` maps to `script-src`
+    * among the static-resource directives, so a declared origin can serve the module. Inlining cost
+    * 9 KB gzip on every single `resources/read`; a `<script type="module" src>` is fetched once and
+    * cached, and the runtime it shares with the UniFi page becomes one hashed chunk instead of a
+    * copy in each.
     *
-    * Inlined rather than served, because the iframe's CSP blocks every external host.
+    * The name is stable and the server knows nothing else about the file — no hash, no content, no
+    * copy in its own resources. Which is the same principle that took the content out of the deploy
+    * artifact.
     */
-  private lazy val appScript: String =
-    val stream = getClass.getResourceAsStream("/upload-app.js")
-    if stream == null then
-      throw new IllegalStateException(
-        "upload-app.js is missing from the jar. It is produced by `mcpui.fullLinkJS` and copied in `mcp.resources`.")
-    else
-      try new String(stream.readAllBytes(), "UTF-8")
-      finally stream.close()
+  private val EntryScript = "upload.js"
 
   /** The page's own styling, kept minimal so the surrounding themes decide how it looks.
     *
@@ -127,7 +124,7 @@ object UploadUi:
     * a video — the title and location are blank and the row is hidden until the host says which
     * video this is.
     */
-  def app(video: Option[PendingVideo] = None): String =
+  def app(scriptBase: String => String, video: Option[PendingVideo] = None): String =
     "<!doctype html>" +
       html(
         head(
@@ -179,7 +176,10 @@ object UploadUi:
               div(cls  := "track", div(id := "bar"))
             )
           ),
-          script(raw(appScript))
+          // `type="module"`, which the entry needs to import its chunk — and which also means the
+          // browser fetches it in CORS mode, unlike a classic script. `mcpui.publish` sets
+          // `Access-Control-Allow-Origin: *` for exactly that reason.
+          script(`type` := "module", src := scriptBase(EntryScript))
         )
       ).render
   end app

@@ -1,6 +1,7 @@
 package whitelabel.captal.mcpui.unifi
 
 import scala.scalajs.js
+import scala.scalajs.js.annotation.JSExportTopLevel
 
 import org.scalajs.dom
 import whitelabel.captal.mcpui.Bridge
@@ -40,7 +41,11 @@ object UnifiApp:
   private def byId(id: String) = dom.document.getElementById(id)
   private def input(id: String) = byId(id).asInstanceOf[dom.html.Input]
 
-  def main(args: Array[String]): Unit =
+  /** The second public module out of the same linker run. See
+    * [[whitelabel.captal.mcpui.UploadApp.start]] for why both apps live in one module now.
+    */
+  @JSExportTopLevel(name = "start", moduleID = "unifi-app")
+  def start(): Unit =
     Bridge.listen: params =>
       params
         .structuredContent

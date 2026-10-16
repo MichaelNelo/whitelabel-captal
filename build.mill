@@ -446,19 +446,143 @@ end api
 
 object mcpui extends BaseJSModule:
   def mvnDeps = Seq(mvn"org.scala-js::scalajs-dom::2.8.0")
-  def mainClass = Some("whitelabel.captal.mcpui.UploadApp")
+  // No `mainClass`: los entry points son dos, declarados con `@JSExportTopLevel(moduleID = ...)`
+  // en `UploadApp.start` y `unifi.UnifiApp.start`. Un `main` corre al cargar el módulo, y estas
+  // páginas deciden cuándo arrancar.
+  //
+  // ESModule es obligatorio para emitir más de un módulo público, y cuesta el Closure Compiler
+  // (Scala.js lo corre sólo sobre un output no-ESModule). Medido sobre la app de upload: 26.618
+  // bytes con Closure, 98.254 sin nada, 32.054 con Rollup+terser — o 9.037 / 18.494 / 10.172
+  // gzipeados. Vite recupera el 87%, y el resto se amortiza porque el script pasa a bajarse del
+  // CDN una vez en lugar de viajar inlineado en cada render de la página.
+  def moduleKind = mill.scalajslib.api.ModuleKind.ESModule
+  def moduleSplitStyle = mill.scalajslib.api.ModuleSplitStyle.SmallModulesFor("whitelabel.captal")
 
-/** The second MCP App, linked on its own rather than as another entry point of [[mcpui]].
-  *
-  * Scala.js emits one public module per linker run unless `ModuleKind.ESModule` is on, and Closure
-  * does not run on ESModule output at all — the same trade [[maintenance]] documents. Two runs cost
-  * a second Closure pass and give each page only its own code; one run with two entry points would
-  * cost every page the other's. `moduleDeps` on [[mcpui]] is what keeps `Bridge` shared, so the
-  * host protocol is written once.
-  */
-object `mcpui-unifi` extends BaseJSModule:
-  def moduleDeps = Seq(mcpui)
-  def mainClass = Some("whitelabel.captal.mcpui.unifi.UnifiApp")
+  def viteConfig: T[PathRef] = Task.Source(moduleDir / "vite.config.mjs")
+
+  def jsTools: T[PathRef] = Task:
+    val result = os
+      .proc(
+        "npm",
+        "install",
+        "--no-save",
+        "--no-audit",
+        "--no-fund",
+        "--silent",
+        "--prefix",
+        Task.dest.toString,
+        "vite@6.0.7",
+        "terser@5.37.0")
+      .call(check = false, stderr = os.Pipe)
+    if result.exitCode != 0 then
+      sys.error(s"[bundle] npm install failed: ${result.err.trim()}")
+    PathRef(Task.dest)
+
+  /** The hand-written entries that call `start`, staged beside the linker's output. */
+  def entries: T[PathRef] = Task.Source(moduleDir / "entries")
+
+  def bundle = Task:
+    val linked = fullLinkJS().dest.path
+    val project = os.temp.dir(prefix = "captal-mcpui-vite")
+    os.makeDir.all(project / "src")
+    for
+      module <- os.list(linked)
+      if module.ext == "js"
+    do
+      os.copy(module, project / "src" / module.last)
+    // After the linker's output, so a stub named like a public module would be caught as a
+    // collision rather than silently overwriting it.
+    for
+      entry <- os.list(entries().path)
+      if entry.ext == "js"
+    do
+      if os.exists(project / "src" / entry.last) then
+        sys.error(
+          s"[bundle] ${entry.last} is both a hand-written entry and a module the linker emitted. Rename the Scala.js moduleID.")
+      os.copy(entry, project / "src" / entry.last)
+    os.copy(viteConfig().path, project / "vite.config.mjs")
+    os.symlink(project / "node_modules", jsTools().path / "node_modules")
+    val built = os
+      .proc((project / "node_modules" / ".bin" / "vite").toString, "build")
+      .call(cwd = project, check = false, stderr = os.Pipe)
+    if built.exitCode != 0 then
+      sys.error(s"[bundle] vite build failed: ${built.err.trim()}")
+    for
+      output <- os.list(project / "dist")
+      if output.ext == "js"
+    do
+      os.copy(output, Task.dest / output.last)
+    PathRef(Task.dest)
+
+  /** The prefix both pages name. Flat and beside the entries, because Rollup writes the chunk
+    * import as `./chunk-<hash>.js` and the browser resolves that against the entry's own URL.
+    */
+  private val uiPrefix = "ui"
+
+  /** Publish the two pages' scripts. Usage:
+    * `./mill mcpui.publish --bucket captal-dev-assets`
+    *
+    * Three rules, and each one is load-bearing:
+    *
+    *   - **Chunks before entries.** An entry published ahead of the chunk it imports is a 404 on an
+    *     `import`, which renders as a page that loads and does nothing — no error the operator can
+    *     see. The reverse order has no window at all: an unreferenced chunk is inert.
+    *   - **Entries revalidate, chunks are immutable.** The server renders `<script src=".../ui/
+    *     upload.js">` as a constant and must not know anything about the content, so the entry name
+    *     is stable and the browser has to ask whether it changed — a 304 is ~200 bytes against the
+    *     9 KB this replaces. The chunks carry a content hash and are only ever referenced by an
+    *     entry, so they can be cached for a year.
+    *   - **Old chunks are not deleted.** A browser mid-session holds an entry that imports a hash
+    *     this deploy replaced, and CloudFront may still serve a previous entry until `s-maxage`
+    *     runs out. They are small and immutable; collect them by age, never on deploy.
+    *
+    * `Access-Control-Allow-Origin: *` because a `<script type="module">` is fetched in CORS mode,
+    * unlike a classic one — so without it the module fails to load and the page is inert. `*` and
+    * not the sandbox origin: these are three public JavaScript files with no credentials and no
+    * data, and the sandbox origin is derived from our own server URL, so pinning it adds a way to
+    * break without adding protection.
+    */
+  def publish(bucket: String, region: String = "us-east-1", endpoint: String = "") =
+    Task.Command:
+      val src = bundle().path
+      val Revalidate = "public, max-age=0, must-revalidate, s-maxage=86400"
+      val Immutable = "public, max-age=31536000, immutable"
+      val files = os.list(src).filter(os.isFile).map(_.last).sorted
+      val (chunks, entries) = files.partition(_.startsWith("chunk-"))
+      if entries.isEmpty then
+        sys.error(s"[publish] no entries in $src — expected upload.js and unifi.js")
+
+      def put(name: String, cache: String): Unit =
+        val args = Seq("aws") ++
+          Option.when(endpoint.nonEmpty)(Seq("--endpoint-url", endpoint)).getOrElse(Nil) ++
+          Seq(
+            "s3",
+            "cp",
+            (src / name).toString,
+            s"s3://$bucket/$uiPrefix/$name",
+            "--region",
+            region,
+            "--content-type",
+            "application/javascript",
+            "--cache-control",
+            cache,
+            "--metadata-directive",
+            "REPLACE")
+        println(s"[publish] $name -> s3://$bucket/$uiPrefix/$name")
+        val result = os.proc(args).call(check = false, stderr = os.Pipe)
+        if result.exitCode != 0 then
+          sys.error(s"[publish] aws s3 cp failed for $name: ${result.err.trim()}")
+
+      chunks.foreach(put(_, Immutable))
+      entries.foreach(put(_, Revalidate))
+      println(s"[publish] ${chunks.size} chunk(s) then ${entries.size} entr(ies)")
+
+// `mcpui-unifi` vivía acá, un linker run propio para la segunda MCP App. El argumento era que
+// Closure sólo corre sobre un módulo no-ESModule, así que dos runs daban dos archivos minificados a
+// cambio de duplicar lo común. Medido, el reparto es al revés: el runtime y `Bridge` son 8.881
+// bytes gzip y estaban en los dos archivos, mientras que lo propio de cada página son 1.965 y
+// 1.633. Un run con dos entry points los pone en un chunk hasheado que se cachea, y Rollup+terser
+// recupera el 87% de lo que hacía Closure.
 
 object client extends BaseJSModule:
   def moduleDeps = Seq(`core-js`, `endpoints-js`)
@@ -758,11 +882,12 @@ object mcp extends BaseModule:
     val names = os.list(skillSources().path).filter(os.isDir).map(_.last).sorted
     os.write(dest / "index.txt", names.mkString("\n"))
     os.copy(defaultStyles().path, Task.dest / "default-styles.css")
-    // The MCP App's code, linked from `mcpui` and carried as a resource because the page must be
-    // self-contained: the iframe's CSP blocks every external host, so the script is inlined into
-    // the HTML rather than fetched.
-    os.copy(mcpui.fullLinkJS().dest.path / "main.js", Task.dest / "upload-app.js")
-    os.copy(`mcpui-unifi`.fullLinkJS().dest.path / "main.js", Task.dest / "unifi-app.js")
+    // The MCP Apps' code is no longer carried here. It used to be: the page inlined it, because a
+    // `<script src>` looked impossible under the iframe's CSP. It is not — `resourceDomains` maps
+    // to `script-src` among others — so the scripts are published to the CDN by `mcpui.publish`
+    // and the page names them by a stable URL. The server does not hold them and does not know
+    // their content, which is the same reason the content itself stopped travelling in the deploy
+    // artifact.
     super.resources() ++ Seq(PathRef(Task.dest))
 
   private val localStackContainer = "localstack-dev"
@@ -875,6 +1000,28 @@ object mcp extends BaseModule:
     // 2.1.14 and stays there.
     def mvnDeps = Seq(mvn"dev.zio::zio-test:2.1.26", mvn"dev.zio::zio-test-sbt:2.1.26")
     def testFramework = "zio.test.sbt.ZTestFramework"
+
+    /** The published bundle, carried as a *test* resource.
+      *
+      * `UploadUiSpec` used to assert the protocol strings — `ui/initialize`, `tools/call`,
+      * `ui/message` — against the page, because the page inlined the script. It does not any more,
+      * and those assertions are still worth having: none of those strings fails loudly, a bad
+      * envelope is ignored by the host in silence and a missing `ui/message` leaves the agent
+      * waiting on a confirmation that already happened.
+      *
+      * So they moved to the artifact that actually ships. Here and not in `mcp.resources`, because
+      * the whole point of the move was that the server stops carrying this file — a production jar
+      * holding a copy would put the two back out of step.
+      */
+    override def resources: T[Seq[PathRef]] = Task:
+      val dest = Task.dest / "ui"
+      os.makeDir.all(dest)
+      for
+        file <- os.list(mcpui.bundle().path)
+        if file.ext == "js"
+      do
+        os.copy(file, dest / file.last)
+      super.resources() ++ Seq(PathRef(Task.dest))
 
     // Its own container, not the one api.test uses: the two suites share a schema and would clear
     // each other's rows.

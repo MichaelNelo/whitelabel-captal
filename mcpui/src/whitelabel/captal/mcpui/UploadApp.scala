@@ -1,6 +1,7 @@
 package whitelabel.captal.mcpui
 
 import scala.scalajs.js
+import scala.scalajs.js.annotation.JSExportTopLevel
 
 import org.scalajs.dom
 
@@ -27,7 +28,20 @@ object UploadApp:
   private def byId(id: String) = dom.document.getElementById(id)
   private def ticketUri(videoId: String) = "captal://videos/" + videoId + "/upload"
 
-  def main(args: Array[String]): Unit =
+  /** The page's entry point, exported into a public module of its own rather than run as a `main`.
+    *
+    * `moduleID = "upload-app"` is what makes Scala.js emit `upload.js` as a public module separate
+    * from the UniFi page's `unifi.js`, out of one linker run — and that is the whole reason the two
+    * apps now live in one module. One run hoists what they share, the `Bridge` protocol and the
+    * Scala.js runtime, into a chunk both entries import; a chunk has a hashed name and is cacheable
+    * forever. Two runs produced two self-contained files carrying about 3.6 KB gzip of identical
+    * code each, which no amount of caching could deduplicate.
+    *
+    * Called by the markup instead of invoked by the linker: a `main` runs on module load, and the
+    * page wants to decide when to start.
+    */
+  @JSExportTopLevel(name = "start", moduleID = "upload-app")
+  def start(): Unit =
     val row = byId("row")
     Bridge.listen: params =>
       val structured = params.structuredContent.asInstanceOf[js.UndefOr[js.Dynamic]]

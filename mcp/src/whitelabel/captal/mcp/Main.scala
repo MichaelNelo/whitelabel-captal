@@ -91,9 +91,14 @@ object Main extends ZIOAppDefault:
             // must reach would serve a page whose PUT the browser blocks, and nothing would say so.
             .mapError(new IllegalStateException(_))
             .flatMap: origin =>
+              // Read off the same store, so the origin the pages declare and the URL they name
+              // cannot disagree — the failure if they did is a page that renders and does nothing.
+              val scriptOrigin = env.get[AssetStore].scriptOrigin
               Server.serve(
                 UiRoutes.routes ++ OauthMetadata.routes(uiOrigin) ++
-                  CaptalMcp.server(Auth.mcpAuth(resource), env, origin, uiOrigin).statelessRoutes)
+                  CaptalMcp
+                    .server(Auth.mcpAuth(resource), env, origin, scriptOrigin, uiOrigin)
+                    .statelessRoutes)
           seeded *>
             ZIO.logInfo(
               s"MCP backoffice on :$p as $resource — ${Skills.all.size} skills, ${CaptalMcp

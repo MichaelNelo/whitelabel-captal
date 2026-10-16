@@ -30,21 +30,15 @@ object UnifiUi:
   /** The same URI as the SDK's type, for the places that take one. */
   val AppUri: McpUiUri = ToolSchema.uiUri(Uri)
 
-  /** The page's behaviour, linked from the `mcpui-unifi` Scala.js module and inlined here.
+  /** The entry this page loads, by a name that never changes. See [[UploadUi]] for why it is a URL
+    * now rather than the script inlined, and why the two pages share a hashed chunk.
     *
-    * Inlined rather than served, because the iframe's CSP blocks every external host. A module
-    * rather than a string literal, for the reason [[UploadUi]] records: the two bugs that cost that
-    * migration a session were a `postMessage` envelope no host reads and a missing `ui/message`,
-    * and a string literal cannot be wrong about those loudly.
+    * Still a Scala.js module rather than a string literal, for the reason that move already
+    * recorded: the two bugs that cost this migration a session were a `postMessage` envelope no
+    * host reads and a missing `ui/message`, and a string literal cannot be wrong about those
+    * loudly.
     */
-  private lazy val appScript: String =
-    val stream = getClass.getResourceAsStream("/unifi-app.js")
-    if stream == null then
-      throw new IllegalStateException(
-        "unifi-app.js is missing from the jar. It is produced by `mcpui-unifi.fullLinkJS` and copied in `mcp.resources`.")
-    else
-      try new String(stream.readAllBytes(), "UTF-8")
-      finally stream.close()
+  private val EntryScript = "unifi.js"
 
   /** Minimal, and themed by whatever surrounds it.
     *
@@ -104,7 +98,7 @@ object UnifiUi:
     input(`type` := inputType, id := fieldName, name := fieldName, attr("autocomplete") := "off"),
     em(hint))
 
-  def app(): String =
+  def app(scriptBase: String => String): String =
     "<!doctype html>" +
       html(
         head(
@@ -151,7 +145,9 @@ object UnifiUi:
               div(id    := "status", cls  := "status")
             )
           ),
-          script(raw(appScript))
+          // `type="module"` for the import of the shared chunk — and so the fetch is CORS mode,
+          // which `mcpui.publish` answers with `Access-Control-Allow-Origin: *`.
+          script(`type` := "module", src := scriptBase(EntryScript))
         )
       ).render
 end UnifiUi
