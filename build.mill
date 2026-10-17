@@ -176,12 +176,22 @@ private val freeServices = "s3"
 
 /** With a licence, everything `deploy_location` and its test fixture need.
   *
-  * `ecs` and `elbv2` are the three resources the tool creates beyond the log group, and both are
+  * `ecs` and `elbv2` are the resources the tool creates beyond the log group, and both are
   * available from the Base plan — 57 of 77 ECS operations and 38 of 51 ELBv2 ones, including every
   * call this repo makes. `ec2` is for the fixture rather than the tool: a VPC, subnets and a
   * security group have to exist before `CreateLoadBalancer` and an awsvpc service will take them.
+  *
+  * The last four arrived with the Terraform fixture, which builds the whole shared stack rather
+  * than the subset the tool touches: `efs` backs the single-node rqlite, `secretsmanager` holds the
+  * backoffice's admin token, `servicediscovery` is the namespace rqlite is reached through, and
+  * `ecr` is where the images would come from. A service missing here does not fail as "not
+  * supported" — it comes back `UnrecognizedClientException`, which reads like a credentials problem
+  * and is not one.
   */
-private val licensedServices = "s3,logs,ecs,elbv2,cloudfront,ec2,iam,sts"
+// `route53` is not used directly: `servicediscovery.CreatePrivateDnsNamespace` refuses without it,
+// because a private namespace *is* a hosted zone.
+private val licensedServices =
+  "s3,logs,ecs,elbv2,cloudfront,ec2,iam,sts,efs,secretsmanager,servicediscovery,route53,ecr"
 
 /** The LocalStack licence, when the environment has one.
   *
@@ -1340,6 +1350,20 @@ object mcp extends BaseModule:
   // it again rather than inheriting: `ScalaTests` picks up `scalaVersion` from here but is its own
   // `ScalafixModule`, so it reads the root config unless told otherwise.
   def scalafixConfig = Task(Some(moduleDir / ".scalafix.conf"))
+
+  /** Explicit because this module has two `ZIOAppDefault`s and Mill will not choose between them:
+    * `Main` serves, `McpMigrate` migrates and then exits. Without it the assembly carries no
+    * `Main-Class`, and the only sign is `java -jar` answering "no main manifest attribute" from
+    * inside a container that has already run its migrations successfully.
+    */
+  def mainClass = Some("whitelabel.captal.mcp.Main")
+
+  /** Declaring a main class makes Mill prepend a launcher script so the jar is executable on its
+    * own, and that is refused above 65 535 ZIP entries — this assembly is well past it. Dropping
+    * the prefix keeps the `Main-Class` in the manifest, which is the half that matters: the image
+    * runs `java -jar`, never the jar directly.
+    */
+  def prependShellScript = ""
   def moduleDeps = Seq(core, infra)
   // The AWS SDK ships `netty-nio-client` for its *async* clients, and that client pins netty
   // 4.1.x. zio-http is on 4.2.x, where `DefaultHeaders` moved to `netty-codec-base` — so the
@@ -1530,6 +1554,55 @@ object mcp extends BaseModule:
 
     os.proc("java", forkArgs(), "-cp", cp, "whitelabel.captal.mcp.Main")
       .call(env = env, stdin = os.Inherit, stdout = os.Inherit, stderr = os.Inherit)
+
+  def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "Dockerfile.mcp")
+
+  /** Build the server's image. Usage: `./mill mcp.image` or `./mill mcp.image --tag v1.2.3`
+    *
+    * The jar is built here, by the tool that already knows how, and the image only packages it.
+    * `Dockerfile.api` does the opposite — it copies the sources in and runs `./mill api.assembly`
+    * inside the builder stage — and that has rotted twice over: it copies `provision/`, which was
+    * deleted with the provisioning system, and a `mill` wrapper script that is not in this
+    * repository. Compiling inside the image also re-resolves the whole dependency tree on every
+    * build, for no gain over a jar Mill has already produced and cached.
+    *
+    * The context is a staged directory holding exactly two files, which is also why the Dockerfile
+    * can say `COPY mcp.jar`: reaching into `out/mcp/assembly.dest/` from a Dockerfile would make
+    * the build context the entire repository and would break the first time Mill's output layout
+    * moved.
+    */
+  def image(tag: String = "latest") = Task.Command:
+    val context = Task.dest / "context"
+    os.makeDir.all(context)
+    os.copy.over(assembly().path, context / "mcp.jar")
+    os.copy.over(dockerfile().path, context / "Dockerfile")
+
+    val name = s"captal-mcp:$tag"
+    val built = os
+      .proc("docker", "build", "-t", name, ".")
+      .call(cwd = context, check = false, stdout = os.Inherit, stderr = os.Inherit)
+    if built.exitCode != 0 then
+      sys.error("[image] docker build failed")
+    println(s"[image] built $name")
+    name
+
+  /** Push the image into a registry, which locally means LocalStack's own ECR. Usage:
+    * `./mill mcp.imagePush --registry 000000000000.dkr.ecr.us-east-1.localhost.localstack.cloud:4566 --repository captal-mcp-local`
+    *
+    * Separate from [[image]] because building is the common case and pushing needs a registry that
+    * exists. Against LocalStack the registry is the one `tofu apply` created, which is what
+    * `mcp_image_repository_url` reports.
+    */
+  def imagePush(registry: String, repository: String, tag: String = "latest") = Task.Command:
+    val local = image(tag)()
+    val remote = s"$registry/$repository:$tag"
+    for args <- Seq(Seq("tag", local, remote), Seq("push", remote))
+    do
+      val result = os.proc("docker" +: args).call(check = false, stderr = os.Pipe)
+      if result.exitCode != 0 then
+        sys.error(s"[image] docker ${args.head} failed: ${result.err.trim()}")
+    println(s"[image] pushed $remote")
+    remote
 
   object test extends ScalaTests with ScalafmtModule with ScalafixModule:
     // zio-test 2.1.26 to match what zio-http-mcp pulls in; the rest of the build is on 2.1.14 and
