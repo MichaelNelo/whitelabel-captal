@@ -1242,6 +1242,12 @@ Los `DbEventHandler` comparten el contexto Quill y corren en una sola transaccio
 - Actualizacion de fase
 - Actualizacion de progreso
 
+**Y durante mucho tiempo no fue cierto.** `RqliteDataSource` envolvía cada conexión en un proxy que interceptaba `setAutoCommit`, `commit` y `rollback` y devolvía `null` en los tres, porque el driver JDBC de rqlite 9.1.2.1 descartaba escrituras en silencio con `autoCommit = false`. Quill's `.transaction` hace exactamente esas tres llamadas, así que **la única transacción del codebase no existía**: un lote de eventos que fallaba a mitad dejaba una respuesta persistida sin la fase que le sigue, y `TransactionalEventHandler` logueaba *"transaction rolled back"* sobre un rollback que nunca ocurrió.
+
+Arreglado con el bump a `rqlite-jdbc` 10.5.2.1 quitando el proxy, y verificado en vez de supuesto: contra un servidor 10.6.1, `setAutoCommit(false)` se sostiene y una fila insertada y revertida no está después.
+
+La lección es la de la entrada 9 otra vez: **una garantía que nadie ejercita no es una garantía.** Esta estaba escrita acá, implementada en el código, y desactivada dos capas más abajo por un workaround contra un bug de una dependencia — sin una sola línea que las conectara.
+
 ### 3. MappedEncoding para Tipos de Dominio
 
 Los Row types usan tipos de dominio directamente (`user.Id`, `survey.Id`, `Phase`, etc.) gracias a `MappedEncoding`. Esto elimina conversiones manuales `.asString` / `.fromString` en las queries.
