@@ -41,12 +41,28 @@ object TestHelpers:
           h: PartialFunction[Throwable, RIO[R, T]]): RIO[R, T] = rt.catchSome(h)
       def ensure[T](f: RIO[R, T], e: => RIO[R, Unit]): RIO[R, T] = f.ensuring(e.ignore)
 
+  /** Logs anything that dies, because otherwise nothing does.
+    *
+    * A defect reaches the stub interpreter and comes back as a bare 500 with the body "Internal
+    * server error", and the cause is gone — no trace, no log line. The test then fails three layers
+    * away on a missing session cookie. Sixty tests broke that way and the answer was never printed
+    * anywhere.
+    *
+    * `tapErrorCause` and not `tapDefect`, which was the first guess and saw nothing: in tapir a
+    * typed error is a *value* the security logic returns as a `Left`, so an effect that fails
+    * instead has failed in a position tapir has no handler for — it answers 500 and the typed error
+    * never becomes a response. That failure is not a defect, so `tapDefect` ran zero times while
+    * ten requests came back 500.
+    */
+  private def logDefects[R, E, A](effect: ZIO[R, E, A]): ZIO[R, E, A] = effect.tapErrorCause:
+    cause => ZIO.logErrorCause("endpoint failed outside the error channel tapir renders", cause)
+
   private def provideEnvToEndpoint[R](
       endpoint: ZServerEndpoint[R, Any],
       env: ZEnvironment[R]): ZServerEndpoint[Any, Any] = ServerEndpoint(
     endpoint.endpoint,
-    _ => a => endpoint.securityLogic(rioMonadError)(a).provideEnvironment(env),
-    _ => u => i => endpoint.logic(rioMonadError)(u)(i).provideEnvironment(env)
+    _ => a => logDefects(endpoint.securityLogic(rioMonadError)(a)).provideEnvironment(env),
+    _ => u => i => logDefects(endpoint.logic(rioMonadError)(u)(i)).provideEnvironment(env)
   )
 
   def testBackend: ZIO[TestEnv, Nothing, SttpBackend[Task, Any]] = ZIO

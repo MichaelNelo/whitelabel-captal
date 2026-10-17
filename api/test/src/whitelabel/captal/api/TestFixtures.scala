@@ -390,6 +390,22 @@ object TestFixtures:
   // Locale Fixtures
   // ─────────────────────────────────────────────────────────────────────────────
 
+  /** Ensures these locales exist, rather than inserting them.
+    *
+    * Two suites call this against the same database — `LocaleSessionSuite` and `SoftDeleteSuite` —
+    * so whichever runs second offers rows that are already there and collides with the unique index
+    * over `(entity_id, locale)`.
+    *
+    * It worked for as long as it did because the old rqlite JDBC driver reported a refused
+    * statement as zero affected rows inside an HTTP 200, raising nothing: the second caller's
+    * inserts did nothing and nobody was told. Driver 10.5.2.1 throws, and the seed took 59 tests
+    * down with it — every one of them failing on a missing session, three layers from the cause.
+    *
+    * `onConflictIgnore` and not delete-then-insert on purpose. Ignoring is exactly what the old
+    * driver did, so the suites keep the behaviour they were written against — including that
+    * `SoftDeleteSuite`'s deactivation of `ui.locale.pt` survives a later seed. Replacing the rows
+    * would quietly undo it, and which suite that breaks would depend on the order they run in.
+    */
   def seedLocales(locales: List[String]): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[
     QuillSqlite]: quill =>
     import quill.*
@@ -403,7 +419,9 @@ object TestFixtures:
         category = "frontend",
         createdAt = now,
         updatedAt = now)
-    ZIO.foreach(rows)(row => run(query[LocalizedTextRow].insertValue(lift(row)))).unit
+    ZIO
+      .foreach(rows)(row => run(query[LocalizedTextRow].insertValue(lift(row)).onConflictIgnore))
+      .unit
 
   def countSessions: ZIO[QuillSqlite, Throwable, Long] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*

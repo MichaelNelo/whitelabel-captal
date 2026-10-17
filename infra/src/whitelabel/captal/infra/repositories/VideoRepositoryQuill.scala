@@ -9,16 +9,7 @@ import whitelabel.captal.core.{user, video}
 import whitelabel.captal.infra.*
 import whitelabel.captal.infra.schema.core.given
 import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.schema.{
-  QuillSqlite,
-  castAsReal,
-  castAsRealOpt,
-  nullif,
-  sqliteAbs,
-  sqliteLog,
-  sqliteRandom,
-  strGt
-}
+import whitelabel.captal.infra.schema.{QuillSqlite, castAsReal, castAsRealOpt, nullif, sqliteAbs, sqliteLog, sqliteRandom, strGt}
 import whitelabel.captal.infra.session.SessionContext
 import zio.*
 

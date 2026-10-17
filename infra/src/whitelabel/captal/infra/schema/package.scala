@@ -36,6 +36,23 @@ package object schema:
 
   inline given SchemaMeta[UserRow] = schemaMeta[UserRow]("users")
   inline given SchemaMeta[SessionRow] = schemaMeta[SessionRow]("sessions")
+
+  /** Missing until now, and every device write has been going nowhere.
+    *
+    * Without it Quill derives the table name from the class and asks for `device_row`, which does
+    * not exist — V6 created `devices`. `SessionService` writes one of these on every session, so
+    * that insert has been failing since V6 and `devices` is empty wherever this has run.
+    *
+    * Nothing said so because the old rqlite JDBC driver reported a refused statement as zero
+    * affected rows inside an HTTP 200: "no such table" arrived as "nothing happened". Driver
+    * 10.5.2.1 throws, and the session endpoint started answering 500 — which is how this was
+    * finally found, nine migrations later.
+    *
+    * `DeviceUserRow` and `NextIdentificationSurveyRow` are also unmapped and deliberately left so:
+    * neither appears in a `query[...]` anywhere, and the second is a projection rather than a
+    * table. Mapping a type nothing reads would only suggest it is used.
+    */
+  inline given SchemaMeta[DeviceRow] = schemaMeta[DeviceRow]("devices")
   inline given SchemaMeta[SurveyRow] = schemaMeta[SurveyRow]("surveys")
   inline given SchemaMeta[QuestionRow] = schemaMeta[QuestionRow]("questions")
   inline given SchemaMeta[QuestionOptionRow] = schemaMeta[QuestionOptionRow]("question_options")
