@@ -135,7 +135,13 @@ Layout actual del repo (paths relativos a la raíz):
 │       ├── UploadUi.scala, UnifiUi.scala  # MCP Apps renderizadas server-side
 │       └── UiRoutes.scala, UiTicket.scala # El POST de las páginas, firmado con HMAC
 │
-├── mcpui/, mcpui-unifi/                 # El JS de esas páginas (Scala.js, linkeado aparte)
+├── client/                              # Un linker run, cuatro módulos públicos:
+│   ├── src/.../client/                  #   el portal (Laminar), `@main`
+│   ├── src/.../mcpui/                   #   las dos MCP Apps (solo scalajs-dom)
+│   ├── src/.../maintenance/             #   la página de pausa que sirve el edge
+│   └── entries/                         #   los stubs que llaman a `start` — uno por módulo
+│                                        #   público que no sea el portal, porque un run da un
+│                                        #   solo module initializer y lo tiene `main`
 │
 ├── .agents/skills/                      # DEV-facing skills (solo en este repo)
 │   ├── add-migration, add-api-endpoint, add-event-handler, add-phase
@@ -1150,7 +1156,7 @@ Las doce operacionales, todas reescritas alrededor de tools:
 | `i18n-reference` | Las claves que el portal exige, derivadas del tipo `I18n` por `get_i18n_schema` |
 | `style-reference` | Variables CSS y estructura de clases. La referencia viva es `get_css_schema` |
 | `configure-aws` | El repo de infra, las env vars que el server lee, y los tokens de operador |
-| `deploy-location` | Las tres cosas que "deploy" puede significar. La tercera no está implementada |
+| `deploy-location` | Las tres cosas que "deploy" puede significar. La tercera es `deploy_location` |
 | `troubleshoot-deployment` | Síntoma → causa → arreglo |
 | `recover-data` | Recuperación tras pérdida de datos en rqlite. **Ya no hay replay desde archivos** |
 
@@ -1158,6 +1164,18 @@ Las doce operacionales, todas reescritas alrededor de tools:
 Una skill que describe algo borrado es peor que una ausente, porque el modelo la obedece —
 `CaptalMcpSpec` pinea el conteo en 12 para que agregar o quitar una sea una decisión y no un
 descuido.
+
+**Cambiar una tool incluye su skill.** No hay test que lo cubra y no debería haberlo: un spec puede
+verificar que un string esté presente, nunca que el párrafo alrededor sea cierto, así que una prueba
+de contenido da apariencia de cobertura sobre lo único que importa. Lo que sí está cubierto es
+mecanismo — empaquetado, parseo del frontmatter, las URIs, y que ninguna quede afuera de
+`skills/list` por el contrato del SDK.
+
+El caso que lo demuestra: `deploy-location` abrió con **"There is no `deploy_location` tool"** desde
+que se borró la CLI hasta que la tool existió, y sobrevivió a una reescritura completa de las doce
+skills. Ningún invariante mecánico lo habría encontrado — se encontró leyendo el archivo para
+agregarle otra cosa. Las tools que una skill nombra son su parte más perecedera: si tocás una tool,
+abrí su skill en el mismo cambio.
 
 ---
 
@@ -1236,6 +1254,52 @@ Cuando un usuario responde con un email que ya existe, el handler vincula la ses
 
 Las entidades (`Survey`, `User`) estan tipadas por su estado, lo que hace imposible invocar operaciones invalidas en tiempo de compilacion.
 
+### 6. Un solo linker run para todo el JS
+
+`client` emite cuatro módulos públicos: el portal, las dos MCP Apps y la página de pausa. Antes eran tres módulos Mill con tres linker runs.
+
+**El costo es conocido y está medido**, porque la alternativa se midió primero. Un linker run produce un runtime dimensionado por el programa entero, y todo módulo público lo importa estáticamente — no es diferible, el entry arranca instanciando algo que deriva de `Object`. En runs separados el runtime de las MCP Apps pesaba 16.810 gzip; dentro de `client` pesa 91.045, de los que Rollup y terser ya sacudieron todo lo que se puede sacudir. La primera descarga de `upload` pasó de 10.839 a 94.899 gzip.
+
+Traducido a lo que se siente: con los hints puestos en las dos estructuras, la fusión cuesta **+70 ms a 10 Mbps y +408 ms a 1,6**. El segundo número es el peso puro (84 KB a 1,6 Mbps son 420 ms) y es un piso, porque 10,8 KB entran en la primera ventana de congestión y 94,9 KB necesitan tres.
+
+Lo que se gana a cambio es un codebase: `maintenance` usa el `Layout` del portal sin copiarlo, y hay una sola configuración de Vite en vez de tres.
+
+**Si esto se revisa**, el eje a medir es ese, no los chunks: el reparto entre módulos no cambia nada porque el módulo que todos comparten es una sola clase, `java.lang.Object`, y ninguna granularidad de paquete entra dentro de una clase.
+
+### 7. Los `modulepreload` se derivan del artefacto, nunca de una lista
+
+Los nombres de chunk llevan hash de contenido, así que una lista escrita a mano o compilada en el servidor queda vieja en el siguiente publish — y **un preload con un hash que ya nadie importa es peor que ninguno**, porque el browser se baja un chunk que no va a usar.
+
+De ahí dos implementaciones y no una, según quién renderiza el HTML:
+
+- El portal y la página de pausa los renderiza el build, así que `preloadLinks` lee los imports reales del entry, transitivamente.
+- Las MCP Apps las renderiza el servidor por request, así que `AssetStore.scriptPreloads` lee el entry publicado de S3 y parsea sus imports. Si no puede leerlo responde vacío: la página sin hints es correcta, solo más lenta.
+
+Ambas excluyen `import()` dinámico — sin eso el portal precargaría todas sus vistas en el primer pintado, que es lo contrario de por qué existe el split de rutas.
+
+Medido: quita un round trip del camino crítico, la app monta 143 ms antes a 100 ms de RTT.
+
+### 8. `cdnEnabled`: en local se salta la invalidación, no se intenta
+
+`AssetStore.cdnEnabled` es false contra un endpoint local, y la invalidación responde `"skipped-no-cdn"` en vez de llamar a CloudFront.
+
+Saltarla y no intentarla, porque **no hay caché de borde delante de LocalStack**: la invalidación no está "no disponible", es que no significa nada. Intentarla haría que toda escritura de asset reportara un fallo con el objeto ya escrito — un error que el operador aprende a ignorar, que es la peor clase de error.
+
+El argumento original citaba que LocalStack Community contesta 501 a toda llamada a CloudFront. Eso dejó de aplicar al pasar a Pro, y la conclusión sobrevivió a la premisa: con Pro la llamada puede funcionar y sigue sin tener sentido.
+
+### 9. Medido y descartado
+
+Para que no se reintente. Cada uno vino con una hipótesis razonable y un número que la cerró.
+
+| Idea | Resultado |
+|---|---|
+| `mangle.properties` en terser | **0,71%** (89 bytes sobre 12.464). Scala.js ya minifica los nombres de miembro a 2–3 caracteres y entrecomilla todo lo que cruza a JS; `keep_quoted` respeta esa marca. No queda nada que acortar, y el riesgo se concentra en los nombres que no se pueden tocar. |
+| `ModuleSplitStyle.SmallestModules` | 755 módulos, cero `internal-*`, y al portal le cuesta menos del 1%. No arregla nada porque `java.lang.-Object` sigue siendo un módulo de 159.172 gzip. |
+| Tree-shake post-build del runtime | Ya lo hace Rollup, y llega a 91 KB desde 159. Lo que falta para llegar a 17 no es código borrable: el runtime de un programa chico tiene 232 funciones y el del portal 1.393, y **no es un subconjunto**. Un pase post-build solo puede borrar, nunca regenerar. |
+| Primer pintado por debajo de ~2 Mbps | Lo gobierna `brand-icon.svg` — 730 bytes con round trip propio, ya eran 756 ms antes de los preloads. El arreglo está escrito en `build.mill` (icono y reglas del loader inline, `styles.css` fuera del render-blocking) y no se hizo porque las conexiones que sirve este portal no son de 1,6 Mbps. |
+
+Sigue sin explorar un lever real: `scala-java-time` aporta 222 KB crudos y `client` no nombra `java.time` en ninguna línea — entra por los 25 archivos de `core` que timestampean con `Instant`.
+
 ---
 
 ## Convenciones de Estilo
@@ -1277,6 +1341,19 @@ inline given MappedEncoding[String, user.Id] = MappedEncoding(user.Id.unsafe)
 # Aplicar scalafix
 ./mill __.fix
 ```
+
+### 5. Comentarios técnicos, documentación de decisiones
+
+Este repo comenta mucho, y la razón es buena: casi todo lo que puede romperse acá rompe en silencio. Pero las dos cosas se habían mezclado, y un comentario que argumenta una decisión con mediciones crece hasta tapar el código que explica.
+
+El reparto:
+
+- **Un comentario responde "qué hace esto y qué se rompe si lo tocás".** El mecanismo, la restricción, la trampa. Es para alguien que está leyendo esa línea. `crossorigin` en un `modulepreload` es load-bearing porque el módulo se busca en modo CORS — eso es un comentario.
+- **La documentación responde "por qué así y no de la otra forma".** La alternativa que se consideró, el número que la descartó, y cuándo valdría revisarlo. Es para alguien que está decidiendo. Que `mangle.properties` rinde 0,71% y por eso no está — eso es documentación, y vive en *Decisiones de Diseño*.
+
+La prueba para separarlos: **si el párrafo sigue siendo verdad cuando alguien cambia la decisión, es un comentario; si deja de tener sentido, era documentación.**
+
+Esto es una dirección de refactor, no un estado alcanzado. Al tocar un archivo con un comentario que argumenta en vez de explicar, el movimiento es mover el argumento a *Decisiones de Diseño* y dejar en el código la mecánica.
 
 ---
 
