@@ -346,7 +346,19 @@ final case class InfraStore(
           .builder()
           .subnets(targets.subnets*)
           .securityGroups(targets.securityGroup)
-          .assignPublicIp(AssignPublicIp.DISABLED)
+          // Mirrors the topology Terraform builds, where `enable_nat_gateway` is false in every
+          // environment: tasks sit in public subnets and are isolated by security group alone --
+          // ingress on the container port from the load balancer's group and nothing else.
+          //
+          // It was DISABLED, which is the opposite of that and never started a task. A public
+          // subnet has no NAT, so without an address of its own a task has no route to ECR: the
+          // service is created, every resource is correct, and `CannotPullContainerError` is the
+          // only sign. Invisible locally, too -- LocalStack runs an ECS task as a plain container
+          // and routes nothing, so the end-to-end test passed throughout.
+          //
+          // If `enable_nat_gateway` is ever turned on, this has to flip with it; its own
+          // description in `variables.tf` says so.
+          .assignPublicIp(AssignPublicIp.ENABLED)
           .build())
       .build()
     val balancer = LoadBalancer
