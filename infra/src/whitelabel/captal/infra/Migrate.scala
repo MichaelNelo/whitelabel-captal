@@ -1,7 +1,5 @@
 package whitelabel.captal.infra
 
-import javax.sql.DataSource
-
 import com.typesafe.config.ConfigFactory
 import fly4s.Fly4s
 import fly4s.data.{Fly4sConfig, Location, MigrationVersion}
@@ -10,107 +8,19 @@ import zio.interop.catz.*
 
 object Migrate extends ZIOAppDefault:
 
-  private val writePrefix = Set(
-    "INSERT",
-    "UPDATE",
-    "DELETE",
-    "CREATE",
-    "ALTER",
-    "DROP",
-    "REPLACE",
-    "PRAGMA")
-
-  /** Every leading comment, not just the first.
-    *
-    * This used to skip one and then decide, which meant a migration opening with more than one `--`
-    * line was still looking at a comment when it checked for a write keyword — so it was classified
-    * as a read, sent to `/db/query`, and silently did nothing while Flyway recorded it as applied.
-    * That is the worst shape this failure can take: the history says the schema changed and the
-    * database disagrees.
-    */
-  @annotation.tailrec
-  private def skipComments(sql: String): String =
-    val trimmed = sql.stripLeading()
-    if trimmed.startsWith("--") then
-      skipComments(trimmed.dropWhile(_ != '\n'))
-    else if trimmed.startsWith("/*") then
-      val end = trimmed.indexOf("*/")
-      if end >= 0 then
-        skipComments(trimmed.drop(end + 2))
-      else
-        trimmed
-    else
-      trimmed
-
-  /** Check if SQL starts with a write keyword (skipping leading comments). */
-  private def isWriteStatement(sql: String): Boolean =
-    val upper = skipComments(sql).toUpperCase
-    writePrefix.exists(p => upper.startsWith(p))
-
-  /** Wrap a DataSource so Flyway's Statement.execute() uses executeUpdate() for write statements.
-    * This works around the rqlite JDBC driver routing INSERTs containing the word "select" in
-    * string literals to the read-only `/db/query` endpoint instead of `/db/execute`.
-    */
-  private def wrapForMigrations(ds: DataSource): DataSource =
-    new DataSource:
-      def getConnection(): java.sql.Connection =
-        val conn = ds.getConnection()
-        java
-          .lang
-          .reflect
-          .Proxy
-          .newProxyInstance(
-            conn.getClass.getClassLoader,
-            Array(classOf[java.sql.Connection]),
-            (_, method, args) =>
-              val result = method.invoke(
-                conn,
-                (
-                  if args == null then
-                    Array.empty[Object]
-                  else
-                    args
-                )*)
-              if method.getName == "createStatement" then
-                val stmt = result.asInstanceOf[java.sql.Statement]
-                java
-                  .lang
-                  .reflect
-                  .Proxy
-                  .newProxyInstance(
-                    stmt.getClass.getClassLoader,
-                    stmt.getClass.getInterfaces,
-                    (_, m, a) =>
-                      if m.getName == "execute" && a != null && a.length >= 1 &&
-                        a(0).isInstanceOf[String] && isWriteStatement(a(0).asInstanceOf[String])
-                      then
-                        stmt.executeUpdate(a(0).asInstanceOf[String])
-                        java.lang.Boolean.FALSE
-                      else
-                        m.invoke(
-                          stmt,
-                          (
-                            if a == null then
-                              Array.empty[Object]
-                            else
-                              a
-                          )*)
-                  )
-                  .asInstanceOf[java.sql.Statement]
-              else
-                result
-              end if
-          )
-          .asInstanceOf[java.sql.Connection]
-      end getConnection
-      def getConnection(u: String, p: String): java.sql.Connection = getConnection()
-      def getLogWriter(): java.io.PrintWriter = ds.getLogWriter()
-      def setLogWriter(out: java.io.PrintWriter): Unit = ds.setLogWriter(out)
-      def setLoginTimeout(seconds: Int): Unit = ds.setLoginTimeout(seconds)
-      def getLoginTimeout(): Int = ds.getLoginTimeout()
-      def getParentLogger(): java.util.logging.Logger = ds.getParentLogger()
-      def unwrap[T](iface: Class[T]): T = ds.unwrap(iface)
-      def isWrapperFor(iface: Class[?]): Boolean = ds.isWrapperFor(iface)
+  // A sixty-line reflection proxy lived here, forcing Flyway's `Statement.execute()` through
+  // `executeUpdate()` for anything that looked like a write — because the driver routed an `INSERT`
+  // whose string literal contained the word "select" to the read-only `/db/query` endpoint, where
+  // it did nothing while Flyway recorded it as applied.
+  //
+  // Gone with the driver bump to 10.5.2.1, and not as tidying: it had become actively harmful. The
+  // proxy's handler never unwrapped the `InvocationTargetException` that `Method.invoke` returns,
+  // which did not matter while the driver swallowed errors — and the moment the new driver started
+  // throwing, every real `SQLException` reached Flyway as an `UndeclaredThrowableException` with no
+  // cause attached. The end-to-end suite failed exactly that way.
+  //
+  // Measured before removing: on 10.5.2.1 an `INSERT` carrying "select" in a literal, issued
+  // through `execute()`, lands.
 
   private val fly4sConfig = Fly4sConfig
     .default
@@ -148,7 +58,7 @@ object Migrate extends ZIOAppDefault:
     Lock(url):
       Fly4s
         .makeFor[Task](
-          ZIO.attempt(wrapForMigrations(RqliteDataSource.create(url))),
+          ZIO.attempt(RqliteDataSource.create(url)),
           config = fly4sConfig.copy(locations = List(Location(location)), table = historyTable))
         .use(_.migrate.map(_.migrationsExecuted))
 
@@ -231,7 +141,7 @@ object Migrate extends ZIOAppDefault:
       * first version of this: it decided by whether the `INSERT` threw, and rqlite reports a
       * rejected statement *inside an HTTP 200* which the driver turns into zero affected rows
       * rather than an exception. Both migrators were told they had won. The same trap is recorded
-      * on `wrapForMigrations` above; it caught this code too.
+      * where the removed proxy above used to live; it caught this code too.
       *
       * Reading back is immune to all of it — it does not care whether the driver throws, returns
       * zero, or returns one, and the read is linearizable because it goes through Raft. So the
@@ -243,7 +153,8 @@ object Migrate extends ZIOAppDefault:
         // Both the count and the exception, because the driver uses each for a different failure
         // and neither on its own is the answer. A rejected statement comes back as zero affected
         // rows *inside an HTTP 200* — no exception at all — which is the trap recorded on
-        // `wrapForMigrations` above and the one that broke the first two versions of this.
+        // the note above where that proxy used to live, and the one that broke the first two
+        // versions of this.
         bid  <- update(url, s"INSERT INTO $Table (id, holder) VALUES ($Row, '$holder')").either
         held <- holderOf(url)
       yield

@@ -29,6 +29,21 @@ ALTER TABLE advertiser_videos
 UPDATE advertiser_videos
 SET status = CASE WHEN is_active = 1 THEN 'active' ELSE 'retired' END;
 
+-- Before the column, and this ordering is the whole point: V4 created this index over `is_active`,
+-- and SQLite refuses to drop a column an index still references.
+--
+-- It did not always refuse. On SQLite 3.46, which rqlite 8.36 ships, the DROP COLUMN went through
+-- and took the index with it -- so this migration applied cleanly for its whole life. On 3.53, in
+-- rqlite 10.6, the same statement fails with "error in index idx_advertiser_videos_active after
+-- drop column: no such column: is_active", and every fresh database stops here.
+--
+-- Nothing saw it coming because the old JDBC driver reported a refused statement as zero affected
+-- rows inside an HTTP 200, raising nothing: against a 10.6 server it failed and said it had
+-- succeeded. The driver bump to 10.5.2.1 is what made the error visible, not what caused it.
+--
+-- `IF EXISTS` so this is replayable on a database where the old behaviour already removed it.
+DROP INDEX IF EXISTS idx_advertiser_videos_active;
+
 -- Dropped rather than kept in sync. Two sources of truth for the same fact is how they drift, and
 -- removing the column makes the compiler enumerate every reader instead of leaving one behind.
 ALTER TABLE advertiser_videos DROP COLUMN is_active;

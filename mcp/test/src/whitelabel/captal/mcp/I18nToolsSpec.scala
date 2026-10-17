@@ -187,13 +187,24 @@ object I18nToolsSpec extends ZIOSpecDefault:
           !rendered.contains("\"missing\":[]")
         )
       ,
-      test("a unique-constraint violation never reaches JDBC as an error"):
-        // The reason every write tool validates in Scala instead of leaning on the schema. rqlite
-        // reports the failure as a per-statement `error` field inside an HTTP 200 response, and the
-        // JDBC driver does not translate that into a SQLException — the same class of silent drop
-        // RqliteDataSource already works around for autoCommit=false.
+      test("a unique-constraint violation reaches JDBC as an error"):
+        // This asserted the opposite until the driver bump, and it said so: "rqlite reports the
+        // failure as a per-statement `error` field inside an HTTP 200 response, and the JDBC driver
+        // does not translate that into a SQLException. If a future driver starts surfacing it, this
+        // test fails and the workaround can be revisited."
         //
-        // If a future driver starts surfacing it, this test fails and the workaround can be revisited.
+        // One did, and it did. `rqlite-jdbc` 10.5.2.1 states it outright: "failed statements,
+        // batches and commits now throw instead of being silently ignored".
+        //
+        // What the old version pinned was a bug in a dependency, held as a contract. Four other
+        // things here were written against the same silence and three were broken by it: a
+        // reflection proxy whose own exception handling had never once run, migration V21 reporting
+        // success on a statement SQLite 3.53 refuses, and `DeviceRow` writing to a table that does
+        // not exist — on every session since V6, found only because this driver finally said so.
+        //
+        // The validation each write tool does in Scala still earns its place: a tool that names
+        // which key collided beats one that forwards a constraint name. What changed is that the
+        // schema is a backstop now rather than a silence.
         for
           locationId <- resetFixture
           _          <- insertRaw(locationId, SomeKey, "uno", "id-a")
@@ -201,9 +212,14 @@ object I18nToolsSpec extends ZIOSpecDefault:
           rows       <- rowsFor(locationId)
           forKey = rows.filter(_.entityId == SomeKey)
         yield assertTrue(
-          // No exception, despite idx_localized_texts_entity_locale rejecting the row.
-          outcome == Right(0L),
-          // And the write is simply gone.
+          // Asserted on the message rather than the type alone: the point is that the reason
+          // survives the trip out of rqlite's HTTP 200 into the exception, which is what makes it
+          // diagnosable at all.
+          outcome
+            .left
+            .toOption
+            .exists(e => Option(e.getMessage).exists(_.contains("UNIQUE constraint failed"))),
+          // And the write is still gone, which was true before and is the half that mattered.
           forKey.size == 1,
           forKey.head.value == "uno"
         )
