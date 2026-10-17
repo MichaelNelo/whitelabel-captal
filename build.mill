@@ -835,6 +835,30 @@ end infra
 
 object api extends BaseModule:
   def moduleDeps = Seq(core, endpoints, infra)
+
+  def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "Dockerfile.api")
+
+  /** Build the API image. Usage: `./mill api.image` or `./mill api.image --tag v1.2.3`
+    *
+    * The same shape as `mcp.image`, and for the reason recorded on `Dockerfile.api`: the previous
+    * arrangement compiled inside the image and had been unbuildable for two separate reasons, each
+    * of which nothing would catch because nothing builds this image in CI. A task that produces it
+    * from the jar Mill already has is both faster and checkable.
+    */
+  def image(tag: String = "latest") = Task.Command:
+    val context = Task.dest / "context"
+    os.makeDir.all(context)
+    os.copy.over(assembly().path, context / "api.jar")
+    os.copy.over(dockerfile().path, context / "Dockerfile")
+
+    val name = s"captal-api:$tag"
+    val built = os
+      .proc("docker", "build", "-t", name, ".")
+      .call(cwd = context, check = false, stdout = os.Inherit, stderr = os.Inherit)
+    if built.exitCode != 0 then
+      sys.error("[image] docker build failed")
+    println(s"[image] built $name")
+    name
   def mvnDeps = Seq(
     mvn"com.softwaremill.sttp.tapir::tapir-zio-http-server:1.11.11",
     mvn"com.softwaremill.sttp.tapir::tapir-json-circe:1.11.11",
@@ -1317,10 +1341,27 @@ object client extends BaseJSModule:
       else
         "application/octet-stream"
 
+    // The MCP App pages live in this directory and do not belong under a location's prefix.
+    //
+    // They arrived with the merge: `client` emits four public modules out of one linker run, so
+    // `upload.js`, `unifi.js` and the chunks they reach now sit beside the portal's. This published
+    // the whole directory, and `Assets.copyBundle` copies `bundle/` into every `<slug>/` -- so every
+    // location would carry a copy of the backoffice's pages at a path nothing addresses. They go to
+    // `ui/` once, through `client.publish`.
+    //
+    // Subtracted by the import graph and not by name, for the reason `client.publish` needs the
+    // same: sharing a linker run with the portal, a chunk is named after whichever module it grew
+    // from, so no prefix distinguishes them. The difference is what *only* the UI pages reach --
+    // the runtime they share with the portal stays, because the portal needs it here.
+    val uiReaches = moduleClosure(src, uiEntries)
+    val portalReaches = moduleClosure(src, Seq("main.js", "maintenance.js"))
+    val uiOnly = uiReaches.diff(portalReaches)
+
     val files = os
       .list(src)
       .filter(os.isFile)
       .map(_.last)
+      .filterNot(uiOnly.contains)
       .sorted
       .map(name =>
         (
