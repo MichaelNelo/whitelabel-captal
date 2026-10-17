@@ -62,14 +62,33 @@ object AssetStoreLocalStackSpec extends ZIOSpecDefault:
       .unit
       .ignore
 
-  /** A store over a chosen bucket, with the CDN off.
+  /** A store over a chosen bucket.
     *
-    * Off because that is what production does against a local endpoint — `AssetStore.layer` derives
-    * `cdnEnabled` from whether `AWS_ENDPOINT_URL` is set — and because the `cdn` client here is
-    * `null`, so an enabled one would be a `NullPointerException` rather than a test.
+    * Its `cdn` client is `null`, which is safe for everything here that only touches S3 — the store
+    * never invalidates on its own, the tools do. [[cdnStore]] is the one that needs a real client.
     */
   private def storeFor(bucket: String): ZIO[Scope, Throwable, AssetStore] = store.map(base =>
-    base.copy(bucket = bucket, cdnEnabled = false))
+    base.copy(bucket = bucket))
+
+  /** A store with a real CloudFront client and the distribution the fixture created.
+    *
+    * Separate from [[store]] because the id comes from the environment and is only there on a
+    * licensed LocalStack: CloudFront is not in the free tier's registry, so the test that uses this
+    * skips rather than failing on a machine that was never going to run it -- the same signal the
+    * deploy end-to-end spec uses for the cluster.
+    */
+  private val cdnStore: ZIO[Scope, Throwable, Option[AssetStore]] = ZIO
+    .attempt(Option(java.lang.System.getenv("CLOUDFRONT_DISTRIBUTION_ID")))
+    .flatMap:
+      case None | Some("") =>
+        ZIO.none
+      case Some(id) =>
+        for
+          base <- store
+          cdn  <-
+            ZIO.acquireRelease(ZIO.attempt(AssetStore.cdnClientFor(Some(Endpoint))))(c =>
+              ZIO.succeed(c.close()))
+        yield Some(base.copy(distributionId = id, cdn = cdn))
 
   /** Writes an object the way `client.publishS3` does, metadata included.
     *
@@ -134,19 +153,31 @@ object AssetStoreLocalStackSpec extends ZIOSpecDefault:
                 )
           yield result
       ,
-      test("skips CDN invalidation when pointed at a local endpoint"):
-        // Every client is null: if the skip regressed, this would be a NullPointerException rather
-        // than a silent call to a CloudFront that LocalStack answers with a 501.
-        val local = AssetStore(Bucket, "E000000", "https://portal.test", null, null, null, false)
-        for id <- local.invalidate("demo", Asset.Styles).mapError(new RuntimeException(_))
-        yield assertTrue(id == "skipped-no-cdn")
-      ,
-      test("a real endpoint still invalidates, and says so when it cannot"):
-        // The mirror image: with the CDN enabled the null client must blow up, which is what keeps
-        // `cdnEnabled` from being flipped to false by default as a convenience.
-        val aws = AssetStore(Bucket, "E000000", "https://portal.test", null, null, null, true)
-        for failed <- aws.invalidate("demo", Asset.Styles).flip
-        yield assertTrue(failed.startsWith("Wrote custom-styles.css.gz but could not invalidate"))
+      test("an invalidation is created and waited out, for real"):
+        // The path nothing executed until it reached AWS. There used to be a `cdnEnabled` flag that
+        // turned every invalidation against a local endpoint into the string `"skipped-no-cdn"`,
+        // because CloudFront was not in the free tier's registry when that was written. The two
+        // tests here pinned the skip in both directions, so between them they asserted that the
+        // CloudFront code was not run -- `createInvalidation`, the poll to `Completed`, and the
+        // ordering in `pause_location` that depends on the wait actually waiting.
+        //
+        // Measured before relying on it: against a licensed LocalStack the invalidation reports
+        // `Completed` on the first poll, so `invalidateAndWait`'s five-minute bound is nowhere near.
+        cdnStore.flatMap:
+          case None =>
+            ZIO.succeed(assertCompletes)
+          case Some(cdn) =>
+            for
+              _    <- ensureBucket(cdn)
+              _    <- cdn.put("demo", Asset.Styles, "body{}").mapError(new RuntimeException(_))
+              one  <- cdn.invalidate("demo", Asset.Styles).mapError(new RuntimeException(_))
+              many <- cdn.invalidateAndWait("demo").mapError(new RuntimeException(_))
+            yield assertTrue(
+              // A real id rather than a sentinel, which is what the old assertion checked for.
+              one.nonEmpty,
+              one != "skipped-no-cdn",
+              many.nonEmpty,
+              many != one)
       ,
       test("the bundle copy carries metadata across and leaves a custom icon alone"):
         // The step `captal locations push` did first and nothing did after the CLI was deleted.

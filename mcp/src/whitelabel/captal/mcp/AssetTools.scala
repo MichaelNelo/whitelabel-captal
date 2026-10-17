@@ -81,7 +81,7 @@ object AssetTools:
       @description("Size of the stored object, after gzip where it applies.")
       storedBytes: Int,
       @description(
-        "The CloudFront invalidation created, so the change is visible rather than waiting behind the edge cache. 'skipped-no-cdn' when running against a local endpoint, where there is no cache in front.")
+        "The CloudFront invalidation created, so the change is visible rather than waiting behind the edge cache.")
       invalidationId: String)
 
   given Schema[CssSchemaRequest] = DeriveSchema.gen

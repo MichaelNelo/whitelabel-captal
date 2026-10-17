@@ -88,8 +88,7 @@ object DeployTools:
       @description(
         "True when the location already had its own brand icon and the bundle's default was left out of the copy. False means it now has the default, which is the ordinary case for a location with no branding of its own.")
       iconPreserved: Boolean,
-      @description(
-        "The CloudFront invalidation covering this location's prefix, or 'skipped-no-cdn' when there is no distribution in front of the bucket.")
+      @description("The CloudFront invalidation covering this location's prefix.")
       invalidation: String,
       @description(
         "The path CloudFront forwards to the ALB and the API answers on. The slug is baked into the routes at boot, so one service serves exactly this prefix.")
@@ -251,7 +250,7 @@ object DeployTools:
         "The listener rule now answering a fixed response instead of forwarding to the target group.")
       ruleArn: String,
       @description(
-        "The CloudFront invalidation that was waited out before the API was stopped, or 'skipped-no-cdn' when there is no distribution. This is what makes the redirect safe: by the time anything can be told the location is paused, the edge is already serving the maintenance page.")
+        "The CloudFront invalidation that was waited out before the API was stopped. This is what makes the redirect safe: by the time anything can be told the location is paused, the edge is already serving the maintenance page.")
       invalidation: String,
       @description(
         "Exactly what the load balancer now answers on this location's API path. The portal reads this to tell a pause from an outage and sends the guest to the maintenance page itself.")
@@ -272,8 +271,7 @@ object DeployTools:
       @description(
         "True when the load balancer reported a healthy target before this returned. False means the task is running but the ALB has not finished health-checking it yet — the portal answers 503 until it does, and nothing is wrong.")
       healthy: Boolean,
-      @description(
-        "The CloudFront invalidation that was waited out, or 'skipped-no-cdn' when there is no distribution.")
+      @description("The CloudFront invalidation that was waited out.")
       invalidation: String,
       @description("What is left.")
       nextSteps: List[String])

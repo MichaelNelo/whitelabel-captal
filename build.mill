@@ -419,10 +419,54 @@ private def awslocalOption(containerName: String, args: String*): Option[String]
   * Every step is look-up-or-create, keyed on a `Name` tag, because `create-vpc` is not idempotent:
   * running twice without the lookup leaves two VPCs and a subnet in whichever one came back first.
   */
+/** A CloudFront distribution in front of `bucket`, created once and found thereafter.
+  *
+  * Needed because `AssetStore` no longer has a way to not have one. It used to turn every
+  * invalidation against a local endpoint into the string `"skipped-no-cdn"`, and the environment
+  * handed it a made-up id -- which meant the whole CloudFront path was never executed by anything
+  * until it reached AWS: `createInvalidation`, the poll to `Completed`, and the ordering in
+  * `pause_location` that depends on the wait actually waiting.
+  *
+  * Looked up by `Comment` rather than tracked, the same shape as the other lookups here: the id is
+  * generated, so a second run has to find the first run's distribution instead of adding one.
+  *
+  * Requires a licence. CloudFront is not in the free tier's registry, so callers that may run
+  * without one have to be prepared for this to fail.
+  */
+private def ensureDistribution(containerName: String, comment: String, bucket: String): String =
+  awslocalOption(
+    containerName,
+    "cloudfront",
+    "list-distributions",
+    "--query",
+    s"DistributionList.Items[?Comment=='$comment'].Id | [0]",
+    "--output",
+    "text").getOrElse:
+    awslocal(
+      containerName,
+      "cloudfront",
+      "create-distribution",
+      "--distribution-config",
+      // Inline rather than a staged file: `os.proc` passes arguments without a shell, so the JSON
+      // needs no quoting of its own. The legacy `ForwardedValues` form instead of a cache policy
+      // id, which would otherwise have to be looked up from a managed policy LocalStack need not
+      // have.
+      s"""{"CallerReference":"$comment","Comment":"$comment","Enabled":true,
+         |"Origins":{"Quantity":1,"Items":[{"Id":"assets","DomainName":"$bucket.s3.amazonaws.com",
+         |"S3OriginConfig":{"OriginAccessIdentity":""}}]},
+         |"DefaultCacheBehavior":{"TargetOriginId":"assets","ViewerProtocolPolicy":"allow-all",
+         |"ForwardedValues":{"QueryString":false,"Cookies":{"Forward":"none"}},"MinTTL":0,
+         |"TrustedSigners":{"Enabled":false,"Quantity":0}}}""".stripMargin.replace("\n", ""),
+      "--query",
+      "Distribution.Id",
+      "--output",
+      "text")
+
 private def ensureLocalStackInfra(
     containerName: String,
     endpoint: String,
-    licensed: Boolean): Map[String, String] =
+    licensed: Boolean,
+    bucket: String): Map[String, String] =
   val name = "captal-mcp-test"
   val region = "us-east-1"
 
@@ -610,7 +654,11 @@ private def ensureLocalStackInfra(
       "--output",
       "text"))
 
-  println(s"[localstack] infra ready: cluster $name, vpc $vpc, listener ${listener.takeRight(24)}")
+  val distribution = ensureDistribution(containerName, name, bucket)
+
+  println(
+    s"[localstack] infra ready: cluster $name, vpc $vpc, listener ${listener
+        .takeRight(24)}, distribution $distribution")
   Map(
     "AWS_ENDPOINT_URL"         -> endpoint,
     "AWS_REGION"               -> region,
@@ -625,6 +673,7 @@ private def ensureLocalStackInfra(
     "ALB_LISTENER_ARN"         -> listener,
     "TASK_EXECUTION_ROLE_ARN"  -> role("exec"),
     "TASK_ROLE_ARN"            -> role("task"),
+    "CLOUDFRONT_DISTRIBUTION_ID" -> distribution,
     // Deliberately an image that is already on the machine. LocalStack runs an ECS task as a real
     // container, so a task definition naming an ECR repository nobody can pull would leave the
     // service trying forever. Nothing here waits for a task to start, but a pull that cannot
@@ -1425,10 +1474,14 @@ object mcp extends BaseModule:
           // `create_token`; a local run only ever needs the one.
           "MCP_ADMIN_TOKEN" -> token,
           "ASSETS_BUCKET"   -> devBucket,
-          // Never called in this flow — only the asset writes invalidate — but the server refuses to
-          // start without it, which is deliberate: in production a missing distribution means writes
-          // land and stay invisible.
-          "CLOUDFRONT_DISTRIBUTION_ID" -> "E000000000000",
+          // A real distribution over the dev bucket, created once. It was a made-up id while every
+          // invalidation against a local endpoint was skipped; now that the skip is gone, an asset
+          // write in this flow really does invalidate, and a fictional id would fail the write's
+          // last step with the object already stored.
+          "CLOUDFRONT_DISTRIBUTION_ID" -> ensureDistribution(
+            localStackContainer,
+            "captal-mcp-dev",
+            devBucket),
           // Where the portal fetches an asset from, which is what gets stored as a video's
           // `video_url`. In production this is the CloudFront distribution; locally it is the
           // bucket on LocalStack, path-style.
@@ -1636,7 +1689,9 @@ object mcp extends BaseModule:
       */
     def localStackInfra: T[Map[String, String]] = Task:
       val parts = localStackStamp().split(" ")
-      ensureLocalStackInfra(localStackContainer, parts(1), parts(2).toBoolean)
+      // The bucket, because the distribution needs an origin and it has to be the one the suite
+      // writes to -- otherwise an invalidation would be aimed at a prefix nothing is under.
+      ensureLocalStackInfra(localStackContainer, parts(1), parts(2).toBoolean, testBucket())
 
     /** A bucket of this suite's own, so no spec writes into the one `mcp.dev` serves.
       *
@@ -1679,9 +1734,9 @@ object mcp extends BaseModule:
           // which every other spec resolves through `application.conf`.
           "E2E_DB_URL"                 -> migratedE2eUrl(),
           "ASSETS_BUCKET"              -> testBucket(),
-          // Never called against LocalStack — `AssetStore` derives `cdnEnabled` from
-          // `AWS_ENDPOINT_URL` being set — but `AssetStore.layer` requires the name regardless.
-          "CLOUDFRONT_DISTRIBUTION_ID" -> "E000000TESTONLY",
+          // No `CLOUDFRONT_DISTRIBUTION_ID` here: `localStackInfra` supplies the real one it
+          // created. It used to be a made-up value, needed only because `AssetStore.layer` requires
+          // the name and safe only because a flag kept the client from ever being called.
           "PUBLIC_BASE_URL"            -> "https://portal.test"
         ) ++ localStackInfra()
 

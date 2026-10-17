@@ -65,13 +65,7 @@ final case class AssetStore(
     publicBaseUrl: String,
     s3: S3Client,
     cdn: CloudFrontClient,
-    presigner: S3Presigner,
-    // False against a local endpoint: every invalidation becomes `"skipped-no-cdn"` instead of a
-    // CloudFront call. Set from `endpoint.isEmpty` in the layer, and defaulted to true so that
-    // forgetting to pass it can only ever make the server stricter.
-    //
-    // See *Decisiones de Diseño* for why a local run skips invalidation rather than attempting it.
-    cdnEnabled: Boolean = true):
+    presigner: S3Presigner):
 
   /** The origin the upload page PUTs to, which the MCP App has to declare in its CSP or the browser
     * blocks the request. The host defaults `connect-src` to `'self'`, so an undeclared bucket fails
@@ -144,40 +138,32 @@ final case class AssetStore(
     * `captal locations push` does invalidate, but the whole `<slug>` prefix, because it has just
     * synced the bundle. Writing one file needs neither that reach nor the deploy.
     */
-  def invalidate(slug: String, asset: Asset): ZIO[Any, String, String] =
-    if !cdnEnabled then
-      ZIO.succeed("skipped-no-cdn")
-    else
-      invalidateNow(slug, asset)
+  def invalidate(slug: String, asset: Asset): ZIO[Any, String, String] = invalidateNow(slug, asset)
 
   /** Everything under a location's prefix at once, for the one caller that has just rewritten all
     * of it. [[invalidate]] names a single key because that is all an asset write touches; a bundle
     * copy replaces every file the SPA loads, and enumerating them would be a longer path list
     * saying the same thing.
     */
-  def invalidatePrefix(slug: String): ZIO[Any, String, String] =
-    if !cdnEnabled then
-      ZIO.succeed("skipped-no-cdn")
-    else
-      ZIO
-        .attemptBlocking:
-          val reference = s"mcp-$slug-bundle-${java.lang.System.currentTimeMillis()}"
-          cdn
-            .createInvalidation(
-              CreateInvalidationRequest
+  def invalidatePrefix(slug: String): ZIO[Any, String, String] = ZIO
+    .attemptBlocking:
+      val reference = s"mcp-$slug-bundle-${java.lang.System.currentTimeMillis()}"
+      cdn
+        .createInvalidation(
+          CreateInvalidationRequest
+            .builder()
+            .distributionId(distributionId)
+            .invalidationBatch(
+              InvalidationBatch
                 .builder()
-                .distributionId(distributionId)
-                .invalidationBatch(
-                  InvalidationBatch
-                    .builder()
-                    .callerReference(reference)
-                    .paths(CfPaths.builder().quantity(1).items(s"/$slug/*").build())
-                    .build())
+                .callerReference(reference)
+                .paths(CfPaths.builder().quantity(1).items(s"/$slug/*").build())
                 .build())
-            .invalidation()
-            .id()
-        .mapError(e =>
-          s"Copied the bundle to '$slug' but could not invalidate the CDN: ${e.getMessage}")
+            .build())
+        .invalidation()
+        .id()
+    .mapError(e =>
+      s"Copied the bundle to '$slug' but could not invalidate the CDN: ${e.getMessage}")
 
   /** The shared bundle, copied under one location's own prefix.
     *
@@ -289,25 +275,22 @@ final case class AssetStore(
     * So this polls until CloudFront says `Completed`. That is seconds to minutes, which is what
     * makes the operation that calls it a task rather than a call.
     */
-  def invalidateAndWait(slug: String): ZIO[Any, String, String] =
-    if !cdnEnabled then
-      ZIO.succeed("skipped-no-cdn")
-    else
-      invalidatePrefix(slug).flatMap: id =>
-        val poll = ZIO
-          .attemptBlocking(
-            cdn
-              .getInvalidation(
-                GetInvalidationRequest.builder().distributionId(distributionId).id(id).build())
-              .invalidation()
-              .status())
-          .mapError(e => s"Could not read invalidation $id: ${e.getMessage}")
-        poll
-          .repeatUntil(_ == "Completed")
-          .timeoutFail(
-            s"Invalidation $id was still running after 5 minutes. The edge may still be serving this location's portal, so nothing has been told it is paused yet; check the distribution.")(
-            5.minutes)
-          .as(id)
+  def invalidateAndWait(slug: String): ZIO[Any, String, String] = invalidatePrefix(slug).flatMap:
+    id =>
+      val poll = ZIO
+        .attemptBlocking(
+          cdn
+            .getInvalidation(
+              GetInvalidationRequest.builder().distributionId(distributionId).id(id).build())
+            .invalidation()
+            .status())
+        .mapError(e => s"Could not read invalidation $id: ${e.getMessage}")
+      poll
+        .repeatUntil(_ == "Completed")
+        .timeoutFail(
+          s"Invalidation $id was still running after 5 minutes. The edge may still be serving this location's portal, so nothing has been told it is paused yet; check the distribution.")(
+          5.minutes)
+        .as(id)
 
   /** Everything a location has in the bucket, removed. Returns how many objects went.
     *
@@ -642,10 +625,10 @@ object AssetStore:
       publicBaseUrl <- required("PUBLIC_BASE_URL")
       endpoint      <- System.env("AWS_ENDPOINT_URL").orDie
       s3  <- ZIO.acquireRelease(ZIO.attempt(s3ClientFor(endpoint)))(c => ZIO.succeed(c.close()))
-      cdn <- ZIO.acquireRelease(ZIO.attempt(CloudFrontClient.create()))(c => ZIO.succeed(c.close()))
+      cdn <- ZIO.acquireRelease(ZIO.attempt(cdnClientFor(endpoint)))(c => ZIO.succeed(c.close()))
       presigner <-
         ZIO.acquireRelease(ZIO.attempt(presignerFor(endpoint)))(p => ZIO.succeed(p.close()))
-    yield AssetStore(bucket, distribution, publicBaseUrl, s3, cdn, presigner, endpoint.isEmpty)
+    yield AssetStore(bucket, distribution, publicBaseUrl, s3, cdn, presigner)
 
   /** `AWS_ENDPOINT_URL` points the S3 client somewhere other than AWS — LocalStack, for testing the
     * upload flow without an account.
@@ -661,6 +644,17 @@ object AssetStore:
         S3Client.builder().endpointOverride(URI.create(url)).forcePathStyle(true).build()
       case None =>
         S3Client.create()
+
+  /** The same override, for the same reason. Explicit rather than left to the SDK, which does read
+    * `AWS_ENDPOINT_URL` on its own since 2.21 — four clients here set it by hand, and one relying
+    * on an implicit instead reads as an oversight and invites being "fixed" the wrong way.
+    */
+  private[mcp] def cdnClientFor(endpoint: Option[String]): CloudFrontClient =
+    endpoint match
+      case Some(url) =>
+        CloudFrontClient.builder().endpointOverride(URI.create(url)).build()
+      case None =>
+        CloudFrontClient.create()
 
   private[mcp] def presignerFor(endpoint: Option[String]): S3Presigner =
     endpoint match

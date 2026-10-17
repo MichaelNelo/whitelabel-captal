@@ -1279,13 +1279,17 @@ Ambas excluyen `import()` dinámico — sin eso el portal precargaría todas sus
 
 Medido: quita un round trip del camino crítico, la app monta 143 ms antes a 100 ms de RTT.
 
-### 8. `cdnEnabled`: en local se salta la invalidación, no se intenta
+### 8. La CDN siempre existe
 
-`AssetStore.cdnEnabled` es false contra un endpoint local, y la invalidación responde `"skipped-no-cdn"` en vez de llamar a CloudFront.
+No hay flag para correr sin CloudFront. `AssetStore` invalida siempre, en todos los entornos, y la distribución es un requisito de arranque como el bucket.
 
-Saltarla y no intentarla, porque **no hay caché de borde delante de LocalStack**: la invalidación no está "no disponible", es que no significa nada. Intentarla haría que toda escritura de asset reportara un fallo con el objeto ya escrito — un error que el operador aprende a ignorar, que es la peor clase de error.
+Hubo un `cdnEnabled`, derivado de si `AWS_ENDPOINT_URL` estaba seteado, que convertía toda invalidación local en el string `"skipped-no-cdn"`. Nació de una capacidad ausente —LocalStack Community no tenía CloudFront— y se quedó como si fuera un caso de uso. No lo es: **no hay ningún escenario nuestro sin CDN.** Prepararse para uno costaba tres piezas móviles (un id de distribución inventado en dos entornos, un flag que lo neutralizaba, y dos tests que fijaban el skip en ambas direcciones) y, entre todas, garantizaban que el camino de CloudFront no se ejecutara nunca hasta llegar a AWS.
 
-El argumento original citaba que LocalStack Community contesta 501 a toda llamada a CloudFront. Eso dejó de aplicar al pasar a Pro, y la conclusión sobrevivió a la premisa: con Pro la llamada puede funcionar y sigue sin tener sentido.
+Verificado contra LocalStack Pro antes de borrarlo — crea distribuciones, sirve por ellas, las invalidaciones llegan a `Completed` en el primer poll, y **ejecuta las CloudFront Functions en viewer-request**. O sea el borde es observable en local, que es lo que vuelve testeables tanto la invalidación como las reglas del edge.
+
+Lo que queda en su lugar: `ensureDistribution` crea una distribución por entorno local (una para los tests, otra para `mcp.dev`) y exporta su id real. Y `cdnClientFor(endpoint)` es explícito como los otros cuatro clientes, aunque el SDK lea `AWS_ENDPOINT_URL` por su cuenta desde 2.21 — cuatro explícitos y uno implícito se lee como un olvido.
+
+**La lección general, que es por qué esta entrada es larga:** un flag justificado por una capacidad ausente hay que volver a mirarlo cuando la capacidad aparece. Este sobrevivió al bump de Community a Pro sin que nadie lo notara, y de paso se llevó la cobertura de todo lo que protegía.
 
 ### 9. Medido y descartado
 
