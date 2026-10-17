@@ -6,7 +6,7 @@ import zio.test.*
   *
   * The page is markup: it names its module and carries the video's identity. The protocol — the
   * envelopes, the method names, the one `ui/message` the model ever hears — lives in the bundle
-  * that `mcpui.publish` ships, so that is where it is checked. It used to all be one assertion set
+  * that `client.publish` ships, so that is where it is checked. It used to all be one assertion set
   * against the page, because the page inlined the script.
   *
   * Those protocol strings are still worth pinning for the reason they always were: none of them
@@ -25,28 +25,36 @@ object UploadUiSpec extends ZIOSpecDefault:
     * the entry or the shared chunk — and pinning that would be pinning the bundler's choices rather
     * than the protocol.
     */
+  private def read(name: String): String =
+    val stream = getClass.getResourceAsStream(s"/ui/$name")
+    if stream == null then
+      throw new IllegalStateException(
+        s"/ui/$name is missing. `mcp.test.resources` copies it from `client.bundle`.")
+    else
+      try new String(stream.readAllBytes(), "UTF-8")
+      finally stream.close()
+
+  /** The local modules an entry pulls in, both forms: `from"./x"` for a binding and a bare
+    * `import"./x"` for a side effect.
+    *
+    * Matched by shape rather than by name. While the pages were their own linker run every chunk
+    * was called `chunk-<hash>`; sharing a run with the portal they are named after whatever module
+    * they grew from, so a `chunk-` prefix no longer identifies them — and a regex that silently
+    * matched nothing would leave every protocol assertion below reading an empty string.
+    */
+  private val localImport = """(?:from|import)"\./([^"]+)"""".r
+
+  private def importsOf(text: String): List[String] =
+    localImport.findAllMatchIn(text).map(_.group(1)).toList.distinct
+
+  /** Every shipped `.js` an entry reaches, concatenated. Which file a given string lands in is
+    * Rollup's business — the entry or a shared chunk — and pinning that would be pinning the
+    * bundler's choices rather than the protocol.
+    */
   private val bundled: String =
-    val names = List("upload.js", "unifi.js")
-    val entries = names.map: name =>
-      val stream = getClass.getResourceAsStream(s"/ui/$name")
-      if stream == null then
-        throw new IllegalStateException(
-          s"/ui/$name is missing. `mcp.test.resources` copies it from `mcpui.bundle`.")
-      else
-        try new String(stream.readAllBytes(), "UTF-8")
-        finally stream.close()
-    val chunks =
-      // The chunk's name carries a content hash, so it cannot be listed — it is found by what the
-      // entries import.
-      entries
-        .flatMap("""from"\./(chunk-[A-Za-z0-9_-]+\.js)"""".r.findAllMatchIn)
-        .map(_.group(1))
-        .distinct
-        .map: name =>
-          val stream = getClass.getResourceAsStream(s"/ui/$name")
-          try new String(stream.readAllBytes(), "UTF-8")
-          finally stream.close()
-    (entries ++ chunks).mkString("\n")
+    val entries = List("upload.js", "unifi.js")
+    val reached = entries.flatMap(name => importsOf(read(name))).distinct
+    (entries ++ reached).map(read).mkString("\n")
   end bundled
 
   def spec =
@@ -59,12 +67,36 @@ object UploadUiSpec extends ZIOSpecDefault:
           !page.contains("X-Amz-Signature"),
           !page.contains("uploadUrl\":"),
           // `type="module"` is load-bearing twice over: the entry imports its chunk, and the
-          // browser fetches a module script in CORS mode — which is why `mcpui.publish` sets
+          // browser fetches a module script in CORS mode — which is why `client.publish` sets
           // `Access-Control-Allow-Origin`.
           page.contains("""<script type="module" src="https://cdn.test/ui/upload.js">"""),
           // And the script is named, not carried. This is what the inlining cost 9 KB gzip per
           // `resources/read` to avoid.
           !page.contains("jsonrpc")
+        )
+      ,
+      test("the resource hints carry crossorigin, and are absent when there is nothing to hint"):
+        // `crossorigin` is the whole test. A module script is fetched in CORS mode, and a hint made
+        // without the attribute warms a connection — or fills a cache entry — in the *other* mode,
+        // which the real request cannot use. The browser then fetches twice: the page is correct,
+        // slightly slower than with no hint at all, and nothing anywhere says so.
+        //
+        // The second half pins the direction this degrades in. The names come from the published
+        // entry via `AssetStore.scriptPreloads`, which answers with nothing when it cannot read it —
+        // on the first deploy of an environment, for one — and a page with no hints has to stay a
+        // page that works.
+        val hinted = UploadUi.app(
+          scriptBase,
+          None,
+          "https://cdn.test",
+          Seq("https://cdn.test/ui/chunk-abc.js"))
+        assertTrue(
+          hinted.contains("""<link rel="preconnect" href="https://cdn.test" crossorigin="" />"""),
+          hinted.contains(
+            """<link rel="modulepreload" href="https://cdn.test/ui/chunk-abc.js" crossorigin="" />"""),
+          // The bare page is what every existing call site renders until the store answers.
+          !page.contains("modulepreload"),
+          !page.contains("preconnect")
         )
       ,
       test("the bundle opens the bridge as a client before saying anything"):
@@ -101,17 +133,21 @@ object UploadUiSpec extends ZIOSpecDefault:
           bundled.contains("expiresInSeconds"),
           bundled.contains("resources/read"))
       ,
-      // The two pages share one chunk out of one linker run, which is the whole reason they were
-      // merged into one module. Two self-contained files would each carry the runtime again.
-      test("both entries import the same shared chunk"):
-        val imports = """from"\./(chunk-[A-Za-z0-9_-]+\.js)"""".r
-        def chunkOf(name: String) =
-          val stream = getClass.getResourceAsStream(s"/ui/$name")
-          val text =
-            try new String(stream.readAllBytes(), "UTF-8")
-            finally stream.close()
-          imports.findFirstMatchIn(text).map(_.group(1))
-        assertTrue(chunkOf("upload.js").isDefined, chunkOf("upload.js") == chunkOf("unifi.js"))
+      // The two pages come out of one linker run and share what they have in common instead of
+      // each carrying the runtime again. Asserted as "neither is self-contained, and they overlap"
+      // rather than "both import chunk X": the count and the names of the shared modules are
+      // Rollup's to decide, and change with every entry added to the run.
+      test("the two entries share their common modules rather than duplicating them"):
+        val upload = importsOf(read("upload.js"))
+        val unifi = importsOf(read("unifi.js"))
+        assertTrue(
+          upload.nonEmpty,
+          unifi.nonEmpty,
+          upload.intersect(unifi).nonEmpty,
+          // The protocol lives in a module both reach, which is what makes one copy of `Bridge`
+          // serve both pages.
+          upload.intersect(unifi).exists(name => read(name).contains("ui/message"))
+        )
       ,
       test("addressed per video, the id is in the shell and the host is not needed for it"):
         // `_meta.ui.resourceUri` can only ever name the bare page — it is built before any call has

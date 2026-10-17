@@ -38,7 +38,9 @@ object UnifiUi:
     * host reads and a missing `ui/message`, and a string literal cannot be wrong about those
     * loudly.
     */
-  private val EntryScript = "unifi.js"
+  // `private[mcp]` for the same reason as [[UploadUi.EntryScript]]: the render site asks
+  // [[AssetStore.scriptPreloads]] about this exact entry.
+  private[mcp] val EntryScript = "unifi.js"
 
   /** Minimal, and themed by whatever surrounds it.
     *
@@ -98,11 +100,17 @@ object UnifiUi:
     input(`type` := inputType, id := fieldName, name := fieldName, attr("autocomplete") := "off"),
     em(hint))
 
-  def app(scriptBase: String => String): String =
+  def app(
+      scriptBase: String => String,
+      scriptOrigin: String = "",
+      preloads: Seq[String] = Nil): String =
     "<!doctype html>" +
       html(
         head(
           meta(charset := "utf-8"),
+          // See [[Hints]]: the connection to the CDN and the chunks the entry imports, both named
+          // before the `<script>` at the bottom is reached.
+          Hints(scriptOrigin, preloads),
           // Without this the browser paints an opaque canvas behind the frame — white in light
           // mode — whenever this document's colour scheme differs from the host's, before any
           // script has run. Declaring both opts in to whichever the host is using.
@@ -146,7 +154,7 @@ object UnifiUi:
             )
           ),
           // `type="module"` for the import of the shared chunk — and so the fetch is CORS mode,
-          // which `mcpui.publish` answers with `Access-Control-Allow-Origin: *`.
+          // which `client.publish` answers with `Access-Control-Allow-Origin: *`.
           script(`type` := "module", src := scriptBase(EntryScript))
         )
       ).render

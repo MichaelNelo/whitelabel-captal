@@ -70,6 +70,27 @@ object Auth:
     */
   val TokensWrite: OauthScope = OauthScope("tokens:write")
 
+  /** Standing a location's portal up, and pausing or resuming it.
+    *
+    * Separate from `content:write` because the blast radius is different in kind, not in degree: a
+    * content token writes rows in a database this server owns, and this one creates ECS services,
+    * target groups and listener rules in an account. A leaked content token costs a portal's copy;
+    * a leaked deploy token costs infrastructure.
+    *
+    * `create_location` stays under `content:write` and that is consistent, not an exception — it
+    * writes one row and nothing in AWS. The split only becomes load-bearing once a tool can act on
+    * the account, which is here.
+    */
+  val InfraDeploy: OauthScope = OauthScope("infra:deploy")
+
+  /** Tearing a location's infrastructure down, and deliberately not the same scope as deploying it.
+    *
+    * Destroying is the one operation that loses something: the assets under the slug's prefix go
+    * with it, and nothing recreates them. Whoever deploys all day has no need of that, and a scope
+    * is how `tools/list` can decline to mention it rather than refusing at the call.
+    */
+  val InfraDestroy: OauthScope = OauthScope("infra:destroy")
+
   /** The audience minted into every principal, and the resource this server declares itself to be.
     *
     * The middleware enforces RFC 8707 audience binding unconditionally: a principal whose audience
@@ -92,7 +113,13 @@ object Auth:
     * can be granted. Listed rather than derived so adding a scope is a decision about who gets it
     * rather than something the admin silently acquires.
     */
-  val AllScopes: Set[OauthScope] = Set(I18nWrite, ContentWrite, IdentityWrite, TokensWrite)
+  val AllScopes: Set[OauthScope] = Set(
+    I18nWrite,
+    ContentWrite,
+    IdentityWrite,
+    TokensWrite,
+    InfraDeploy,
+    InfraDestroy)
 
   /** Verifies against the tokens table.
     *

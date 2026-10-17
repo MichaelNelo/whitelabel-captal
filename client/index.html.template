@@ -19,6 +19,13 @@
   </script>
   <link rel="stylesheet" href="{{CSS_PATH}}">
   <link rel="stylesheet" href="./custom-styles.css.gz" onerror="this.remove()">
+  <!-- Written by the build, not by hand: the chunk names carry a content hash. Naming them here is
+       what lets them be requested together with `main.js` instead of after it has been parsed —
+       measured at 119 ms off the critical path with 100 ms of round-trip time.
+       Only the eager ones: a route chunk arrives through a dynamic import, and preloading those
+       would download every view on the first paint, which is the opposite of why the split is
+       there. -->
+{{PRELOADS}}
 </head>
 <body>
   <!-- Fuera de #app y con el mismo markup que el estado de carga de Layout, para que el relevo no

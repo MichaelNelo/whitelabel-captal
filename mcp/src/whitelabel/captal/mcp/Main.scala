@@ -60,6 +60,10 @@ object Main extends ZIOAppDefault:
       p        <- port
       admin    <- adminToken
       resource <- Auth.resourceUri
+      // Before the server is assembled: the registry owns the Tasks runtime, and one that fails to
+      // validate would otherwise become a server that starts and answers every call synchronously.
+      extensions <- CaptalMcp.extensions
+      _          <- SkillsExtension.logSkipped
       // Where this server is reached. Its pages post there and declare it in their CSP, so it has
       // to be the address a browser sees rather than the port we bound — behind an ALB those
       // differ, and a guess that is close but wrong fails only when the operator presses Save.
@@ -74,11 +78,16 @@ object Main extends ZIOAppDefault:
       // is served: the first request would otherwise arrive at a tokens table that is not there.
       _ <- McpMigrate.run
       _ <- ZIO
-        .environment[QuillSqlite & AssetStore]
+        // `Option[InfraStore]` rather than `InfraStore`: a deployment that only edits content has
+        // no cluster configured and no clients to build, and demanding the service here would stop
+        // such a server from starting at all. The layer answers `None` and the deploy tools are
+        // simply not registered.
+        .environment[QuillSqlite & AssetStore & Option[InfraStore]]
         .flatMap: env =>
+          val infra = env.get[Option[InfraStore]]
           // Asked rather than assumed, because the answer is otherwise found by an operator opening
           // a page that renders and does nothing. A warning and not a failure: the artifact belongs
-          // to `mcpui.publish`, so refusing to start would make this server depend on something it
+          // to `client.publish`, so refusing to start would make this server depend on something it
           // does not own — and a new environment reaches here before that has ever run.
           val checkScript = env
             .get[AssetStore]
@@ -113,17 +122,39 @@ object Main extends ZIOAppDefault:
               Server.serve(
                 UiRoutes.routes ++ OauthMetadata.routes(uiOrigin) ++
                   CaptalMcp
-                    .server(Auth.mcpAuth(resource), env, origin, scriptOrigin, uiOrigin)
+                    .server(
+                      Auth.mcpAuth(resource),
+                      env,
+                      origin,
+                      scriptOrigin,
+                      uiOrigin,
+                      infra,
+                      extensions)
                     .statelessRoutes)
+          // The deploy tools are added here rather than to `tools` above because whether they exist
+          // depends on `infra`, which is only known inside this block. Counted for the same reason
+          // as the rest: the number has to track the list, and this one varies per deployment.
+          val registered = tools + DeployTools.all(infra).size
           seeded *> checkScript *>
             ZIO.logInfo(
               s"MCP backoffice on :$p as $resource — ${Skills.all.size} skills, ${CaptalMcp
                   .resources
-                  .size} resources, $tools tools") *> serve
+                  .size} resources, $registered tools${
+                  if infra.isDefined then
+                    ""
+                  else
+                    " (no ECS_CLUSTER, so the deploy, pause and destroy tools are not registered)"
+                }") *> serve
         .provide(
           Server.defaultWithPort(p),
           RqliteDataSource.layer,
           AssetStore.layer,
-          Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase))
+          // Read at startup like the bucket and the distribution, and for the same reason: a
+          // cluster name that turns out to be wrong should stop the server rather than surface on
+          // the first deploy, which is the one call where a mistake creates something.
+          DeployTargets.layer,
+          InfraStore.layer,
+          Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)
+        )
     yield ()
 end Main

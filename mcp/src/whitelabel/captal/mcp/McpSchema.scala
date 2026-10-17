@@ -34,8 +34,16 @@ object McpSchema:
 
   /** `Inline` rather than `Reference`: a `$ref` points into an OpenAPI document that does not exist
     * here, and a host reading `tools/list` has nothing to resolve it against.
+    *
+    * The spec half says which document a `$ref` would point into, and names the right one for a
+    * reader that speaks JSON Schema rather than OpenAPI — `#/$defs/` over `#/components/schemas/`.
+    * `Inline` emits no refs, so it changes nothing today; it is the honest declaration if this ever
+    * stops being inline. Taking the pair at all is what zio-http 3.8 deprecated the bare
+    * `SchemaStyle` in favour of, and 0.10.0 moved this module from 3.0.1 to 3.11.6.
     */
-  private val Style = JsonSchema.SchemaStyle.Inline
+  private val Style = JsonSchema.SchemaRef(
+    JsonSchema.SchemaSpec.JsonSchema,
+    JsonSchema.SchemaStyle.Inline)
 
   private[mcp] def fromSchema[A](schema: Schema[A]): Json.Obj = JsonSchema
     .fromZSchema(schema, Style)

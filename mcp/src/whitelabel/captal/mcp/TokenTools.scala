@@ -21,6 +21,8 @@ enum Grant:
   case content_write
   case identity_write
   case tokens_write
+  case infra_deploy
+  case infra_destroy
 
 object Grant:
   given Schema[Grant] = DeriveSchema.gen
@@ -44,6 +46,10 @@ object Grant:
         Auth.IdentityWrite
       case Grant.tokens_write =>
         Auth.TokensWrite
+      case Grant.infra_deploy =>
+        Auth.InfraDeploy
+      case Grant.infra_destroy =>
+        Auth.InfraDestroy
 end Grant
 
 /** Issuing and revoking operator tokens.

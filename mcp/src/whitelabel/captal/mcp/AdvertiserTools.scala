@@ -12,6 +12,7 @@ import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
 import McpSchema.given
+import QuillArrow.->
 import ToolSchema.readOnly
 
 /** Advertiser tools.

@@ -39,7 +39,10 @@ object UploadUi:
     * copy in its own resources. Which is the same principle that took the content out of the deploy
     * artifact.
     */
-  private val EntryScript = "upload.js"
+  // `private[mcp]` rather than `private`: the render site needs it too, to ask
+  // [[AssetStore.scriptPreloads]] which chunks *this* entry imports. Naming it in two places is
+  // what the hint would otherwise cost.
+  private[mcp] val EntryScript = "upload.js"
 
   /** The page's own styling, kept minimal so the surrounding themes decide how it looks.
     *
@@ -124,11 +127,28 @@ object UploadUi:
     * a video — the title and location are blank and the row is hidden until the host says which
     * video this is.
     */
-  def app(scriptBase: String => String, video: Option[PendingVideo] = None): String =
+  def app(
+      scriptBase: String => String,
+      video: Option[PendingVideo] = None,
+      scriptOrigin: String = "",
+      preloads: Seq[String] = Nil): String =
     "<!doctype html>" +
       html(
         head(
           meta(charset := "utf-8"),
+          // Two hints about the module at the bottom, buying different things.
+          //
+          // `preconnect` is about the origin: the script comes from the CDN and this document from
+          // the server, so the browser has a DNS lookup and a TCP and TLS handshake to do before it
+          // can ask for anything. Named here, that happens while the rest of the head is still
+          // being parsed rather than after.
+          //
+          // `modulepreload` is about the graph: the entry imports chunks whose names only it knows,
+          // so without this the browser must fetch and parse the entry before it can ask for them.
+          // Naming them here is one round trip off the critical path — 107 ms at 100 ms of RTT, 308
+          // at 300. Both are simply absent when the caller has nothing to offer; see
+          // [[AssetStore.scriptPreloads]] for why that is the safe direction to fail in.
+          Hints(scriptOrigin, preloads),
           // Covers the first paint, before any script runs. A browser gives an iframe document an
           // opaque canvas — white in light mode — whenever its colour scheme differs from the
           // embedding page, and that backdrop sits behind everything regardless of what the CSS
@@ -177,7 +197,7 @@ object UploadUi:
             )
           ),
           // `type="module"`, which the entry needs to import its chunk — and which also means the
-          // browser fetches it in CORS mode, unlike a classic script. `mcpui.publish` sets
+          // browser fetches it in CORS mode, unlike a classic script. `client.publish` sets
           // `Access-Control-Allow-Origin: *` for exactly that reason.
           script(`type` := "module", src := scriptBase(EntryScript))
         )

@@ -24,6 +24,7 @@ import zio.schema.annotation.{description, discriminatorName, rejectExtraFields}
 import zio.schema.{DeriveSchema, Schema}
 
 import McpSchema.given
+import QuillArrow.->
 import ToolSchema.readOnly
 
 // The case names are the wire values, lowercase and underscored, which is why they break Scala

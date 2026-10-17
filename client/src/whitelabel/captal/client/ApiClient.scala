@@ -13,13 +13,30 @@ object ApiClient:
     * first path segment and prefix all API calls with `/<slug>/api`. In dev the page is served at
     * `/` and there is no prefix segment, so we fall back to `/api`.
     */
-  private val apiBase: String =
-    val firstSegment = dom.window.location.pathname.split("/").find(_.nonEmpty)
-    firstSegment match
-      case Some(slug) if slug != "api" =>
-        s"/$slug/api"
-      case _ =>
-        "/api"
+  private val firstSegment: Option[String] = dom
+    .window
+    .location
+    .pathname
+    .split("/")
+    .find(_.nonEmpty)
+    .filter(_ != "api")
+
+  private val apiBase: String = firstSegment.fold("/api")(slug => s"/$slug/api")
+
+  /** Served from the same prefix as the page itself, beside `index.html`. */
+  private val maintenanceUrl: String =
+    firstSegment.fold("/maintenance.html")(slug => s"/$slug/maintenance.html")
+
+  /** What the load balancer answers on this location's API path while the portal is paused.
+    *
+    * A paused location has no task running at all, so this does not come from the API — the rule in
+    * front of it answers directly. Which is the point: it is the one failure the portal can tell
+    * apart from an outage, because an outage does not say anything.
+    *
+    * The value has to match what `pause_location` installs, in `InfraStore.PausedBody`. There is no
+    * schema between them: one is a string in a load balancer rule and the other is this.
+    */
+  private val PausedStatus = "paused"
 
   inline def url(path: String): String = s"$apiBase$path"
 
@@ -45,6 +62,11 @@ object ApiClient:
     yield
       if response.ok then
         parser.decode[A](text).left.map(e => ApiError.InternalError(e.getMessage))
+      else if isPaused(text) then
+        // `replace` rather than `assign`, so the paused page is not left in history: the back
+        // button would otherwise return here and bounce straight out again.
+        dom.window.location.replace(maintenanceUrl)
+        Left(ApiError.InternalError("This location is paused for maintenance."))
       else
         parser.decode[ApiError](text) match
           case Right(err) =>
@@ -52,6 +74,19 @@ object ApiClient:
           case Left(_) =>
             Left(ApiError.InternalError(s"HTTP ${response.status}: $text"))
   end fetchApi
+
+  /** Whether this body is the load balancer saying the location is paused.
+    *
+    * Checked on the parsed field rather than by matching the string, so a 503 that merely happens
+    * to contain the word — an error page, a proxy's own message — is not mistaken for one. Every
+    * other failure keeps going down the path it did before: a paused location is a specific answer,
+    * and everything else is still an error to report.
+    */
+  private def isPaused(body: String): Boolean = parser
+    .parse(body)
+    .toOption
+    .flatMap(_.hcursor.get[String]("status").toOption)
+    .contains(PausedStatus)
 
   def get[A: Decoder](path: String): js.Promise[Either[ApiError, A]] = fetchApi("GET", path)
 
