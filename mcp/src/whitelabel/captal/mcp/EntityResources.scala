@@ -183,10 +183,18 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
       uri: String,
       ctx: McpToolContext): ZIO[QuillSqlite & AssetStore, ToolError, Chunk[ResourceContents]] =
     if uri == UnifiUi.Uri then
-      // Static, unlike the upload page: it carries no data at all, because the ticket and the
-      // location arrive with the result of the call that opened it.
-      ZIO.serviceWith[AssetStore](store =>
-        Chunk(McpApps.contents(UnifiUi.AppUri, UnifiUi.app(store.scriptUrl), unifiMeta)))
+      // Static in its data — it carries none, because the ticket and the location arrive with the
+      // result of the call that opened it — but the resource hints still come from the published
+      // entry, so the markup is not a constant either.
+      ZIO.serviceWithZIO[AssetStore](store =>
+        store
+          .scriptPreloads(UnifiUi.EntryScript)
+          .map(preloads =>
+            Chunk(
+              McpApps.contents(
+                UnifiUi.AppUri,
+                UnifiUi.app(store.scriptUrl, store.scriptOrigin, preloads),
+                unifiMeta))))
     else if uri.startsWith(UploadUi.Uri) then
       upload.readResource(uri, ctx)
     else

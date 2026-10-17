@@ -4,17 +4,18 @@ import com.jamesward.ziohttp.mcp.*
 import com.jamesward.ziohttp.mcp.auth.McpAuth
 import whitelabel.captal.core.i18n.{I18n, I18nSchema}
 import whitelabel.captal.infra.schema.QuillSqlite
-import zio.{Chunk, ZEnvironment, ZIO}
+import zio.{Chunk, IO, ZEnvironment, ZIO}
 
 import ToolSchema.visibleTo
 
 /** The read-only half of the backoffice server: everything a host can discover and read before any
   * tool exists to mutate anything.
   *
-  * Skills are served as Resources under the `skill://` convention rather than through the
-  * experimental `skills/list` and `skills/get` methods, because `McpDispatchMethod` is a closed
-  * enum in the SDK — new JSON-RPC methods cannot be registered without patching the library, while
-  * Resources are a first-class primitive that every host already understands.
+  * Skills are served as Resources under the `skill://` convention, and now also over `skills/list`
+  * and `skills/get` — see [[SkillsExtension]] for why both. The resource convention used to be the
+  * only option: `McpDispatchMethod` was a closed enum and a new JSON-RPC method could not be
+  * registered without patching the SDK. 0.10.0 replaced that with a registry of extensions that
+  * carry their own operations, so the choice is now a choice.
   */
 object CaptalMcp:
   val RequiredI18nKeysUri: String = "i18n://required-keys"
@@ -29,8 +30,9 @@ object CaptalMcp:
     s"""Backoffice for the Captal whitelabel captive portal.
        |
        |Content is edited here: translations, surveys and questions, advertisers, videos, and each
-       |location's stylesheet and brand icon. Deployment — pushing a location, deprovisioning one,
-       |bootstrapping infrastructure — still goes through the CLI.
+       |location's stylesheet and brand icon. A location's portal is also stood up here, with
+       |`deploy_location`. Tearing one down is not — nor is the shared infrastructure every location
+       |sits on, which lives in its own repository and is applied with OpenTofu.
        |
        |Call `read_skill` before acting on a request in its area. Each skill is a procedure, not
        |background reading, and they encode constraints that are not visible from the data alone;
@@ -77,6 +79,30 @@ object CaptalMcp:
 
   val resources: List[McpResourceHandler] = requiredI18nKeys :: Skills.all.map(skillResource)
 
+  /** The three extensions this server declares, validated into one registry.
+    *
+    * An effect because of Tasks: its settings carry the runtime, which owns the task store and the
+    * `Ref`s holding running fibers and the promises that wake a handler waiting for input. Nothing
+    * about Apps or Skills needs one — they are capability declarations and a set of operations over
+    * documents in the jar.
+    *
+    * `inMemory` is the store, and that is a decision worth naming: tasks live in this process, so a
+    * task survives a client disconnect but not a task replacement, and `tasks/get` only answers on
+    * the replica that started the work. With one task per location today that is invisible. The
+    * seam for fixing it is `McpTaskStore` — implement it over rqlite and any replica can answer.
+    *
+    * Failure is a programming error: ids must be unique and operations must not shadow a core
+    * method. It is surfaced as a typed failure rather than thrown so that startup reports it as
+    * what it is, rather than as a stack trace from inside server assembly.
+    */
+  val extensions: IO[IllegalStateException, McpExtensions[Any]] = McpTasks
+    .inMemory
+    .flatMap: tasks =>
+      ZIO
+        .fromEither((tasks ++ SkillsExtension.extension).flatMap(_.add(McpApps.serverExtension)))
+        .mapError(error =>
+          new IllegalStateException(s"Could not build the MCP extension registry: $error"))
+
   /** Auth is not optional.
     *
     * The SDK ignores `requireScopes` declarations when no `.auth(...)` is configured — silently, so
@@ -93,11 +119,19 @@ object CaptalMcp:
       // from the same store that signs the URLs, so the policy and the URL cannot disagree.
       uploadOrigin: String,
       // Where the pages' own modules come from, declared in their `resourceDomains`. The same CDN
-      // the portal's assets are served from; `mcpui.publish` puts them under `ui/`.
+      // the portal's assets are served from; `client.publish` puts them under `ui/`.
       scriptOrigin: String,
       // Where this server is reached. The pages it renders post there and declare it in their CSP,
       // which belongs to them rather than to the protocol; see [[UiRoutes]].
       uiOrigin: String,
+      // Absent in a deployment with no `ECS_CLUSTER`, and then the deploy tools are not registered
+      // at all. Passed by value rather than asked for from the environment so the server's type
+      // does not demand a service such a deployment has no layer for.
+      infra: Option[InfraStore],
+      // Apps, Skills and Tasks, already validated. Built in [[Main]] rather than here because the
+      // Tasks runtime is an effect — it owns the task store and the fibers — and this is a pure
+      // assembly that the test suite calls directly.
+      extensions: McpExtensions[Any],
       name: String = "captal-backoffice",
       version: String = "0.1.0"): McpServer[QuillSqlite & AssetStore] =
     /** Default-deny for the rendered pages: a tool is callable from an App only by being named
@@ -126,7 +160,10 @@ object CaptalMcp:
       LocationTools.all ++ I18nTools.all ++ AdvertiserTools.all ++ SurveyTools.all ++
         UnifiTools.all(uiOrigin) ++ TokenTools.all ++ SkillTools.all
     ).map(restrictToApps).foldLeft[McpServer[QuillSqlite]](withPrompts)(_.tool(_))
-    val withAssets = (AssetTools.all ++ VideoTools.all ++ Readiness.all)
+    // `deploy_location` is here rather than above because it copies the shared bundle under the new
+    // slug, which is S3 and therefore `AssetStore`. That copy is the step the CLI did first and
+    // nothing did after it was deleted, so a deployed location answered its API and served no SPA.
+    val withAssets = (AssetTools.all ++ VideoTools.all ++ Readiness.all ++ DeployTools.all(infra))
       .map(restrictToApps)
       .foldLeft[McpServer[QuillSqlite & AssetStore]](withData)(_.tool(_))
     // One source for everything: `McpServer` holds a single `resourceSrc`, so the upload page and
@@ -134,18 +171,14 @@ object CaptalMcp:
     // freshly signed URL and the location's stylesheet, none of which a static handler can reach.
     val withSource = withAssets.resourceSource(
       EntityResources(UploadUiSource(uploadOrigin, scriptOrigin), uiOrigin, scriptOrigin))
-    // Declares `io.modelcontextprotocol/ui`, which is how a host knows the `ui://` resources are
-    // meant to be rendered rather than read. It used to be announced through the resource source's
-    // `capabilities`, now deprecated in favour of this.
+    // The registry carries `io.modelcontextprotocol/ui`, which is how a host knows the `ui://`
+    // resources are meant to be rendered rather than read; `…/skills`, which makes the bundled
+    // documents discoverable; and `…/tasks`, without which a tool's `taskExecution` is inert and
+    // every call answers synchronously.
     //
-    // The registration is an `Either` because extension ids must be unique, and there is exactly
-    // one here. A failure is a programming error that must not be swallowed into a server that
-    // starts and renders nothing.
-    withSource
-      .extension(McpApps.serverExtension)
-      .fold(
-        error =>
-          throw new IllegalStateException(s"Could not declare the MCP Apps extension: $error"),
-        identity)
+    // `withExtensions` replaces rather than merges, which is why the whole registry is assembled in
+    // one place and handed over whole. Validation — duplicate ids, methods shadowing core ones —
+    // happened where it was built.
+    withSource.withExtensions(extensions)
   end server
 end CaptalMcp

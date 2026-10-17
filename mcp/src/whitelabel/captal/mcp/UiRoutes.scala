@@ -9,6 +9,8 @@ import whitelabel.captal.infra.schema.given
 import zio.*
 import zio.http.*
 
+import QuillArrow.->
+
 /** Plain HTTP for the pages this server renders, mounted beside the MCP endpoint.
   *
   * Under `/ui` so the root stays the protocol's. This route is not MCP and deliberately so: a

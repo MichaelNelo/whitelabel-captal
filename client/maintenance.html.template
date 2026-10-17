@@ -21,6 +21,10 @@
   </script>
   <link rel="stylesheet" href="{{CSS_PATH}}">
   <link rel="stylesheet" href="./custom-styles.css.gz" onerror="this.remove()">
+  <!-- Written by the build, not by hand: the chunk names carry a content hash. Naming them here is
+       what lets them be requested together with the entry instead of after it has been parsed, and
+       that is one round trip off the critical path. -->
+{{PRELOADS}}
 </head>
 <body>
   <div class="initial-loader">
@@ -30,6 +34,8 @@
     </div>
   </div>
   <div id="app"></div>
-  <script src="{{JS_PATH}}"></script>
+  <!-- `type="module"` now that this is a public module of the portal's linker run rather than a
+       `NoModule` output of its own: a classic script cannot carry the `import`s the entry has. -->
+  <script type="module" src="{{JS_PATH}}"></script>
 </body>
 </html>

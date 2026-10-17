@@ -106,7 +106,11 @@ final class UploadUiSource(uploadOrigin: String, scriptOrigin: String)
       uri: String,
       ctx: McpToolContext): ZIO[QuillSqlite & AssetStore, ToolError, Chunk[ResourceContents]] =
     if uri == UploadUi.Uri then
-      ZIO.serviceWith[AssetStore](store => page(uri, UploadUi.app(store.scriptUrl)))
+      ZIO.serviceWithZIO[AssetStore](store =>
+        store
+          .scriptPreloads(UploadUi.EntryScript)
+          .map(preloads =>
+            page(uri, UploadUi.app(store.scriptUrl, None, store.scriptOrigin, preloads))))
     else if uri.startsWith(Prefix) then
       pageFor(uri, uri.stripPrefix(Prefix)).mapError(ToolError.apply)
     else
@@ -135,8 +139,9 @@ final class UploadUiSource(uploadOrigin: String, scriptOrigin: String)
             .map(_.slug)
             .getOrElse("—")
         )
-        store <- ZIO.service[AssetStore]
-      yield page(uri, UploadUi.app(store.scriptUrl, Some(pending)))
+        store    <- ZIO.service[AssetStore]
+        preloads <- store.scriptPreloads(UploadUi.EntryScript)
+      yield page(uri, UploadUi.app(store.scriptUrl, Some(pending), store.scriptOrigin, preloads))
       end for
 
   override def readDirectory(

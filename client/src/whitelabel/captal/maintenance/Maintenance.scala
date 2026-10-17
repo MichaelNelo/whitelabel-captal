@@ -1,22 +1,22 @@
 package whitelabel.captal.maintenance
 
+import scala.scalajs.js.annotation.JSExportTopLevel
+
 import com.raquo.laminar.api.L.*
 import org.scalajs.dom
 import whitelabel.captal.client.views.Layout
 
 /** What the edge serves in place of the portal while a location is paused.
   *
-  * A module of its own rather than a second entrypoint of `client`, which was the obvious shape and
-  * turned out to be the expensive one. Scala.js does share internal modules between public modules
-  * of one linker run -- measured, the maintenance module came out at 7 KB, only what it adds -- but
-  * multiple public modules require `ModuleKind.ESModule`, and the Closure Compiler does not run on
-  * ESModule output at all. That took the portal from 247 KB gzipped to 459 KB for every guest, to
-  * save on a page almost nobody sees. Two linker runs, each with Closure, leave the portal
-  * untouched and cost 54 KB here.
+  * A second public module of the portal's own linker run, which is what makes [[Layout]] and the
+  * stylesheet literally the portal's rather than a copy that drifts. The linker shares its internal
+  * modules across the public modules of one run, and dead-code elimination keeps only what this
+  * reaches, so the page costs roughly what it adds.
   *
-  * `moduleDeps = Seq(client)` is what keeps the reuse: [[Layout]] and the stylesheet are the
-  * portal's own, so this looks like the place it stands in front of, and dead-code elimination
-  * keeps only what this reaches -- 197 KB against the portal's 908 KB.
+  * What that gives up is the Closure Compiler: Scala.js runs it only over a single non-ESModule
+  * output, and more than one public module requires `ESModule`. On a linker run of its own this
+  * page was 54 KB gzipped, against 109 KB once the optimizer was gone -- the portal had already
+  * traded Closure away for its route split, so joining it is where that 55 KB goes.
   *
   * It talks to nothing, which is the point. This is what gets shown when the backend is
   * deliberately not there, so anything it needed from the API would be missing exactly when it is
@@ -48,7 +48,11 @@ object Maintenance:
       p(cls  := "maintenance-body", copy.body)),
     footer = div())
 
-  def main(args: Array[String]): Unit =
+  /** Called by the entry stub rather than invoked by the linker: a `main` yields one module
+    * initializer per run, and this run has the portal's.
+    */
+  @JSExportTopLevel(name = "start", moduleID = "maintenance-app")
+  def start(): Unit =
     // The loader is in the markup so something brand-coloured is on screen before this file
     // arrives. Nothing to remove it here: [[Layout]] takes over from it on mount, and because this
     // renders with isLoading false the ring resolves straight into the message.

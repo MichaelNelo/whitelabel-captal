@@ -13,6 +13,7 @@ import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
 import McpSchema.given
+import QuillArrow.->
 import ToolSchema.readOnly
 
 /** Translation tools: the first mutations the backoffice exposes.

@@ -68,6 +68,13 @@ object ToolSchema:
       *
       * Written by hand rather than through `McpApps.tool`, whose metadata requires a `resourceUri`
       * — most tools render nothing and still need to say who may call them.
+      *
+      * Being hand-written is also why every member of the trait has to be forwarded explicitly,
+      * including ones added after this was. `taskPolicy` is the live example: 0.10.0 added it to
+      * the trait with a `TaskPolicy.never` default and added the forward to its own
+      * `AppsToolHandler` in the same change. Leaving it out here would not fail to compile — the
+      * default would quietly apply — and since [[CaptalMcp]] wraps *every* tool in this, one
+      * missing line would make `taskExecution` a no-op server-wide.
       */
     def visibleTo(values: McpAppsVisibility*): McpToolHandlerR[R] =
       val visibility: Json = Json.Arr(
@@ -88,9 +95,11 @@ object ToolSchema:
           original.copy(meta = Some(
             Json.Obj(rest :+ ("ui" -> (Json.Obj(ui :+ ("visibility" -> visibility)): Json)))))
         override def requiredScopes: Set[auth.OauthScope] = handler.requiredScopes
+        override def taskPolicy: TaskPolicy = handler.taskPolicy
         def call(args: Option[Json.Obj]) = handler.call(args)
         override def callWithContext(args: Option[Json.Obj], ctx: McpToolContext) = handler
           .callWithContext(args, ctx)
+      end new
     end visibleTo
   end extension
 end ToolSchema

@@ -10,6 +10,8 @@ import io.getquill.*
 import whitelabel.captal.infra.schema.QuillSqlite
 import zio.*
 
+import QuillArrow.->
+
 /** Operator tokens, in the database rather than in `MCP_TOKENS`.
   *
   * The environment variable could only be edited by whoever deploys, so handing a translator their

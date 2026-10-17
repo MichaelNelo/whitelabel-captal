@@ -29,13 +29,27 @@ object OauthMetadataSpec extends ZIOSpecDefault:
       test("names itself as the issuer"):
         assertTrue(OauthMetadata.document(issuer).toString.contains(s"\"issuer\":\"$issuer\""))
       ,
-      // The same four the middleware enforces. A scope the server rejects calls for and never
+      // The same ones the middleware enforces. A scope the server rejects calls for and never
       // publishes is a contract kept secret from the people who have to satisfy it.
+      //
+      // Spelled out rather than counted, which is what this was. A count fails with "6 was not
+      // equal to 4" and names neither the scope that arrived nor whether publishing it was
+      // intended; the set fails naming it. Adding a scope is meant to land here, because the half
+      // that is easy to forget is `Grant.scopeOf` — a scope no grant maps to can be enforced but
+      // never issued.
       test("publishes exactly the scopes that are enforced"):
         val doc = OauthMetadata.document(issuer).toString
         assertTrue(
           Auth.AllScopes.forall(scope => doc.contains(s"\"$scope\"")),
-          Auth.AllScopes.size == 4)
+          Auth.AllScopes.map(_.toString) ==
+            Set(
+              "i18n:write",
+              "content:write",
+              "identity:write",
+              "tokens:write",
+              "infra:deploy",
+              "infra:destroy")
+        )
       ,
       // It is fetched before any token is presented, so it must not depend on one or leak one.
       test("carries nothing secret"):

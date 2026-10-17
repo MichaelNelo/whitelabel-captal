@@ -13,10 +13,73 @@ private def renderIndex(
     templatePath: os.Path,
     destPath: os.Path,
     jsPath: String,
-    cssPath: String): Unit =
+    cssPath: String,
+    preloads: String = ""): Unit =
   val template = os.read(templatePath)
-  val rendered = template.replace("{{JS_PATH}}", jsPath).replace("{{CSS_PATH}}", cssPath)
+  val rendered = template
+    .replace("{{JS_PATH}}", jsPath)
+    .replace("{{CSS_PATH}}", cssPath)
+    .replace("{{PRELOADS}}", preloads)
   os.write.over(destPath, rendered)
+
+/** A local ES import, in both forms Rollup emits: `from"./x"` for a binding and a bare
+  * `import"./x"` for a side effect.
+  *
+  * Deliberately does not match `import("./x")`, the dynamic form, because the parenthesis is not a
+  * quote. That is what keeps the route chunks out of [[preloadLinks]].
+  */
+private val localImport = """(?:from|import)\s*"\./([^"]+)"""".r
+
+/** `<link rel="modulepreload">` for everything `entry` reaches through static imports.
+  *
+  * Rendered by the build rather than written into the template, because the chunk names carry a
+  * content hash — and derived from the file rather than from a list, so it cannot drift: a preload
+  * naming a hash that is no longer imported is worse than none, since the browser downloads a
+  * chunk it will not use.
+  *
+  * What it buys, measured in a throttled browser against the built page: the dependencies stop being
+  * discovered by parsing the entry and go out together with it, which removes one round trip from
+  * the critical path. The app mounted 143 ms sooner at 100 ms of RTT and 315 ms sooner at 300 ms.
+  *
+  * `fetchpriority="low"` is there because the same measurement showed the other side of it: the
+  * hint also starts 167 KB of JavaScript immediately, and the brand loader in the markup is all the
+  * guest sees until the bundle mounts. Unprioritised, first paint went the wrong way by 88 ms. With
+  * the attribute it comes back to where it was without the hint — 264 ms against 260 — while the
+  * mount stays early, so both ends are ahead of no hint at all. "Sooner, but not ahead of what
+  * renders."
+  *
+  * That holds at 10 Mbps and stops holding below roughly 2. On a 1.6 Mbps profile first paint is
+  * 980 ms either way, and priority has nothing to do with it: it tracks `brand-icon.svg`, which
+  * ends at 965 ms. The loader has no text, so the first contentful paint *is* that image — 730
+  * bytes that need a round trip of their own and queue behind the bundle on a saturated pipe. It
+  * was already 756 ms before any of this; the hint exposed it rather than caused it.
+  *
+  * Left alone deliberately. Fixing it means making the first paint depend on the document alone —
+  * the icon inline as a data URI, the loader's rules in a `<style>`, and `styles.css` out of the
+  * render-blocking path — which would put first paint at one round trip, better than it has ever
+  * been. It is not done because the venue connections this serves are not 1.6 Mbps, and at the
+  * speeds they are, there is nothing left to win.
+  *
+  * Transitive, because a chunk that imports another chunk would otherwise just move the late
+  * discovery one level down.
+  */
+private def preloadLinks(dir: os.Path, entry: String): String =
+  def walk(name: String, seen: Seq[String]): Seq[String] =
+    if seen.contains(name) || !os.exists(dir / name) then seen
+    else
+      localImport
+        .findAllMatchIn(os.read(dir / name))
+        .map(_.group(1))
+        .foldLeft(seen :+ name)((acc, next) => walk(next, acc))
+  walk(entry, Seq.empty)
+    .filterNot(_ == entry)
+    .map(name => s"""  <link rel="modulepreload" fetchpriority="low" href="./$name">""")
+    .mkString("\n")
+
+/** Named once because two places need it: the container every suite runs against, and the image the
+  * end-to-end deploy puts in its task definition — which only has to be something already pulled.
+  */
+private val rqliteVersion = "8.36.2"
 
 /** Ensure an rqlite Docker container is running. Starts one if needed. */
 private def ensureRqlite(containerName: String, hostPort: Int): String =
@@ -53,7 +116,7 @@ private def ensureRqlite(containerName: String, hostPort: Int): String =
         s"$hostPort:4001",
         "-e",
         "SQLITE_EXTENSIONS=sqlean,misc",
-        "rqlite/rqlite:8.36.2")
+        s"rqlite/rqlite:$rqliteVersion")
       .call(check = false, stderr = os.Pipe)
 
     if startResult.exitCode != 0 then
@@ -92,21 +155,121 @@ end ensureRqlite
   * signatures, so the dummy credentials below are enough for the SDK's signer and are never
   * checked.
   */
-/** Shared by `mcp` (which starts the container) and `mcpui` (which publishes into it), so the two
+/** Shared by `mcp` (which starts the container) and `client` (which publishes into it), so the two
   * cannot disagree about where dev assets live.
   */
 private val localStackContainer = "localstack-dev"
 private val devBucket = "captal-assets-dev"
 
-private def ensureLocalStack(containerName: String, hostPort: Int, bucket: String): String =
-  val endpoint = s"http://localhost:$hostPort"
-  val running = os.proc("docker", "ps", "-q", "-f", s"name=$containerName").call().out.trim()
+/** Pinned, and the same for both editions so a developer with a licence and one without are running
+  * the same LocalStack rather than two.
+  *
+  * Not `:3`, which is where this was: a licence is checked against the image, and 3.8.1 (built
+  * 2024-10-08) is refused outright — *"Your LocalStack license requires you to use localstack-pro
+  * version 2026.3.0 or higher"*, after which the container exits 55 and the only trace is in
+  * `docker logs`. LocalStack versions by date now; both repositories publish the same tags.
+  */
+private val localStackVersion = "2026.9.1"
 
-  if running.nonEmpty then
-    println(s"[localstack] '$containerName' already running")
+/** S3 is all the free tier has of what this project touches. */
+private val freeServices = "s3"
+
+/** With a licence, everything `deploy_location` and its test fixture need.
+  *
+  * `ecs` and `elbv2` are the three resources the tool creates beyond the log group, and both are
+  * available from the Base plan — 57 of 77 ECS operations and 38 of 51 ELBv2 ones, including every
+  * call this repo makes. `ec2` is for the fixture rather than the tool: a VPC, subnets and a
+  * security group have to exist before `CreateLoadBalancer` and an awsvpc service will take them.
+  */
+private val licensedServices = "s3,logs,ecs,elbv2,cloudfront,ec2,iam,sts"
+
+/** The LocalStack licence, when the environment has one.
+  *
+  * Both spellings: `LOCALSTACK_AUTH_TOKEN` is what LocalStack documents, `LOCALSTACK_TOKEN` is what
+  * this project's direnv calls it. Never logged — it is a credential, and the only thing worth
+  * reporting is whether one was found.
+  *
+  * Takes the environment rather than reading `System.getenv`, which is wrong in a build: Mill runs
+  * as a daemon that outlives the invocation, so `System.getenv` returns whatever was set when the
+  * daemon started. Configuring the token and re-running then quietly keeps the free tier. `Task.env`
+  * is the launching client's environment, which is what the rest of this file already uses.
+  */
+private def localStackToken(env: Map[String, String]): Option[String] = env
+  .get("LOCALSTACK_AUTH_TOKEN")
+  .orElse(env.get("LOCALSTACK_TOKEN"))
+  .map(_.trim)
+  .filter(_.nonEmpty)
+
+/** The `SERVICES` a running container was actually started with.
+  *
+  * Docker cannot change the environment of a container that is already up, so "running" does not
+  * mean "running what we asked for". Without this check a container started before the licence was
+  * configured gets reused, `ecs` answers 501, and the build still says LocalStack is ready — the
+  * failure then surfaces inside a test as an unhelpful `InternalFailure`.
+  */
+private def localStackServices(containerName: String): Option[String] = os
+  .proc("docker", "inspect", containerName, "--format", "{{range .Config.Env}}{{println .}}{{end}}")
+  .call(check = false, stderr = os.Pipe)
+  .out
+  .lines()
+  .collectFirst { case line if line.startsWith("SERVICES=") => line.stripPrefix("SERVICES=") }
+
+/** The image a running container was started from, for the same reason as the services above: a
+  * version bump has to replace the container, and a licence refused by an old image is reported
+  * only in `docker logs` after an exit 55.
+  */
+private def localStackImage(containerName: String): Option[String] = os
+  .proc("docker", "inspect", containerName, "--format", "{{.Config.Image}}")
+  .call(check = false, stderr = os.Pipe)
+  .out
+  .lines()
+  .headOption
+  .map(_.trim)
+  .filter(_.nonEmpty)
+
+private def ensureLocalStack(
+    containerName: String,
+    hostPort: Int,
+    bucket: String,
+    env: Map[String, String]): String =
+  val endpoint = s"http://localhost:$hostPort"
+  val token = localStackToken(env)
+  val services =
+    if token.isDefined then
+      licensedServices
+    else
+      freeServices
+  val image =
+    if token.isDefined then
+      s"localstack/localstack-pro:$localStackVersion"
+    else
+      s"localstack/localstack:$localStackVersion"
+  val running = os.proc("docker", "ps", "-q", "-f", s"name=$containerName").call().out.trim()
+  val reusable = running.nonEmpty && localStackServices(containerName).contains(services) &&
+    localStackImage(containerName).contains(image)
+
+  if reusable then
+    println(s"[localstack] '$containerName' already running: $image, SERVICES=$services")
   else
+    if running.nonEmpty then
+      println(
+        s"[localstack] '$containerName' is running ${localStackImage(containerName)
+            .getOrElse("<unknown>")} with SERVICES=${localStackServices(containerName)
+            .getOrElse("<unset>")}, replacing it with $image / $services")
     os.proc("docker", "rm", "-f", containerName).call(check = false, stderr = os.Pipe)
-    println(s"[localstack] Starting '$containerName' on port $hostPort...")
+    println(
+      s"[localstack] Starting '$containerName' on port $hostPort (${
+          if token.isDefined then
+            "licensed"
+          else
+            "free tier"
+        })...")
+    // The licensed image, and the Docker socket with it: LocalStack runs an ECS task as a real
+    // container, so without the socket `CreateService` succeeds and no task ever starts.
+    val licensedArgs = token
+      .toSeq
+      .flatMap(value =>
+        Seq("-e", s"LOCALSTACK_AUTH_TOKEN=$value", "-v", "/var/run/docker.sock:/var/run/docker.sock"))
     val started = os
       .proc(
         "docker",
@@ -117,26 +280,59 @@ private def ensureLocalStack(containerName: String, hostPort: Int, bucket: Strin
         "-p",
         s"$hostPort:4566",
         "-e",
-        "SERVICES=s3",
-        "localstack/localstack:3")
+        s"SERVICES=$services",
+        licensedArgs,
+        image)
       .call(check = false, stderr = os.Pipe)
     if started.exitCode != 0 then
       sys.error(s"[localstack] Failed to start: ${started.err.trim()}")
 
     var ready = false
     var attempts = 0
-    while !ready && attempts < 60 do
+    var exited = Option.empty[String]
+    while !ready && exited.isEmpty && attempts < 60 do
       Thread.sleep(1000)
       ready =
         scala.util.Try(os.proc("curl", "-sf", s"$endpoint/_localstack/health").call()).isSuccess
+      // A container that has already stopped will never become ready, and waiting out the full
+      // minute to say so buries the reason. License activation is the case to expect: it exits 55
+      // within a couple of seconds, and the explanation is only in the log.
+      if !ready then
+        exited = os
+          .proc("docker", "ps", "-a", "-f", s"name=$containerName", "--format", "{{.Status}}")
+          .call(check = false, stderr = os.Pipe)
+          .out
+          .lines()
+          .headOption
+          .filter(_.startsWith("Exited"))
       attempts += 1
     if !ready then
       val logs = os
-        .proc("docker", "logs", "--tail", "20", containerName)
+        .proc("docker", "logs", "--tail", "25", containerName)
         .call(check = false, stderr = os.Pipe)
-      sys.error(
-        s"[localstack] Not ready after ${attempts}s.\n${logs.out.trim()}\n${logs.err.trim()}")
+      val why = exited.fold(s"Not ready after ${attempts}s")(status => s"Container $status")
+      sys.error(s"[localstack] $why.\n${logs.out.trim()}\n${logs.err.trim()}")
   end if
+
+  // Asked rather than assumed, because a licence that did not take looks exactly like one that did
+  // until a test calls `ecs` and gets a 501 out of an SDK that reports it as `InternalFailure`. The
+  // health endpoint lists the registry it actually built, so a missing service is caught here with
+  // its own name on it.
+  val declared = services.split(',').toSet
+  val health = os
+    .proc("curl", "-sf", s"$endpoint/_localstack/health")
+    .call(check = false, stderr = os.Pipe)
+    .out
+    .text()
+  val missing = declared.filterNot(service => health.contains(s"\"$service\""))
+  if missing.nonEmpty then
+    sys.error(
+      s"[localstack] ${missing.toList.sorted.mkString(", ")} not in the registry. ${
+          if token.isDefined then
+            "A token was supplied, so either it is not valid for these services or the image does not carry them"
+          else
+            "No LOCALSTACK_AUTH_TOKEN / LOCALSTACK_TOKEN was set, and these are licensed services"
+        }.")
 
   // Idempotent: creating a bucket that exists is not an error worth stopping for.
   os.proc("docker", "exec", containerName, "awslocal", "s3api", "create-bucket", "--bucket", bucket)
@@ -179,6 +375,263 @@ private def ensureLocalStack(containerName: String, hostPort: Int, bucket: Strin
   println(s"[localstack] '$containerName' ready on $endpoint, bucket $bucket (CORS set)")
   endpoint
 end ensureLocalStack
+
+/** One `awslocal` call inside the container, failing loudly with what AWS said.
+  *
+  * `docker exec` rather than the host's `aws`, matching how the bucket is created above and for the
+  * same reasons: `awslocal` ships in the image already pointed at the right endpoint, and it needs
+  * no credentials on the machine running the build.
+  */
+private def awslocal(containerName: String, args: String*): String =
+  val result = os
+    .proc("docker", "exec", containerName, "awslocal", args)
+    .call(check = false, stderr = os.Pipe)
+  if result.exitCode != 0 then
+    sys.error(s"[localstack] awslocal ${args.mkString(" ")} failed: ${result.err.trim()}")
+  result.out.trim()
+
+/** An `awslocal` query that is allowed to find nothing.
+  *
+  * The CLI is inconsistent about absence: a `--query` into an empty list prints `None`, while
+  * `describe-load-balancers --names` for a name that does not exist exits non-zero. Both mean the
+  * same thing here, so both become `None`.
+  */
+private def awslocalOption(containerName: String, args: String*): Option[String] =
+  val result = os
+    .proc("docker", "exec", containerName, "awslocal", args)
+    .call(check = false, stderr = os.Pipe)
+  Option
+    .when(result.exitCode == 0)(result.out.trim())
+    .filter(value => value.nonEmpty && value != "None")
+
+/** The shared infrastructure a deploy assumes already exists, created in LocalStack.
+  *
+  * [[whitelabel.captal.mcp.DeployTools]] creates five resources *per location* and reads the rest
+  * from its environment, because in production those are applied with OpenTofu from another
+  * repository. Nothing was standing them up locally, which is why `mcp.localStackSetup` only ever
+  * made a bucket: the licensed services were available and no cluster, VPC or load balancer existed
+  * for a deploy to attach to.
+  *
+  * Returned as the environment rather than as objects, so a test goes through `DeployTargets.layer`
+  * and `AssetStore.layer` — the same reading of the same variables production does. A fixture that
+  * built `DeployTargets` directly would skip the one part that has already gone wrong once.
+  *
+  * Every step is look-up-or-create, keyed on a `Name` tag, because `create-vpc` is not idempotent:
+  * running twice without the lookup leaves two VPCs and a subnet in whichever one came back first.
+  */
+private def ensureLocalStackInfra(
+    containerName: String,
+    endpoint: String,
+    licensed: Boolean): Map[String, String] =
+  val name = "captal-mcp-test"
+  val region = "us-east-1"
+
+  // Nothing to build without a licence: ECS and ELBv2 are not in the free tier's registry at all.
+  // An empty environment leaves `ECS_CLUSTER` unset, which is the same signal production uses — the
+  // deploy tools are not registered and the end-to-end test skips itself, rather than the suite
+  // failing on a machine that was never going to be able to run it.
+  if !licensed then
+    println(
+      "[localstack] no licence, so no ECS/ELBv2/CloudFront fixture; the deploy end-to-end test will skip")
+    Map.empty
+  else
+
+  // Idempotent on its own, and the only one that is.
+  awslocal(containerName, "ecs", "create-cluster", "--cluster-name", name)
+
+  val vpc = awslocalOption(
+    containerName,
+    "ec2",
+    "describe-vpcs",
+    "--filters",
+    s"Name=tag:Name,Values=$name",
+    "--query",
+    "Vpcs[0].VpcId",
+    "--output",
+    "text").getOrElse:
+    val created = awslocal(
+      containerName,
+      "ec2",
+      "create-vpc",
+      "--cidr-block",
+      "10.0.0.0/16",
+      "--query",
+      "Vpc.VpcId",
+      "--output",
+      "text")
+    awslocal(containerName, "ec2", "create-tags", "--resources", created, "--tags", s"Key=Name,Value=$name")
+    created
+
+  // Two, in different availability zones: `create-load-balancer` refuses a single subnet for an
+  // application load balancer, and that refusal is the kind that arrives as a validation error with
+  // no hint about which input it means.
+  def subnet(suffix: String, cidr: String, zone: String): String = awslocalOption(
+    containerName,
+    "ec2",
+    "describe-subnets",
+    "--filters",
+    s"Name=tag:Name,Values=$name-$suffix",
+    "--query",
+    "Subnets[0].SubnetId",
+    "--output",
+    "text").getOrElse:
+    val created = awslocal(
+      containerName,
+      "ec2",
+      "create-subnet",
+      "--vpc-id",
+      vpc,
+      "--cidr-block",
+      cidr,
+      "--availability-zone",
+      zone,
+      "--query",
+      "Subnet.SubnetId",
+      "--output",
+      "text")
+    awslocal(
+      containerName,
+      "ec2",
+      "create-tags",
+      "--resources",
+      created,
+      "--tags",
+      s"Key=Name,Value=$name-$suffix")
+    created
+
+  val subnetA = subnet("a", "10.0.1.0/24", s"${region}a")
+  val subnetB = subnet("b", "10.0.2.0/24", s"${region}b")
+
+  val securityGroup = awslocalOption(
+    containerName,
+    "ec2",
+    "describe-security-groups",
+    "--filters",
+    s"Name=group-name,Values=$name",
+    s"Name=vpc-id,Values=$vpc",
+    "--query",
+    "SecurityGroups[0].GroupId",
+    "--output",
+    "text").getOrElse(
+    awslocal(
+      containerName,
+      "ec2",
+      "create-security-group",
+      "--group-name",
+      name,
+      "--description",
+      "Captal MCP end-to-end test",
+      "--vpc-id",
+      vpc,
+      "--query",
+      "GroupId",
+      "--output",
+      "text"))
+
+  val loadBalancer = awslocalOption(
+    containerName,
+    "elbv2",
+    "describe-load-balancers",
+    "--names",
+    name,
+    "--query",
+    "LoadBalancers[0].LoadBalancerArn",
+    "--output",
+    "text").getOrElse(
+    awslocal(
+      containerName,
+      "elbv2",
+      "create-load-balancer",
+      "--name",
+      name,
+      "--subnets",
+      subnetA,
+      subnetB,
+      "--security-groups",
+      securityGroup,
+      "--query",
+      "LoadBalancers[0].LoadBalancerArn",
+      "--output",
+      "text"))
+
+  // A fixed 404 as the default action, which is what the real listener does too: every location is
+  // a rule in front of it, and a request matching no rule belongs to no location.
+  val listener = awslocalOption(
+    containerName,
+    "elbv2",
+    "describe-listeners",
+    "--load-balancer-arn",
+    loadBalancer,
+    "--query",
+    "Listeners[0].ListenerArn",
+    "--output",
+    "text").getOrElse(
+    awslocal(
+      containerName,
+      "elbv2",
+      "create-listener",
+      "--load-balancer-arn",
+      loadBalancer,
+      "--protocol",
+      "HTTP",
+      "--port",
+      "80",
+      "--default-actions",
+      "Type=fixed-response,FixedResponseConfig={StatusCode=404,ContentType=text/plain}",
+      "--query",
+      "Listeners[0].ListenerArn",
+      "--output",
+      "text"))
+
+  // The task definition names these; nothing assumes them. They exist so the deploy is reading real
+  // ARNs rather than strings that happen to look like them.
+  val trust =
+    """{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}"""
+  def role(suffix: String): String = awslocalOption(
+    containerName,
+    "iam",
+    "get-role",
+    "--role-name",
+    s"$name-$suffix",
+    "--query",
+    "Role.Arn",
+    "--output",
+    "text").getOrElse(
+    awslocal(
+      containerName,
+      "iam",
+      "create-role",
+      "--role-name",
+      s"$name-$suffix",
+      "--assume-role-policy-document",
+      trust,
+      "--query",
+      "Role.Arn",
+      "--output",
+      "text"))
+
+  println(s"[localstack] infra ready: cluster $name, vpc $vpc, listener ${listener.takeRight(24)}")
+  Map(
+    "AWS_ENDPOINT_URL"         -> endpoint,
+    "AWS_REGION"               -> region,
+    // LocalStack verifies nothing; the SDK's signer only needs a pair to exist. Set here rather
+    // than left to the machine, so the suite does not pick up someone's real profile.
+    "AWS_ACCESS_KEY_ID"        -> "test",
+    "AWS_SECRET_ACCESS_KEY"    -> "test",
+    "ECS_CLUSTER"              -> name,
+    "VPC_ID"                   -> vpc,
+    "SUBNET_IDS"               -> s"$subnetA,$subnetB",
+    "SECURITY_GROUP_ID"        -> securityGroup,
+    "ALB_LISTENER_ARN"         -> listener,
+    "TASK_EXECUTION_ROLE_ARN"  -> role("exec"),
+    "TASK_ROLE_ARN"            -> role("task"),
+    // Deliberately an image that is already on the machine. LocalStack runs an ECS task as a real
+    // container, so a task definition naming an ECR repository nobody can pull would leave the
+    // service trying forever. Nothing here waits for a task to start, but a pull that cannot
+    // succeed is noise in the container's log that looks like a test failure.
+    "API_IMAGE"                -> s"rqlite/rqlite:$rqliteVersion"
+  )
+end ensureLocalStackInfra
 
 // Shared by api.dev and mcp.dev on purpose: the backoffice writes what the portal reads, so they
 // have to be looking at the same database to be worth running together.
@@ -450,162 +903,10 @@ end api
 // Client: JS only (Laminar app)
 // ─────────────────────────────────────────────────────────────────────────────
 
-object mcpui extends BaseJSModule:
-  def mvnDeps = Seq(mvn"org.scala-js::scalajs-dom::2.8.0")
-  // No `mainClass`: los entry points son dos, declarados con `@JSExportTopLevel(moduleID = ...)`
-  // en `UploadApp.start` y `unifi.UnifiApp.start`. Un `main` corre al cargar el módulo, y estas
-  // páginas deciden cuándo arrancar.
-  //
-  // ESModule es obligatorio para emitir más de un módulo público, y cuesta el Closure Compiler
-  // (Scala.js lo corre sólo sobre un output no-ESModule). Medido sobre la app de upload: 26.618
-  // bytes con Closure, 98.254 sin nada, 32.054 con Rollup+terser — o 9.037 / 18.494 / 10.172
-  // gzipeados. Vite recupera el 87%, y el resto se amortiza porque el script pasa a bajarse del
-  // CDN una vez en lugar de viajar inlineado en cada render de la página.
-  def moduleKind = mill.scalajslib.api.ModuleKind.ESModule
-  def moduleSplitStyle = mill.scalajslib.api.ModuleSplitStyle.SmallModulesFor("whitelabel.captal")
-
-  def viteConfig: T[PathRef] = Task.Source(moduleDir / "vite.config.mjs")
-
-  def jsTools: T[PathRef] = Task:
-    val result = os
-      .proc(
-        "npm",
-        "install",
-        "--no-save",
-        "--no-audit",
-        "--no-fund",
-        "--silent",
-        "--prefix",
-        Task.dest.toString,
-        "vite@6.0.7",
-        "terser@5.37.0")
-      .call(check = false, stderr = os.Pipe)
-    if result.exitCode != 0 then
-      sys.error(s"[bundle] npm install failed: ${result.err.trim()}")
-    PathRef(Task.dest)
-
-  /** The hand-written entries that call `start`, staged beside the linker's output. */
-  def entries: T[PathRef] = Task.Source(moduleDir / "entries")
-
-  def bundle = Task:
-    val linked = fullLinkJS().dest.path
-    val project = os.temp.dir(prefix = "captal-mcpui-vite")
-    os.makeDir.all(project / "src")
-    for
-      module <- os.list(linked)
-      if module.ext == "js"
-    do
-      os.copy(module, project / "src" / module.last)
-    // After the linker's output, so a stub named like a public module would be caught as a
-    // collision rather than silently overwriting it.
-    for
-      entry <- os.list(entries().path)
-      if entry.ext == "js"
-    do
-      if os.exists(project / "src" / entry.last) then
-        sys.error(
-          s"[bundle] ${entry.last} is both a hand-written entry and a module the linker emitted. Rename the Scala.js moduleID.")
-      os.copy(entry, project / "src" / entry.last)
-    os.copy(viteConfig().path, project / "vite.config.mjs")
-    os.symlink(project / "node_modules", jsTools().path / "node_modules")
-    val built = os
-      .proc((project / "node_modules" / ".bin" / "vite").toString, "build")
-      .call(cwd = project, check = false, stderr = os.Pipe)
-    if built.exitCode != 0 then
-      sys.error(s"[bundle] vite build failed: ${built.err.trim()}")
-    for
-      output <- os.list(project / "dist")
-      if output.ext == "js"
-    do
-      os.copy(output, Task.dest / output.last)
-    PathRef(Task.dest)
-
-  /** The prefix both pages name. Flat and beside the entries, because Rollup writes the chunk
-    * import as `./chunk-<hash>.js` and the browser resolves that against the entry's own URL.
-    */
-  private val uiPrefix = "ui"
-
-  /** Publish the two pages' scripts. Usage:
-    * `./mill mcpui.publish --bucket captal-dev-assets`
-    *
-    * Three rules, and each one is load-bearing:
-    *
-    *   - **Chunks before entries.** An entry published ahead of the chunk it imports is a 404 on an
-    *     `import`, which renders as a page that loads and does nothing — no error the operator can
-    *     see. The reverse order has no window at all: an unreferenced chunk is inert.
-    *   - **Entries revalidate, chunks are immutable.** The server renders `<script src=".../ui/
-    *     upload.js">` as a constant and must not know anything about the content, so the entry name
-    *     is stable and the browser has to ask whether it changed — a 304 is ~200 bytes against the
-    *     9 KB this replaces. The chunks carry a content hash and are only ever referenced by an
-    *     entry, so they can be cached for a year.
-    *   - **Old chunks are not deleted.** A browser mid-session holds an entry that imports a hash
-    *     this deploy replaced, and CloudFront may still serve a previous entry until `s-maxage`
-    *     runs out. They are small and immutable; collect them by age, never on deploy.
-    *
-    * `Access-Control-Allow-Origin: *` because a `<script type="module">` is fetched in CORS mode,
-    * unlike a classic one — so without it the module fails to load and the page is inert. `*` and
-    * not the sandbox origin: these are three public JavaScript files with no credentials and no
-    * data, and the sandbox origin is derived from our own server URL, so pinning it adds a way to
-    * break without adding protection.
-    */
-  def publish(bucket: String, region: String = "us-east-1", endpoint: String = "") =
-    Task.Command:
-      val src = bundle().path
-      val Revalidate = "public, max-age=0, must-revalidate, s-maxage=86400"
-      val Immutable = "public, max-age=31536000, immutable"
-      val files = os.list(src).filter(os.isFile).map(_.last).sorted
-      val (chunks, entries) = files.partition(_.startsWith("chunk-"))
-      if entries.isEmpty then
-        sys.error(s"[publish] no entries in $src — expected upload.js and unifi.js")
-
-      // Two transports for one operation. Against LocalStack the copy runs *inside* the container
-      // with `awslocal`, which is what `ensureLocalStack` already does and for the same reason:
-      // `aws` is not on the PATH Mill gives a subprocess, so a dev loop that needed it would work
-      // only on a machine that happens to have it. `docker cp` first, since `docker exec` cannot
-      // read a host file.
-      val local = endpoint.nonEmpty
-      def put(name: String, cache: String): Unit =
-        val target = s"s3://$bucket/$uiPrefix/$name"
-        val metadata = Seq(
-          "--content-type",
-          "application/javascript",
-          "--cache-control",
-          cache,
-          "--metadata-directive",
-          "REPLACE")
-        println(s"[publish] $name -> $target")
-        val result =
-          if local then
-            val staged = s"/tmp/$name"
-            val copied = os
-              .proc("docker", "cp", (src / name).toString, s"$localStackContainer:$staged")
-              .call(check = false, stderr = os.Pipe)
-            if copied.exitCode != 0 then
-              sys.error(s"[publish] docker cp failed for $name: ${copied.err.trim()}")
-            os.proc(
-              Seq("docker", "exec", localStackContainer, "awslocal", "s3", "cp", staged, target) ++
-                metadata)
-              .call(check = false, stderr = os.Pipe)
-          else
-            os.proc(
-              Seq("aws", "s3", "cp", (src / name).toString, target, "--region", region) ++
-                metadata)
-              .call(check = false, stderr = os.Pipe)
-        if result.exitCode != 0 then
-          sys.error(s"[publish] s3 cp failed for $name: ${result.err.trim()}")
-      end put
-
-      chunks.foreach(put(_, Immutable))
-      entries.foreach(put(_, Revalidate))
-      println(s"[publish] ${chunks.size} chunk(s) then ${entries.size} entr(ies)")
-
-// `mcpui-unifi` vivía acá, un linker run propio para la segunda MCP App. El argumento era que
-// Closure sólo corre sobre un módulo no-ESModule, así que dos runs daban dos archivos minificados a
-// cambio de duplicar lo común. Medido, el reparto es al revés: el runtime y `Bridge` son 8.881
-// bytes gzip y estaban en los dos archivos, mientras que lo propio de cada página son 1.965 y
-// 1.633. Un run con dos entry points los pone en un chunk hasheado que se cachea, y Rollup+terser
-// recupera el 87% de lo que hacía Closure.
-
+// `mcpui` y `maintenance` vivían acá, cada uno con su propio linker run. Ahora son módulos
+// públicos de `client`: cuatro entry points de un run, con las fuentes bajo `client/src` y los
+// stubs bajo `client/entries`. Lo que cada uno ganaba por separado era su propio runtime — y
+// `maintenance`, además, el Closure Compiler, que no corre sobre output ESModule.
 object client extends BaseJSModule:
   def moduleDeps = Seq(`core-js`, `endpoints-js`)
 
@@ -640,6 +941,9 @@ object client extends BaseJSModule:
   def mvnDeps = Seq(
     mvn"com.raquo::laminar::17.2.0",
     mvn"com.raquo::waypoint::9.0.0",
+    // Declared rather than taken from Laminar's own graph: the MCP App pages use nothing but the
+    // DOM, and a Laminar bump that changed this version would move them without naming them.
+    mvn"org.scala-js::scalajs-dom::2.8.0",
     mvn"io.github.cquiroz::scala-java-time::2.6.0")
 
   // Generate BuildInfo with environment at build time
@@ -673,6 +977,12 @@ object client extends BaseJSModule:
 
   def clientAssets: T[PathRef] = Task.Source(moduleDir / "assets")
   def clientTemplate: T[PathRef] = Task.Source(moduleDir / "index.html.template")
+  def maintenanceTemplate: T[PathRef] = Task.Source(moduleDir / "maintenance.html.template")
+
+  /** The hand-written entries that call `start`, staged beside the linker's output. One per public
+    * module that is not the portal: `main` carries this run's single module initializer.
+    */
+  def entries: T[PathRef] = Task.Source(moduleDir / "entries")
 
   def viteConfig: T[PathRef] = Task.Source(moduleDir / "vite.config.mjs")
 
@@ -724,6 +1034,16 @@ object client extends BaseJSModule:
       if module.ext == "js"
     do
       os.copy(module, project / "src" / module.last)
+    // After the linker's output, so a stub named like a public module is caught as a collision
+    // rather than silently overwriting it.
+    for
+      entry <- os.list(entries().path)
+      if entry.ext == "js"
+    do
+      if os.exists(project / "src" / entry.last) then
+        sys.error(
+          s"[bundle] ${entry.last} is both a hand-written entry and a module the linker emitted. Rename the Scala.js moduleID.")
+      os.copy(entry, project / "src" / entry.last)
     os.copy(viteConfig().path, project / "vite.config.mjs")
     os.symlink(project / "node_modules", jsTools().path / "node_modules")
 
@@ -742,20 +1062,125 @@ object client extends BaseJSModule:
     os.copy(assets / "styles.css", dest / "styles.css")
     os.copy(assets / "brand-icon.svg", dest / "brand-icon.svg")
 
-    // The maintenance page keeps its own linker run, and with it the Closure Compiler: it is a
-    // single module, so nothing about the split applies to it.
-    os.copy(maintenance.fullLinkJS().dest.path / "main.js", dest / "maintenance.js")
-
     // Relative paths so the browser resolves them against the current directory, which in
     // production is https://<host>/<slug>/.
-    renderIndex(clientTemplate().path, dest / "index.html", "./main.js", "./styles.css")
     renderIndex(
-      maintenance.maintenanceTemplate().path,
+      clientTemplate().path,
+      dest / "index.html",
+      "./main.js",
+      "./styles.css",
+      preloadLinks(dest, "main.js"))
+    renderIndex(
+      maintenanceTemplate().path,
       dest / "maintenance.html",
       "./maintenance.js",
-      "./styles.css")
+      "./styles.css",
+      preloadLinks(dest, "maintenance.js"))
 
     PathRef(dest)
+
+  /** The prefix both MCP App pages name. Flat, because Rollup writes the chunk import as
+    * `./<name>-<hash>.js` and the browser resolves that against the entry's own URL.
+    */
+  private val uiPrefix = "ui"
+
+  /** The two entries the MCP App pages load, and nothing else. */
+  private val uiEntries = Seq("upload.js", "unifi.js")
+
+  /** Every local module reachable from `roots`, by reading the `import`s Rollup wrote.
+    *
+    * This exists because of the merge. While the MCP App pages were their own linker run, every
+    * chunk in their bundle belonged to them and `publish` could take the whole directory. Sharing a
+    * run with the portal means the directory now also holds `main.js`, `maintenance.js` and the
+    * portal's route chunks, none of which belong under `ui/` — and the chunks the two pages *do*
+    * import are shared with the portal, so they cannot be told apart by name either. The only
+    * honest selector left is the import graph.
+    */
+  private def moduleClosure(dir: os.Path, roots: Seq[String]): Set[String] =
+    val Import = """(?:from|import)\s*"\./([^"]+)"""".r
+    def walk(name: String, seen: Set[String]): Set[String] =
+      if seen.contains(name) || !os.exists(dir / name) then seen
+      else
+        Import
+          .findAllMatchIn(os.read(dir / name))
+          .map(_.group(1))
+          .foldLeft(seen + name)((acc, next) => walk(next, acc))
+    roots.foldLeft(Set.empty[String])((acc, root) => walk(root, acc))
+
+  /** Publish the two MCP App pages' scripts. Usage:
+    * `./mill client.publish --bucket captal-dev-assets`
+    *
+    * Three rules, and each one is load-bearing:
+    *
+    *   - **Chunks before entries.** An entry published ahead of the chunk it imports is a 404 on an
+    *     `import`, which renders as a page that loads and does nothing — no error the operator can
+    *     see. The reverse order has no window at all: an unreferenced chunk is inert.
+    *   - **Entries revalidate, chunks are immutable.** The server renders `<script src=".../ui/
+    *     upload.js">` as a constant and must not know anything about the content, so the entry name
+    *     is stable and the browser has to ask whether it changed — a 304 is ~200 bytes against the
+    *     9 KB this replaces. The chunks carry a content hash and are only ever referenced by an
+    *     entry, so they can be cached for a year.
+    *   - **Old chunks are not deleted.** A browser mid-session holds an entry that imports a hash
+    *     this deploy replaced, and CloudFront may still serve a previous entry until `s-maxage`
+    *     runs out. They are small and immutable; collect them by age, never on deploy.
+    *
+    * `Access-Control-Allow-Origin: *` because a `<script type="module">` is fetched in CORS mode,
+    * unlike a classic one — so without it the module fails to load and the page is inert. `*` and
+    * not the sandbox origin: these are public JavaScript files with no credentials and no data, and
+    * the sandbox origin is derived from our own server URL, so pinning it adds a way to break
+    * without adding protection.
+    */
+  def publish(bucket: String, region: String = "us-east-1", endpoint: String = "") =
+    Task.Command:
+      val src = bundle().path
+      val Revalidate = "public, max-age=0, must-revalidate, s-maxage=86400"
+      val Immutable = "public, max-age=31536000, immutable"
+      val missing = uiEntries.filterNot(name => os.exists(src / name))
+      if missing.nonEmpty then
+        sys.error(s"[publish] missing from $src: ${missing.mkString(", ")}")
+      val (entries, chunks) =
+        moduleClosure(src, uiEntries).toSeq.sorted.partition(uiEntries.contains)
+
+      // Two transports for one operation. Against LocalStack the copy runs *inside* the container
+      // with `awslocal`, which is what `ensureLocalStack` already does and for the same reason:
+      // `aws` is not on the PATH Mill gives a subprocess, so a dev loop that needed it would work
+      // only on a machine that happens to have it. `docker cp` first, since `docker exec` cannot
+      // read a host file.
+      val local = endpoint.nonEmpty
+      def put(name: String, cache: String): Unit =
+        val target = s"s3://$bucket/$uiPrefix/$name"
+        val metadata = Seq(
+          "--content-type",
+          "application/javascript",
+          "--cache-control",
+          cache,
+          "--metadata-directive",
+          "REPLACE")
+        println(s"[publish] $name -> $target")
+        val result =
+          if local then
+            val staged = s"/tmp/$name"
+            val copied = os
+              .proc("docker", "cp", (src / name).toString, s"$localStackContainer:$staged")
+              .call(check = false, stderr = os.Pipe)
+            if copied.exitCode != 0 then
+              sys.error(s"[publish] docker cp failed for $name: ${copied.err.trim()}")
+            os.proc(
+              Seq("docker", "exec", localStackContainer, "awslocal", "s3", "cp", staged, target) ++
+                metadata)
+              .call(check = false, stderr = os.Pipe)
+          else
+            os.proc(
+              Seq("aws", "s3", "cp", (src / name).toString, target, "--region", region) ++
+                metadata)
+              .call(check = false, stderr = os.Pipe)
+        if result.exitCode != 0 then
+          sys.error(s"[publish] s3 cp failed for $name: ${result.err.trim()}")
+      end put
+
+      chunks.foreach(put(_, Immutable))
+      entries.foreach(put(_, Revalidate))
+      println(s"[publish] ${chunks.size} chunk(s) then ${entries.size} entr(ies)")
 
   /** Publish the bundle to S3 under `<bucket>/<prefix>/`. Replaces 4 manual `aws s3 cp` invocations
     * and ensures Content-Type / Content-Encoding metadata stay consistent.
@@ -847,11 +1272,25 @@ end client
 // ─────────────────────────────────────────────────────────────────────────────
 
 object mcp extends BaseModule:
-  // 3.9.0 only because zio-http-mcp is: every release from 0.6.0 on is built with it, so their
-  // TASTy is 28.9 and a 3.8 compiler refuses to read it outright. The dependency on MCP Apps is
-  // what forces the version. Backward compatibility covers the other direction, so `core` and
-  // `infra` stay where they are and this module reads them.
-  def scalaVersion = "3.9.0"
+  // Pinned to whatever zio-http-mcp was built with, and nothing else: 0.10.0 ships TASTy 28.10,
+  // which a 3.9 compiler refuses outright ("expected stable TASTy from 28.0 to 28.9"). It was 3.9.0
+  // for 0.8.3 and 3.8.4 before that, for the same reason each time.
+  //
+  // Forward compatibility is the direction TASTy does not have, so this follows the dependency
+  // upward and `core`, `infra` and the rest stay on 3.8.0 — backward compatibility covers reading
+  // them from here. Which is also why it is only this module: 3.10 breaks Quill, and `api` writes
+  // far more SQL than the backoffice does.
+  //
+  // What 3.10 breaks is every `update(_.column -> lift(value))`, because `->` became an inline
+  // extension method and Quill's parser matches the `ArrowAssoc.->` call that no longer appears in
+  // the tree. Quill 4.8.6 is the last release and predates 3.10, so that is permanent; the module
+  // compiles because [[whitelabel.captal.mcp.QuillArrow]] puts the call back. Read it before
+  // touching a Quill assignment here, and expect the same failure in any module moved to 3.10.
+  def scalaVersion = "3.10.0"
+  // Its own, because scalafix refuses `removeUnused` on 3.10 — the file says why. `mcp.test` sets
+  // it again rather than inheriting: `ScalaTests` picks up `scalaVersion` from here but is its own
+  // `ScalafixModule`, so it reads the root config unless told otherwise.
+  def scalafixConfig = Task(Some(moduleDir / ".scalafix.conf"))
   def moduleDeps = Seq(core, infra)
   // The AWS SDK ships `netty-nio-client` for its *async* clients, and that client pins netty
   // 4.1.x. zio-http is on 4.2.x, where `DefaultHeaders` moved to `netty-codec-base` — so the
@@ -860,13 +1299,37 @@ object mcp extends BaseModule:
   // `S3Client`/`CloudFrontClient`/`S3Presigner`, which use `apache-client`, so the async client
   // is dead weight. Excluding it is what keeps the server able to answer at all.
   def mvnDeps = Seq(
-    // 0.8.3 rather than 0.5.0 for MCP Apps. `ResourceContents` gained a `_meta` field, which is
-    // where the Apps contract puts the CSP — and without it the upload page's PUT to S3 dies as
-    // `blocked:csp`, with nowhere to declare the bucket's origin. It also brings `McpApps`, which
-    // replaces the `_meta` decorator this repo hand-rolled before the SDK had one.
-    mvn"com.jamesward::zio-http-mcp:0.8.3",
+    // 0.8.3 brought MCP Apps: `ResourceContents` gained the `_meta` the Apps contract puts the CSP
+    // in, without which the upload page's PUT dies as `blocked:csp`, plus `McpApps` to replace the
+    // `_meta` decorator this repo hand-rolled.
+    //
+    // 0.10.0 for `TaskExecution`, which is what makes a long call safe: the tool declares its own
+    // policy and the *server* decides, rather than the client opting in per request. `Required`
+    // answers `-32021` to a client that cannot poll, instead of running synchronously and being
+    // cut off by a transport timeout. 0.8.3 had the task machinery and no way to ask for it.
+    //
+    // It also lands `skills/list` / `skills/get` as a primitive. `read_skill` stays regardless:
+    // the resources story already showed that a primitive existing is not the same as a host
+    // handing it to the model.
+    mvn"com.jamesward::zio-http-mcp:0.10.0",
+    // Named explicitly only to force 3.0.10 over the 3.0.9 the tree resolves to. Scala 3.10's own
+    // notes list it among the libraries to upgrade *before* the compiler, and it is the one on that
+    // list whose breakage would be invisible here: izumi-reflect is where `Tag` comes from, so a
+    // mismatch surfaces as a ZLayer that cannot find a service at runtime, not as a compile error.
+    // The rest of that list is either already current — zio 2.1.26, which 0.10.0 pulls in on its
+    // own — or absent from this classpath (zio-blocks, neotype).
+    mvn"dev.zio::izumi-reflect:3.0.10",
     mvn"software.amazon.awssdk:s3:2.29.51".exclude("software.amazon.awssdk" -> "netty-nio-client"),
     mvn"software.amazon.awssdk:cloudfront:2.29.51".exclude(
+      "software.amazon.awssdk" -> "netty-nio-client"),
+    // What standing up a location's portal takes: the service, the target group and its listener
+    // rule, and the log group the task writes to. `netty-nio-client` excluded as above — these are
+    // all synchronous calls, and the async client would pull in a second HTTP stack beside
+    // zio-http's.
+    mvn"software.amazon.awssdk:ecs:2.29.51".exclude("software.amazon.awssdk" -> "netty-nio-client"),
+    mvn"software.amazon.awssdk:elasticloadbalancingv2:2.29.51".exclude(
+      "software.amazon.awssdk" -> "netty-nio-client"),
+    mvn"software.amazon.awssdk:cloudwatchlogs:2.29.51".exclude(
       "software.amazon.awssdk" -> "netty-nio-client"),
     mvn"com.lihaoyi::scalatags:0.13.1",
     mvn"org.slf4j:slf4j-nop:1.7.36"
@@ -906,7 +1369,7 @@ object mcp extends BaseModule:
     os.copy(defaultStyles().path, Task.dest / "default-styles.css")
     // The MCP Apps' code is no longer carried here. It used to be: the page inlined it, because a
     // `<script src>` looked impossible under the iframe's CSP. It is not — `resourceDomains` maps
-    // to `script-src` among others — so the scripts are published to the CDN by `mcpui.publish`
+    // to `script-src` among others — so the scripts are published to the CDN by `client.publish`
     // and the page names them by a stable URL. The server does not hold them and does not know
     // their content, which is the same reason the content itself stopped travelling in the deploy
     // artifact.
@@ -916,7 +1379,7 @@ object mcp extends BaseModule:
   private val devPort = 8081
 
   def localStackSetup() = Task.Command:
-    ensureLocalStack(localStackContainer, localStackPort, devBucket)
+    ensureLocalStack(localStackContainer, localStackPort, devBucket, Task.env)
 
   def stopLocalStack() = Task.Command:
     os.proc("docker", "rm", "-f", localStackContainer).call(check = false)
@@ -948,7 +1411,7 @@ object mcp extends BaseModule:
       sys.error("[dev] Migrations failed; the server would start against a schema-less database.")
 
     println("[dev] Step 3/4: Ensuring LocalStack...")
-    val endpoint = ensureLocalStack(localStackContainer, localStackPort, devBucket)
+    val endpoint = ensureLocalStack(localStackContainer, localStackPort, devBucket, Task.env)
 
     println(s"[dev] Step 4/4: Starting MCP backoffice on :$port")
 
@@ -1016,10 +1479,22 @@ object mcp extends BaseModule:
       .call(env = env, stdin = os.Inherit, stdout = os.Inherit, stderr = os.Inherit)
 
   object test extends ScalaTests with ScalafmtModule with ScalafixModule:
-    // zio-test 2.1.26 to match what zio-http-mcp 0.5.0 pulls in; the rest of the build is on
-    // 2.1.14 and stays there.
-    def mvnDeps = Seq(mvn"dev.zio::zio-test:2.1.26", mvn"dev.zio::zio-test-sbt:2.1.26")
+    // zio-test 2.1.26 to match what zio-http-mcp pulls in; the rest of the build is on 2.1.14 and
+    // stays there. Scala 3.10's own notes name 2.1.26 as the version to be on before the compiler,
+    // so this module and the one it tests now agree for two independent reasons.
+    def mvnDeps = Seq(
+      mvn"dev.zio::zio-test:2.1.26",
+      mvn"dev.zio::zio-test-sbt:2.1.26",
+      // `TestClient`, which serves this server's own routes to a client with no socket between
+      // them. What that buys is the half the end-to-end spec could not otherwise reach: JSON-RPC
+      // dispatch, the auth middleware, and decoding from raw JSON rather than from a codec round
+      // trip. Matched to the zio-http that zio-http-mcp pulls in — a testkit from a different
+      // minor would be a second `Client` trait.
+      mvn"dev.zio::zio-http-testkit:3.11.6"
+    )
     def testFramework = "zio.test.sbt.ZTestFramework"
+    // The same exception the module itself takes; see `mcp.scalafixConfig`.
+    def scalafixConfig = mcp.scalafixConfig
 
     /** The published bundle, carried as a *test* resource.
       *
@@ -1037,7 +1512,7 @@ object mcp extends BaseModule:
       val dest = Task.dest / "ui"
       os.makeDir.all(dest)
       for
-        file <- os.list(mcpui.bundle().path)
+        file <- os.list(client.bundle().path)
         if file.ext == "js"
       do
         os.copy(file, dest / file.last)
@@ -1047,6 +1522,10 @@ object mcp extends BaseModule:
     // each other's rows.
     private val rqlitePort = 4012
     private val rqliteContainer = "rqlite-mcp-test"
+
+    // The end-to-end spec's own, for the reason given at `migratedE2eUrl`.
+    private val e2ePort = 4013
+    private val e2eContainer = "rqlite-mcp-e2e"
 
     /** The container's id and URL, as one input.
       *
@@ -1094,22 +1573,117 @@ object mcp extends BaseModule:
       */
     def migratedRqliteUrl: T[String] = Task:
       // The stamp, not `rqliteUrl`, so a recreated container invalidates this.
-      val url = rqliteStamp().split(" ").last
+      migrateSchema(rqliteStamp().split(" ").last, infra.runClasspath(), runClasspath())
+
+    /** Both schemas against one URL, in order, as two processes.
+      *
+      * In order because the second checks the first has run: the API owns every table the portal
+      * reads, and the backoffice owns only its tokens.
+      *
+      * Through `Migrate` and `McpMigrate` rather than a Flyway assembled here, which is not a
+      * matter of taste. rqlite reports a rejected statement inside an HTTP 200 and the driver turns
+      * that into zero rows, so DDL run without `Migrate`'s DataSource wrapper does nothing and
+      * Flyway records it as applied.
+      */
+    private def migrateSchema(
+        url: String,
+        apiClassPath: Seq[PathRef],
+        mcpClassPath: Seq[PathRef]): String =
       val env = Map("DB_URL" -> url)
       def migrate(label: String, classPath: Seq[PathRef], mainClass: String): Unit =
-        println(s"[migrate] $label ...")
+        println(s"[migrate] $label ($url) ...")
         val result = os
           .proc("java", "-cp", classPath.map(_.path).mkString(":"), mainClass)
           .call(env = env, check = false, stderr = os.Pipe, stdout = os.Pipe)
         if result.exitCode != 0 then
           sys.error(s"[migrate] $label failed:\n${result.err.text().trim}")
-      migrate("api schema", infra.runClasspath(), "whitelabel.captal.infra.Migrate")
-      migrate("backoffice schema", runClasspath(), "whitelabel.captal.mcp.McpMigrate")
+      migrate("api schema", apiClassPath, "whitelabel.captal.infra.Migrate")
+      migrate("backoffice schema", mcpClassPath, "whitelabel.captal.mcp.McpMigrate")
       url
 
-    // RqliteDataSource reads `database.jdbcUrl`, which infra's application.conf overrides from DB_URL.
+    /** A database of its own for the end-to-end spec, for the reason this module already has one of
+      * its own rather than sharing `api.test`'s: suites that share a schema clear each other's rows.
+      *
+      * One level down, the same thing was happening inside this module. Advertisers and the three
+      * identification surveys are deployment-wide rather than scoped to a location, so on a shared
+      * database `get_location_readiness` counts what every other spec wrote — and the end-to-end
+      * run watched `SurveyToolsSpec` delete, between two of its own calls, the survey it had just
+      * read. Isolation is what lets that spec assert on exactly what it created.
+      */
+    private def e2eStamp: T[String] = Task.Input:
+      val url = ensureRqlite(e2eContainer, e2ePort)
+      val id = os.proc("docker", "ps", "-q", "-f", s"name=$e2eContainer").call().out.trim()
+      s"$id $url"
+
+    def migratedE2eUrl: T[String] = Task:
+      migrateSchema(e2eStamp().split(" ").last, infra.runClasspath(), runClasspath())
+
+    /** LocalStack's container, its endpoint, and whether a licence was configured — as one input.
+      *
+      * The same shape as [[rqliteStamp]] and for the same reason, plus one more: the licence belongs
+      * in the cache key. `Task.env` read inside a cached task would be the environment of whichever
+      * invocation happened to populate the cache, so configuring a token and re-running would reuse
+      * an empty fixture and the end-to-end test would skip itself with no explanation.
+      */
+    private def localStackStamp: T[String] = Task.Input:
+      val licensed = localStackToken(Task.env).isDefined
+      val endpoint = ensureLocalStack(localStackContainer, localStackPort, devBucket, Task.env)
+      val id = os.proc("docker", "ps", "-q", "-f", s"name=$localStackContainer").call().out.trim()
+      s"$id $endpoint $licensed"
+
+    /** The cluster, network and load balancer a deploy attaches to, as the environment that names
+      * them. Empty without a licence; see [[ensureLocalStackInfra]].
+      */
+    def localStackInfra: T[Map[String, String]] = Task:
+      val parts = localStackStamp().split(" ")
+      ensureLocalStackInfra(localStackContainer, parts(1), parts(2).toBoolean)
+
+    /** A bucket of this suite's own, so no spec writes into the one `mcp.dev` serves.
+      *
+      * The end-to-end spec publishes a bundle and clears the prefix first to make its own fixture
+      * deterministic — it had been counting an object a previous version of itself left behind. On
+      * the dev bucket that clearing would delete a developer's assets, which is not a thing a test
+      * gets to do.
+      */
+    def testBucket: T[String] = Task:
+      val name = "captal-assets-mcp-test"
+      // The stamp, so a recreated container gets the bucket again.
+      localStackStamp()
+      os.proc(
+        "docker",
+        "exec",
+        localStackContainer,
+        "awslocal",
+        "s3api",
+        "create-bucket",
+        "--bucket",
+        name)
+        .call(check = false, stderr = os.Pipe)
+      name
+
+    /** What the server reads at startup, so a test exercises the real layers.
+      *
+      * `RqliteDataSource` reads `database.jdbcUrl`, which infra's application.conf overrides from
+      * `DB_URL`. The asset variables are here rather than in each spec because `AssetStore.layer`
+      * requires all three, and the end-to-end test builds the whole server rather than a store.
+      *
+      * The database is created and migrated outside the deploy on purpose: it is not something a
+      * location provisions, and `DB_URL` is a value the server knows in advance and injects into
+      * every task definition it registers.
+      */
     override def forkEnv: T[Map[String, String]] = Task:
-      super.forkEnv() ++ Map("DB_URL" -> migratedRqliteUrl())
+      super.forkEnv() ++
+        Map(
+          "DB_URL"                     -> migratedRqliteUrl(),
+          // The end-to-end spec builds its own data source from this rather than reading `DB_URL`,
+          // which every other spec resolves through `application.conf`.
+          "E2E_DB_URL"                 -> migratedE2eUrl(),
+          "ASSETS_BUCKET"              -> testBucket(),
+          // Never called against LocalStack — `AssetStore` derives `cdnEnabled` from
+          // `AWS_ENDPOINT_URL` being set — but `AssetStore.layer` requires the name regardless.
+          "CLOUDFRONT_DISTRIBUTION_ID" -> "E000000TESTONLY",
+          "PUBLIC_BASE_URL"            -> "https://portal.test"
+        ) ++ localStackInfra()
 
     def stopRqlite() = Task.Command:
       os.proc("docker", "rm", "-f", rqliteContainer).call(check = false)
@@ -1117,16 +1691,6 @@ object mcp extends BaseModule:
   end test
 end mcp
 
-/** The page the edge serves in place of the portal while a location is paused.
-  *
-  * Its own module rather than a second entrypoint of `client`: two public modules in one linker run
-  * need `ModuleKind.ESModule`, which turns the Closure Compiler off entirely -- measured at 247 KB
-  * gzipped for the portal today against 459 KB that way. Two linker runs each keep Closure, so the
-  * portal is untouched and this costs 54 KB. `moduleDeps` is what preserves the reuse the shared
-  * entrypoint was for: the views and stylesheet are the portal's, and dead-code elimination drops
-  * everything this does not reach.
-  */
-object maintenance extends BaseJSModule:
-  def moduleDeps = Seq(client)
-  def mainClass = Some("whitelabel.captal.maintenance.Maintenance")
-  def maintenanceTemplate: T[PathRef] = Task.Source(moduleDir / "maintenance.html.template")
+// La página de pausa era `object maintenance`, con su propio linker run y por lo tanto con el
+// Closure Compiler. Ahora es el cuarto módulo público de `client`; su template vive en
+// `client/maintenance.html.template` y su stub en `client/entries/maintenance.js`.

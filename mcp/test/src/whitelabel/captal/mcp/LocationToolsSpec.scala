@@ -9,6 +9,8 @@ import whitelabel.captal.infra.{LocationRow, RqliteDataSource}
 import zio.*
 import zio.test.*
 
+import QuillArrow.->
+
 /** `locations.slug` is UNIQUE and rqlite does enforce it — but it reports the rejection as a field
   * inside an HTTP 200, which the driver turns into zero rows affected rather than an exception.
   * Disabling the Scala pre-check leaves the row correctly unwritten and degrades the message to
