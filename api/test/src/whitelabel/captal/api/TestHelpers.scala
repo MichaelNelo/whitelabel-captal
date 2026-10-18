@@ -147,13 +147,25 @@ object TestHelpers:
     decode[NextIdentificationSurvey](body).toOption
 
   def postEmailAnswer(backend: SttpBackend[Task, Any], sessionCookie: String, email: String) =
-    basicRequest
-      .post(uri"http://test/api/survey/email")
-      .cookie("captal_session", sessionCookie)
-      .body(s"""{"answer":{"type":"text","value":"$email"}}""")
-      .contentType("application/json")
-      .response(asStringAlways)
-      .send(backend)
+    postRawBody(backend, sessionCookie, "email", s"""{"answer":{"type":"text","value":"$email"}}""")
+
+  /** A body exactly as given, with no typed request in between.
+    *
+    * Every other helper builds valid JSON, which is the point of them and the reason nothing here
+    * has ever exercised an invalid one. `ProtocolRejectionSuite` needs to send what a client would
+    * never send, so the body has to arrive unexamined.
+    */
+  def postRawBody(
+      backend: SttpBackend[Task, Any],
+      sessionCookie: String,
+      survey: String,
+      body: String) = basicRequest
+    .post(uri"http://test/api/survey/$survey")
+    .cookie("captal_session", sessionCookie)
+    .body(body)
+    .contentType("application/json")
+    .response(asStringAlways)
+    .send(backend)
 
   def postProfilingAnswer(
       backend: SttpBackend[Task, Any],
