@@ -80,7 +80,8 @@ object SessionEndpoint:
         if allowedPhases.isEmpty || allowedPhases.contains(session.phase) then
           ZIO.unit
         else
-          ZIO.fail(ApiError.WrongPhase(session.phase.toString, allowedPhases.map(_.toString).toList))
+          ZIO.fail(
+            ApiError.WrongPhase(session.phase.toString, allowedPhases.map(_.toString).toList))
       _ <- SessionContext.set(session)
     yield session
 

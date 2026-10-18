@@ -8,10 +8,10 @@ import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.survey.question.TextRule
 import whitelabel.captal.core.{survey, user, video}
 import whitelabel.captal.platform.*
-import whitelabel.captal.platform.surveySchemas.given
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
+import whitelabel.captal.platform.surveySchemas.given
 import zio.*
 
 object TestFixtures:

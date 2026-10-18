@@ -14,12 +14,8 @@ object LocaleSessionSuite:
     * `path` are the same attribute to a browser, and the two libraries need not agree on which to
     * write.
     */
-  private def attributesOf(header: String): Set[String] = header
-    .split(";")
-    .drop(1)
-    .map(_.trim.toLowerCase)
-    .filter(_.nonEmpty)
-    .toSet
+  private def attributesOf(header: String): Set[String] =
+    header.split(";").drop(1).map(_.trim.toLowerCase).filter(_.nonEmpty).toSet
 
   val suite: Spec[TestEnv, Throwable] =
     zio
@@ -87,7 +83,7 @@ object LocaleSessionSuite:
             statusResp <- getStatus(backend, None)
             cookie = extractSessionCookie(statusResp).get
             localeResp <- putSetLocale(backend, "en", Some(cookie))
-            fromTapir = statusResp.header("Set-Cookie").map(attributesOf)
+            fromTapir     = statusResp.header("Set-Cookie").map(attributesOf)
             fromConverted = localeResp.header("Set-Cookie").map(attributesOf)
           yield assertTrue(fromConverted == fromTapir, fromConverted.contains(Set("path=/"))) ??
             s"tapir=${statusResp.header("Set-Cookie")} converted=${localeResp.header("Set-Cookie")}"

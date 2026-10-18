@@ -12,6 +12,7 @@ import whitelabel.captal.mcp.{QuillArrow, Writes}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
+import whitelabel.captal.platform.surveySchemas.given
 import whitelabel.captal.platform.{
   AdvertiserVideoRow,
   AnswerRow,
@@ -24,7 +25,6 @@ import whitelabel.captal.platform.{
   SurveyRow,
   surveySchemas
 }
-import whitelabel.captal.platform.surveySchemas.given
 import zio.*
 import zio.schema.annotation.{description, discriminatorName, rejectExtraFields}
 import zio.schema.{DeriveSchema, Schema}
@@ -973,8 +973,7 @@ object SurveyTools:
           .util
           .Try(java.time.LocalDate.parse(rule.value))
           .toOption
-          .toRight(
-            s"The ${rule.kind} rule needs an ISO date (yyyy-mm-dd), got '${rule.value}'.")
+          .toRight(s"The ${rule.kind} rule needs an ISO date (yyyy-mm-dd), got '${rule.value}'.")
         bound
           .map: value =>
             rule.kind match
@@ -1209,7 +1208,7 @@ object SurveyTools:
           ZIO.when(o.text.isEmpty)(ZIO.fail(s"Option ${i + 1} has no text.")) *>
             validateTexts(o.text, s"option ${i + 1}")
       ruleConfigs <- ZIO.foreach(ruleSpecs)(ZIO.fromEither)
-      _ <-
+      _           <-
         ZIO.when(hierarchyLevel.isDefined && surveyCategory != "location")(
           ZIO.fail("hierarchyLevel only applies to questions in a location survey."))
       _ <- ZIO.when(points < 0)(ZIO.fail(s"Points must not be negative, got $points."))

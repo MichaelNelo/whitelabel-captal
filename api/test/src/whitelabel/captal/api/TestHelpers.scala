@@ -5,23 +5,21 @@ import io.circe.syntax.*
 import sttp.client3.*
 import sttp.client3.testing.SttpBackendStub
 import sttp.monad.MonadError
-import whitelabel.captal.core.application.commands.NextIdentificationSurvey.given
 import whitelabel.captal.core.application.commands.{
   NextAdvertiserSurvey,
   NextIdentificationSurvey,
   NextVideo
 }
-import whitelabel.captal.core.survey.question.codecs.given
 import whitelabel.captal.core.survey.question.{AnswerValue, OptionId}
 import whitelabel.captal.messages.AdvertiserSurveyResponse.given
 import whitelabel.captal.messages.AnswerRequest.given
-import whitelabel.captal.messages.SurveyResponse
 import whitelabel.captal.messages.SurveyResponse.given
 import whitelabel.captal.messages.VideoResponse.given
 import whitelabel.captal.messages.VideoWatchedResponse.given
 import whitelabel.captal.messages.{
   AdvertiserSurveyResponse,
   AnswerRequest,
+  SurveyResponse,
   VideoResponse,
   VideoWatchedResponse
 }
@@ -101,6 +99,7 @@ object TestHelpers:
                     .headers
                     .toList
                     .map(h => sttp.model.Header(h.headerName, h.renderedValue)))
+  end serveZioHttp
 
   /** Every route the dev server mounts, with the test environment supplied.
     *
@@ -112,9 +111,11 @@ object TestHelpers:
     .map: env =>
       val localeRoutes = env.get[LocaleRoutes]
       serveZioHttp(
-        (HealthRoutes.routes ++ env.get[FinishRoutes].routes ++ localeRoutes.routes ++
-          localeRoutes.devRoutes ++ env.get[VideoRoutes].routes ++ env.get[SurveyRoutes].routes ++
-          env.get[AdvertiserSurveyRoutes].routes).provideEnvironment(env))
+        (
+          HealthRoutes.routes ++ env.get[FinishRoutes].routes ++ localeRoutes.routes ++
+            localeRoutes.devRoutes ++ env.get[VideoRoutes].routes ++ env.get[SurveyRoutes].routes ++
+            env.get[AdvertiserSurveyRoutes].routes
+        ).provideEnvironment(env))
 
   /** The health check, which is the one route already off tapir. */
   def getHealth(backend: SttpBackend[Task, Any]) = basicRequest

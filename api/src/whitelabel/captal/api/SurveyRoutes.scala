@@ -166,8 +166,7 @@ final class SurveyRoutes(
         userCookie = updated
           .flatMap(_.userId)
           .map(uid => userCookieConfig.asSetCookie(uid.asString))
-      yield (result, userCookie)
-    ,
+      yield (result, userCookie),
     answerProfiling.implement: (cookie, request) =>
       for
         _          <- identifying(cookie)
@@ -177,8 +176,7 @@ final class SurveyRoutes(
           answerFlow
             .execute(AnswerProfilingCommand(answer = request.answer, occurredAt = now))
             .map(SurveyResponse.from))
-      yield result
-    ,
+      yield result,
     answerLocation.implement: (cookie, request) =>
       for
         _          <- identifying(cookie)
@@ -188,8 +186,7 @@ final class SurveyRoutes(
           answerFlow
             .execute(AnswerLocationCommand(answer = request.answer, occurredAt = now))
             .map(SurveyResponse.from))
-      yield result
-    ,
+      yield result,
     nextSurvey.implement: cookie =>
       for
         session <- SessionEndpoint.authorise(
@@ -222,8 +219,7 @@ final class SurveyRoutes(
                 .mapError(ApiError.fromThrowable)
             case _ =>
               ZIO.unit
-      yield result
-    ,
+      yield result,
     status.implement: (cookies, userAgentOpt, clientMac, apMac, redirectUrl, ssid, clickId) =>
       val userAgent = userAgentOpt.getOrElse(defaultUserAgent)
       // Build portalParams only when both clientMac AND click_id are present (both required by
@@ -243,15 +239,12 @@ final class SurveyRoutes(
             None
       for
         _         <- softValidateApMac(apMac, clientMac)
-        onMissing <- resolveOnMissing(
-          userCookieConfig.valueFrom(cookies),
-          userAgent,
-          portalParams)
-        session <- SessionEndpoint.resolveSession(cookieConfig.valueFrom(cookies), onMissing)
-        _       <- SessionContext.set(session)
-        now     <- Clock.instant
-        isExpired = session.phase == Phase.Authorized &&
-          session.accessExpiresAt.exists(_.isBefore(now))
+        onMissing <- resolveOnMissing(userCookieConfig.valueFrom(cookies), userAgent, portalParams)
+        session   <- SessionEndpoint.resolveSession(cookieConfig.valueFrom(cookies), onMissing)
+        _         <- SessionContext.set(session)
+        now       <- Clock.instant
+        isExpired =
+          session.phase == Phase.Authorized && session.accessExpiresAt.exists(_.isBefore(now))
         response <-
           if isExpired then
             // Reset the session: phase → Welcome, clear userId and current* fields. The user
@@ -269,6 +262,7 @@ final class SurveyRoutes(
                 Option(session.redirectUrl).filter(_.nonEmpty),
                 StatusResponse.secondsRemainingFrom(session.accessExpiresAt, now)))
       yield (response, Some(cookieConfig.asSetCookie(session.sessionId.asString)))
+      end for
   )
 
 end SurveyRoutes
