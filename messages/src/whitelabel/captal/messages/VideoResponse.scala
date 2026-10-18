@@ -1,7 +1,6 @@
 package whitelabel.captal.messages
 
 import io.circe.generic.semiauto.*
-import io.circe.syntax.*
 import io.circe.{Decoder as CirceDecoder, Encoder as CirceEncoder}
 import whitelabel.captal.core.application.NextStep
 import whitelabel.captal.core.application.commands.NextVideo
@@ -28,22 +27,21 @@ object VideoResponse:
       case n: NextStep =>
         Step(n)
 
-  given CirceEncoder[VideoResponse] = CirceEncoder.instance:
-    case Video(data) =>
-      data.asJson.deepMerge(io.circe.Json.obj("type" -> "video".asJson))
-    case Step(data) =>
-      data.asJson.deepMerge(io.circe.Json.obj("type" -> "step".asJson))
-
-  given CirceDecoder[VideoResponse] = CirceDecoder.instance: cursor =>
-    cursor
-      .get[String]("type")
-      .flatMap:
-        case "video" =>
-          cursor.as[NextVideo].map(Video.apply)
-        case "step" =>
-          cursor.as[NextStep].map(Step.apply)
-        case other =>
-          Left(io.circe.DecodingFailure(s"Unknown type: $other", cursor.history))
+  /** Derived, where this was a hand-written pair flattening the payload under a `type` field.
+    *
+    * The flattening is what had to go: zio-http's `Endpoint` serialises with a zio-schema `Schema`,
+    * and a `Schema` that merges a nested object's fields into its parent's and puts a discriminator
+    * beside them is not something the library can express. So both sides are derived and the shape
+    * is the derivations' — `{"Video":{"data":{…}}}` rather than `{…,"type":"video"}`.
+    *
+    * Nothing read those bytes directly. The browser and the suites both decode to this enum and
+    * match on it, so the change is confined to the two derivations, with `WireContractSuite`
+    * holding them to one shape. Compare `ApiError`, whose two hand-written matches had silently
+    * disagreed for the twenty-two variants its decoder never covered: the risk in writing a codec
+    * twice is structural, and deriving is what removes it.
+    */
+  given CirceEncoder[VideoResponse] = CirceEncoder.AsObject.derived
+  given CirceDecoder[VideoResponse] = CirceDecoder.derived
 end VideoResponse
 
 final case class MarkVideoWatchedRequest(durationWatched: Int, completed: Boolean)

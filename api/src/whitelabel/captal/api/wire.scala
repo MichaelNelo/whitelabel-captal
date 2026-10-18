@@ -1,8 +1,16 @@
 package whitelabel.captal.api
 
-import whitelabel.captal.core.application.Phase
+import whitelabel.captal.core.application.commands.NextVideo
+import whitelabel.captal.core.application.{NextStep, Phase}
 import whitelabel.captal.core.i18n.I18n
-import whitelabel.captal.messages.{ApiError, SetLocaleRequest, StatusResponse}
+import whitelabel.captal.messages.{
+  ApiError,
+  MarkVideoWatchedRequest,
+  SetLocaleRequest,
+  StatusResponse,
+  VideoResponse,
+  VideoWatchedResponse
+}
 import zio.schema.{DeriveSchema, Schema}
 
 /** The server's half of the wire format, for the routes that have left tapir.
@@ -51,5 +59,14 @@ object wire:
     * only who writes it. `DeriveSchema.gen` reaches the nested types on its own.
     */
   given Schema[I18n] = DeriveSchema.gen[I18n]
+
+  // ─── Video ────────────────────────────────────────────────────────────────
+
+  // `NextStep` carries a `Phase`, so it is derived after the instance above and not before.
+  given Schema[NextStep] = DeriveSchema.gen[NextStep]
+  given Schema[NextVideo] = DeriveSchema.gen[NextVideo]
+  given Schema[VideoResponse] = DeriveSchema.gen[VideoResponse]
+  given Schema[MarkVideoWatchedRequest] = DeriveSchema.gen[MarkVideoWatchedRequest]
+  given Schema[VideoWatchedResponse] = DeriveSchema.gen[VideoWatchedResponse]
 
 end wire

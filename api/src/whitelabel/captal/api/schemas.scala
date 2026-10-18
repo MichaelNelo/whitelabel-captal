@@ -71,12 +71,10 @@ object schemas:
   given Schema[ApiError] = Schema.string
   given Schema[StatusResponse] = Schema.derived
   given Schema[AnswerRequest] = Schema.derived
-  given Schema[VideoResponse] = Schema.anyObject
-  given Schema[MarkVideoWatchedRequest] = Schema.derived
-  given Schema[VideoWatchedResponse] = Schema.derived
   given Schema[AdvertiserSurveyResponse] = Schema.anyObject
 
-  // `SetLocaleRequest` and the ten of the translation bundle were here. They went with
-  // `LocaleRoutes`, which was the only thing that asked for them — this object shrinks as routes
-  // convert, and empties when the last one does.
+  // `SetLocaleRequest`, the ten of the translation bundle and the three video types were here.
+  // Each went with the routes that asked for it — this object shrinks as routes convert, and
+  // empties when the last one does. What is left is what `SurveyRoutes`,
+  // `AdvertiserSurveyRoutes` and `SessionEndpoint` still need.
 end schemas

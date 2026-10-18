@@ -315,14 +315,13 @@ object Main extends ZIOAppDefault:
   private def endpoints(
       locationSlug: Option[String],
       surveyRoutes: SurveyRoutes,
-      videoRoutes: VideoRoutes,
       advertiserSurveyRoutes: AdvertiserSurveyRoutes): List[ZServerEndpoint[FullEnv, Any]] =
-    // `HealthRoutes`, `FinishRoutes` and `LocaleRoutes` left this list: they are zio-http `Routes`
-    // now rather than tapir endpoints, so they join at the outer layer where the two are already
-    // the same type. This list shrinks as each remaining route converts; the `devEndpoints` flag
-    // went with `LocaleRoutes`, which owned the only dev route.
+    // Health, finish, the four locale routes and the two video ones left this list: they are
+    // zio-http `Routes` now rather than tapir endpoints, so they join at the outer layer where the
+    // two are already the same type. This list shrinks as each remaining route converts; the
+    // `devEndpoints` flag went with `LocaleRoutes`, which owned the only dev route.
     val base =
-      surveyRoutes.routes.map(_.widen[FullEnv]) ++ videoRoutes.routes.map(_.widen[FullEnv]) ++
+      surveyRoutes.routes.map(_.widen[FullEnv]) ++
         advertiserSurveyRoutes.routes.map(_.widen[FullEnv])
     locationSlug match
       case Some(slug) =>
@@ -334,9 +333,8 @@ object Main extends ZIOAppDefault:
   private def apiRoutes(
       locationSlug: Option[String],
       surveyRoutes: SurveyRoutes,
-      videoRoutes: VideoRoutes,
       advertiserSurveyRoutes: AdvertiserSurveyRoutes) = ZioHttpInterpreter().toHttp(
-    endpoints(locationSlug, surveyRoutes, videoRoutes, advertiserSurveyRoutes))
+    endpoints(locationSlug, surveyRoutes, advertiserSurveyRoutes))
 
   private def loggingMiddleware[R]: Middleware[R] =
     new Middleware[R]:
@@ -447,8 +445,11 @@ object Main extends ZIOAppDefault:
       devEndpoints: Boolean,
       locationSlug: Option[String],
       localeRoutes: LocaleRoutes,
-      finishRoutes: FinishRoutes): Routes[FinishRoutes.FullEnv & LocaleRoutes.FullEnv, Nothing] =
-    val base = HealthRoutes.routes ++ finishRoutes.routes ++ localeRoutes.routes
+      videoRoutes: VideoRoutes,
+      finishRoutes: FinishRoutes)
+      : Routes[FinishRoutes.FullEnv & LocaleRoutes.FullEnv & VideoRoutes.FullEnv, Nothing] =
+    val base =
+      HealthRoutes.routes ++ finishRoutes.routes ++ localeRoutes.routes ++ videoRoutes.routes
     val converted =
       if devEndpoints then
         base ++ localeRoutes.devRoutes
@@ -465,11 +466,12 @@ object Main extends ZIOAppDefault:
       videoRoutes: VideoRoutes,
       advertiserSurveyRoutes: AdvertiserSurveyRoutes,
       finishRoutes: FinishRoutes): Routes[FullEnv, Response] =
-    val api = apiRoutes(locationSlug, surveyRoutes, videoRoutes, advertiserSurveyRoutes)
+    val api = apiRoutes(locationSlug, surveyRoutes, advertiserSurveyRoutes)
     // Where tapir's interpreted output and the converted routes meet: `toHttp` already produces a
     // zio-http `Routes`, so a route that no longer goes through tapir joins with the same `++`.
     // That is what lets this move one route at a time with the build green in between.
-    val served = convertedRoutes(devEndpoints, locationSlug, localeRoutes, finishRoutes) ++ api
+    val served =
+      convertedRoutes(devEndpoints, locationSlug, localeRoutes, videoRoutes, finishRoutes) ++ api
     val baseRoutes =
       if devMode then
         devLinkerOutput(devStaticRoutes(locationSlug) ++ served ++ spaCatchAllRoutes(locationSlug))
@@ -565,7 +567,7 @@ object Main extends ZIOAppDefault:
         advertiserSurveyRoutes <- ZIO.service[AdvertiserSurveyRoutes]
         finishRoutes           <- ZIO.service[FinishRoutes]
         cookieConfig           <- ZIO.service[SessionCookieConfig]
-        ep = endpoints(settings.locationSlug, surveyRoutes, videoRoutes, advertiserSurveyRoutes)
+        ep = endpoints(settings.locationSlug, surveyRoutes, advertiserSurveyRoutes)
         // Both halves, so a converted route does not quietly drop out of the startup log. `ep` is
         // only what tapir still interprets; the rest are zio-http `Route`s, which carry the same
         // information under a different name.
@@ -573,6 +575,7 @@ object Main extends ZIOAppDefault:
           settings.devEndpoints,
           settings.locationSlug,
           localeRoutes,
+          videoRoutes,
           finishRoutes)
         routeInfos =
           ep.map: e =>

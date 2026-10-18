@@ -3,13 +3,24 @@ package whitelabel.captal.api.suites
 import io.circe.syntax.*
 import io.circe.{Decoder as CirceDecoder, Encoder as CirceEncoder}
 import whitelabel.captal.api.wire.given
-import whitelabel.captal.core.application.Phase
+import whitelabel.captal.core.application.commands.NextVideo
+import whitelabel.captal.core.application.{NextStep, Phase}
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.messages.ApiError.given
+import whitelabel.captal.messages.MarkVideoWatchedRequest.given
 import whitelabel.captal.messages.SetLocaleRequest.given
 import whitelabel.captal.messages.StatusResponse.given
+import whitelabel.captal.messages.VideoResponse.given
+import whitelabel.captal.messages.VideoWatchedResponse.given
 import whitelabel.captal.messages.i18n.given
-import whitelabel.captal.messages.{ApiError, SetLocaleRequest, StatusResponse}
+import whitelabel.captal.messages.{
+  ApiError,
+  MarkVideoWatchedRequest,
+  SetLocaleRequest,
+  StatusResponse,
+  VideoResponse,
+  VideoWatchedResponse
+}
 import zio.schema.codec.JsonCodec
 import zio.schema.{DeriveSchema, Schema}
 import zio.test.*
@@ -227,5 +238,22 @@ object WireContractSuite:
         agreement("ApiError", every),
         agreement("StatusResponse", statuses),
         agreement("SetLocaleRequest", List(SetLocaleRequest("es"), SetLocaleRequest("en"))),
-        agreement("I18n", List(bundle)))
+        agreement("I18n", List(bundle)),
+        // Both branches of the discriminated response, and `NextVideo`'s two `Option` fields each
+        // way — this is the type whose wire shape the migration changed, so it is the one where a
+        // derivation drifting apart would be least visible from the outside.
+        agreement(
+          "VideoResponse",
+          List(
+            VideoResponse.Video(NextVideo("https://cdn.test/a.mp4", 30, Some("Title"), Some("Desc"))),
+            VideoResponse.Video(NextVideo("https://cdn.test/b.mp4", 15, None, None)),
+            VideoResponse.Step(NextStep(Phase.AdvertiserVideoSurvey)),
+            VideoResponse.Step(NextStep(Phase.Ready))
+          )),
+        agreement(
+          "MarkVideoWatchedRequest",
+          List(
+            MarkVideoWatchedRequest(30, completed = true),
+            MarkVideoWatchedRequest(0, completed = false))),
+        agreement("VideoWatchedResponse", List(VideoWatchedResponse("advertiser_video_survey"))))
 end WireContractSuite
