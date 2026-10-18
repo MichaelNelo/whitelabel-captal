@@ -7,6 +7,16 @@ import whitelabel.captal.core.user
 import zio.test.*
 
 object PhaseValidationSuite:
+
+  /** An option id that refers to nothing, for the tests that only need a request to exist.
+    *
+    * Every endpoint here is expected to refuse on the phase alone, before the body means anything,
+    * so what the option points at is irrelevant. It was the string `"any-option"`, which said so
+    * more plainly but is not an id — and now that the suites build their bodies with the same
+    * encoder the browser uses, a body has to be one a browser could have sent.
+    */
+  private val AnyOption = "44444444-4444-4444-4444-444444444444"
+
   val suite: Spec[TestEnv, Throwable] =
     zio
       .test
@@ -225,12 +235,12 @@ object PhaseValidationSuite:
             // Action endpoints — all must reject with wrong_phase + "Authorized"
             nextSurveyResp <- getNextSurvey(backend, cookie)
             emailResp      <- postEmailAnswer(backend, cookie, "x@example.com")
-            profilingResp  <- postProfilingAnswer(backend, cookie, "any-option")
-            locationResp   <- postLocationAnswer(backend, cookie, "any-option")
+            profilingResp  <- postProfilingAnswer(backend, cookie, AnyOption)
+            locationResp   <- postLocationAnswer(backend, cookie, AnyOption)
             nextVideoResp  <- getNextVideo(backend, cookie)
             watchedResp    <- postMarkVideoWatched(backend, cookie, 10, completed = true)
             nextAdvResp    <- getNextAdvertiserSurvey(backend, cookie)
-            advAnswerResp  <- postAdvertiserAnswer(backend, cookie, "any-option")
+            advAnswerResp  <- postAdvertiserAnswer(backend, cookie, AnyOption)
             finishResp     <- postFinish(backend, cookie)
           yield assertTrue(
             // /status — open

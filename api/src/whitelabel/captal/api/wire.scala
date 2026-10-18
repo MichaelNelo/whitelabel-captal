@@ -1,16 +1,20 @@
 package whitelabel.captal.api
 
-import whitelabel.captal.core.application.commands.NextVideo
+import whitelabel.captal.core.application.commands.{NextAdvertiserSurvey, NextVideo}
 import whitelabel.captal.core.application.{NextStep, Phase}
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.messages.{
+  AdvertiserSurveyResponse,
+  AnswerRequest,
   ApiError,
   MarkVideoWatchedRequest,
   SetLocaleRequest,
   StatusResponse,
+  SurveyResponse,
   VideoResponse,
   VideoWatchedResponse
 }
+import whitelabel.captal.platform.surveySchemas.given
 import zio.schema.{DeriveSchema, Schema}
 
 /** The server's half of the wire format, for the routes that have left tapir.
@@ -68,5 +72,16 @@ object wire:
   given Schema[VideoResponse] = DeriveSchema.gen[VideoResponse]
   given Schema[MarkVideoWatchedRequest] = DeriveSchema.gen[MarkVideoWatchedRequest]
   given Schema[VideoWatchedResponse] = DeriveSchema.gen[VideoWatchedResponse]
+
+  // ─── Survey ───────────────────────────────────────────────────────────────
+
+  // The tree itself is in `platform.surveySchemas`, because `question_rules.rule_config` and
+  // `answers.answer_value` hold the same bytes this serves — one description for the column and
+  // the response, shared with the MCP backoffice that writes them. What is left here is the two
+  // wrappers, which only a response has.
+  given Schema[SurveyResponse] = DeriveSchema.gen[SurveyResponse]
+  given Schema[AnswerRequest] = DeriveSchema.gen[AnswerRequest]
+  given Schema[NextAdvertiserSurvey] = DeriveSchema.gen[NextAdvertiserSurvey]
+  given Schema[AdvertiserSurveyResponse] = DeriveSchema.gen[AdvertiserSurveyResponse]
 
 end wire

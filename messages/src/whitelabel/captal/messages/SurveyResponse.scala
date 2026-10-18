@@ -1,6 +1,5 @@
 package whitelabel.captal.messages
 
-import io.circe.syntax.*
 import io.circe.{Decoder as CirceDecoder, Encoder as CirceEncoder}
 import whitelabel.captal.core.application.NextStep
 import whitelabel.captal.core.application.commands.NextIdentificationSurvey
@@ -13,9 +12,10 @@ import whitelabel.captal.core.application.commands.NextIdentificationSurvey
   * browser build compiled against tapir to satisfy declarations it never reads. The `Schema` for
   * this type stayed behind in `schemas`.
   *
-  * The discriminator is written and read by hand rather than derived, because the two cases are
-  * flattened into the same object rather than nested under a key — the client reads `type` and then
-  * the fields beside it.
+  * The discriminator was written and read by hand, flattening each case's payload into the same
+  * object rather than nesting it under a key. That is what a zio-schema `Schema` cannot describe,
+  * so both sides are derived now — see `VideoResponse`, which made the same move for the same
+  * reason.
   */
 enum SurveyResponse:
   case Survey(data: NextIdentificationSurvey)
@@ -29,20 +29,6 @@ object SurveyResponse:
       case n: NextStep =>
         Step(n)
 
-  given CirceEncoder[SurveyResponse] = CirceEncoder.instance:
-    case Survey(data) =>
-      data.asJson.deepMerge(io.circe.Json.obj("type" -> "survey".asJson))
-    case Step(data) =>
-      data.asJson.deepMerge(io.circe.Json.obj("type" -> "step".asJson))
-
-  given CirceDecoder[SurveyResponse] = CirceDecoder.instance: cursor =>
-    cursor
-      .get[String]("type")
-      .flatMap:
-        case "survey" =>
-          cursor.as[NextIdentificationSurvey].map(Survey.apply)
-        case "step" =>
-          cursor.as[NextStep].map(Step.apply)
-        case other =>
-          Left(io.circe.DecodingFailure(s"Unknown type: $other", cursor.history))
+  given CirceEncoder[SurveyResponse] = CirceEncoder.AsObject.derived
+  given CirceDecoder[SurveyResponse] = CirceDecoder.derived
 end SurveyResponse

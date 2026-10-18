@@ -27,7 +27,7 @@ object MultiQuestionSurveySuite:
             emailParsed.isDefined,
             emailParsed.get.surveyType == IdentificationSurveyType.Email,
             answerResp.code.isSuccess,
-            answerResp.body.contains("\"type\":\"step\""),
+            answerResp.body.contains("\"Step\""),
             answerResp.body.contains("\"phase\":\"advertiser_video\""),
             dbState.sessions.exists(_.phase == Phase.AdvertiserVideo)
           ))

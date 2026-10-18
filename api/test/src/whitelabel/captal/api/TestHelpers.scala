@@ -1,23 +1,32 @@
 package whitelabel.captal.api
 
 import io.circe.parser.decode
+import io.circe.syntax.*
 import sttp.client3.*
 import sttp.client3.testing.SttpBackendStub
 import sttp.monad.MonadError
-import sttp.tapir.server.ServerEndpoint
-import sttp.tapir.server.stub.TapirStubInterpreter
-import sttp.tapir.ztapir.ZServerEndpoint
 import whitelabel.captal.core.application.commands.NextIdentificationSurvey.given
 import whitelabel.captal.core.application.commands.{
   NextAdvertiserSurvey,
   NextIdentificationSurvey,
   NextVideo
 }
+import whitelabel.captal.core.survey.question.codecs.given
+import whitelabel.captal.core.survey.question.{AnswerValue, OptionId}
 import whitelabel.captal.messages.AdvertiserSurveyResponse.given
+import whitelabel.captal.messages.AnswerRequest.given
+import whitelabel.captal.messages.SurveyResponse
+import whitelabel.captal.messages.SurveyResponse.given
 import whitelabel.captal.messages.VideoResponse.given
 import whitelabel.captal.messages.VideoWatchedResponse.given
-import whitelabel.captal.messages.{AdvertiserSurveyResponse, VideoResponse, VideoWatchedResponse}
+import whitelabel.captal.messages.{
+  AdvertiserSurveyResponse,
+  AnswerRequest,
+  VideoResponse,
+  VideoWatchedResponse
+}
 import zio.*
+import zio.http.codec.CodecConfig
 
 object TestHelpers:
   type TestEnv = TestLayers.TestEnv
@@ -30,40 +39,6 @@ object TestHelpers:
     protected def handleWrappedError[T](rt: Task[T])(
         h: PartialFunction[Throwable, Task[T]]): Task[T] = rt.catchSome(h)
     def ensure[T](f: Task[T], e: => Task[Unit]): Task[T] = f.ensuring(e.ignore)
-
-  private def rioMonadError[R]: MonadError[[A] =>> RIO[R, A]] =
-    new MonadError[[A] =>> RIO[R, A]]:
-      def unit[T](t: T): RIO[R, T] = ZIO.succeed(t)
-      def map[T, T2](fa: RIO[R, T])(f: T => T2): RIO[R, T2] = fa.map(f)
-      def flatMap[T, T2](fa: RIO[R, T])(f: T => RIO[R, T2]): RIO[R, T2] = fa.flatMap(f)
-      def error[T](t: Throwable): RIO[R, T] = ZIO.fail(t)
-      protected def handleWrappedError[T](rt: RIO[R, T])(
-          h: PartialFunction[Throwable, RIO[R, T]]): RIO[R, T] = rt.catchSome(h)
-      def ensure[T](f: RIO[R, T], e: => RIO[R, Unit]): RIO[R, T] = f.ensuring(e.ignore)
-
-  /** Logs anything that dies, because otherwise nothing does.
-    *
-    * A defect reaches the stub interpreter and comes back as a bare 500 with the body "Internal
-    * server error", and the cause is gone — no trace, no log line. The test then fails three layers
-    * away on a missing session cookie. Sixty tests broke that way and the answer was never printed
-    * anywhere.
-    *
-    * `tapErrorCause` and not `tapDefect`, which was the first guess and saw nothing: in tapir a
-    * typed error is a *value* the security logic returns as a `Left`, so an effect that fails
-    * instead has failed in a position tapir has no handler for — it answers 500 and the typed error
-    * never becomes a response. That failure is not a defect, so `tapDefect` ran zero times while
-    * ten requests came back 500.
-    */
-  private def logDefects[R, E, A](effect: ZIO[R, E, A]): ZIO[R, E, A] = effect.tapErrorCause:
-    cause => ZIO.logErrorCause("endpoint failed outside the error channel tapir renders", cause)
-
-  private def provideEnvToEndpoint[R](
-      endpoint: ZServerEndpoint[R, Any],
-      env: ZEnvironment[R]): ZServerEndpoint[Any, Any] = ServerEndpoint(
-    endpoint.endpoint,
-    _ => a => logDefects(endpoint.securityLogic(rioMonadError)(a)).provideEnvironment(env),
-    _ => u => i => logDefects(endpoint.logic(rioMonadError)(u)(i)).provideEnvironment(env)
-  )
 
   /** The sttp request as zio-http sees it.
     *
@@ -91,29 +66,26 @@ object TestHelpers:
         remoteAddress = None
       )
 
-  /** Routes that no longer go through tapir, served to the same suites.
+  /** The server, as an sttp backend the suites can send to.
     *
-    * This exists because converting a route off tapir removes it from `TapirStubInterpreter`, and
-    * its tests would then fail for having no server rather than for anything about the route. The
-    * suites speak `basicRequest` with URLs and know nothing about either library, which is what
-    * makes them worth keeping unchanged across the migration — so the adapting happens here.
-    *
-    * zio-http first with tapir as the fallback: `runZIO` answers 404 when no route matches, and
-    * that is the signal to hand the request to the endpoints that have not moved yet. The fallback
-    * goes when the last one does.
+    * It began as an adapter with a tapir fallback, so that a route converting to zio-http did not
+    * take its tests down with it — the suites speak `basicRequest` with URLs and know nothing about
+    * either library, which is what made them worth keeping unchanged across the migration. The
+    * fallback is gone with the last tapir route; what is left is the translation between sttp's
+    * request and zio-http's.
     */
-  private def serveZioHttp(
-      routes: zio.http.Routes[Any, Nothing],
-      fallback: SttpBackend[Task, Any]): SttpBackend[Task, Any] = SttpBackendStub[Task, Any](
-    taskMonadError)
-    .whenAnyRequest
-    .thenRespondF: request =>
-      routes
-        .runZIO(asZioRequest(request))
-        .flatMap: response =>
-          if response.status == zio.http.Status.NotFound then
-            fallback.send(request.asInstanceOf[Request[String, Any]])
-          else
+  private def serveZioHttp(routes: zio.http.Routes[Any, Nothing]): SttpBackend[Task, Any] =
+    // The server's own `CodecConfig`, not a copy of it — see the note on `Main.codecConfig`.
+    // Without it these suites would be reading a wire format the deployed server does not produce,
+    // which is how an empty `options` list came to vanish from a radio question's response while
+    // every test stayed green.
+    val served = routes @@ CodecConfig.withConfig(Main.codecConfig)
+    SttpBackendStub[Task, Any](taskMonadError)
+      .whenAnyRequest
+      .thenRespondF: request =>
+        served
+          .runZIO(asZioRequest(request))
+          .flatMap: response =>
             response
               .body
               .asString
@@ -130,31 +102,19 @@ object TestHelpers:
                     .toList
                     .map(h => sttp.model.Header(h.headerName, h.renderedValue)))
 
+  /** Every route the dev server mounts, with the test environment supplied.
+    *
+    * `devRoutes` among them because `/api/dev/reset-phase` is what `TestFixtures` resets with, and
+    * the suites run as the dev server does.
+    */
   def testBackend: ZIO[TestEnv, Nothing, SttpBackend[Task, Any]] = ZIO
     .environment[TestEnv]
     .map: env =>
-      val surveyRoutes = env.get[SurveyRoutes]
       val localeRoutes = env.get[LocaleRoutes]
-      val videoRoutes = env.get[VideoRoutes]
-      val advertiserSurveyRoutes = env.get[AdvertiserSurveyRoutes]
-      val finishRoutes = env.get[FinishRoutes]
-      val surveyEndpoints = surveyRoutes.routes.map(e => provideEnvToEndpoint(e, env))
-      val advertiserSurveyEndpoints = advertiserSurveyRoutes
-        .routes
-        .map(e => provideEnvToEndpoint(e, env))
-      val tapirBackend = TapirStubInterpreter(SttpBackendStub[Task, Any](taskMonadError))
-        .whenServerEndpointsRunLogic(surveyEndpoints ++ advertiserSurveyEndpoints)
-        .backend()
-      // `provideEnvironment` is what `provideEnvToEndpoint` does for the tapir half: the suites
-      // hold a `ZEnvironment[TestEnv]` and the routes want their services supplied, so each half
-      // gets the same environment through its own library's door.
-      //
-      // `devRoutes` included because `/api/dev/reset-phase` is what `TestFixtures` resets with, and
-      // the suites run as the dev server does.
       serveZioHttp(
-        (HealthRoutes.routes ++ finishRoutes.routes ++ localeRoutes.routes ++
-          localeRoutes.devRoutes ++ videoRoutes.routes).provideEnvironment(env),
-        tapirBackend)
+        (HealthRoutes.routes ++ env.get[FinishRoutes].routes ++ localeRoutes.routes ++
+          localeRoutes.devRoutes ++ env.get[VideoRoutes].routes ++ env.get[SurveyRoutes].routes ++
+          env.get[AdvertiserSurveyRoutes].routes).provideEnvironment(env))
 
   /** The health check, which is the one route already off tapir. */
   def getHealth(backend: SttpBackend[Task, Any]) = basicRequest
@@ -219,11 +179,46 @@ object TestHelpers:
     .response(asStringAlways)
     .send(backend)
 
-  def parseNextSurvey(body: String): Option[NextIdentificationSurvey] =
-    decode[NextIdentificationSurvey](body).toOption
+  /** The question out of a `/api/survey/next` body, through the wrapper the endpoint returns.
+    *
+    * This decoded `NextIdentificationSurvey` straight off the body, which worked only because the
+    * old codec flattened the payload into the same object and left `type` beside it for circe to
+    * ignore. The wrapper is a real object now, so reading the response means naming it — the way
+    * `parseNextAdvertiserSurvey` always had to.
+    */
+  def parseNextSurvey(body: String): Option[NextIdentificationSurvey] = decode[SurveyResponse](body)
+    .toOption
+    .flatMap:
+      case SurveyResponse.Survey(data) =>
+        Some(data)
+      case SurveyResponse.Step(_) =>
+        None
+
+  /** An answer body as the browser writes it.
+    *
+    * These were hand-written JSON — `{"answer":{"type":"text","value":"…"}}` — which made the
+    * helpers one more independent rendering of a format that already had several. Encoding an
+    * `AnswerRequest` instead means the suites send what `ApiClient` sends, so every test posting an
+    * answer now also exercises the request direction of the wire contract: the browser's circe
+    * encoder against whatever the server decodes with.
+    *
+    * `postRawBody` stays for `ProtocolRejectionSuite`, which needs to send what no client would.
+    */
+  def answerBody(value: AnswerValue): String = AnswerRequest(value).asJson.noSpaces
+
+  /** The suites hold option ids as the strings they read out of a fixture, so this parses one back.
+    *
+    * Throws rather than returning an `Option`: a test that reaches here with something that is not
+    * an option id has a broken fixture, and the useful outcome is a loud failure naming the string.
+    */
+  private def singleChoice(optionId: String): String = answerBody(
+    AnswerValue.SingleChoice(
+      OptionId
+        .fromString(optionId)
+        .getOrElse(throw new IllegalArgumentException(s"Not an option id: $optionId"))))
 
   def postEmailAnswer(backend: SttpBackend[Task, Any], sessionCookie: String, email: String) =
-    postRawBody(backend, sessionCookie, "email", s"""{"answer":{"type":"text","value":"$email"}}""")
+    postRawBody(backend, sessionCookie, "email", answerBody(AnswerValue.Text(email)))
 
   /** A body exactly as given, with no typed request in between.
     *
@@ -249,7 +244,7 @@ object TestHelpers:
       optionId: String) = basicRequest
     .post(uri"http://test/api/survey/profiling")
     .cookie("captal_session", sessionCookie)
-    .body(s"""{"answer":{"type":"single","value":"$optionId"}}""")
+    .body(singleChoice(optionId))
     .contentType("application/json")
     .response(asStringAlways)
     .send(backend)
@@ -261,7 +256,7 @@ object TestHelpers:
       text: String) = basicRequest
     .post(uri"http://test/api/survey/profiling")
     .cookie("captal_session", sessionCookie)
-    .body(s"""{"answer":{"type":"text","value":"$text"}}""")
+    .body(answerBody(AnswerValue.Text(text)))
     .contentType("application/json")
     .response(asStringAlways)
     .send(backend)
@@ -269,7 +264,7 @@ object TestHelpers:
     basicRequest
       .post(uri"http://test/api/survey/location")
       .cookie("captal_session", sessionCookie)
-      .body(s"""{"answer":{"type":"single","value":"$optionId"}}""")
+      .body(singleChoice(optionId))
       .contentType("application/json")
       .response(asStringAlways)
       .send(backend)
@@ -325,7 +320,7 @@ object TestHelpers:
       optionId: String) = basicRequest
     .post(uri"http://test/api/survey/advertiser")
     .cookie("captal_session", sessionCookie)
-    .body(s"""{"answer":{"type":"single","value":"$optionId"}}""")
+    .body(singleChoice(optionId))
     .contentType("application/json")
     .response(asStringAlways)
     .send(backend)

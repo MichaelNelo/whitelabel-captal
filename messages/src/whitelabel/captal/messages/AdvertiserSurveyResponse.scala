@@ -1,6 +1,5 @@
 package whitelabel.captal.messages
 
-import io.circe.syntax.*
 import io.circe.{Decoder as CirceDecoder, Encoder as CirceEncoder}
 import whitelabel.captal.core.application.NextStep
 import whitelabel.captal.core.application.commands.NextAdvertiserSurvey
@@ -27,20 +26,8 @@ object AdvertiserSurveyResponse:
       case n: NextStep =>
         Step(n)
 
-  given CirceEncoder[AdvertiserSurveyResponse] = CirceEncoder.instance:
-    case Survey(data) =>
-      data.asJson.deepMerge(io.circe.Json.obj("type" -> "survey".asJson))
-    case Step(data) =>
-      data.asJson.deepMerge(io.circe.Json.obj("type" -> "step".asJson))
-
-  given CirceDecoder[AdvertiserSurveyResponse] = CirceDecoder.instance: cursor =>
-    cursor
-      .get[String]("type")
-      .flatMap:
-        case "survey" =>
-          cursor.as[NextAdvertiserSurvey].map(Survey.apply)
-        case "step" =>
-          cursor.as[NextStep].map(Step.apply)
-        case other =>
-          Left(io.circe.DecodingFailure(s"Unknown type: $other", cursor.history))
+  // Derived, like the other two wrappers. See `VideoResponse` for why a flattened `type`
+  // discriminator could not survive the move to a zio-schema `Schema`.
+  given CirceEncoder[AdvertiserSurveyResponse] = CirceEncoder.AsObject.derived
+  given CirceDecoder[AdvertiserSurveyResponse] = CirceDecoder.derived
 end AdvertiserSurveyResponse

@@ -879,9 +879,9 @@ end platform
 // ─────────────────────────────────────────────────────────────────────────────
 
 object api extends BaseModule:
-  // `endpoints` was in here and is gone. It carried `tapir-core`, which this module needs — and
-  // already had, transitively through the `tapir-zio-http-server` declared below. So nothing had to
-  // be added: this is now the only module with tapir in it, which is the point.
+  // `endpoints` was in here and is gone, and so is the tapir it carried. `messages` holds what the
+  // browser actually shared with this module — the request and response types — and the route
+  // descriptions live beside the routes, which is the only place that ever read them.
   def moduleDeps = Seq(core, messages, platform)
 
   def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "Dockerfile.api")
@@ -907,15 +907,15 @@ object api extends BaseModule:
       sys.error("[image] docker build failed")
     println(s"[image] built $name")
     name
+  // tapir was here — `tapir-zio-http-server` and `tapir-json-circe` — and is gone with the last
+  // route that used it. What it gave was a description of an endpoint as a value; zio-http's own
+  // `Endpoint` gives the same thing, and the server was already running on zio-http underneath,
+  // interpreted into it by `ZioHttpInterpreter`.
+  //
+  // zio-schema comes in anyway, since `zio-http` resolves 1.4.1 of it, and that is where a `Schema`
+  // stops being documentation beside circe and becomes the codec `Endpoint` serialises with. Only
+  // `derivation` has to be asked for.
   def mvnDeps = Seq(
-    mvn"com.softwaremill.sttp.tapir::tapir-zio-http-server:1.11.11",
-    mvn"com.softwaremill.sttp.tapir::tapir-json-circe:1.11.11",
-    // zio-schema comes in anyway — `zio-http` resolves 1.4.1 of it, and that is where a
-    // `Schema` stops being documentation and becomes the codec `Endpoint` serialises with. Only
-    // `derivation` has to be asked for, and only here: it was declared on `core` and `core-js` for
-    // one afternoon, which put a serialisation library on the Scala.js classpath for types the
-    // browser decodes with circe. Nothing linked it — dead code elimination saw to that — but the
-    // reason it was there was a `Schema` the server needed, so it belongs on the server.
     mvn"dev.zio::zio-schema-derivation:1.4.1",
     mvn"dev.zio::zio-interop-cats:23.1.0.3"
   )
@@ -989,10 +989,14 @@ object api extends BaseModule:
       .call(env = env, stdin = os.Inherit, stdout = os.Inherit, stderr = os.Inherit)
 
   object test extends ScalaTests with ScalafmtModule with ScalafixModule:
+    // `tapir-sttp-stub-server` was here, and sttp-client came in behind it. The suites never used
+    // the tapir half: they send `basicRequest` and `TestHelpers` answers with an
+    // `SttpBackendStub`, which is sttp-client's own. So the client is declared directly now, at
+    // the version tapir had been resolving.
     def mvnDeps = Seq(
       mvn"dev.zio::zio-test:2.1.14",
       mvn"dev.zio::zio-test-sbt:2.1.14",
-      mvn"com.softwaremill.sttp.tapir::tapir-sttp-stub-server:1.11.11")
+      mvn"com.softwaremill.sttp.client3::core:3.10.2")
     def testFramework = "zio.test.sbt.ZTestFramework"
 
     private val rqliteTestPort = 4011

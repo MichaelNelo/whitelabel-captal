@@ -2,14 +2,13 @@ package whitelabel.captal.platform.eventhandlers
 
 import java.util.UUID
 
-import io.circe.syntax.*
 import io.getquill.*
 import whitelabel.captal.core.application.Event
 import whitelabel.captal.core.survey.Event as SurveyEvent
 import whitelabel.captal.core.survey.question.Event as QuestionEvent
-import whitelabel.captal.core.survey.question.codecs.given
 import whitelabel.captal.core.{survey, user}
-import whitelabel.captal.platform.AnswerRow
+import whitelabel.captal.platform.surveySchemas.given
+import whitelabel.captal.platform.{AnswerRow, surveySchemas}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
@@ -64,7 +63,7 @@ object AnswerPersistenceHandler:
           userId = userId,
           sessionId = sessionId,
           questionId = questionId,
-          answerValue = answer.value.asJson.noSpaces,
+          answerValue = surveySchemas.encode(answer.value),
           answeredAt = occurredAt.toString,
           createdAt = now
         )
@@ -74,7 +73,7 @@ object AnswerPersistenceHandler:
           userId = userId,
           sessionId = sessionId,
           questionId = questionId,
-          answerValue = answer.value.asJson.noSpaces,
+          answerValue = surveySchemas.encode(answer.value),
           answeredAt = occurredAt.toString,
           createdAt = now
         )
@@ -84,7 +83,7 @@ object AnswerPersistenceHandler:
           userId = userId,
           sessionId = sessionId,
           questionId = questionId,
-          answerValue = answer.value.asJson.noSpaces,
+          answerValue = surveySchemas.encode(answer.value),
           answeredAt = occurredAt.toString,
           createdAt = now
         )
@@ -94,7 +93,7 @@ object AnswerPersistenceHandler:
           userId = userId,
           sessionId = sessionId,
           questionId = questionId,
-          answerValue = answer.value.asJson.noSpaces,
+          answerValue = surveySchemas.encode(answer.value),
           answeredAt = occurredAt.toString,
           createdAt = now
         )

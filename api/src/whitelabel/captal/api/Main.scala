@@ -2,9 +2,6 @@ package whitelabel.captal.api
 
 import com.typesafe.config.ConfigFactory
 import io.getquill.jdbczio.Quill
-import sttp.tapir.server.ziohttp.ZioHttpInterpreter
-import sttp.tapir.stringToPath
-import sttp.tapir.ztapir.{RichZServerEndpoint, ZServerEndpoint}
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{
   Event,
@@ -39,7 +36,7 @@ import whitelabel.captal.platform.session.{JobQueue, JobRunner, SessionContext, 
 import whitelabel.captal.platform.{RqliteDataSource, UnifiAccess, UnifiClient}
 import zio.*
 import zio.http.*
-import zio.http.codec.PathCodec
+import zio.http.codec.{CodecConfig, PathCodec}
 import zio.interop.catz.*
 
 object Main extends ZIOAppDefault:
@@ -303,38 +300,14 @@ object Main extends ZIOAppDefault:
   // ─── Routes ───────────────────────────────────────────────────────────────────
 
   type FullEnv =
-    SessionContext & SessionService & LocaleService & QuillSqlite & SessionEndpoint &
-      SessionCookieConfig & CurrentLocation & UserCookieConfig & UserLookup & SurveyRoutes &
+    SessionContext & SessionService & LocaleService & QuillSqlite & SessionCookieConfig &
+      CurrentLocation & UserCookieConfig & UserLookup & SurveyRoutes &
       LocaleRoutes & VideoRoutes & AdvertiserSurveyRoutes & FinishRoutes &
       SurveyRoutes.AnswerEmailFlowType & SurveyRoutes.AnswerProfilingFlowType &
       SurveyRoutes.AnswerLocationFlowType & SurveyRoutes.NextSurveyFlowType &
       VideoRoutes.NextVideoFlowType & VideoRoutes.MarkVideoWatchedFlowType &
       AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType
-
-  private def endpoints(
-      locationSlug: Option[String],
-      surveyRoutes: SurveyRoutes,
-      advertiserSurveyRoutes: AdvertiserSurveyRoutes): List[ZServerEndpoint[FullEnv, Any]] =
-    // Health, finish, the four locale routes and the two video ones left this list: they are
-    // zio-http `Routes` now rather than tapir endpoints, so they join at the outer layer where the
-    // two are already the same type. This list shrinks as each remaining route converts; the
-    // `devEndpoints` flag went with `LocaleRoutes`, which owned the only dev route.
-    val base =
-      surveyRoutes.routes.map(_.widen[FullEnv]) ++
-        advertiserSurveyRoutes.routes.map(_.widen[FullEnv])
-    locationSlug match
-      case Some(slug) =>
-        base.map(_.prependSecurityIn(slug))
-      case None =>
-        base
-  end endpoints
-
-  private def apiRoutes(
-      locationSlug: Option[String],
-      surveyRoutes: SurveyRoutes,
-      advertiserSurveyRoutes: AdvertiserSurveyRoutes) = ZioHttpInterpreter().toHttp(
-    endpoints(locationSlug, surveyRoutes, advertiserSurveyRoutes))
 
   private def loggingMiddleware[R]: Middleware[R] =
     new Middleware[R]:
@@ -432,30 +405,50 @@ object Main extends ZIOAppDefault:
         )
   end spaCatchAllRoutes
 
-  /** The routes that have left tapir, under the location slug when there is one.
+  /** How this server serialises, which is part of its wire format and not an implementation
+    * detail.
     *
-    * The prefix has to be applied here, separately, because it was tapir's: `endpoints` calls
-    * `prependSecurityIn(slug)` on every endpoint it interprets, and a converted route is no longer
-    * in that list. `HealthRoutes` spent a commit without it, which was a live regression and an
-    * invisible one — `Deploy.healthCheckPath` registers each location's target group against
-    * `/<slug>/api/health`, so a 404 there is an unhealthy task. Only in production, where
-    * `LOCATION_SLUG` is set; the suite runs without one, so nothing in it can fail.
+    * zio-http's default sets `ignoreEmptyCollections = true`, so a `List` field with nothing in it
+    * disappears from the response. circe's derived decoder has no default to fall back on, so an
+    * absent field is a decode failure rather than an empty list: a radio question whose options had
+    * all been retired answered 200 with `{"Radio":{}}`, and the SPA could not read it.
+    *
+    * Three E2E tests caught that and `WireContractSuite` did not, which is the more useful half of
+    * the lesson. That suite had been encoding through `JsonCodec.jsonEncoder` with no config, where
+    * zio-schema's own default is the opposite — `false` — so it was comparing two libraries through
+    * a setting the server does not use, and an empty list looked fine in both. It reads this value
+    * now, rather than declaring its own, so the format it checks is the format being served.
     */
-  private def convertedRoutes(
+  val codecConfig: CodecConfig = CodecConfig(ignoreEmptyCollections = false)
+
+  /** Every route, under the location slug when there is one.
+    *
+    * The slug prefix is applied once, here, to all of them. It used to be tapir's — `endpoints`
+    * called `prependSecurityIn(slug)` on every endpoint it interpreted — and a route that converted
+    * left that list and lost it. `HealthRoutes` spent a commit that way: a live regression and an
+    * invisible one, since `Deploy.healthCheckPath` registers each location's target group against
+    * `/<slug>/api/health` and a 404 there is an unhealthy task. Only in production, where
+    * `LOCATION_SLUG` is set; the suite runs without one, so nothing in it could fail.
+    */
+  private def apiRoutes(
       devEndpoints: Boolean,
       locationSlug: Option[String],
+      surveyRoutes: SurveyRoutes,
       localeRoutes: LocaleRoutes,
       videoRoutes: VideoRoutes,
-      finishRoutes: FinishRoutes)
-      : Routes[FinishRoutes.FullEnv & LocaleRoutes.FullEnv & VideoRoutes.FullEnv, Nothing] =
+      advertiserSurveyRoutes: AdvertiserSurveyRoutes,
+      finishRoutes: FinishRoutes): Routes[FullEnv, Nothing] =
     val base =
-      HealthRoutes.routes ++ finishRoutes.routes ++ localeRoutes.routes ++ videoRoutes.routes
-    val converted =
+      HealthRoutes.routes ++ finishRoutes.routes ++ localeRoutes.routes ++ videoRoutes.routes ++
+        surveyRoutes.routes ++ advertiserSurveyRoutes.routes
+    val all =
       if devEndpoints then
         base ++ localeRoutes.devRoutes
       else
         base
-    locationSlug.fold(converted)(slug => converted.nest(PathCodec.literal(slug)))
+    val prefixed = locationSlug.fold(all)(slug => all.nest(PathCodec.literal(slug)))
+    prefixed @@ CodecConfig.withConfig(codecConfig)
+  end apiRoutes
 
   private def routes(
       devMode: Boolean,
@@ -466,12 +459,14 @@ object Main extends ZIOAppDefault:
       videoRoutes: VideoRoutes,
       advertiserSurveyRoutes: AdvertiserSurveyRoutes,
       finishRoutes: FinishRoutes): Routes[FullEnv, Response] =
-    val api = apiRoutes(locationSlug, surveyRoutes, advertiserSurveyRoutes)
-    // Where tapir's interpreted output and the converted routes meet: `toHttp` already produces a
-    // zio-http `Routes`, so a route that no longer goes through tapir joins with the same `++`.
-    // That is what lets this move one route at a time with the build green in between.
-    val served =
-      convertedRoutes(devEndpoints, locationSlug, localeRoutes, videoRoutes, finishRoutes) ++ api
+    val served = apiRoutes(
+      devEndpoints,
+      locationSlug,
+      surveyRoutes,
+      localeRoutes,
+      videoRoutes,
+      advertiserSurveyRoutes,
+      finishRoutes)
     val baseRoutes =
       if devMode then
         devLinkerOutput(devStaticRoutes(locationSlug) ++ served ++ spaCatchAllRoutes(locationSlug))
@@ -519,7 +514,6 @@ object Main extends ZIOAppDefault:
       currentLocationLayer,
       UserCookieConfig.layer,
       UserLookup.layer,
-      SessionEndpoint.layer,
       SurveyRoutes.layer,
       LocaleRoutes.layer,
       VideoRoutes.layer,
@@ -567,20 +561,18 @@ object Main extends ZIOAppDefault:
         advertiserSurveyRoutes <- ZIO.service[AdvertiserSurveyRoutes]
         finishRoutes           <- ZIO.service[FinishRoutes]
         cookieConfig           <- ZIO.service[SessionCookieConfig]
-        ep = endpoints(settings.locationSlug, surveyRoutes, advertiserSurveyRoutes)
-        // Both halves, so a converted route does not quietly drop out of the startup log. `ep` is
-        // only what tapir still interprets; the rest are zio-http `Route`s, which carry the same
-        // information under a different name.
-        converted = convertedRoutes(
+        // One list again, now that there is one library. This was two halves joined for the
+        // duration of the migration, so that a route leaving tapir did not quietly drop out of the
+        // startup log.
+        mounted = apiRoutes(
           settings.devEndpoints,
           settings.locationSlug,
+          surveyRoutes,
           localeRoutes,
           videoRoutes,
+          advertiserSurveyRoutes,
           finishRoutes)
-        routeInfos =
-          ep.map: e =>
-            s"  ${e.endpoint.method.map(_.method).getOrElse("*")} ${e.endpoint.showPathTemplate()}"
-          ++ converted.routes.map(route => s"  ${route.routePattern.render}").toList
+        routeInfos = mounted.routes.map(route => s"  ${route.routePattern.render}").toList
         _ <- ZIO.logInfo(
           s"Server starting on ${settings.config.address.getHostString}:${settings
               .config
