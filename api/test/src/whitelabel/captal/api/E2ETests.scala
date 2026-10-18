@@ -25,10 +25,15 @@ object E2ETests extends ZIOSpecDefault:
         FinishSuite.suite,
         AuthorizedSuite.suite,
         SoftDeleteSuite.suite
-      ) @@
-        TestAspect.before(clearAndSeedNoise.orDie)
-        // `ProvisioningSuite` sat here, outside the `before` that clears the database, because it
-        // asserted against what a provisioning run had just written. It went with the engine.
+      ) @@ TestAspect.before(clearAndSeedNoise.orDie),
+      // `ProvisioningSuite` sat inside the block above, outside the `before` that clears the
+      // database, because it asserted against what a provisioning run had just written. It went
+      // with the engine.
+      //
+      // `MigrationLockSuite` is outside it for its own reason: it migrates, so clearing the
+      // application data around it would prove nothing. That it lives in this spec rather than its
+      // own `ZIOSpecDefault` is load-bearing — see the note on the suite.
+      MigrationLockSuite.suite
     ) @@ TestAspect.sequential
   ).provideShared(TestLayers.testEnv, ZLayer.fromZIO(TestFixtures.migrate.unit))
 end E2ETests

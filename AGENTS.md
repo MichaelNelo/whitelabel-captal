@@ -1224,7 +1224,9 @@ object E2ETests extends ZIOSpecDefault:
 
 ### Rqlite en Tests
 
-`build.mill` arranca un contenedor Docker de `rqlite/rqlite:8.36.2` antes de los tests (`ensureRqlite`). El driver JDBC apunta a `jdbc:rqlite:http://localhost:<port>`.
+`build.mill` arranca un contenedor Docker de `rqlite/rqlite:10.6.1` antes de los tests (`ensureRqlite`). El driver JDBC apunta a `jdbc:rqlite:http://localhost:<port>`.
+
+La versión es la del driver a propósito: `rqlite-jdbc` 10.5.2.1 contra servidor 10.6.x. `ensureRqlite` compara la imagen del contenedor corriendo contra la pedida y lo recrea si difieren, porque antes decía 8.36.2 acá, 9.1.2 en el build y 10.6.1 en producción — tres combinaciones y ninguna la que el driver apunta.
 
 ---
 
@@ -1247,6 +1249,12 @@ Los `DbEventHandler` comparten el contexto Quill y corren en una sola transaccio
 Arreglado con el bump a `rqlite-jdbc` 10.5.2.1 quitando el proxy, y verificado en vez de supuesto: contra un servidor 10.6.1, `setAutoCommit(false)` se sostiene y una fila insertada y revertida no está después.
 
 La lección es la de la entrada 9 otra vez: **una garantía que nadie ejercita no es una garantía.** Esta estaba escrita acá, implementada en el código, y desactivada dos capas más abajo por un workaround contra un bug de una dependencia — sin una sola línea que las conectara.
+
+**Había un segundo proxy, y se fue con el mismo bump.** `Migrate.wrapForMigrations` eran sesenta líneas de reflection que forzaban el `Statement.execute()` de Flyway a pasar por `executeUpdate()` para cualquier cosa que pareciera una escritura — porque el driver 9.1.2.1 ruteaba un `INSERT` cuyo literal de string contenía la palabra "select" al endpoint read-only `/db/query`, donde no hacía nada mientras Flyway la registraba como aplicada.
+
+Quitarlo no fue limpieza: **se había vuelto activamente nocivo.** El handler del proxy nunca desenvolvía el `InvocationTargetException` que devuelve `Method.invoke`, lo cual no importaba mientras el driver se tragaba los errores — y en el momento en que el driver nuevo empezó a lanzar, cada `SQLException` real llegaba a Flyway como un `UndeclaredThrowableException` sin causa adjunta. La suite end-to-end falló exactamente así, y el mensaje no nombraba nada.
+
+Verificado antes de borrarlo: en 10.5.2.1 un `INSERT` que carga "select" en un literal, emitido por `execute()`, aterriza.
 
 ### 3. MappedEncoding para Tipos de Dominio
 
@@ -1309,6 +1317,40 @@ Para que no se reintente. Cada uno vino con una hipótesis razonable y un númer
 | Primer pintado por debajo de ~2 Mbps | Lo gobierna `brand-icon.svg` — 730 bytes con round trip propio, ya eran 756 ms antes de los preloads. El arreglo está escrito en `build.mill` (icono y reglas del loader inline, `styles.css` fuera del render-blocking) y no se hizo porque las conexiones que sirve este portal no son de 1,6 Mbps. |
 
 Sigue sin explorar un lever real: `scala-java-time` aporta 222 KB crudos y `client` no nombra `java.time` en ninguna línea — entra por los 25 archivos de `core` que timestampean con `Instant`.
+
+### 10. El lock de migraciones vive en rqlite, no en S3
+
+`Migrate.Lock` es un mutex hand-rolled: un `INSERT` de una primary key fija en `migration_lock`, y el ganador se decide leyendo de vuelta quién quedó. Dos preguntas razonables lo cuestionan, y vale tenerlas contestadas.
+
+**"Flyway envuelve cada migración en una transacción — ¿el lock no es redundante?"** No, y la medición importa porque su primera mitad parece decir que sí.
+
+Las transacciones son reales desde que se quitó el proxy de `autoCommit` (entrada 2), y hacen trabajo: con `group = false` cada migración commitea sola, así que el perdedor se rechaza completo, DDL y fila del historial juntos. Seis migradores contra una base vacía, diez intentos: **18 de 60 murieron en el commit** con `SQL State 25000 — Transaction commit failed: table users already exists`, y **cero versiones duplicadas** sobrevivieron en ningún intento.
+
+Pero eso no es exclusión, y ahí está la trampa: lo que falló esos commits fue el SQL de la migración chocando consigo mismo — `CREATE TABLE users` contra una tabla que ya existe. Cuando el SQL no choca, nada excluye a nadie. Seis migradores con una sola migración pendiente, cuyo cuerpo es `DROP TABLE IF EXISTS`, escribieron **tres filas de historial para la misma versión** en ranks 23, 24 y 25, dentro de 53 ms, **diez intentos de diez**. `installed_rank` es la primary key y `version` no es única, así que migradores que leen el mismo máximo y lo incrementan caen en ranks distintos y nunca colisionan.
+
+El segundo caso es el desplegado. Una base vacía ocurre una vez; un redespliegue con una migración nueva es cada release. Y lo que lo hace caro en vez de desordenado es V22: reconstruye `advertiser_videos` con `INSERT INTO advertiser_videos_new` sin `ON CONFLICT`, así que aplicarla dos veces duplica cada video que copia.
+
+Flyway no ayuda, y esto no hacía falta medirlo: la frase `SQLite does not support locking. No concurrent migration supported.` sale de `org.flywaydb.core.internal.database.sqlite.SQLiteTable`, el `doLock()` de Flyway para SQLite, que no hace nada y loguea. En PostgreSQL tomaría un advisory lock, en MySQL `GET_LOCK`; acá el método está vacío. **Ese es el contrato, declarado por la implementación**, y contesta la pregunta sin armar un experimento. Lo que las corridas agregaron es la forma del fallo — qué commits mueren y por qué los ranks no colisionan — que no está documentada en ningún lado.
+
+Queda fijado por `MigrationLockSuite`, que es lo que faltaba.
+
+**"¿Hay un servicio de AWS que dé un lock real? ¿Un lockfile en S3, o en EFS?"** Sí, S3 lo da, y es un primitivo legítimo: desde agosto de 2024 `PutObject` acepta `If-None-Match: *`, que es un compare-and-swap de crear-si-no-existe. El precedente está al lado — es exactamente lo que usa el backend S3 de OpenTofu con `use_lockfile = true`, el que reemplazó a la tabla de DynamoDB. DynamoDB con `PutItem` condicional es el clásico y sirve igual.
+
+No se eligió porque **el primitivo no es la parte débil.** El `INSERT` contra rqlite pasa por Raft, así que de N inserciones concurrentes de una primary key exactamente una tiene efecto y todos los nodos coinciden en cuál: las mismas semánticas de CAS que daría S3 o DynamoDB. Cambiarlo no compra corrección, y cuesta una dependencia nueva con su IAM.
+
+Y sobre todo: **no arreglaría la única debilidad real**, que es el lock abandonado. Lo que S3 o DynamoDB agregan es poder ponerle un TTL, y el TTL resuelve el problema equivocado — un migrador que muere a mitad deja un esquema a medio aplicar *y* una fila fallida en el historial que Flyway se niega a pasar hasta que alguien la repare. Entregarle el lock al siguiente proceso lo deja igual de bloqueado, solo más tarde y con menos pistas.
+
+EFS es el caso más interesante, y se descarta igual. Sus locks NFSv4 sí se liberan solos cuando el cliente muere, por expiración del lease — lo único que el diseño actual no hace. Pero EFS solo existe en la topología de `dev` (rqlite single-node); en prod el cluster Raft corre sobre almacenamiento efímero. Montarlo en la task de cada location para un lockfile es pesado, `FileChannel.tryLock` sobre NFS no es confiable en la JVM, y la liberación automática vuelve a resolver el problema equivocado.
+
+**El costo que esto acepta, dicho sin adornos.** Un nodo que toma el lock y muere sin liberarlo bloquea a todos los demás migradores hasta que alguien borre la fila. El lock loguea cada 2 s a quién espera y falla a los 10 minutos nombrando la tabla y qué hacer, así que no es invisible en el log — pero el contenedor sale, ECS lo reinicia, vuelve a esperar 10 minutos, y nada escala. En la práctica el despliegue nunca termina y hay que mirar para enterarse.
+
+Eso no se arregla con el almacén. Detectar que un nodo se desconectó requiere una **sesión del lado del servidor** — el advisory lock de Postgres que se libera cuando cae el TCP, un lease de etcd con su keepalive, una sesión de Consul, un znode efímero de ZooKeeper. rqlite no tiene sesiones y S3 tampoco, así que ninguno de los dos puede. Lo máximo sin sesiones es un lease con TTL, que no detecta la desconexión: expira si nadie renueva.
+
+**Decidido: se queda así por ahora. Si muerde, entra etcd** — una instancia sola alcanza, no hace falta cluster, y es el único de la lista que da la semántica de verdad con el keepalive manejado por la librería (`jetcd`) en vez de escrito a mano. Lo que cuesta es una task siempre encendida, su módulo de TF, y `jetcd` arrastrando grpc-netty dentro de `infra/`; y hay que saber que se vuelve un SPOF que bloquea despliegues, y que tampoco cierra el fencing (un holder congelado por GC puede despertar y seguir migrando tras perder el lease, porque Flyway no acepta tokens).
+
+La alternativa que no necesita ningún lock quedó sobre la mesa y sin hacer: sacar las migraciones del contenedor que sirve y correrlas como una task one-shot por despliegue, con la API solo verificando la versión. Un migrador por construcción, y ECS ya detecta la task muerta — es exactamente la capacidad que se le compraría a etcd. Es el patrón que `mill dev` ya usa localmente (paso 2/4); el camino desplegado es el que divergió.
+
+Cuándo revisar lo de S3: si alguna vez hace falta tomar el lock **antes** de que la base exista, o cuando está inalcanzable. Hoy es discutible — si no se puede llegar a la base, tampoco se puede migrar.
 
 ---
 
