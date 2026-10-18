@@ -2,10 +2,10 @@ package whitelabel.captal.api
 
 import io.getquill.*
 import whitelabel.captal.core.user
-import whitelabel.captal.infra.UserRow
-import whitelabel.captal.infra.schema.QuillSqlite
-import whitelabel.captal.infra.schema.core.given
-import whitelabel.captal.infra.schema.given
+import whitelabel.captal.platform.UserRow
+import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.platform.schema.core.given
+import whitelabel.captal.platform.schema.given
 import zio.*
 
 /** Direct id-based lookup for the cross-location `captal_user` cookie validation. Kept separate

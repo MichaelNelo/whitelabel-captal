@@ -5,7 +5,7 @@ import whitelabel.captal.api.TestHelpers.*
 import whitelabel.captal.api.{TestFixtures, TestUnifiClient}
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.user
-import whitelabel.captal.infra.session.JobRunner
+import whitelabel.captal.platform.session.JobRunner
 import zio.test.*
 import zio.{Clock, ZIO, durationInt}
 

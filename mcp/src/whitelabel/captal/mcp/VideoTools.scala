@@ -3,10 +3,10 @@ import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
 import whitelabel.captal.core.video.VideoType
 import whitelabel.captal.core.{survey, video}
-import whitelabel.captal.infra.schema.QuillSqlite
-import whitelabel.captal.infra.schema.core.given
-import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.{
+import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.platform.schema.core.given
+import whitelabel.captal.platform.schema.given
+import whitelabel.captal.platform.{
   AdvertiserRow,
   AdvertiserVideoRow,
   LocalizedTextRow,

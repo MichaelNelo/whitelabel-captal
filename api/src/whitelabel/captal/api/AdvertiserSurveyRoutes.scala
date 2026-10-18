@@ -7,7 +7,7 @@ import whitelabel.captal.core.application.{Flow, NextStep, Phase}
 import whitelabel.captal.endpoints.AdvertiserSurveyResponse.given
 import whitelabel.captal.endpoints.AnswerRequest.given
 import whitelabel.captal.endpoints.{AdvertiserSurveyResponse, AnswerRequest, ApiError}
-import whitelabel.captal.infra.session.{SessionContext, SessionService}
+import whitelabel.captal.platform.session.{SessionContext, SessionService}
 import zio.*
 
 object AdvertiserSurveyRoutes:

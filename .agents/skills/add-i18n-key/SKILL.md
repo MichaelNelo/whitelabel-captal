@@ -11,7 +11,7 @@ version: 1.0.0
 i18n keys are **typed end-to-end**:
 
 1. **Schema** (`core/.../i18n/I18n.scala`) — case class hierarchy defining the structure (e.g. `welcome.title`, `question.invalidEmail`). Cross-compiled JVM+JS.
-2. **Materialization** (`infra/.../services/LocaleService.scala`) — `buildI18n(messages: Map[String, String]): I18n` maps flat YAML keys to the typed structure with `[key]` fallback.
+2. **Materialization** (`platform/.../services/LocaleService.scala`) — `buildI18n(messages: Map[String, String]): I18n` maps flat YAML keys to the typed structure with `[key]` fallback.
 3. **Persistence** (`localized_texts` table) — key/value pairs scoped by `(locale, location_id, category="frontend")`. Operators populate via `locations/<slug>/i18n/<locale>.yaml`.
 4. **Defaults** (`cli/resources/templates/location/i18n/{es,en}.yaml`) — what `captal locations add <slug>` scaffolds.
 5. **Operator doc** (`cli/resources/templates/skills/i18n-reference/SKILL.md`) — the 36-key reference.
@@ -64,7 +64,7 @@ final case class I18n(
 
 ### 3. Update LocaleService.buildI18n
 
-`infra/src/whitelabel/captal/infra/services/LocaleService.scala`:
+`platform/src/whitelabel/captal/platform/services/LocaleService.scala`:
 
 ```scala
 // Inside buildI18n:

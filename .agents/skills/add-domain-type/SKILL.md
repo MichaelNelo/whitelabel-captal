@@ -91,7 +91,7 @@ Match exhaustively at use sites — compiler enforces.
 
 The `Row` case class uses your domain type directly (`case class BonusRow(id: bonus.Id, ...)`). Quill needs to encode/decode opaque types to/from the underlying primitive.
 
-Add to `infra/src/whitelabel/captal/infra/schema/core.scala` (or a new sibling file if the aggregate is large):
+Add to `platform/src/whitelabel/captal/platform/schema/core.scala` (or a new sibling file if the aggregate is large):
 
 ```scala
 import io.getquill.MappedEncoding

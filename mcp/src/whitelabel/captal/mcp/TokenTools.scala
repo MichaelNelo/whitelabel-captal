@@ -2,7 +2,7 @@ package whitelabel.captal.mcp
 
 import com.jamesward.ziohttp.mcp.*
 import com.jamesward.ziohttp.mcp.auth.OauthScope
-import whitelabel.captal.infra.schema.QuillSqlite
+import whitelabel.captal.platform.schema.QuillSqlite
 import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}

@@ -1,8 +1,8 @@
 package whitelabel.captal.mcp
 
 import io.getquill.jdbczio.Quill
-import whitelabel.captal.infra.RqliteDataSource
-import whitelabel.captal.infra.schema.QuillSqlite
+import whitelabel.captal.platform.RqliteDataSource
+import whitelabel.captal.platform.schema.QuillSqlite
 import zio.*
 import zio.http.Server
 

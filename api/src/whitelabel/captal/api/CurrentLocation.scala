@@ -1,7 +1,7 @@
 package whitelabel.captal.api
 
-import whitelabel.captal.infra.UnifiAccess
-import whitelabel.captal.infra.services.LocationService
+import whitelabel.captal.platform.UnifiAccess
+import whitelabel.captal.platform.services.LocationService
 import zio.*
 
 /** Snapshot of the location this API instance serves. Loaded once at startup from the

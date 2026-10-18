@@ -9,7 +9,7 @@ version: 1.0.0
 ## What you need running
 
 1. **rqlite container** (the DB)
-2. **API server** (`./mill api.dev` — runs `infra.Migrate` then HTTP server on 8080)
+2. **API server** (`./mill api.dev` — runs `platform.Migrate` then HTTP server on 8080)
 3. **Client bundle** built and served (in dev mode the API serves it from the filesystem)
 4. **Provision data** under `<dir>/shared/` and `<dir>/locations/<slug>/`
 
@@ -79,7 +79,7 @@ java -jar out/cli/releaseAssets.dest/captal.jar shared push
 This launches an ephemeral container locally? No — `shared push` provisions via the CLI directly hitting rqlite via the API's `/api/admin/provision-shared` flow… **actually** in local-dev `SHARED_DIR` is read at API startup by `ProvisionService.runShared`. So:
 
 - **Dev mode**: API at startup reads `SHARED_DIR` and provisions surveys/advertisers — no separate `shared push` needed.
-- **Prod mode**: ephemeral ECS task runs `infra.assembly` which calls `Migrate` + `ProvisionService.runShared`.
+- **Prod mode**: ephemeral ECS task runs `platform.assembly` which calls `Migrate` + `ProvisionService.runShared`.
 
 For local dev, just make sure `SHARED_DIR` is set when starting the API.
 

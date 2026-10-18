@@ -1,6 +1,6 @@
 package whitelabel.captal.api
 
-import whitelabel.captal.infra.{UnifiAccess, UnifiClient}
+import whitelabel.captal.platform.{UnifiAccess, UnifiClient}
 import zio.*
 
 /** Test stub for [[UnifiClient]]: records calls instead of reaching the network.

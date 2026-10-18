@@ -51,11 +51,12 @@ Provisiona surveys y advertisers *cross-location*. YAMLs en
 * `surveys/location.yaml` — 1 pregunta dropdown
 * `advertisers/*.yaml` — google-play, chromecast
 
-`api.dev` NO lo ejecuta. Hay que correrlo manual:
-```
-SHARED_DIR=$PWD/api/resources/provision/dev/shared \
-  mill infra.runMain whitelabel.captal.infra.SharedProvision
-```
+NOTA — obsoleto. El motor de provisioning declarativo se eliminó: `SharedProvision`,
+`ProvisionService` y el directorio `provision/` ya no existen, y V23 dropeó
+`provision_manifest`. El contenido se escribe hoy por el backoffice MCP y la API solo
+lee. Esta sección queda como contexto de por qué existían esos YAML, no como algo
+ejecutable — el comando era `mill platform.runMain …SharedProvision`, y ninguna de las
+dos mitades existe.
 
 *Sin `runShared`*, no hay email survey → `WelcomeApi.getNextSurvey()`
 salta directo de Welcome a Ready (server-side warning:

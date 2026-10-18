@@ -1,7 +1,7 @@
 package whitelabel.captal.mcp
 
 import com.jamesward.ziohttp.mcp.auth.*
-import whitelabel.captal.infra.schema.QuillSqlite
+import whitelabel.captal.platform.schema.QuillSqlite
 import zio.*
 import zio.json.ast.Json
 

@@ -8,7 +8,7 @@ version: 1.0.0
 
 ## When to use
 
-After any change in `core/`, `endpoints/`, `infra/`, `api/`, `provision/`, or `Dockerfile.api`/`Dockerfile.provision`. The two ECR base images (`captal-api-dev`, `captal-provision-dev`) are versioned together — even if only one module changed, push both with the same tag for traceability.
+After any change in `core/`, `endpoints/`, `platform/`, `api/`, `provision/`, or `Dockerfile.api`/`Dockerfile.provision`. The two ECR base images (`captal-api-dev`, `captal-provision-dev`) are versioned together — even if only one module changed, push both with the same tag for traceability.
 
 ## Pre-flight
 
@@ -43,8 +43,8 @@ TAG=vX.Y.Z
 ### 2. Build + push the Provision image (same tag)
 
 ```bash
-./mill infra.dockerBuild --repoUri 460486036288.dkr.ecr.us-east-1.amazonaws.com/captal-provision-dev --tag $TAG
-./mill infra.dockerPush  --repoUri 460486036288.dkr.ecr.us-east-1.amazonaws.com/captal-provision-dev --tag $TAG
+./mill platform.dockerBuild --repoUri 460486036288.dkr.ecr.us-east-1.amazonaws.com/captal-provision-dev --tag $TAG
+./mill platform.dockerPush  --repoUri 460486036288.dkr.ecr.us-east-1.amazonaws.com/captal-provision-dev --tag $TAG
 ```
 
 ### 3. Bump the project's `shared/captal.yaml`

@@ -109,7 +109,7 @@ Edit `client/assets/styles.css`. Conventions:
 
 If your view shows translated copy:
 - Add fields to `core/.../i18n/I18n.scala` (e.g. `final case class BonusGame(title: String, submit: String)` + add to `I18n` case class).
-- Update `infra/.../services/LocaleService.scala` `buildI18n` to populate them.
+- Update `platform/.../services/LocaleService.scala` `buildI18n` to populate them.
 - Update the bundled default `cli/resources/templates/location/i18n/{es,en}.yaml`.
 - Update the operator-facing skill `i18n-reference` with the new keys.
 

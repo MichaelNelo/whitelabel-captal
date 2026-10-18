@@ -2,8 +2,8 @@ package whitelabel.captal.api
 
 import sttp.tapir.ztapir.*
 import whitelabel.captal.endpoints.{ApiError, LocaleEndpoints}
-import whitelabel.captal.infra.services.LocaleService
-import whitelabel.captal.infra.session.{SessionContext, SessionService}
+import whitelabel.captal.platform.services.LocaleService
+import whitelabel.captal.platform.session.{SessionContext, SessionService}
 import zio.*
 
 object LocaleRoutes:

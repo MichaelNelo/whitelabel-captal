@@ -3,7 +3,7 @@ package whitelabel.captal.mcp
 import com.jamesward.ziohttp.mcp.*
 import com.jamesward.ziohttp.mcp.auth.McpAuth
 import whitelabel.captal.core.i18n.{I18n, I18nSchema}
-import whitelabel.captal.infra.schema.QuillSqlite
+import whitelabel.captal.platform.schema.QuillSqlite
 import zio.{Chunk, IO, ZEnvironment, ZIO}
 
 import ToolSchema.visibleTo

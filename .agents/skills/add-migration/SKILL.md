@@ -8,21 +8,21 @@ version: 1.0.0
 
 ## When to use
 
-Any persisted change to the schema (new column, new table, index, soft-delete flag). Migrations run at every API container startup via `infra.Migrate` and on the ephemeral `captal shared push` task.
+Any persisted change to the schema (new column, new table, index, soft-delete flag). Migrations run at every API container startup via `platform.Migrate` and on the ephemeral `captal shared push` task.
 
 ## Steps
 
 ### 1. Pick the next version number
 
 ```bash
-ls infra/resources/db/migration/ | tail -3
+ls platform/resources/db/migration/ | tail -3
 ```
 
 Pick `Vn+1` where `n` is the last `Vn__*.sql`. Versions are linear; gaps fail Flyway.
 
 ### 2. Create the file
 
-`infra/resources/db/migration/V<n>__<descriptive_name>.sql`. Naming: snake_case, present-tense verb (`add_`, `rename_`, `drop_`). Example: `V16__add_locale_to_users.sql`.
+`platform/resources/db/migration/V<n>__<descriptive_name>.sql`. Naming: snake_case, present-tense verb (`add_`, `rename_`, `drop_`). Example: `V16__add_locale_to_users.sql`.
 
 ### 3. Write the SQL
 
@@ -43,7 +43,7 @@ CREATE INDEX idx_users_locale ON users(locale);
 
 ### 4. Add the corresponding row field
 
-If you added a column, update the `*Row` case class in `infra/src/whitelabel/captal/infra/rows.scala`. Keep the field order matching column order in `CREATE TABLE` to make Quill happy. Use `Option[T]` for nullable columns, `T` for `NOT NULL DEFAULT ...`.
+If you added a column, update the `*Row` case class in `platform/src/whitelabel/captal/platform/rows.scala`. Keep the field order matching column order in `CREATE TABLE` to make Quill happy. Use `Option[T]` for nullable columns, `T` for `NOT NULL DEFAULT ...`.
 
 ### 5. Update writers / queries
 
@@ -62,8 +62,8 @@ Rebuild both base images (the migrations are baked into the assembly classpath):
 ```bash
 ./mill api.dockerBuild --repoUri <ecr>/captal-api-dev --tag vX.Y.Z
 ./mill api.dockerPush  --repoUri <ecr>/captal-api-dev --tag vX.Y.Z
-./mill infra.dockerBuild --repoUri <ecr>/captal-provision-dev --tag vX.Y.Z
-./mill infra.dockerPush  --repoUri <ecr>/captal-provision-dev --tag vX.Y.Z
+./mill platform.dockerBuild --repoUri <ecr>/captal-provision-dev --tag vX.Y.Z
+./mill platform.dockerPush  --repoUri <ecr>/captal-provision-dev --tag vX.Y.Z
 ```
 
 Then operator bumps `shared/captal.yaml` images.api/provision → `captal shared push` (runs migration once) → `captal locations push-all` (each API task restart re-runs Flyway harmlessly — it's idempotent).

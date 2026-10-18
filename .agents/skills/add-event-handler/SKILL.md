@@ -8,7 +8,7 @@ version: 1.0.0
 
 ## Event sourcing model
 
-Commands produce **events** (in `core/`); events are processed by **two kinds of handlers** (in `infra/eventhandlers/`):
+Commands produce **events** (in `core/`); events are processed by **two kinds of handlers** (in `platform/eventhandlers/`):
 
 1. **Transactional** (`DbEventHandler`): run inside a single Quill transaction (`TransactionalEventHandler`). Pure functions of `(Event, SessionContext, Quill) → Task[Unit]`. Use for DB writes that must commit atomically with the rest of the chain.
 2. **Post-commit** (`EventHandler[Task, Event]`): composed via `.andThen` **after** `TransactionalEventHandler` in `Main.eventHandlerLayer`. Run only if the transaction committed. Use for external side-effects (HTTP calls, queue publishes) that should not roll back DB writes on failure. Example: `UnifiAuthorizationHandler` (UniFi Integration v1 two-step lookup + `AUTHORIZE_GUEST_ACCESS`).
@@ -47,17 +47,17 @@ def handle(cmd: ChangeLocaleCommand): Op[Done] =
 
 ### 3. Create the handler
 
-In `infra/src/whitelabel/captal/infra/eventhandlers/<Name>Handler.scala`:
+In `platform/src/whitelabel/captal/platform/eventhandlers/<Name>Handler.scala`:
 
 ```scala
-package whitelabel.captal.infra.eventhandlers
+package whitelabel.captal.platform.eventhandlers
 
 import io.getquill.*
 import whitelabel.captal.core.application.Event
 import whitelabel.captal.core.user.UserEvent
-import whitelabel.captal.infra.UserRow
-import whitelabel.captal.infra.schema.{QuillSqlite, given}
-import whitelabel.captal.infra.session.SessionContext
+import whitelabel.captal.platform.UserRow
+import whitelabel.captal.platform.schema.{QuillSqlite, given}
+import whitelabel.captal.platform.session.SessionContext
 import zio.*
 
 class UserLocaleChangedHandler(ctx: SessionContext) extends DbEventHandler[Event]:
@@ -71,7 +71,7 @@ class UserLocaleChangedHandler(ctx: SessionContext) extends DbEventHandler[Event
     }
 ```
 
-Use the existing handlers in `infra/.../eventhandlers/` as patterns: `UserPersistenceHandler`, `AnswerPersistenceHandler`, `SessionPhaseHandler` etc.
+Use the existing handlers in `platform/.../eventhandlers/` as patterns: `UserPersistenceHandler`, `AnswerPersistenceHandler`, `SessionPhaseHandler` etc.
 
 ### 4. Register the handler in the chain
 

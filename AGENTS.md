@@ -67,14 +67,14 @@ Layout actual del repo (paths relativos a la raíz):
 │       └── *Request.scala / *Response.scala
 │
 ├── provision/                           # YAML models — minimal, sin Quill/DB deps
-│   └── src/whitelabel/captal/infra/provision/
+│   └── src/whitelabel/captal/platform/provision/
 │       └── models.scala                 # LocationYaml, SurveyYaml, VideoYaml, ...
 │
-├── infra/                               # DB + Event handlers + Services (JVM only)
+├── platform/                               # DB + Event handlers + Services (JVM only)
 │   ├── resources/
 │   │   ├── application.conf
 │   │   └── db/migration/V*.sql          # Flyway migrations (V1 … V17 hoy: V16=unifi fields, V17=access_expires_at)
-│   └── src/whitelabel/captal/infra/
+│   └── src/whitelabel/captal/platform/
 │       ├── Migrate.scala                # Flyway runner
 │       ├── RqliteDataSource.scala       # JDBC wrapper sobre rqlite HTTP
 │       ├── rows.scala                   # *Row case classes (Quill)
@@ -153,7 +153,7 @@ Layout actual del repo (paths relativos a la raíz):
 └── docs/                                # Diagrams + extended notes
 ```
 
-> Convención: módulos **JVM-only** = `infra/`, `api/`, `cli/`. **Cross-compile** (JVM+JS) = `core/`, `endpoints/`. `provision/` es JVM-only pero minimal (solo case classes + circe decoders, sin Quill/DB) para que pueda ser dep del CLI sin arrastrar 60+ MB.
+> Convención: módulos **JVM-only** = `platform/`, `api/`, `cli/`. **Cross-compile** (JVM+JS) = `core/`, `endpoints/`. `provision/` es JVM-only pero minimal (solo case classes + circe decoders, sin Quill/DB) para que pueda ser dep del CLI sin arrastrar 60+ MB.
 
 ---
 
@@ -193,7 +193,7 @@ Cosas que NUNCA deben violarse — usadas como checklist mental al editar:
 
 ## UniFi integration — captive portal interaction
 
-> **Estado**: integración implementada end-to-end. El handler post-commit `UnifiAccessHandler` (`infra/eventhandlers/`) llama al UCG cuando se emite `UserEvent.UserFinishedProcess`, y on success setea `session.phase = Authorized` + `accessExpiresAt`. Si UniFi falla, el session queda en `Phase.Ready` y la próxima llamada a `/api/finish` reintenta seamless.
+> **Estado**: integración implementada end-to-end. El handler post-commit `UnifiAccessHandler` (`platform/eventhandlers/`) llama al UCG cuando se emite `UserEvent.UserFinishedProcess`, y on success setea `session.phase = Authorized` + `accessExpiresAt`. Si UniFi falla, el session queda en `Phase.Ready` y la próxima llamada a `/api/finish` reintenta seamless.
 
 ### Modelo del flujo completo
 
@@ -346,7 +346,7 @@ Response 200 con `revokedAuthorization` (required): `authorizationMethod`, `auth
 
 Dato colateral: el authorize *"cancels existing active authorization (if exists), creates a new one with new limits and resets guest traffic counters"* — o sea que el retry-by-design de `/api/finish` es idempotente por diseño de la API, no por casualidad.
 
-`UnifiClient` (`infra/UnifiClient.scala`) implementa ambos flows; `UnifiAccessHandler` (`infra/eventhandlers/`) es sólo el adaptador de eventos.
+`UnifiClient` (`platform/UnifiClient.scala`) implementa ambos flows; `UnifiAccessHandler` (`platform/eventhandlers/`) es sólo el adaptador de eventos.
 
 ### Caveats conocidos
 
@@ -369,11 +369,11 @@ Dato colateral: el authorize *"cancels existing active authorization (if exists)
 | Tarea | Archivos primarios |
 |---|---|
 | Agregar API endpoint | `endpoints/.../<Name>Endpoints.scala` + `api/.../<Name>Routes.scala` + `api/test/.../suites/<Name>Suite.scala`. Skill: `add-api-endpoint`. |
-| Agregar Phase | `core/.../application/phase.scala` + `infra/.../eventhandlers/SessionPhaseHandler.scala` + `client/.../Router.scala` (`Page` enum + `phaseToPage`) + nueva view. Skill: `add-phase`. |
-| Migración DB | `infra/resources/db/migration/V<n>__*.sql` + `infra/.../rows.scala` (campo) + `EntityWriter` (insert + upsert) + `ProvisionService` (pasar el value). Skill: `add-migration`. |
-| Nuevo evento + handler | `core/.../<aggregate>/Event.scala` + `infra/.../eventhandlers/<Name>Handler.scala` + `.andThen` en `Main.eventHandlerLayer` Y `TestLayers.eventHandlerLayer`. Skill: `add-event-handler`. |
-| Trabajo programado con deadline | `infra/.../session/JobScheduler.scala`: agregar un `case` a `ScheduledJob` y su rama en `JobRunner.execute`. El payload debe ser **datos, no un efecto** — la rehidratación de arranque reconstruye las tareas leyendo la DB, y un closure no se puede reconstruir desde una fila. |
-| Nueva entidad provisionable | `provision/.../models.scala` (YAML) + `infra/.../rows.scala` + migration + `EntityWriter` + `ProvisionService.{provisionX, scanDisk, provisionEntity, softDeleteEntity}` |
+| Agregar Phase | `core/.../application/phase.scala` + `platform/.../eventhandlers/SessionPhaseHandler.scala` + `client/.../Router.scala` (`Page` enum + `phaseToPage`) + nueva view. Skill: `add-phase`. |
+| Migración DB | `platform/resources/db/migration/V<n>__*.sql` + `platform/.../rows.scala` (campo) + `EntityWriter` (insert + upsert) + `ProvisionService` (pasar el value). Skill: `add-migration`. |
+| Nuevo evento + handler | `core/.../<aggregate>/Event.scala` + `platform/.../eventhandlers/<Name>Handler.scala` + `.andThen` en `Main.eventHandlerLayer` Y `TestLayers.eventHandlerLayer`. Skill: `add-event-handler`. |
+| Trabajo programado con deadline | `platform/.../session/JobScheduler.scala`: agregar un `case` a `ScheduledJob` y su rama en `JobRunner.execute`. El payload debe ser **datos, no un efecto** — la rehidratación de arranque reconstruye las tareas leyendo la DB, y un closure no se puede reconstruir desde una fila. |
+| Nueva entidad provisionable | `provision/.../models.scala` (YAML) + `platform/.../rows.scala` + migration + `EntityWriter` + `ProvisionService.{provisionX, scanDisk, provisionEntity, softDeleteEntity}` |
 | Wire un AWS service en CLI | `cli/.../AwsLayers.scala` + agregar al `.provide(...)` en `cli/Main.scala` |
 | Nueva skill | Crear `.agents/skills/<name>/SKILL.md` (dev) o `cli/resources/templates/skills/<name>/SKILL.md` (operator); registrar en `cli/.../Catalog.scala` si es operator |
 | Release de API base | Skill: `bump-api-version` |
@@ -422,7 +422,7 @@ Dato colateral: el authorize *"cancels existing active authorization (if exists)
 - **Despliegue producción vivo**: dev environment con CloudFront + ALB en coexistencia (production.captal.centauroads.com -> CloudFront, staging.* -> ALB Lambda CDN)
 - **Imagenes derivadas baked-in**: CLI construye y pushea imagenes con provision data via docker build local
 - **CloudFront SPA**: distribution con SPA fallback CloudFront Function + base href dinamico para soportar slug-aware paths
-- **Integración UniFi (authorize-guest)**: `UnifiAccessHandler` post-commit en `infra/eventhandlers/` llama al UCG con trust-all SSL + proxy opcional, idempotente, con retry-by-design (session.phase queda en Ready si UniFi falla → próximo `/api/finish` reintenta)
+- **Integración UniFi (authorize-guest)**: `UnifiAccessHandler` post-commit en `platform/eventhandlers/` llama al UCG con trust-all SSL + proxy opcional, idempotente, con retry-by-design (session.phase queda en Ready si UniFi falla → próximo `/api/finish` reintenta)
 - **Fase Authorized**: nueva fase + `accessExpiresAt` en sessions, `WelcomeView` muestra countdown, `/api/status` resetea fase al expirar (`resetForExpiration`)
 - **HTTP proxy support**: `UNIFI_PROXY_URL` env var en el API server, configurado via CLI (`shared/captal.yaml: unifi.proxyUrl`) — habilita acceso al UCG on-prem vía tinyproxy + Tailscale en deploys cloud
 - **`/api/finish` endpoint**: emite `UserFinishedProcess`, retorna `StatusResponse` post-commit con `accessExpiresAt` para que el cliente no necesite round-trip extra a `/api/status`
@@ -505,8 +505,8 @@ whitelabel-captal/
 │       ├── infrastructure/       # Traits de repositorios y SessionData
 │       ├── survey/               # Agregado Survey (con AdvertiserQuestion)
 │       └── user/                 # Agregado User
-├── infra/                        # Implementaciones Quill + Rqlite
-│   └── src/whitelabel/captal/infra/
+├── platform/                        # Implementaciones Quill + Rqlite
+│   └── src/whitelabel/captal/platform/
 │       ├── schema/                  # MappedEncoding y SchemaMeta
 │       ├── rows.scala               # Row types con tipos de dominio
 │       ├── RqliteDataSource.scala   # DataSource para Rqlite
@@ -665,7 +665,7 @@ final case class SessionData(
     currentSurveyId: Option[survey.Id],
     currentQuestionId: Option[survey.question.Id])
 
-// infra/SessionContext.scala
+// platform/SessionContext.scala
 trait SessionContext:
   def get: UIO[Option[SessionData]]
   def getOrFail: Task[SessionData]
@@ -680,7 +680,7 @@ object SessionContext:
           def getOrFail = ref.get.someOrFailException
           def set(data: SessionData) = ref.set(Some(data))
 
-// infra/SessionService.scala
+// platform/SessionService.scala
 trait SessionService:
   def findById(sessionId: user.SessionId): Task[Option[SessionData]]
   def create(deviceId: user.DeviceId, locale: String, phase: Phase): Task[SessionData]
@@ -703,7 +703,7 @@ object EventHandler:
     def andThen(other: EventHandler[F, E]): EventHandler[F, E] =
       events => self.handle(events) *> other.handle(events)
 
-// infra/DbEventHandler.scala
+// platform/DbEventHandler.scala
 trait DbEventHandler[-E]:
   def handle(events: List[E], quill: QuillSqlite): Task[Unit]
 
@@ -734,7 +734,7 @@ private val eventHandlerLayer: ZLayer[QuillSqlite & SessionContext, Nothing, Eve
 Los Row types usan tipos de dominio directamente gracias a `MappedEncoding`:
 
 ```scala
-// infra/schema.scala
+// platform/schema.scala
 type QuillSqlite = Quill.Sqlite[SnakeCase]
 
 object QuillSchema:
@@ -770,7 +770,7 @@ object QuillSchema:
 ### 7. Row Types con Tipos de Dominio
 
 ```scala
-// infra/rows.scala
+// platform/rows.scala
 final case class UserRow(
     id: user.Id,
     email: Option[user.Email],
@@ -802,7 +802,7 @@ final case class AnswerRow(
 
 Los repositorios siguen el patron:
 - Trait abstracto en `core/infrastructure/`
-- Implementacion Quill en `infra/`
+- Implementacion Quill en `platform/`
 
 ```scala
 // core/infrastructure/SurveyRepository.scala
@@ -812,7 +812,7 @@ trait SurveyRepository[F[_]]:
   def findWithLocationQuestion(surveyId: survey.Id, questionId: survey.question.Id): F[Option[Survey[State.WithLocationQuestion]]]
   def findNextIdentificationSurvey(): F[Option[NextIdentificationSurvey]]
 
-// infra/SurveyRepositoryQuill.scala
+// platform/SurveyRepositoryQuill.scala
 object SurveyRepositoryQuill:
   def apply(quill: QuillSqlite, ctx: SessionContext): SurveyRepository[Task] = ...
   val layer: ZLayer[QuillSqlite & SessionContext, Nothing, SurveyRepository[Task]] = ...
@@ -1049,7 +1049,7 @@ se deje andando.
 tiene reemplazo</summary>
 
 Estos diez pasos levantaban el portal de un slug. Los pasos 5 a 9 **no existen hoy en ningún lado**:
-el repo de infra crea el cluster, los log groups y un único target group compartido, y
+el repo de platform crea el cluster, los log groups y un único target group compartido, y
 `aws_ecs_service` sólo aparece en `modules/rqlite` y `modules/tailscale-proxy`. `create_location`
 escribe la fila en la base y nada en AWS la sirve. Es la especificación pendiente de
 `deploy_location`.
@@ -1065,7 +1065,7 @@ captal locations add <slug>                     # Crea locations/<slug>/ desde t
 captal locations push <slug>                    # Deploy de location (S3 + ECS + ALB rule)
 captal locations push all                       # Itera push sobre cada locations/<slug>/
                                                 # ("all" es slug sentinel — no es subcomando)
-captal locations deprovision <slug> [-y|--yes]  # Tear-down de la infra AWS de la location
+captal locations deprovision <slug> [-y|--yes]  # Tear-down de la platform AWS de la location
                                                 # (ALB rule, ECS service, task defs, target group,
                                                 # log group, ECR image tags, S3 assets, CF cache).
                                                 # locations/<slug>/ local NO se toca.
@@ -1102,7 +1102,7 @@ Tras cada invocación de cualquier `captal`, un hook en `Main.scala::run` compar
 2. Push a ECR
 3. Register task definition `captal-shared-provision` con esa imagen
 4. RunTask Fargate (one-shot)
-5. Container ejecuta `java -cp infra.jar SharedProvision` que aplica YAMLs de surveys + advertisers a la DB
+5. Container ejecuta `java -cp platform.jar SharedProvision` que aplica YAMLs de surveys + advertisers a la DB
 6. Poll hasta STOPPED, verificar exit code
 
 **`captal locations push <slug>`** (service de larga duracion):
@@ -1155,7 +1155,7 @@ Las doce operacionales, todas reescritas alrededor de tools:
 | `edit-i18n` | `get_i18n_status` → `set_translations` → `remove_translation` |
 | `i18n-reference` | Las claves que el portal exige, derivadas del tipo `I18n` por `get_i18n_schema` |
 | `style-reference` | Variables CSS y estructura de clases. La referencia viva es `get_css_schema` |
-| `configure-aws` | El repo de infra, las env vars que el server lee, y los tokens de operador |
+| `configure-aws` | El repo de platform, las env vars que el server lee, y los tokens de operador |
 | `deploy-location` | Las tres cosas que "deploy" puede significar. La tercera es `deploy_location` |
 | `troubleshoot-deployment` | Síntoma → causa → arreglo |
 | `recover-data` | Recuperación tras pérdida de datos en rqlite. **Ya no hay replay desde archivos** |
@@ -1346,7 +1346,7 @@ EFS es el caso más interesante, y se descarta igual. Sus locks NFSv4 sí se lib
 
 Eso no se arregla con el almacén. Detectar que un nodo se desconectó requiere una **sesión del lado del servidor** — el advisory lock de Postgres que se libera cuando cae el TCP, un lease de etcd con su keepalive, una sesión de Consul, un znode efímero de ZooKeeper. rqlite no tiene sesiones y S3 tampoco, así que ninguno de los dos puede. Lo máximo sin sesiones es un lease con TTL, que no detecta la desconexión: expira si nadie renueva.
 
-**Decidido: se queda así por ahora. Si muerde, entra etcd** — una instancia sola alcanza, no hace falta cluster, y es el único de la lista que da la semántica de verdad con el keepalive manejado por la librería (`jetcd`) en vez de escrito a mano. Lo que cuesta es una task siempre encendida, su módulo de TF, y `jetcd` arrastrando grpc-netty dentro de `infra/`; y hay que saber que se vuelve un SPOF que bloquea despliegues, y que tampoco cierra el fencing (un holder congelado por GC puede despertar y seguir migrando tras perder el lease, porque Flyway no acepta tokens).
+**Decidido: se queda así por ahora. Si muerde, entra etcd** — una instancia sola alcanza, no hace falta cluster, y es el único de la lista que da la semántica de verdad con el keepalive manejado por la librería (`jetcd`) en vez de escrito a mano. Lo que cuesta es una task siempre encendida, su módulo de TF, y `jetcd` arrastrando grpc-netty dentro de `platform/`; y hay que saber que se vuelve un SPOF que bloquea despliegues, y que tampoco cierra el fencing (un holder congelado por GC puede despertar y seguir migrando tras perder el lease, porque Flyway no acepta tokens).
 
 La alternativa que no necesita ningún lock quedó sobre la mesa y sin hacer: sacar las migraciones del contenedor que sirve y correrlas como una task one-shot por despliegue, con la API solo verificando la versión. Un migrador por construcción, y ECS ya detecta la task muerta — es exactamente la capacidad que se le compraría a etcd. Es el patrón que `mill dev` ya usa localmente (paso 2/4); el camino desplegado es el que divergió.
 
@@ -1474,7 +1474,7 @@ real la invalidacion vuelve a ser obligatoria y un fallo es un error de la tool.
 ```bash
 # Docker - imagenes base
 ./mill api.dockerBuild   <ecr-uri>/captal-api v1.0.0
-./mill infra.dockerBuild <ecr-uri>/captal-provision v1.0.0
+./mill platform.dockerBuild <ecr-uri>/captal-provision v1.0.0
 
 # CLI
 ./mill cli.run -- init --claude
@@ -1492,7 +1492,7 @@ Implementar tests E2E del cliente web (Welcome → IdentificationQuestion → Vi
 ### Unit test de `UnifiClient`
 Viable desde que la lógica HTTP se extrajo del handler: levantar un server zio-http en puerto 0 y usar `UnifiClient.live(client, scheme = "http")`. Cubrir authorize (path, encoding del `filter`, `X-API-KEY`, body con `timeLimitMinutes`), revoke (`action` correcto y **sin** `timeLimitMinutes`), `{"data":[]}` → "no client found", no-2xx en GET y en POST, más asserts puros sobre el bracketing IPv6 de `baseUrl` y `normalizeMac`.
 
-Ojo: **no existe módulo `infra.test`** — `build.mill` sólo define `object test` bajo `core`, `api` y `cli`. O va en `api/test/` como `ZIOSpecDefault` standalone (fuera de `E2ETests.spec`, que hace `provideShared` y necesita rqlite), o hay que agregar el submódulo al build.
+Ojo: **no existe módulo `platform.test`** — `build.mill` sólo define `object test` bajo `core`, `api` y `cli`. O va en `api/test/` como `ZIOSpecDefault` standalone (fuera de `E2ETests.spec`, que hace `provideShared` y necesita rqlite), o hay que agregar el submódulo al build.
 
 ---
 
@@ -1500,8 +1500,8 @@ Ojo: **no existe módulo `infra.test`** — `build.mill` sólo define `object te
 
 El proyecto produce **dos imagenes base** que se pushean a ECR:
 
-- `captal-api` (`Dockerfile.api`): JVM + `api.jar` assembly. Base del ECS service per-location. Incluye clases de `infra` (Migrate) por el assembly.
-- `captal-provision` (`Dockerfile.provision`): JVM + `infra.jar` assembly. Base de la task efimera de `shared push`. Mas pequena (no incluye `api/`).
+- `captal-api` (`Dockerfile.api`): JVM + `api.jar` assembly. Base del ECS service per-location. Incluye clases de `platform` (Migrate) por el assembly.
+- `captal-provision` (`Dockerfile.provision`): JVM + `platform.jar` assembly. Base de la task efimera de `shared push`. Mas pequena (no incluye `api/`).
 
 Ambas imagenes tienen `/etc/captal/` vacio. El CLI `captal` construye **imagenes derivadas** (FROM base + COPY provision yamls) durante `shared push` y `locations push`.
 
@@ -1517,8 +1517,8 @@ aws ecr get-login-password --region us-east-1 | \
 ./mill api.dockerPush  <account>.dkr.ecr.us-east-1.amazonaws.com/captal-api v1.0.0
 
 # 3. Build + push imagen Provision base
-./mill infra.dockerBuild <account>.dkr.ecr.us-east-1.amazonaws.com/captal-provision v1.0.0
-./mill infra.dockerPush  <account>.dkr.ecr.us-east-1.amazonaws.com/captal-provision v1.0.0
+./mill platform.dockerBuild <account>.dkr.ecr.us-east-1.amazonaws.com/captal-provision v1.0.0
+./mill platform.dockerPush  <account>.dkr.ecr.us-east-1.amazonaws.com/captal-provision v1.0.0
 
 # 4. Bundle del cliente a S3 (con Content-Encoding: gzip para los .gz)
 ./mill client.bundle
@@ -1561,7 +1561,7 @@ ENVIRONMENT=dev ./mill client.bundle    # incluye features dev
 - Eliminado `sqlite-jdbc`
 
 ### Sistema de Provisioning Declarativo
-- `infra/provision/`: `ProvisionService`, `ProvisionPlan`, `EntityWriter`, `IdGenerator`
+- `platform/provision/`: `ProvisionService`, `ProvisionPlan`, `EntityWriter`, `IdGenerator`
 - Reemplazo del seeding manual por migraciones repetibles + sync de YAML
 - Manifest hashed con soft-delete e idempotencia
 - Estructura split: `shared/` (global) + `locations/<slug>/` (per-tenant)
@@ -1615,8 +1615,8 @@ ENVIRONMENT=dev ./mill client.bundle    # incluye features dev
 aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <ecr-host>
 ./mill api.dockerBuild   --repoUri <ecr>/captal-api-dev      --tag vX.Y.Z
 ./mill api.dockerPush    --repoUri <ecr>/captal-api-dev      --tag vX.Y.Z
-./mill infra.dockerBuild --repoUri <ecr>/captal-provision-dev --tag vX.Y.Z
-./mill infra.dockerPush  --repoUri <ecr>/captal-provision-dev --tag vX.Y.Z
+./mill platform.dockerBuild --repoUri <ecr>/captal-provision-dev --tag vX.Y.Z
+./mill platform.dockerPush  --repoUri <ecr>/captal-provision-dev --tag vX.Y.Z
 
 # Bundle del cliente con metadata correcta (gzip + content-type)
 ENVIRONMENT=dev ./mill client.bundle   # o sin ENVIRONMENT=dev para production
@@ -1665,7 +1665,7 @@ $env:Path += ";$dir"   # o agregar permanentemente via System Properties
 captal init --claude
 ```
 
-**TODO**: el bucket `captal-cli-releases` es nuevo; agregar a Terraform infra (versioning + lifecycle policy para cleanup de releases viejos).
+**TODO**: el bucket `captal-cli-releases` es nuevo; agregar a Terraform platform (versioning + lifecycle policy para cleanup de releases viejos).
 
 ### Recovery: rqlite perdio data
 Si tras redeploy de rqlite (o force-deploy del API) las queries devuelven 500 / "no result set returned":

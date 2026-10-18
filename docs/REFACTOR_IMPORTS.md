@@ -48,7 +48,7 @@ Highest density first; each file is independent and compiles on its own.
 | 11 | `mcp/.../EntityResources.scala` |
 | 11 | `mcp/test/.../I18nToolsSpec.scala` |
 | 8 | `api/.../Main.scala` |
-| 6 | `infra/.../session/SessionService.scala` |
+| 6 | `platform/.../session/SessionService.scala` |
 | …34 more, 4 or fewer each |
 
 The test files are the bulk and the safest: `zio.json.ast.Json` accounts for most of it, and a

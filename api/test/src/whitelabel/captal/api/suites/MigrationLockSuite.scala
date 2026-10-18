@@ -2,7 +2,7 @@ package whitelabel.captal.api.suites
 
 import com.typesafe.config.ConfigFactory
 import java.sql.Connection
-import whitelabel.captal.infra.{Migrate, RqliteDataSource}
+import whitelabel.captal.platform.{Migrate, RqliteDataSource}
 // Selective, because `zio.*` and `zio.test.*` both export `test` and neither wins by being second.
 // The other suites get away with the wildcard by extending `ZIOSpecDefault`, where `test` arrives
 // as an inherited member and shadows both imports; a plain object has no such member.

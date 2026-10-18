@@ -5,10 +5,10 @@ import java.util.UUID
 import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
 import whitelabel.captal.core.survey
-import whitelabel.captal.infra.schema.QuillSqlite
-import whitelabel.captal.infra.schema.core.given
-import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.{
+import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.platform.schema.core.given
+import whitelabel.captal.platform.schema.given
+import whitelabel.captal.platform.{
   AdvertiserVideoRow,
   AnswerRow,
   LocalizedTextRow,

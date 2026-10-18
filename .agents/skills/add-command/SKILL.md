@@ -13,7 +13,7 @@ The application layer is a **pure command/event system**:
 - A **command** is a case class describing intent (`AnswerEmailCommand`, `ProvideNextVideoCommand`).
 - A **handler** transforms the command into an `Op[Event, Error, Result]` — a pure value carrying the events to emit and the result, or accumulated errors.
 - A **flow** wires a handler with an event-handler chain: it runs the handler, dispatches events transactionally, and returns the result.
-- Side effects (DB reads/writes) live in the `EventHandler` chain (`infra/eventhandlers/`), not in the handler itself.
+- Side effects (DB reads/writes) live in the `EventHandler` chain (`platform/eventhandlers/`), not in the handler itself.
 
 Read `core/src/whitelabel/captal/core/Op.scala` and `core/src/whitelabel/captal/core/application/Flow.scala` if `Op`/`Flow` are unfamiliar. Brief refresher:
 
@@ -151,7 +151,7 @@ The result type is often `NextStep(phase: Phase)`. The route then calls `setPhas
 
 ## Anti-patterns
 
-- ❌ DB writes from inside `handle` — those belong in event handlers (`infra/eventhandlers/`). Handlers should be pure + read-only.
+- ❌ DB writes from inside `handle` — those belong in event handlers (`platform/eventhandlers/`). Handlers should be pure + read-only.
 - ❌ Throwing exceptions — use `Op.fail` so errors compose with the rest of the pipeline.
 - ❌ Embedding `Task.attempt(...)` in the handler body — keeps the `F[_]` abstract. If you need a side effect, it goes in an event handler.
 - ❌ Skipping `TestLayers.scala` registration — tests will provide-fail at compile time once you reference the new flow type in `Routes.FullEnv`.

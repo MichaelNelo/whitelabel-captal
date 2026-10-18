@@ -10,7 +10,7 @@ import whitelabel.captal.endpoints.StatusResponse.given
 import whitelabel.captal.endpoints.SurveyResponse.given
 import whitelabel.captal.endpoints.schemas.given
 import whitelabel.captal.endpoints.{AnswerRequest, ApiError, StatusResponse, SurveyResponse}
-import whitelabel.captal.infra.session.{CaptivePortalParams, SessionContext, SessionService}
+import whitelabel.captal.platform.session.{CaptivePortalParams, SessionContext, SessionService}
 import zio.*
 
 object SurveyRoutes:

@@ -46,7 +46,7 @@ Also update `Phase.fromDbString` / `Phase.toDbString` if defined (some places se
 
 Two places set the phase based on events:
 
-- **`SessionPhaseHandler.scala`** (`infra/.../eventhandlers/`): transitions on identification answer + video watched. If your new phase comes after one of these, add the branch there.
+- **`SessionPhaseHandler.scala`** (`platform/.../eventhandlers/`): transitions on identification answer + video watched. If your new phase comes after one of these, add the branch there.
 - **Individual route serverLogic**: e.g. `VideoRoutes.NextVideo` sets `session.phase = step.phase` when no video matches. If your phase is reached by a route directly, update the route.
 
 Example: if BonusGame goes after AdvertiserQuestion:
