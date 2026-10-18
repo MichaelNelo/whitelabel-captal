@@ -15,7 +15,7 @@ import whitelabel.captal.core.application.{
   Phase
 }
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository, VideoRepository}
-import whitelabel.captal.infra.eventhandlers.{
+import whitelabel.captal.platform.eventhandlers.{
   AnswerPersistenceHandler,
   DbEventHandler,
   EventLogHandler,
@@ -28,15 +28,15 @@ import whitelabel.captal.infra.eventhandlers.{
   UnifiAccessHandler,
   UserPersistenceHandler
 }
-import whitelabel.captal.infra.repositories.{
+import whitelabel.captal.platform.repositories.{
   SurveyRepositoryQuill,
   UserRepositoryQuill,
   VideoRepositoryQuill
 }
-import whitelabel.captal.infra.schema.QuillSqlite
-import whitelabel.captal.infra.services.{LocaleService, LocaleServiceQuill, LocationService}
-import whitelabel.captal.infra.session.{JobQueue, JobRunner, SessionContext, SessionService}
-import whitelabel.captal.infra.{RqliteDataSource, UnifiAccess, UnifiClient}
+import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.platform.services.{LocaleService, LocaleServiceQuill, LocationService}
+import whitelabel.captal.platform.session.{JobQueue, JobRunner, SessionContext, SessionService}
+import whitelabel.captal.platform.{RqliteDataSource, UnifiAccess, UnifiClient}
 import zio.*
 import zio.http.*
 import zio.interop.catz.*

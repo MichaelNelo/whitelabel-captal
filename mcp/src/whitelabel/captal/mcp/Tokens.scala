@@ -7,7 +7,7 @@ import java.util.{Base64, UUID}
 
 import com.jamesward.ziohttp.mcp.auth.OauthScope
 import io.getquill.*
-import whitelabel.captal.infra.schema.QuillSqlite
+import whitelabel.captal.platform.schema.QuillSqlite
 import zio.*
 
 import QuillArrow.->

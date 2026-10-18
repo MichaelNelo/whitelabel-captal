@@ -2,9 +2,9 @@ package whitelabel.captal.mcp
 
 import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
-import whitelabel.captal.infra.LocationRow
-import whitelabel.captal.infra.schema.QuillSqlite
-import whitelabel.captal.infra.schema.given
+import whitelabel.captal.platform.LocationRow
+import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.platform.schema.given
 import zio.*
 import zio.json.ast.Json
 import zio.schema.annotation.description

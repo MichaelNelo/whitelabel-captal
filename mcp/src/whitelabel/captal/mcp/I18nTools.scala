@@ -5,9 +5,9 @@ import java.util.UUID
 import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
 import whitelabel.captal.core.i18n.{I18n, I18nSchema}
-import whitelabel.captal.infra.schema.QuillSqlite
-import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.{LocalizedTextRow, LocationRow}
+import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.platform.schema.given
+import whitelabel.captal.platform.{LocalizedTextRow, LocationRow}
 import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}

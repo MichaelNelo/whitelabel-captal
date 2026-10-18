@@ -6,7 +6,7 @@ import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Flow, Phase}
 import whitelabel.captal.endpoints.StatusResponse.given
 import whitelabel.captal.endpoints.{ApiError, StatusResponse}
-import whitelabel.captal.infra.session.{SessionContext, SessionService}
+import whitelabel.captal.platform.session.{SessionContext, SessionService}
 import zio.*
 
 object FinishRoutes:

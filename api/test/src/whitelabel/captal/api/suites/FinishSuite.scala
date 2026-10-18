@@ -4,16 +4,16 @@ import io.circe.Json
 import io.circe.parser.parse
 import whitelabel.captal.api.TestFixtures
 import whitelabel.captal.api.TestHelpers.*
+import whitelabel.captal.platform.EventLogRow
 import zio.test.*
 
 object FinishSuite:
   private val FinishedProcessEventType = "user.finished_process"
 
-  private def findFinishedEvent(rows: List[whitelabel.captal.infra.EventLogRow]) = rows.filter(
+  private def findFinishedEvent(rows: List[EventLogRow]) = rows.filter(
     _.eventType == FinishedProcessEventType)
 
-  private def parseEventData(row: whitelabel.captal.infra.EventLogRow): Json =
-    parse(row.eventData).toOption.get
+  private def parseEventData(row: EventLogRow): Json = parse(row.eventData).toOption.get
 
   val suite: Spec[TestEnv, Throwable] =
     zio

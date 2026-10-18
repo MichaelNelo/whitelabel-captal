@@ -14,16 +14,16 @@ import whitelabel.captal.core.application.{
   Phase
 }
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository, VideoRepository}
-import whitelabel.captal.infra.eventhandlers.*
-import whitelabel.captal.infra.repositories.{
+import whitelabel.captal.platform.eventhandlers.*
+import whitelabel.captal.platform.repositories.{
   SurveyRepositoryQuill,
   UserRepositoryQuill,
   VideoRepositoryQuill
 }
-import whitelabel.captal.infra.schema.QuillSqlite
-import whitelabel.captal.infra.services.LocaleService
-import whitelabel.captal.infra.session.{JobQueue, JobRunner, SessionContext, SessionService}
-import whitelabel.captal.infra.{RqliteDataSource, UnifiAccess}
+import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.platform.services.LocaleService
+import whitelabel.captal.platform.session.{JobQueue, JobRunner, SessionContext, SessionService}
+import whitelabel.captal.platform.{RqliteDataSource, UnifiAccess}
 import zio.*
 import zio.interop.catz.*
 

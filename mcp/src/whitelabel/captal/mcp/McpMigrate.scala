@@ -1,7 +1,7 @@
 package whitelabel.captal.mcp
 
 import com.typesafe.config.ConfigFactory
-import whitelabel.captal.infra.Migrate
+import whitelabel.captal.platform.Migrate
 import zio.*
 
 /** The MCP server's own schema, and a check that the API has already laid down the rest.

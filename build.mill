@@ -797,8 +797,11 @@ trait EndpointsDepsJS extends ScalaJSModule:
     mvn"com.softwaremill.sttp.tapir::tapir-core::1.11.11",
     mvn"com.softwaremill.sttp.tapir::tapir-json-circe::1.11.11")
 
+// `platform` was declared here and nothing in the module imported from it — not one reference. It
+// made the HTTP contract look like it depended on persistence, a layering inversion that never
+// existed. Verified by compiling `endpoints` and `api` without it.
 object endpoints extends BaseModule with EndpointsDepsJVM:
-  def moduleDeps = Seq(core, infra)
+  def moduleDeps = Seq(core)
 
 object `endpoints-js` extends BaseJSModule with EndpointsDepsJS:
   def moduleDeps = Seq(`core-js`)
@@ -808,7 +811,7 @@ object `endpoints-js` extends BaseJSModule with EndpointsDepsJS:
 // Infra: JVM only
 // ─────────────────────────────────────────────────────────────────────────────
 
-object infra extends BaseModule:
+object platform extends BaseModule:
   def moduleDeps = Seq(core)
   def mvnDeps = Seq(
     mvn"dev.zio::zio:2.1.14",
@@ -833,21 +836,21 @@ object infra extends BaseModule:
   )
 
   def migrate() = Task.Command:
-    runMain("whitelabel.captal.infra.Migrate")()
+    runMain("whitelabel.captal.platform.Migrate")()
 
   // `dockerBuild` and `dockerPush` built and shipped `captal-provision`, an image whose only
   // process was `SharedProvision`. With the ephemeral provisioning task gone there is nothing to
   // run in it. The ECR repositories `captal-provision-{env}` and `captal-shared-{env}` are now
   // unreferenced; emptying and removing them is a `tofu apply` in the infrastructure repo, not
   // something this build can do.
-end infra
+end platform
 
 // ─────────────────────────────────────────────────────────────────────────────
 // API: JVM only (server implementation)
 // ─────────────────────────────────────────────────────────────────────────────
 
 object api extends BaseModule:
-  def moduleDeps = Seq(core, endpoints, infra)
+  def moduleDeps = Seq(core, endpoints, platform)
 
   def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "Dockerfile.api")
 
@@ -933,7 +936,7 @@ object api extends BaseModule:
     println("[dev] Step 1/3: Ensuring rqlite container...")
     rqliteSetup()()
     println("[dev] Step 2/3: Running migrations...")
-    infra.migrate()()
+    platform.migrate()()
     println(s"[dev] Step 3/3: Starting server (location=$slug)...")
     copyIndex()()
     if Task.env.getOrElse("CLIENT_LINKER", "fast") == "full" then
@@ -1414,9 +1417,9 @@ end client
 // 3.8.4 module may depend on 3.8.0 ones but not the reverse — which is exactly why the version
 // bump is contained here instead of applied build-wide.
 //
-// Depending on `infra` also pulls its zio-http 3.0.1, which Coursier evicts up to the 3.11.3 that
+// Depending on `platform` also pulls its zio-http 3.0.1, which Coursier evicts up to the 3.11.3 that
 // zio-http-mcp requires — but only inside THIS module's classpath; `api` still resolves 3.0.1.
-// `UnifiClient` is the single file in `infra` compiled against zio-http, and the backoffice never
+// `UnifiClient` is the single file in `platform` compiled against zio-http, and the backoffice never
 // authorizes guests, so that class is never loaded here. If this server ever needs to talk to a
 // UniFi controller, align the versions first rather than finding out through a NoSuchMethodError.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1427,7 +1430,7 @@ object mcp extends BaseModule:
   // for 0.8.3 and 3.8.4 before that, for the same reason each time.
   //
   // Forward compatibility is the direction TASTy does not have, so this follows the dependency
-  // upward and `core`, `infra` and the rest stay on 3.8.0 — backward compatibility covers reading
+  // upward and `core`, `platform` and the rest stay on 3.8.0 — backward compatibility covers reading
   // them from here. Which is also why it is only this module: 3.10 breaks Quill, and `api` writes
   // far more SQL than the backoffice does.
   //
@@ -1455,7 +1458,7 @@ object mcp extends BaseModule:
     * runs `java -jar`, never the jar directly.
     */
   def prependShellScript = ""
-  def moduleDeps = Seq(core, infra)
+  def moduleDeps = Seq(core, platform)
   // The AWS SDK ships `netty-nio-client` for its *async* clients, and that client pins netty
   // 4.1.x. zio-http is on 4.2.x, where `DefaultHeaders` moved to `netty-codec-base` — so the
   // stale `netty-codec` 4.1 jar shadows the class and every request dies with
@@ -1561,7 +1564,7 @@ object mcp extends BaseModule:
     * Usage: ./mill mcp.dev
     */
   def dev(port: Int = devPort, token: String = "dev-token") = Task.Command:
-    val migrationCp = infra.runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
+    val migrationCp = platform.runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
     val cp = runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
 
     println("[dev] Step 1/4: Ensuring rqlite...")
@@ -1569,7 +1572,7 @@ object mcp extends BaseModule:
 
     println("[dev] Step 2/4: Running migrations...")
     val migration = os
-      .proc("java", "-cp", migrationCp, "whitelabel.captal.infra.Migrate")
+      .proc("java", "-cp", migrationCp, "whitelabel.captal.platform.Migrate")
       .call(env = Map("DB_URL" -> dbUrl), check = false, stdout = os.Inherit, stderr = os.Inherit)
     if migration.exitCode != 0 then
       sys.error("[dev] Migrations failed; the server would start against a schema-less database.")
@@ -1790,7 +1793,7 @@ object mcp extends BaseModule:
       */
     def migratedRqliteUrl: T[String] = Task:
       // The stamp, not `rqliteUrl`, so a recreated container invalidates this.
-      migrateSchema(rqliteStamp().split(" ").last, infra.runClasspath(), runClasspath())
+      migrateSchema(rqliteStamp().split(" ").last, platform.runClasspath(), runClasspath())
 
     /** Both schemas against one URL, in order, as two processes.
       *
@@ -1814,7 +1817,7 @@ object mcp extends BaseModule:
           .call(env = env, check = false, stderr = os.Pipe, stdout = os.Pipe)
         if result.exitCode != 0 then
           sys.error(s"[migrate] $label failed:\n${result.err.text().trim}")
-      migrate("api schema", apiClassPath, "whitelabel.captal.infra.Migrate")
+      migrate("api schema", apiClassPath, "whitelabel.captal.platform.Migrate")
       migrate("backoffice schema", mcpClassPath, "whitelabel.captal.mcp.McpMigrate")
       url
 
@@ -1833,7 +1836,7 @@ object mcp extends BaseModule:
       s"$id $url"
 
     def migratedE2eUrl: T[String] = Task:
-      migrateSchema(e2eStamp().split(" ").last, infra.runClasspath(), runClasspath())
+      migrateSchema(e2eStamp().split(" ").last, platform.runClasspath(), runClasspath())
 
     /** LocalStack's container, its endpoint, and whether a licence was configured — as one input.
       *
@@ -1927,7 +1930,7 @@ object mcp extends BaseModule:
 
     /** What the server reads at startup, so a test exercises the real layers.
       *
-      * `RqliteDataSource` reads `database.jdbcUrl`, which infra's application.conf overrides from
+      * `RqliteDataSource` reads `database.jdbcUrl`, which platform's application.conf overrides from
       * `DB_URL`. The asset variables are here rather than in each spec because `AssetStore.layer`
       * requires all three, and the end-to-end test builds the whole server rather than a store.
       *

@@ -1,7 +1,7 @@
 package whitelabel.captal.mcp
 
 import com.jamesward.ziohttp.mcp.*
-import whitelabel.captal.infra.schema.QuillSqlite
+import whitelabel.captal.platform.schema.QuillSqlite
 import zio.*
 
 /** Onboarding, as far as MCP can express a sequence.

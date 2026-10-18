@@ -3,9 +3,9 @@ package whitelabel.captal.mcp
 import com.jamesward.ziohttp.mcp.{CallToolResult, ToolContent}
 import io.getquill.*
 import io.getquill.jdbczio.Quill
-import whitelabel.captal.infra.schema.QuillSqlite
-import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.{AdvertiserRow, RqliteDataSource}
+import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.platform.schema.given
+import whitelabel.captal.platform.{AdvertiserRow, RqliteDataSource}
 import zio.*
 import zio.test.*
 

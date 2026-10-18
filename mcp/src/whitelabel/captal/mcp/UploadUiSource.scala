@@ -2,10 +2,10 @@ package whitelabel.captal.mcp
 
 import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
-import whitelabel.captal.infra.schema.QuillSqlite
-import whitelabel.captal.infra.schema.core.given
-import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.{AdvertiserVideoRow, LocalizedTextRow, LocationRow}
+import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.platform.schema.core.given
+import whitelabel.captal.platform.schema.given
+import whitelabel.captal.platform.{AdvertiserVideoRow, LocalizedTextRow, LocationRow}
 import zio.*
 
 /** Serves the upload page, one URI per video.

@@ -13,7 +13,7 @@ import whitelabel.captal.endpoints.{
   VideoResponse,
   VideoWatchedResponse
 }
-import whitelabel.captal.infra.session.{SessionContext, SessionService}
+import whitelabel.captal.platform.session.{SessionContext, SessionService}
 import zio.*
 
 object VideoRoutes:

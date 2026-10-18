@@ -1,6 +1,6 @@
 package whitelabel.captal.mcp
 
-import whitelabel.captal.infra.{LocationRow, UnifiAccess}
+import whitelabel.captal.platform.{LocationRow, UnifiAccess}
 import zio.test.*
 
 /** The step list is the whole point of the readiness record, and it is pure, so it is tested

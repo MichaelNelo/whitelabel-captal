@@ -7,7 +7,7 @@ import whitelabel.captal.core.infrastructure.SessionData
 import whitelabel.captal.core.user
 import whitelabel.captal.endpoints.ApiError
 import whitelabel.captal.endpoints.ApiError.given
-import whitelabel.captal.infra.session.{CaptivePortalParams, SessionContext, SessionService}
+import whitelabel.captal.platform.session.{CaptivePortalParams, SessionContext, SessionService}
 import zio.*
 
 final class SessionEndpoint(cookieConfig: SessionCookieConfig):

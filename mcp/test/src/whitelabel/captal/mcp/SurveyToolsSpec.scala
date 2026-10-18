@@ -6,10 +6,10 @@ import com.jamesward.ziohttp.mcp.{CallToolResult, ToolContent}
 import io.getquill.*
 import io.getquill.jdbczio.Quill
 import whitelabel.captal.core.survey
-import whitelabel.captal.infra.schema.QuillSqlite
-import whitelabel.captal.infra.schema.core.given
-import whitelabel.captal.infra.schema.given
-import whitelabel.captal.infra.{
+import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.platform.schema.core.given
+import whitelabel.captal.platform.schema.given
+import whitelabel.captal.platform.{
   LocalizedTextRow,
   LocationRow,
   QuestionRow,

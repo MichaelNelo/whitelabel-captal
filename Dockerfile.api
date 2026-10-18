@@ -46,4 +46,4 @@ ENV JAVA_TOOL_OPTIONS="-Xss4m -Dnetworkaddress.cache.ttl=5 -Dnetworkaddress.cach
 # `McpMigrate` from its own image. Both take `Migrate.Lock` first, which matters most here: every
 # location runs this image, so a fleet redeploy is one migrator per location against one history
 # table, and Flyway cannot serialise them on SQLite.
-CMD ["sh", "-c", "java -cp api.jar whitelabel.captal.infra.Migrate && java -jar api.jar"]
+CMD ["sh", "-c", "java -cp api.jar whitelabel.captal.platform.Migrate && java -jar api.jar"]

@@ -3,9 +3,9 @@ package whitelabel.captal.mcp
 import java.time.Instant
 
 import io.getquill.*
-import whitelabel.captal.infra.LocationRow
-import whitelabel.captal.infra.schema.QuillSqlite
-import whitelabel.captal.infra.schema.given
+import whitelabel.captal.platform.LocationRow
+import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.platform.schema.given
 import zio.*
 import zio.http.*
 
