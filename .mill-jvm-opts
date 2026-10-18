@@ -1,0 +1,11 @@
+# Stack for the JVM Mill runs the Scala 3 compiler in.
+#
+# `DeployE2ESpec` compiles one `lifecycle` method holding six `assertTrue` chains of about forty
+# conditions each, and the compiler recurses once per node of that tree. The default 1m was already
+# close enough that adding a second test to the suite overflowed it, with the compiler reporting
+# "Stack overflow in the compiler" and a link to the deeply-nested-code page rather than anything
+# about the code.
+#
+# Raised rather than worked around: breaking the assertions up to fit a stack size is letting the
+# compiler dictate how a test reads. If this is hit again, that spec is the place to look first.
+-Xss8m
