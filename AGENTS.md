@@ -1358,7 +1358,7 @@ LocalStack arranca con `ENFORCE_IAM=1` y `IAM_SOFT_MODE=1`, y el suite corre com
 
 **Lo que esto arregla.** Por defecto LocalStack no autentica nada: *"all APIs can be accessed without authentication"*. El suite pasaba `test`/`test`, así que cada llamada tenía éxito sin importar qué concediera la política — el e2e de deploy **pasaba igual con una política vacía**. La entrada 2 otra vez: una garantía que nadie ejercita no es una garantía.
 
-**Por qué soft y no duro.** Hard mode es inalcanzable acá, y es una limitación medida, no una concesión. La política condiciona las llamadas de servicio de ECS a `ecs:cluster` y `iam:PassRole` a `iam:PassedToService`, y **LocalStack no puebla esas claves** aunque la petición las lleve. Medido con su propio `simulate-principal-policy`:
+**Por qué soft y no duro.** Hard mode es inalcanzable acá, y está **documentado**, no es una inferencia mía. La página de *IAM coverage* de LocalStack enumera las claves de condición que soporta — las globales, las de tags, y específicas de servicio **solo para EC2 y RAM** — y lista los servicios con cobertura de enforcement, donde **ECS no figura**. Esta política condiciona las llamadas de servicio de ECS a `ecs:cluster` y `iam:PassRole` a `iam:PassedToService`, ninguna de las cuales está en esa lista. Su propio `simulate-principal-policy` muestra la consecuencia:
 
 | simulación | decisión |
 |---|---|

@@ -298,14 +298,22 @@ private def ensureLocalStack(
   // Enforcement only where it can work: both settings are licensed features, and without a token
   // there is no ECS or IAM to evaluate anything against anyway.
   //
-  // Soft by default, which is a measured limitation rather than a soft landing. `IAM_SOFT_MODE`
-  // evaluates every request against the policy and logs the outcome without denying; hard mode
-  // denies. Hard is unreachable here because LocalStack does not populate the condition keys the
-  // requests carry — the policy gates ECS service calls on `ecs:cluster` and `iam:PassRole` on
-  // `iam:PassedToService`, and its own simulator flips each one from `implicitDeny` to `allowed`
-  // purely by supplying the key. So hard mode would fail the deploy end-to-end test on an emulator
-  // gap, and the alternative — dropping the conditions — is weakening a production policy to suit
-  // a local tool.
+  // Soft by default, and that is a documented limitation rather than a soft landing.
+  // `IAM_SOFT_MODE` evaluates every request against the policy and logs the outcome without
+  // denying; hard mode denies.
+  //
+  // Hard is unreachable because what this policy gates on is outside LocalStack's IAM coverage.
+  // Its coverage page enumerates the condition keys it supports — the global ones, the tag ones,
+  // and service-specific keys for EC2 and RAM only — and lists the services with enforcement
+  // coverage, which does not include ECS. This policy gates ECS service calls on `ecs:cluster` and
+  // `iam:PassRole` on `iam:PassedToService`, neither of which is in that list, and its own
+  // simulator confirms the consequence: each flips from `implicitDeny` to `allowed` purely by
+  // supplying the key. So hard mode would fail the deploy end-to-end test on coverage that was
+  // never claimed, and the alternative — dropping the conditions — is weakening a production
+  // policy to suit a local tool.
+  //
+  // S3 *is* in that coverage, which is why the one real finding here was an S3 one and why the
+  // liveness check in `DeployE2ESpec` is an S3 call.
   //
   // `CAPTAL_IAM_SOFT=0` tries hard anyway, which is what to run when LocalStack starts supplying
   // them. `DeployE2ESpec` is what keeps soft mode honest: it reads the evaluation log and fails on
