@@ -20,17 +20,7 @@ final class SessionEndpoint(cookieConfig: SessionCookieConfig):
         String], SessionData, Unit, ApiError, Unit, Any] = endpoint
     .securityIn(cookieConfig.tapirInput)
     .errorOut(jsonBody[ApiError])
-    .zServerSecurityLogic: cookie =>
-      for
-        session <- SessionEndpoint.resolveSession(cookie, onMissingSession)
-        _       <-
-          if allowedPhases.isEmpty || allowedPhases.contains(session.phase) then
-            ZIO.unit
-          else
-            ZIO.fail(
-              ApiError.WrongPhase(session.phase.toString, allowedPhases.map(_.toString).toList))
-        _ <- SessionContext.set(session)
-      yield session
+    .zServerSecurityLogic(SessionEndpoint.authorise(_, onMissingSession, allowedPhases))
 
 end SessionEndpoint
 
@@ -80,6 +70,29 @@ object SessionEndpoint:
         createSession(userAgent, locale, portalParams)
       case OnMissing.CreateForUser(userAgent, locale, portalParams, userId) =>
         createSessionForUser(userAgent, locale, portalParams, userId)
+
+  /** Resolve the session, check the phase, publish it — what every secured route does first.
+    *
+    * Lifted out of `secured` so it is not tapir's. The description of a route is a tapir value and
+    * will be a zio-http one, but this is neither: it reads a cookie value and returns a session or
+    * an `ApiError`, and both front ends call it with the cookie their own codec extracted. That is
+    * what keeps a converted route answering exactly as it did — a reimplementation here would be a
+    * second copy of the phase rule, and a route is not converted if its idea of "wrong phase"
+    * drifts.
+    */
+  def authorise(
+      cookie: Option[String],
+      onMissing: OnMissing,
+      allowedPhases: Seq[Phase]): ZIO[SessionService & SessionContext, ApiError, SessionData] =
+    for
+      session <- resolveSession(cookie, onMissing)
+      _       <-
+        if allowedPhases.isEmpty || allowedPhases.contains(session.phase) then
+          ZIO.unit
+        else
+          ZIO.fail(ApiError.WrongPhase(session.phase.toString, allowedPhases.map(_.toString).toList))
+      _ <- SessionContext.set(session)
+    yield session
 
   def resolveSession(
       cookie: Option[String],

@@ -759,8 +759,6 @@ trait CoreDepsJVM extends ScalaModule:
     mvn"io.circe::circe-core:0.14.10",
     mvn"io.circe::circe-generic:0.14.10",
     mvn"io.circe::circe-parser:0.14.10",
-    mvn"dev.zio::zio-schema:1.4.1",
-    mvn"dev.zio::zio-schema-derivation:1.4.1",
     mvn"io.taig::babel-core:0.5.3",
     mvn"io.taig::babel-generic:0.5.3",
     mvn"io.taig::babel-circe:0.5.3"
@@ -772,8 +770,6 @@ trait CoreDepsJS extends ScalaJSModule:
     mvn"io.circe::circe-core::0.14.10",
     mvn"io.circe::circe-generic::0.14.10",
     mvn"io.circe::circe-parser::0.14.10",
-    mvn"dev.zio::zio-schema::1.4.1",
-    mvn"dev.zio::zio-schema-derivation::1.4.1",
     mvn"io.github.cquiroz::scala-java-time::2.6.0",
     mvn"io.taig::babel-core::0.5.3",
     mvn"io.taig::babel-generic::0.5.3",
@@ -914,6 +910,13 @@ object api extends BaseModule:
   def mvnDeps = Seq(
     mvn"com.softwaremill.sttp.tapir::tapir-zio-http-server:1.11.11",
     mvn"com.softwaremill.sttp.tapir::tapir-json-circe:1.11.11",
+    // zio-schema comes in anyway — `zio-http` resolves 1.4.1 of it, and that is where a
+    // `Schema` stops being documentation and becomes the codec `Endpoint` serialises with. Only
+    // `derivation` has to be asked for, and only here: it was declared on `core` and `core-js` for
+    // one afternoon, which put a serialisation library on the Scala.js classpath for types the
+    // browser decodes with circe. Nothing linked it — dead code elimination saw to that — but the
+    // reason it was there was a `Schema` the server needed, so it belongs on the server.
+    mvn"dev.zio::zio-schema-derivation:1.4.1",
     mvn"dev.zio::zio-interop-cats:23.1.0.3"
   )
 

@@ -2,6 +2,7 @@ package whitelabel.captal.api
 
 import sttp.model.headers.CookieValueWithMeta
 import sttp.tapir.{EndpointInput, EndpointOutput, cookie, setCookieOpt}
+import zio.http.Header
 
 /** Per-deployment session cookie name + path. Derived from `LOCATION_SLUG` so that two locations
   * served on the same domain (e.g. `/cafe-centro/` and `/valmy/` under `production.captal...`) have
@@ -16,6 +17,17 @@ final case class SessionCookieConfig(name: String, path: String):
   def asMeta(value: String): CookieValueWithMeta = CookieValueWithMeta.unsafeApply(
     value,
     path = Some(path))
+
+  /** This deployment's session cookie, picked out of the request's whole `Cookie` header.
+    *
+    * What `tapirInput` does for a tapir route, by hand, because zio-http's cookie codec hands over
+    * every cookie the browser sent rather than one by name. The header is `Option` on purpose: a
+    * required codec would answer a request carrying no cookies with a 400 from the codec, and a
+    * missing session is a `SessionMissing` the route decides how to treat — `OnMissing.Create` for
+    * the status route, a failure for the rest.
+    */
+  def valueFrom(header: Option[Header.Cookie]): Option[String] = header.flatMap(
+    _.value.find(_.name == name).map(_.content))
 end SessionCookieConfig
 
 object SessionCookieConfig:

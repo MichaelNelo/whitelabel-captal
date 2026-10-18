@@ -144,13 +144,16 @@ object TestHelpers:
       val advertiserSurveyEndpoints = advertiserSurveyRoutes
         .routes
         .map(e => provideEnvToEndpoint(e, env))
-      val finishEndpoints = finishRoutes.routes.map(e => provideEnvToEndpoint(e, env))
       val tapirBackend = TapirStubInterpreter(SttpBackendStub[Task, Any](taskMonadError))
         .whenServerEndpointsRunLogic(
-          surveyEndpoints ++ localeEndpoints ++ videoEndpoints ++ advertiserSurveyEndpoints ++
-            finishEndpoints)
+          surveyEndpoints ++ localeEndpoints ++ videoEndpoints ++ advertiserSurveyEndpoints)
         .backend()
-      serveZioHttp(HealthRoutes.routes, tapirBackend)
+      // `provideEnvironment` is what `provideEnvToEndpoint` does for the tapir half: the suites
+      // hold a `ZEnvironment[TestEnv]` and the routes want their services supplied, so each half
+      // gets the same environment through its own library's door.
+      serveZioHttp(
+        (HealthRoutes.routes ++ finishRoutes.routes).provideEnvironment(env),
+        tapirBackend)
 
   /** The health check, which is the one route already off tapir. */
   def getHealth(backend: SttpBackend[Task, Any]) = basicRequest
