@@ -117,6 +117,23 @@ object ClientDecodeSuite:
             response <- getStatus(backend, None)
           yield readsAs[StatusResponse]("StatusResponse", response.body)
         ,
+        test("the same type off a converted route, where zio-schema wrote it"):
+          // `getStatus` above is still tapir, so it proves circe can read what circe wrote.
+          // `/api/finish` is not: the body below is zio-schema's, and it differs — the two `None`
+          // fields are absent rather than null, which `WireContractSuite` measures and this reads.
+          // Both tests, because the one that matters is the one whose writer is being replaced.
+          for
+            _       <- TestFixtures.seedEmailSurvey
+            backend <- testBackend
+            cookie  <- createSession(backend)
+            _       <- getNextSurvey(backend, cookie)
+            _       <- postEmailAnswer(backend, cookie, "converted-route@example.com")
+            _       <- getNextVideo(backend, cookie)
+            response <- postFinish(backend, cookie)
+          yield readsAs[StatusResponse]("StatusResponse (finish)", response.body) &&
+            assertTrue(response.code.isSuccess) ??
+            s"status=${response.code.code} body=${response.body}"
+        ,
         test("the next identification survey, as the wrapper the endpoint returns"):
           // `SurveyResponse` and not `NextIdentificationSurvey`: the suites decode the payload
           // directly, which skips the discriminated wrapper — the one part of this format that is

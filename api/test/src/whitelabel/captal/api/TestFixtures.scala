@@ -5,8 +5,10 @@ import java.util.UUID
 import com.typesafe.config.ConfigFactory
 import io.getquill.*
 import whitelabel.captal.core.application.Phase
+import whitelabel.captal.core.survey.question.TextRule
 import whitelabel.captal.core.{survey, user, video}
 import whitelabel.captal.platform.*
+import whitelabel.captal.platform.surveySchemas.given
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
@@ -47,7 +49,7 @@ object TestFixtures:
   def seedEmailSurvey: ZIO[QuillSqlite, Throwable, SurveyFixture] =
     for
       fixture <- seedSurvey("email", "input", "What is your email?")
-      _       <- addQuestionRule(fixture.questionId, "text", """{"type":"email"}""")
+      _       <- addTextRule(fixture.questionId, TextRule.Email)
     yield fixture
 
   def seedProfilingSurvey: ZIO[QuillSqlite, Throwable, SurveyFixture] = seedSurvey(
@@ -192,6 +194,21 @@ object TestFixtures:
               run(query[LocalizedTextRow].insertValue(lift(txtRow)))
       yield optionsWithText.map(_._1.id)
 
+  /** Seed a rule as the rule, not as the JSON a rule happens to look like.
+    *
+    * These took a hand-written `ruleConfig` string — `{"type":"min_length","value":8}` — which made
+    * the fixtures a fourth independent rendering of a format that already had three. A test that
+    * spells the column itself passes when the fixture and the reader agree with each other and the
+    * writer agrees with neither, which is precisely the failure `surveySchemas` exists to remove.
+    * So the caller passes a `TextRule` and the one encoder renders it.
+    */
+  def addTextRule(
+      questionId: survey.question.Id,
+      rule: TextRule): ZIO[QuillSqlite, Throwable, String] = addQuestionRule(
+    questionId,
+    "text",
+    surveySchemas.encode(rule))
+
   def addQuestionRule(
       questionId: survey.question.Id,
       ruleType: String,
@@ -221,15 +238,9 @@ object TestFixtures:
       minLength: Int = 8,
       pattern: String = "^[A-Z].*"): ZIO[QuillSqlite, Throwable, RuledSurveyFixture] =
     for
-      fixture <- seedSurvey("profiling", "input", "What is your full name?")
-      minRule <- addQuestionRule(
-        fixture.questionId,
-        "text",
-        s"""{"type":"min_length","value":$minLength}""")
-      patternRule <- addQuestionRule(
-        fixture.questionId,
-        "text",
-        s"""{"type":"pattern","value":"$pattern"}""")
+      fixture     <- seedSurvey("profiling", "input", "What is your full name?")
+      minRule     <- addTextRule(fixture.questionId, TextRule.MinLength(minLength))
+      patternRule <- addTextRule(fixture.questionId, TextRule.Pattern(pattern))
     yield RuledSurveyFixture(fixture.surveyId, fixture.questionId, minRule, patternRule)
   // ─────────────────────────────────────────────────────────────────────────────
   // Soft-delete helpers

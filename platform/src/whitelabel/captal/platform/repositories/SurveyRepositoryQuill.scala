@@ -15,7 +15,9 @@ import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.session.SessionContext
+import whitelabel.captal.platform.surveySchemas.given
 import zio.*
+import zio.schema.Schema
 
 object SurveyRepositoryQuill:
   final case class QuestionWithDetails(
@@ -428,8 +430,21 @@ object SurveyRepositoryQuill:
       case _ =>
         QuestionType.Input(Nil)
 
-  private def decodeRules[R: circe.Decoder](rules: List[QuestionRuleRow]): List[R] = rules.flatMap(
-    r => decode[R](r.ruleConfig).toOption)
+  /** The rules of a question, read from the column the MCP backoffice writes.
+    *
+    * Through `surveySchemas`, which is what writes that column too. Before, this was a circe
+    * decoder here and string interpolation there, agreeing by nobody's enforcement.
+    *
+    * A row that will not decode is dropped, and dropped silently — unchanged from the `.toOption`
+    * this replaces, and worth stating plainly because it is not a safe default. A rule that fails
+    * to decode is a validation that stops being applied, and a validation that is not applied looks
+    * exactly like one that passed: no error, no log line, no record of which question lost which
+    * rule. Fixing it means carrying the reason out to where an effect can log it, through
+    * `parseQuestionType` and `buildQuestionToAnswer`, both of which are pure — a change worth
+    * making on its own rather than inside this one.
+    */
+  private def decodeRules[R: Schema](rules: List[QuestionRuleRow]): List[R] = rules.flatMap(
+    row => surveySchemas.decode[R](row.ruleConfig).toOption)
 
   /** Who the video belonged to, when it belonged to anyone.
     *

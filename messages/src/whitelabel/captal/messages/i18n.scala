@@ -33,6 +33,4 @@ object i18n:
   given CirceDecoder[I18n.Video] = deriveDecoder
   given CirceEncoder[I18n] = deriveEncoder
   given CirceDecoder[I18n] = deriveDecoder
-
-  // Tapir schemas for I18n
 end i18n

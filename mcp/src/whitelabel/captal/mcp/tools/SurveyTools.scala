@@ -5,6 +5,7 @@ import java.util.UUID
 import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
 import whitelabel.captal.core.survey
+import whitelabel.captal.core.survey.question
 import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
 import whitelabel.captal.mcp.{QuillArrow, Writes}
@@ -20,8 +21,10 @@ import whitelabel.captal.platform.{
   QuestionRow,
   QuestionRuleRow,
   SurveyCategory as StoredCategory,
-  SurveyRow
+  SurveyRow,
+  surveySchemas
 }
+import whitelabel.captal.platform.surveySchemas.given
 import zio.*
 import zio.schema.annotation.{description, discriminatorName, rejectExtraFields}
 import zio.schema.{DeriveSchema, Schema}
@@ -256,7 +259,8 @@ object SurveyTools:
       text: List[LocalizedText],
       @description("Empty for the types that take no options.")
       options: List[OptionView],
-      @description("The stored validation rules, rendered for reading — 'min_length=3'.")
+      @description(
+        "The validation rules exactly as stored, one JSON object each — '{\"MinLength\":{\"min\":3}}'. Raw and not decoded on purpose: a rule that does not match its question type is dropped when the portal reads it, so this is the only view that shows one which exists in the table but never applies.")
       rules: List[String])
   final case class SurveyView(
       @description("What create_question takes to add to this survey.")
@@ -858,23 +862,26 @@ object SurveyTools:
   given Schema[CreateQuestionRequest] = DeriveSchema.gen
   given Schema[CreateQuestionResponse] = DeriveSchema.gen
 
-  /** Flattens the discriminated spec into what the row needs.
+  /** Flattens the discriminated spec into what the row needs, rules already rendered.
     *
     * The kind-versus-type pairing that used to be checked here is gone: `AnswerFormat` makes it
     * unrepresentable, so an `input` question cannot carry a selection rule to be rejected. What is
     * left is parsing each value, which the types cannot do.
+    *
+    * The third element used to be `(kind, value)` pairs — `r.kind.toString` — which a separate
+    * `ruleConfig` turned into JSON by interpolation. The kinds were already typed enums and the
+    * stringifying was only there to feed that renderer, so each rule is built as the rule it is and
+    * `surveySchemas.encode` writes it. The win is in the match: mapping a `TextRuleKind` to a
+    * `question.TextRule` is checked for exhaustiveness, where `s"""{"type":"$kind"…"""` accepted
+    * whatever it was handed.
     */
   private def flatten(
-      spec: AnswerFormat): (String, List[AnswerOption], List[(String, Option[String])]) =
-    def text(rules: Option[List[TextRule]]) = rules
+      spec: AnswerFormat): (String, List[AnswerOption], List[Either[String, String]]) =
+    def text(rules: Option[List[TextRule]]) = rules.getOrElse(Nil).map(textRule)
+    def selection(rules: Option[List[SelectionRule]]) = rules.getOrElse(Nil).map(selectionRule)
+    def range(rules: Option[List[RangeRule]], element: RangeElement) = rules
       .getOrElse(Nil)
-      .map(r => (r.kind.toString, r.value))
-    def selection(rules: Option[List[SelectionRule]]) = rules
-      .getOrElse(Nil)
-      .map(r => (r.kind.toString, Some(r.value)))
-    def range(rules: Option[List[RangeRule]]) = rules
-      .getOrElse(Nil)
-      .map(r => (r.kind.toString, Some(r.value)))
+      .map(rangeRule(_, element))
     spec match
       case AnswerFormat.Radio(options) =>
         ("radio", options, Nil)
@@ -885,61 +892,97 @@ object SurveyTools:
       case AnswerFormat.Input(rules) =>
         ("input", Nil, text(rules))
       case AnswerFormat.Numeric(rules) =>
-        ("numeric", Nil, range(rules))
+        ("numeric", Nil, range(rules, RangeElement.Numeric))
       case AnswerFormat.Date(rules) =>
-        ("date", Nil, range(rules))
+        ("date", Nil, range(rules, RangeElement.Date))
   end flatten
 
-  /** Builds the stored rule JSON. Only the value can be wrong now; the kind is already known to
-    * belong to the question type.
+  /** Which element type a range rule's bound is read as — the one thing `RangeRule` does not say.
     *
-    * The config is constructed here rather than accepted from the caller so its shape is always the
-    * one `SurveyRepositoryQuill.decodeRules` expects — it decodes with `.toOption` and flat-maps,
-    * so a rule it cannot read disappears at runtime with no error.
+    * `RangeRule` is one tool type serving both the numeric and the date question, so its `value` is
+    * a `String` and the question decides what that string means. This replaces matching on the
+    * question type's name, where `("date", _)` and `("numeric", _)` were two branches of a match
+    * that also had a catch-all.
     */
-  private def ruleConfig(
-      questionType: String,
-      kind: String,
-      value: Option[String]): Either[String, String] =
-    def wholeNumber(v: String) = v
+  private enum RangeElement:
+    case Numeric
+    case Date
+
+  /** The three renderers that replaced `ruleConfig`, one per rule family.
+    *
+    * Each builds the rule as a `question.*` value and lets `surveySchemas.encode` write it, so the
+    * column is written by the same description that reads it. What they keep is the validation: the
+    * tool takes every bound as a `String` — an LLM is filling these in — and the messages below are
+    * what the backoffice tells it when a bound is not the kind of number its rule needs.
+    *
+    * Total matches over the kind enums, which is the point. `ruleConfig` interpolated the kind it
+    * was handed into `{"type":"…"}` and so had no unmatched case to report; here a kind with no
+    * mapping is a compile error.
+    */
+  private def textRule(rule: TextRule): Either[String, String] =
+    def needs[A](parse: String => Option[A], what: String): Either[String, A] = rule
+      .value
+      .toRight(s"The ${rule.kind} rule needs a value.")
+      .flatMap(v => parse(v).toRight(s"The ${rule.kind} rule needs $what, got '$v'."))
+
+    val built: Either[String, question.TextRule] =
+      rule.kind match
+        case TextRuleKind.min_length =>
+          needs(_.toIntOption, "a whole number").map(question.TextRule.MinLength(_))
+        case TextRuleKind.max_length =>
+          needs(_.toIntOption, "a whole number").map(question.TextRule.MaxLength(_))
+        case TextRuleKind.pattern =>
+          needs(Some(_), "a regex").map(question.TextRule.Pattern(_))
+        case TextRuleKind.email =>
+          Right(question.TextRule.Email)
+        case TextRuleKind.url =>
+          Right(question.TextRule.Url)
+    built.map(surveySchemas.encode)
+
+  private def selectionRule(rule: SelectionRule): Either[String, String] =
+    val count = rule
+      .value
       .toIntOption
-      .toRight(s"The $kind rule needs a whole number, got '$v'.")
-      .map(_.toString)
-    def number(v: String) = v
-      .toDoubleOption
-      .toRight(s"The $kind rule needs a number, got '$v'.")
-      .map(_ => v)
-    def isoDate(v: String) = scala
-      .util
-      .Try(java.time.LocalDate.parse(v))
-      .toEither
-      .left
-      .map(_ => s"The $kind rule needs an ISO date (yyyy-mm-dd), got '$v'.")
-      .map(_ => s""""$v"""")
-    def quoted(v: String) = Right(s""""${v.replace("\\", "\\\\").replace("\"", "\\\"")}"""")
-    def needs(render: String => Either[String, String]) = value
-      .toRight(s"The $kind rule needs a value.")
-      .flatMap(render)
+      .toRight(s"The ${rule.kind} rule needs a whole number, got '${rule.value}'.")
+    val built: Either[String, question.SelectionRule] =
+      rule.kind match
+        case SelectionRuleKind.min_selections =>
+          count.map(question.SelectionRule.MinSelections(_))
+        case SelectionRuleKind.max_selections =>
+          count.map(question.SelectionRule.MaxSelections(_))
+    built.map(surveySchemas.encode)
 
-    val rendered: Either[String, Option[String]] =
-      (questionType, kind) match
-        case (_, "email") | (_, "url") =>
-          Right(None)
-        case (_, "pattern") =>
-          needs(quoted).map(Some(_))
-        case ("date", _) =>
-          needs(isoDate).map(Some(_))
-        case ("numeric", _) =>
-          needs(number).map(Some(_))
-        case _ =>
-          needs(wholeNumber).map(Some(_))
-
-    rendered.map:
-      case Some(v) =>
-        s"""{"type":"$kind","value":$v}"""
-      case None =>
-        s"""{"type":"$kind"}"""
-  end ruleConfig
+  private def rangeRule(rule: RangeRule, element: RangeElement): Either[String, String] =
+    element match
+      case RangeElement.Numeric =>
+        val bound = scala
+          .util
+          .Try(BigDecimal(rule.value))
+          .toOption
+          .toRight(s"The ${rule.kind} rule needs a number, got '${rule.value}'.")
+        bound
+          .map: value =>
+            rule.kind match
+              case RangeRuleKind.min =>
+                question.RangeRule.Min(value)
+              case RangeRuleKind.max =>
+                question.RangeRule.Max(value)
+          .map(surveySchemas.encode[question.RangeRule[BigDecimal]])
+      case RangeElement.Date =>
+        val bound = scala
+          .util
+          .Try(java.time.LocalDate.parse(rule.value))
+          .toOption
+          .toRight(
+            s"The ${rule.kind} rule needs an ISO date (yyyy-mm-dd), got '${rule.value}'.")
+        bound
+          .map: value =>
+            rule.kind match
+              case RangeRuleKind.min =>
+                question.RangeRule.Min(value)
+              case RangeRuleKind.max =>
+                question.RangeRule.Max(value)
+          .map(surveySchemas.encode[question.RangeRule[java.time.LocalDate]])
 
   private def validateTexts(texts: List[LocalizedText], what: String): ZIO[Any, String, Unit] =
     for
@@ -1165,9 +1208,7 @@ object SurveyTools:
         ZIO.foreachDiscard(options.zipWithIndex): (o, i) =>
           ZIO.when(o.text.isEmpty)(ZIO.fail(s"Option ${i + 1} has no text.")) *>
             validateTexts(o.text, s"option ${i + 1}")
-      ruleConfigs <-
-        ZIO.foreach(ruleSpecs): (kind, value) =>
-          ZIO.fromEither(ruleConfig(questionType, kind, value))
+      ruleConfigs <- ZIO.foreach(ruleSpecs)(ZIO.fromEither)
       _ <-
         ZIO.when(hierarchyLevel.isDefined && surveyCategory != "location")(
           ZIO.fail("hierarchyLevel only applies to questions in a location survey."))
