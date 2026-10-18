@@ -1,5 +1,6 @@
 package whitelabel.captal.mcp
 
+import whitelabel.captal.mcp.tools.VideoTools
 import zio.test.*
 
 /** Where the video's length comes from, and what it settles.

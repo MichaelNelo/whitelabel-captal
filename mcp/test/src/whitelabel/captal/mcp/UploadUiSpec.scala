@@ -1,5 +1,6 @@
 package whitelabel.captal.mcp
 
+import whitelabel.captal.mcp.apps.UploadUi
 import zio.test.*
 
 /** Two artifacts now, and each is asserted against for what only it can promise.

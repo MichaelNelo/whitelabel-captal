@@ -1,5 +1,6 @@
 package whitelabel.captal.mcp
 
+import whitelabel.captal.mcp.protocol.CssSchema
 import zio.test.*
 
 /** The CSS variable list, which is derived rather than written down.

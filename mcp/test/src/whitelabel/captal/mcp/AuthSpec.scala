@@ -3,6 +3,7 @@ package whitelabel.captal.mcp
 import com.jamesward.ziohttp.mcp.auth.{AuthError, OauthScope, ResourceUri}
 import io.getquill.*
 import io.getquill.jdbczio.Quill
+import whitelabel.captal.mcp.access.{Auth, Tokens}
 import whitelabel.captal.platform.RqliteDataSource
 import whitelabel.captal.platform.schema.QuillSqlite
 import zio.*

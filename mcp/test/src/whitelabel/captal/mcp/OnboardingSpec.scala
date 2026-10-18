@@ -1,5 +1,7 @@
 package whitelabel.captal.mcp
 
+import whitelabel.captal.mcp.resources.Readiness
+import whitelabel.captal.mcp.tools.Prompts
 import whitelabel.captal.platform.{LocationRow, UnifiAccess}
 import zio.test.*
 

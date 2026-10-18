@@ -6,6 +6,8 @@ import com.jamesward.ziohttp.mcp.{CallToolResult, ToolContent}
 import io.getquill.*
 import io.getquill.jdbczio.Quill
 import whitelabel.captal.core.survey
+import whitelabel.captal.mcp.access.Auth
+import whitelabel.captal.mcp.tools.SurveyTools
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given

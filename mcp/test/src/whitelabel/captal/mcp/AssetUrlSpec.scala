@@ -1,5 +1,6 @@
 package whitelabel.captal.mcp
 
+import whitelabel.captal.mcp.aws.AssetStore
 import zio.test.*
 
 /** `publicUrl` and `keyOf` as a pair, against both addressing styles.

@@ -1,5 +1,6 @@
 package whitelabel.captal.mcp
 
+import whitelabel.captal.mcp.tools.AssetTools
 import zio.test.*
 
 /** The SVG check is the only part of the asset tools with logic of its own; the rest is S3 calls

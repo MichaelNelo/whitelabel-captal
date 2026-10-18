@@ -1,5 +1,7 @@
 package whitelabel.captal.mcp
 
+import whitelabel.captal.mcp.access.Auth
+import whitelabel.captal.mcp.tools.Grant
 import zio.test.*
 
 /** The grant-to-scope mapping, pinned because it failed silently.
