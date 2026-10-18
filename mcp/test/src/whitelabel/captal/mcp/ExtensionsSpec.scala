@@ -1,6 +1,15 @@
 package whitelabel.captal.mcp
 
 import com.jamesward.ziohttp.mcp.*
+import whitelabel.captal.mcp.access.Auth
+import whitelabel.captal.mcp.protocol.{Skills, SkillsExtension, ToolSchema}
+import whitelabel.captal.mcp.tools.{
+  AdvertiserTools,
+  DeployTools,
+  I18nTools,
+  SurveyTools,
+  VideoTools
+}
 import zio.json.ast.Json
 import zio.test.*
 import zio.{Chunk, ZIO}

@@ -3,6 +3,7 @@ package whitelabel.captal.mcp
 import com.jamesward.ziohttp.mcp.{CallToolResult, ToolContent}
 import io.getquill.*
 import io.getquill.jdbczio.Quill
+import whitelabel.captal.mcp.tools.{I18nTools, LocationTools}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.{LocationRow, RqliteDataSource}

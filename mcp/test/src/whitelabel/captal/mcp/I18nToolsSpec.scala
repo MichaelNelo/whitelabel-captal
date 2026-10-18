@@ -5,6 +5,7 @@ import java.util.UUID
 import com.jamesward.ziohttp.mcp.ToolContent
 import io.getquill.*
 import io.getquill.jdbczio.Quill
+import whitelabel.captal.mcp.tools.I18nTools
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.{LocalizedTextRow, LocationRow, RqliteDataSource}

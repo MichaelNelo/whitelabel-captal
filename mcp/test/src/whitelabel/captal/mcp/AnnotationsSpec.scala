@@ -1,6 +1,18 @@
 package whitelabel.captal.mcp
 
 import com.jamesward.ziohttp.mcp.McpToolHandlerR
+import whitelabel.captal.mcp.resources.Readiness
+import whitelabel.captal.mcp.tools.{
+  AdvertiserTools,
+  AssetTools,
+  I18nTools,
+  LocationTools,
+  SkillTools,
+  SurveyTools,
+  TokenTools,
+  UnifiTools,
+  VideoTools
+}
 import zio.test.*
 
 /** Which tools say they change nothing.

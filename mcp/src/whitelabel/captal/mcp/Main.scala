@@ -1,6 +1,23 @@
 package whitelabel.captal.mcp
 
 import io.getquill.jdbczio.Quill
+import whitelabel.captal.mcp.access.{Auth, OauthMetadata, Tokens}
+import whitelabel.captal.mcp.apps.UiRoutes
+import whitelabel.captal.mcp.aws.{AssetStore, DeployTargets, InfraStore}
+import whitelabel.captal.mcp.protocol.{Skills, SkillsExtension}
+import whitelabel.captal.mcp.resources.Readiness
+import whitelabel.captal.mcp.tools.{
+  AdvertiserTools,
+  AssetTools,
+  DeployTools,
+  I18nTools,
+  LocationTools,
+  SkillTools,
+  SurveyTools,
+  TokenTools,
+  UnifiTools,
+  VideoTools
+}
 import whitelabel.captal.platform.RqliteDataSource
 import whitelabel.captal.platform.schema.QuillSqlite
 import zio.*

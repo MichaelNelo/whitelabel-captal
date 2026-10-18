@@ -1,6 +1,19 @@
 package whitelabel.captal.mcp
 
 import whitelabel.captal.core.i18n.{I18n, I18nSchema}
+import whitelabel.captal.mcp.access.Auth
+import whitelabel.captal.mcp.apps.UploadUiSource
+import whitelabel.captal.mcp.protocol.{McpSchema, Skills}
+import whitelabel.captal.mcp.tools.{
+  AdvertiserTools,
+  AnswerFormat,
+  AssetTools,
+  I18nTools,
+  LocalizedText,
+  LocationTools,
+  SurveyTools,
+  VideoTools
+}
 import zio.test.*
 
 /** Asserts against the resources as a host would see them — definition plus body — rather than

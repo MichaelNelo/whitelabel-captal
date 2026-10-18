@@ -1,5 +1,6 @@
 package whitelabel.captal.mcp
 
+import whitelabel.captal.mcp.access.{Auth, OauthMetadata}
 import zio.test.*
 
 /** What this server publishes about how its tokens are obtained.
