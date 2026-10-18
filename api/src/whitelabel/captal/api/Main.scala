@@ -313,45 +313,30 @@ object Main extends ZIOAppDefault:
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType
 
   private def endpoints(
-      devEndpoints: Boolean,
       locationSlug: Option[String],
       surveyRoutes: SurveyRoutes,
-      localeRoutes: LocaleRoutes,
       videoRoutes: VideoRoutes,
       advertiserSurveyRoutes: AdvertiserSurveyRoutes): List[ZServerEndpoint[FullEnv, Any]] =
-    // `HealthRoutes` and `FinishRoutes` left this list: they are zio-http `Routes` now rather than
-    // tapir endpoints, so they join at the outer layer where the two are already the same type.
-    // This list shrinks as each remaining route converts.
+    // `HealthRoutes`, `FinishRoutes` and `LocaleRoutes` left this list: they are zio-http `Routes`
+    // now rather than tapir endpoints, so they join at the outer layer where the two are already
+    // the same type. This list shrinks as each remaining route converts; the `devEndpoints` flag
+    // went with `LocaleRoutes`, which owned the only dev route.
     val base =
-      surveyRoutes.routes.map(_.widen[FullEnv]) ++ localeRoutes.routes.map(_.widen[FullEnv]) ++
-        videoRoutes.routes.map(_.widen[FullEnv]) ++
+      surveyRoutes.routes.map(_.widen[FullEnv]) ++ videoRoutes.routes.map(_.widen[FullEnv]) ++
         advertiserSurveyRoutes.routes.map(_.widen[FullEnv])
-    val withDev =
-      if devEndpoints then
-        base ++ localeRoutes.devRoutes.map(_.widen[FullEnv])
-      else
-        base
     locationSlug match
       case Some(slug) =>
-        withDev.map(_.prependSecurityIn(slug))
+        base.map(_.prependSecurityIn(slug))
       case None =>
-        withDev
+        base
   end endpoints
 
   private def apiRoutes(
-      devEndpoints: Boolean,
       locationSlug: Option[String],
       surveyRoutes: SurveyRoutes,
-      localeRoutes: LocaleRoutes,
       videoRoutes: VideoRoutes,
       advertiserSurveyRoutes: AdvertiserSurveyRoutes) = ZioHttpInterpreter().toHttp(
-    endpoints(
-      devEndpoints,
-      locationSlug,
-      surveyRoutes,
-      localeRoutes,
-      videoRoutes,
-      advertiserSurveyRoutes))
+    endpoints(locationSlug, surveyRoutes, videoRoutes, advertiserSurveyRoutes))
 
   private def loggingMiddleware[R]: Middleware[R] =
     new Middleware[R]:
@@ -459,9 +444,16 @@ object Main extends ZIOAppDefault:
     * `LOCATION_SLUG` is set; the suite runs without one, so nothing in it can fail.
     */
   private def convertedRoutes(
+      devEndpoints: Boolean,
       locationSlug: Option[String],
-      finishRoutes: FinishRoutes): Routes[FinishRoutes.FullEnv, Nothing] =
-    val converted = HealthRoutes.routes ++ finishRoutes.routes
+      localeRoutes: LocaleRoutes,
+      finishRoutes: FinishRoutes): Routes[FinishRoutes.FullEnv & LocaleRoutes.FullEnv, Nothing] =
+    val base = HealthRoutes.routes ++ finishRoutes.routes ++ localeRoutes.routes
+    val converted =
+      if devEndpoints then
+        base ++ localeRoutes.devRoutes
+      else
+        base
     locationSlug.fold(converted)(slug => converted.nest(PathCodec.literal(slug)))
 
   private def routes(
@@ -473,18 +465,11 @@ object Main extends ZIOAppDefault:
       videoRoutes: VideoRoutes,
       advertiserSurveyRoutes: AdvertiserSurveyRoutes,
       finishRoutes: FinishRoutes): Routes[FullEnv, Response] =
-    val api = apiRoutes(
-      devEndpoints,
-      locationSlug,
-      surveyRoutes,
-      localeRoutes,
-      videoRoutes,
-      advertiserSurveyRoutes)
+    val api = apiRoutes(locationSlug, surveyRoutes, videoRoutes, advertiserSurveyRoutes)
     // Where tapir's interpreted output and the converted routes meet: `toHttp` already produces a
     // zio-http `Routes`, so a route that no longer goes through tapir joins with the same `++`.
     // That is what lets this move one route at a time with the build green in between.
-    //
-    val served = convertedRoutes(locationSlug, finishRoutes) ++ api
+    val served = convertedRoutes(devEndpoints, locationSlug, localeRoutes, finishRoutes) ++ api
     val baseRoutes =
       if devMode then
         devLinkerOutput(devStaticRoutes(locationSlug) ++ served ++ spaCatchAllRoutes(locationSlug))
@@ -580,17 +565,15 @@ object Main extends ZIOAppDefault:
         advertiserSurveyRoutes <- ZIO.service[AdvertiserSurveyRoutes]
         finishRoutes           <- ZIO.service[FinishRoutes]
         cookieConfig           <- ZIO.service[SessionCookieConfig]
-        ep = endpoints(
-          settings.devEndpoints,
-          settings.locationSlug,
-          surveyRoutes,
-          localeRoutes,
-          videoRoutes,
-          advertiserSurveyRoutes)
+        ep = endpoints(settings.locationSlug, surveyRoutes, videoRoutes, advertiserSurveyRoutes)
         // Both halves, so a converted route does not quietly drop out of the startup log. `ep` is
         // only what tapir still interprets; the rest are zio-http `Route`s, which carry the same
         // information under a different name.
-        converted = convertedRoutes(settings.locationSlug, finishRoutes)
+        converted = convertedRoutes(
+          settings.devEndpoints,
+          settings.locationSlug,
+          localeRoutes,
+          finishRoutes)
         routeInfos =
           ep.map: e =>
             s"  ${e.endpoint.method.map(_.method).getOrElse("*")} ${e.endpoint.showPathTemplate()}"

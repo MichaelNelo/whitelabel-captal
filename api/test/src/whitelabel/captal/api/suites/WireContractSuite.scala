@@ -4,9 +4,12 @@ import io.circe.syntax.*
 import io.circe.{Decoder as CirceDecoder, Encoder as CirceEncoder}
 import whitelabel.captal.api.wire.given
 import whitelabel.captal.core.application.Phase
+import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.messages.ApiError.given
+import whitelabel.captal.messages.SetLocaleRequest.given
 import whitelabel.captal.messages.StatusResponse.given
-import whitelabel.captal.messages.{ApiError, StatusResponse}
+import whitelabel.captal.messages.i18n.given
+import whitelabel.captal.messages.{ApiError, SetLocaleRequest, StatusResponse}
 import zio.schema.codec.JsonCodec
 import zio.schema.{DeriveSchema, Schema}
 import zio.test.*
@@ -178,10 +181,51 @@ object WireContractSuite:
         StatusResponse(Phase.Ready, "en", Some("https://example.test/after"), None)
       )
 
+  /** A bundle whose every field holds its own name, so a schema that pairs the wrong name with the
+    * wrong value is visible rather than symmetric. Thirty-eight strings, none interchangeable.
+    */
+  private val bundle = I18n(
+    welcome = I18n.Welcome(
+      title = "welcome.title",
+      subtitle = "welcome.subtitle",
+      steps = I18n.Welcome.Steps("steps.1", "steps.2", "steps.3"),
+      button = I18n.Welcome.Button("button.start", "button.connecting"),
+      selectLanguage = "welcome.selectLanguage",
+      authorized = I18n.Welcome.Authorized("authorized.title", "authorized.remaining")),
+    ready = I18n.Ready("ready.title", "ready.subtitle", "ready.resetButton"),
+    loading = I18n.Loading("loading.message"),
+    error = I18n.Error("error.title", "error.retry", "error.generic"),
+    question = I18n.Question(
+      submit = "question.submit",
+      next = "question.next",
+      required = "question.required",
+      invalidEmail = "question.invalidEmail",
+      invalidUrl = "question.invalidUrl",
+      invalidPattern = "question.invalidPattern",
+      minLength = "question.minLength",
+      maxLength = "question.maxLength",
+      minSelections = "question.minSelections",
+      maxSelections = "question.maxSelections",
+      invalidOption = "question.invalidOption",
+      ratingOutOfRange = "question.ratingOutOfRange",
+      numericOutOfRange = "question.numericOutOfRange",
+      dateOutOfRange = "question.dateOutOfRange",
+      invalidAnswer = "question.invalidAnswer"),
+    video = I18n.Video(
+      pageTitle = "video.pageTitle",
+      continueIn = "video.continueIn",
+      watchComplete = "video.watchComplete",
+      markWatched = "video.markWatched",
+      loading = "video.loading",
+      noVideoAvailable = "video.noVideoAvailable",
+      payAttention = "video.payAttention"))
+
   val suite: Spec[Any, Throwable] =
     zio
       .test
       .suite("Wire contract")(
         agreement("ApiError", every),
-        agreement("StatusResponse", statuses))
+        agreement("StatusResponse", statuses),
+        agreement("SetLocaleRequest", List(SetLocaleRequest("es"), SetLocaleRequest("en"))),
+        agreement("I18n", List(bundle)))
 end WireContractSuite

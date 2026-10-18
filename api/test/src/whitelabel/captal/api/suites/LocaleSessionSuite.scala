@@ -7,6 +7,20 @@ import whitelabel.captal.core.user
 import zio.test.*
 
 object LocaleSessionSuite:
+
+  /** A `Set-Cookie` header's attributes, lowercased, without the name=value pair itself.
+    *
+    * Lowercased because the casing is the one thing here that genuinely does not matter: `Path` and
+    * `path` are the same attribute to a browser, and the two libraries need not agree on which to
+    * write.
+    */
+  private def attributesOf(header: String): Set[String] = header
+    .split(";")
+    .drop(1)
+    .map(_.trim.toLowerCase)
+    .filter(_.nonEmpty)
+    .toSet
+
   val suite: Spec[TestEnv, Throwable] =
     zio
       .test
@@ -60,6 +74,23 @@ object LocaleSessionSuite:
             localeResp.body.contains("en"),
             countAfter == countBefore
           ) // No new session created
+        ,
+        test("the cookie a converted route sets is the same cookie the others set"):
+          // `extractSessionCookie` reads the name and value and stops at the first `;`, so the
+          // attributes have never been asserted — and `PUT /api/session/locale` is now the one
+          // route writing them from zio-http's `Cookie.Response` rather than tapir's
+          // `CookieValueWithMeta`. Name and path are what the browser keys an entry on: two routes
+          // disagreeing about either would be writing to two separate entries, and a guest would
+          // appear to lose their session on changing language.
+          for
+            backend    <- testBackend
+            statusResp <- getStatus(backend, None)
+            cookie = extractSessionCookie(statusResp).get
+            localeResp <- putSetLocale(backend, "en", Some(cookie))
+            fromTapir = statusResp.header("Set-Cookie").map(attributesOf)
+            fromConverted = localeResp.header("Set-Cookie").map(attributesOf)
+          yield assertTrue(fromConverted == fromTapir, fromConverted.contains(Set("path=/"))) ??
+            s"tapir=${statusResp.header("Set-Cookie")} converted=${localeResp.header("Set-Cookie")}"
         ,
         test("status creates session, setLocale updates same session"):
           for

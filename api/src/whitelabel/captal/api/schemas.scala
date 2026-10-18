@@ -7,7 +7,6 @@ import whitelabel.captal.core.application.commands.{
   NextVideo
 }
 import whitelabel.captal.core.application.{IdentificationSurveyType, NextStep, Phase}
-import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.core.survey
 import whitelabel.captal.core.survey.question.*
 import whitelabel.captal.messages.*
@@ -72,22 +71,12 @@ object schemas:
   given Schema[ApiError] = Schema.string
   given Schema[StatusResponse] = Schema.derived
   given Schema[AnswerRequest] = Schema.derived
-  given Schema[SetLocaleRequest] = Schema.derived
   given Schema[VideoResponse] = Schema.anyObject
   given Schema[MarkVideoWatchedRequest] = Schema.derived
   given Schema[VideoWatchedResponse] = Schema.derived
   given Schema[AdvertiserSurveyResponse] = Schema.anyObject
 
-  // The translation bundle. Its Circe codecs are in `core.codecs.i18n`, which is what the
-  // browser reads; only these stay here.
-  given Schema[I18n.Welcome.Steps] = Schema.derived
-  given Schema[I18n.Welcome.Button] = Schema.derived
-  given Schema[I18n.Welcome.Authorized] = Schema.derived
-  given Schema[I18n.Welcome] = Schema.derived
-  given Schema[I18n.Ready] = Schema.derived
-  given Schema[I18n.Loading] = Schema.derived
-  given Schema[I18n.Error] = Schema.derived
-  given Schema[I18n.Question] = Schema.derived
-  given Schema[I18n.Video] = Schema.derived
-  given Schema[I18n] = Schema.derived
+  // `SetLocaleRequest` and the ten of the translation bundle were here. They went with
+  // `LocaleRoutes`, which was the only thing that asked for them — this object shrinks as routes
+  // convert, and empties when the last one does.
 end schemas

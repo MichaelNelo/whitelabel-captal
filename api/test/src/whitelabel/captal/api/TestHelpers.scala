@@ -139,20 +139,23 @@ object TestHelpers:
       val advertiserSurveyRoutes = env.get[AdvertiserSurveyRoutes]
       val finishRoutes = env.get[FinishRoutes]
       val surveyEndpoints = surveyRoutes.routes.map(e => provideEnvToEndpoint(e, env))
-      val localeEndpoints = localeRoutes.routes.map(e => provideEnvToEndpoint(e, env))
       val videoEndpoints = videoRoutes.routes.map(e => provideEnvToEndpoint(e, env))
       val advertiserSurveyEndpoints = advertiserSurveyRoutes
         .routes
         .map(e => provideEnvToEndpoint(e, env))
       val tapirBackend = TapirStubInterpreter(SttpBackendStub[Task, Any](taskMonadError))
         .whenServerEndpointsRunLogic(
-          surveyEndpoints ++ localeEndpoints ++ videoEndpoints ++ advertiserSurveyEndpoints)
+          surveyEndpoints ++ videoEndpoints ++ advertiserSurveyEndpoints)
         .backend()
       // `provideEnvironment` is what `provideEnvToEndpoint` does for the tapir half: the suites
       // hold a `ZEnvironment[TestEnv]` and the routes want their services supplied, so each half
       // gets the same environment through its own library's door.
+      //
+      // `devRoutes` included because `/api/dev/reset-phase` is what `TestFixtures` resets with, and
+      // the suites run as the dev server does.
       serveZioHttp(
-        (HealthRoutes.routes ++ finishRoutes.routes).provideEnvironment(env),
+        (HealthRoutes.routes ++ finishRoutes.routes ++ localeRoutes.routes ++ localeRoutes.devRoutes)
+          .provideEnvironment(env),
         tapirBackend)
 
   /** The health check, which is the one route already off tapir. */

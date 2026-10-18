@@ -2,7 +2,7 @@ package whitelabel.captal.api
 
 import sttp.model.headers.CookieValueWithMeta
 import sttp.tapir.{EndpointInput, EndpointOutput, cookie, setCookieOpt}
-import zio.http.Header
+import zio.http.{Cookie, Header, Path}
 
 /** Per-deployment session cookie name + path. Derived from `LOCATION_SLUG` so that two locations
   * served on the same domain (e.g. `/cafe-centro/` and `/valmy/` under `production.captal...`) have
@@ -17,6 +17,15 @@ final case class SessionCookieConfig(name: String, path: String):
   def asMeta(value: String): CookieValueWithMeta = CookieValueWithMeta.unsafeApply(
     value,
     path = Some(path))
+
+  /** `asMeta` for a converted route: the same cookie, as the header zio-http sets.
+    *
+    * Path and nothing else, because that is what `asMeta` attaches and the two have to be the same
+    * cookie — the browser keys an entry on name and path, so a route that set one of these and a
+    * route that set the other would be writing to two separate entries.
+    */
+  def asSetCookie(value: String): Header.SetCookie = Header.SetCookie(
+    Cookie.Response(name, value, path = Some(Path.decode(path))))
 
   /** This deployment's session cookie, picked out of the request's whole `Cookie` header.
     *

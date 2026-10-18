@@ -1,7 +1,8 @@
 package whitelabel.captal.api
 
 import whitelabel.captal.core.application.Phase
-import whitelabel.captal.messages.{ApiError, StatusResponse}
+import whitelabel.captal.core.i18n.I18n
+import whitelabel.captal.messages.{ApiError, SetLocaleRequest, StatusResponse}
 import zio.schema.{DeriveSchema, Schema}
 
 /** The server's half of the wire format, for the routes that have left tapir.
@@ -39,5 +40,16 @@ object wire:
   given Schema[ApiError] = DeriveSchema.gen[ApiError]
 
   given Schema[StatusResponse] = DeriveSchema.gen[StatusResponse]
+
+  given Schema[SetLocaleRequest] = DeriveSchema.gen[SetLocaleRequest]
+
+  /** The translation bundle, derived whole.
+    *
+    * Ten nested case classes of nothing but `String`, which is the easiest shape this seam has to
+    * carry: no options to differ about, no enum to discriminate, no opaque type to teach. Its tapir
+    * counterpart was ten `Schema.derived` lines for the same reason — the shape was never in doubt,
+    * only who writes it. `DeriveSchema.gen` reaches the nested types on its own.
+    */
+  given Schema[I18n] = DeriveSchema.gen[I18n]
 
 end wire
