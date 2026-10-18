@@ -498,225 +498,158 @@ private def ensureDistribution(containerName: String, comment: String, bucket: S
       "--output",
       "text")
 
-private def ensureLocalStackInfra(
-    containerName: String,
+/** Where the OpenTofu configuration lives, which is a sibling repository rather than a directory
+  * here. Overridable because that is a layout choice and not a fact: moving it in as `terraform/`
+  * is on the table, and this is the one line that would change.
+  */
+private def terraformDir(env: Map[String, String], repoRoot: os.Path): os.Path = env
+  .get("CAPTAL_TERRAFORM_DIR")
+  .map(os.Path(_, repoRoot))
+  .getOrElse(repoRoot / os.up / "whitelabel-captal-infrastructure")
+
+/** The shared infrastructure a location deploy attaches to, applied from the real OpenTofu
+  * configuration against LocalStack.
+  *
+  * `environment = "local"` is a real environment in that configuration, so what the suite attaches
+  * to is what builds the deployed ones — the cluster, the listener, the security groups, the task
+  * roles, the bucket and the distribution. A fixture assembled from `awslocal` calls agrees with
+  * the configuration only for as long as someone keeps it agreeing.
+  *
+  * The state file lives under `stateDir`, which the caller keys by the LocalStack container id,
+  * and that pairing is the whole operational contract here: **the state and the container have to
+  * be born together.** LocalStack holds the resources and the state file holds the record of them,
+  * so either one surviving without the other is a divergence tofu cannot repair — it plans a
+  * create for something that exists and the apply fails with `AlreadyExists` on roles, buckets and
+  * CloudFront policies. That is what [[resetLocalStack]] is for, and why the error below points at
+  * it rather than trying to be clever.
+  *
+  * `backend.tf` is deliberately not staged. It declares an S3 backend whose bucket this same
+  * configuration creates (`module.s3_backend`), which is a chicken-and-egg locally; dropping the
+  * file leaves tofu's default local state, which is what `-state` then places.
+  *
+  * Applied rather than planned, every run. A plan is never clean here: LocalStack reports the ALB
+  * listener's port as its own edge port, 4566, so tofu sees drift back to 80 on every evaluation
+  * and corrects it to no effect. One in-place modification per run is the cost of that, and it is
+  * why "no changes" cannot be used as a health check.
+  */
+private def ensureLocalStackTofu(
     endpoint: String,
     licensed: Boolean,
-    bucket: String): Map[String, String] =
-  val name = "captal-mcp-test"
-  val region = "us-east-1"
-
-  // Nothing to build without a licence: ECS and ELBv2 are not in the free tier's registry at all.
-  // An empty environment leaves `ECS_CLUSTER` unset, which is the same signal production uses — the
-  // deploy tools are not registered and the end-to-end test skips itself, rather than the suite
-  // failing on a machine that was never going to be able to run it.
+    configDir: os.Path,
+    stateDir: os.Path): Map[String, String] =
+  // Same signal production uses: no `ECS_CLUSTER` means the deploy tools are not registered and
+  // the end-to-end test skips itself, rather than the suite failing on a machine that was never
+  // going to run it. ECS and ELBv2 are not in the free tier's registry at all.
   if !licensed then
-    println(
-      "[localstack] no licence, so no ECS/ELBv2/CloudFront fixture; the deploy end-to-end test will skip")
+    println("[tofu] no LocalStack licence, so no infrastructure; the deploy end-to-end test will skip")
     Map.empty
   else
 
-  // Idempotent on its own, and the only one that is.
-  awslocal(containerName, "ecs", "create-cluster", "--cluster-name", name)
+  if !os.exists(configDir) then
+    sys.error(
+      s"[tofu] no OpenTofu configuration at $configDir. It is a sibling repository; set CAPTAL_TERRAFORM_DIR if it lives elsewhere.")
 
-  val vpc = awslocalOption(
-    containerName,
-    "ec2",
-    "describe-vpcs",
-    "--filters",
-    s"Name=tag:Name,Values=$name",
-    "--query",
-    "Vpcs[0].VpcId",
-    "--output",
-    "text").getOrElse:
-    val created = awslocal(
-      containerName,
-      "ec2",
-      "create-vpc",
-      "--cidr-block",
-      "10.0.0.0/16",
-      "--query",
-      "Vpc.VpcId",
-      "--output",
-      "text")
-    awslocal(containerName, "ec2", "create-tags", "--resources", created, "--tags", s"Key=Name,Value=$name")
-    created
+  val staged = stateDir / "config"
+  val state = stateDir / "terraform.tfstate"
 
-  // Two, in different availability zones: `create-load-balancer` refuses a single subnet for an
-  // application load balancer, and that refusal is the kind that arrives as a validation error with
-  // no hint about which input it means.
-  def subnet(suffix: String, cidr: String, zone: String): String = awslocalOption(
-    containerName,
-    "ec2",
-    "describe-subnets",
-    "--filters",
-    s"Name=tag:Name,Values=$name-$suffix",
-    "--query",
-    "Subnets[0].SubnetId",
-    "--output",
-    "text").getOrElse:
-    val created = awslocal(
-      containerName,
-      "ec2",
-      "create-subnet",
-      "--vpc-id",
-      vpc,
-      "--cidr-block",
-      cidr,
-      "--availability-zone",
-      zone,
-      "--query",
-      "Subnet.SubnetId",
-      "--output",
-      "text")
-    awslocal(
-      containerName,
-      "ec2",
-      "create-tags",
-      "--resources",
-      created,
-      "--tags",
-      s"Key=Name,Value=$name-$suffix")
-    created
+  // Copied rather than used in place, so the configuration repository stays read-only from here:
+  // `TF_DATA_DIR` keeps the provider cache out of it and this keeps `backend.tf` out of the copy.
+  os.remove.all(staged)
+  os.makeDir.all(staged)
+  os.list(configDir)
+    .filter(p => p.last.endsWith(".tf") && p.last != "backend.tf")
+    .foreach(p => os.copy.into(p, staged))
+  Seq("modules", "environments").foreach: dir =>
+    os.copy(configDir / dir, staged / dir)
+  val lock = configDir / ".terraform.lock.hcl"
+  if os.exists(lock) then
+    os.copy.into(lock, staged)
 
-  val subnetA = subnet("a", "10.0.1.0/24", s"${region}a")
-  val subnetB = subnet("b", "10.0.2.0/24", s"${region}b")
+  // `-chdir=path` as one argument, not two: tofu parses it itself rather than through a flag
+  // parser, and rejects the separated form.
+  def tofu(args: String*): os.CommandResult = os
+    .proc("tofu", s"-chdir=$staged", args)
+    .call(
+      env = Map("TF_DATA_DIR" -> (stateDir / ".terraform").toString, "TF_IN_AUTOMATION" -> "1"),
+      check = false,
+      stdout = os.Pipe,
+      stderr = os.Pipe)
 
-  val securityGroup = awslocalOption(
-    containerName,
-    "ec2",
-    "describe-security-groups",
-    "--filters",
-    s"Name=group-name,Values=$name",
-    s"Name=vpc-id,Values=$vpc",
-    "--query",
-    "SecurityGroups[0].GroupId",
-    "--output",
-    "text").getOrElse(
-    awslocal(
-      containerName,
-      "ec2",
-      "create-security-group",
-      "--group-name",
-      name,
-      "--description",
-      "Captal MCP end-to-end test",
-      "--vpc-id",
-      vpc,
-      "--query",
-      "GroupId",
-      "--output",
-      "text"))
+  def fail(what: String, result: os.CommandResult): Nothing =
+    val output = (result.out.text() + result.err.text()).trim()
+    // The one failure worth naming, because its message says nothing about its cause: the
+    // resources are there and this state has never seen them.
+    val diverged = output.contains("AlreadyExists") || output.contains("EntityAlreadyExists")
+    sys.error(
+      s"[tofu] $what failed.\n$output\n\n" + (
+        if diverged then
+          s"That is LocalStack holding resources this state does not know about — the two have come apart. Run `mill mcp.test.resetLocalStack` to recreate the container, which also discards $stateDir, and let the next run build both together."
+        else
+          ""
+      ))
 
-  val loadBalancer = awslocalOption(
-    containerName,
-    "elbv2",
-    "describe-load-balancers",
-    "--names",
-    name,
-    "--query",
-    "LoadBalancers[0].LoadBalancerArn",
-    "--output",
-    "text").getOrElse(
-    awslocal(
-      containerName,
-      "elbv2",
-      "create-load-balancer",
-      "--name",
-      name,
-      "--subnets",
-      subnetA,
-      subnetB,
-      "--security-groups",
-      securityGroup,
-      "--query",
-      "LoadBalancers[0].LoadBalancerArn",
-      "--output",
-      "text"))
+  val initialised = tofu("init", "-input=false")
+  if initialised.exitCode != 0 then
+    fail("init", initialised)
 
-  // A fixed 404 as the default action, which is what the real listener does too: every location is
-  // a rule in front of it, and a request matching no rule belongs to no location.
-  val listener = awslocalOption(
-    containerName,
-    "elbv2",
-    "describe-listeners",
-    "--load-balancer-arn",
-    loadBalancer,
-    "--query",
-    "Listeners[0].ListenerArn",
-    "--output",
-    "text").getOrElse(
-    awslocal(
-      containerName,
-      "elbv2",
-      "create-listener",
-      "--load-balancer-arn",
-      loadBalancer,
-      "--protocol",
-      "HTTP",
-      "--port",
-      "80",
-      "--default-actions",
-      "Type=fixed-response,FixedResponseConfig={StatusCode=404,ContentType=text/plain}",
-      "--query",
-      "Listeners[0].ListenerArn",
-      "--output",
-      "text"))
+  println(s"[tofu] applying the local environment (minutes, on a fresh container)")
+  val applied = tofu(
+    "apply",
+    "-auto-approve",
+    "-input=false",
+    "-var-file=environments/local/terraform.tfvars",
+    s"-state=$state")
+  if applied.exitCode != 0 then
+    fail("apply", applied)
 
-  // The task definition names these; nothing assumes them. They exist so the deploy is reading real
-  // ARNs rather than strings that happen to look like them.
-  val trust =
-    """{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}"""
-  def role(suffix: String): String = awslocalOption(
-    containerName,
-    "iam",
-    "get-role",
-    "--role-name",
-    s"$name-$suffix",
-    "--query",
-    "Role.Arn",
-    "--output",
-    "text").getOrElse(
-    awslocal(
-      containerName,
-      "iam",
-      "create-role",
-      "--role-name",
-      s"$name-$suffix",
-      "--assume-role-policy-document",
-      trust,
-      "--query",
-      "Role.Arn",
-      "--output",
-      "text"))
+  val outputs = tofu("output", "-json", s"-state=$state")
+  if outputs.exitCode != 0 then
+    fail("output", outputs)
 
-  val distribution = ensureDistribution(containerName, name, bucket)
+  val parsed = ujson.read(outputs.out.text()).obj
+  def output(name: String): String = parsed
+    .get(name)
+    .map(_.obj("value").str)
+    .filter(_.nonEmpty)
+    .getOrElse(sys.error(
+      s"[tofu] the apply reported success but output '$name' is missing or empty. Outputs present: ${parsed.keys.toSeq.sorted.mkString(", ")}"))
 
   println(
-    s"[localstack] infra ready: cluster $name, vpc $vpc, listener ${listener
-        .takeRight(24)}, distribution $distribution")
+    s"[tofu] ready: cluster ${output("ecs_cluster_name")}, vpc ${output("vpc_id")}, distribution ${output("cloudfront_distribution_id")}")
+
   Map(
-    "AWS_ENDPOINT_URL"         -> endpoint,
-    "AWS_REGION"               -> region,
+    "AWS_ENDPOINT_URL" -> endpoint,
+    // Matches `aws_region` in the local tfvars. Literal rather than an output because it is an
+    // input to that configuration, not something it decides.
+    "AWS_REGION" -> "us-east-1",
     // LocalStack verifies nothing; the SDK's signer only needs a pair to exist. Set here rather
     // than left to the machine, so the suite does not pick up someone's real profile.
-    "AWS_ACCESS_KEY_ID"        -> "test",
-    "AWS_SECRET_ACCESS_KEY"    -> "test",
-    "ECS_CLUSTER"              -> name,
-    "VPC_ID"                   -> vpc,
-    "SUBNET_IDS"               -> s"$subnetA,$subnetB",
-    "SECURITY_GROUP_ID"        -> securityGroup,
-    "ALB_LISTENER_ARN"         -> listener,
-    "TASK_EXECUTION_ROLE_ARN"  -> role("exec"),
-    "TASK_ROLE_ARN"            -> role("task"),
-    "CLOUDFRONT_DISTRIBUTION_ID" -> distribution,
+    "AWS_ACCESS_KEY_ID" -> "test",
+    "AWS_SECRET_ACCESS_KEY" -> "test",
+    "ECS_CLUSTER" -> output("ecs_cluster_name"),
+    "VPC_ID" -> output("vpc_id"),
+    "SUBNET_IDS" -> output("subnet_ids"),
+    "SECURITY_GROUP_ID" -> output("ecs_tasks_security_group_id"),
+    "ALB_LISTENER_ARN" -> output("alb_listener_arn"),
+    "TASK_EXECUTION_ROLE_ARN" -> output("task_execution_role_arn"),
+    "TASK_ROLE_ARN" -> output("task_role_arn"),
+    // The distribution this configuration builds, whose origin is its own assets bucket rather
+    // than the suite's. Nothing fetches through it — the spec calls `createInvalidation` and polls
+    // for `Completed` — so the origin does not matter; the id being a real one does.
+    "CLOUDFRONT_DISTRIBUTION_ID" -> output("cloudfront_distribution_id"),
     // Deliberately an image that is already on the machine. LocalStack runs an ECS task as a real
     // container, so a task definition naming an ECR repository nobody can pull would leave the
     // service trying forever. Nothing here waits for a task to start, but a pull that cannot
     // succeed is noise in the container's log that looks like a test failure.
-    "API_IMAGE"                -> s"rqlite/rqlite:$rqliteVersion"
+    "API_IMAGE" -> s"rqlite/rqlite:$rqliteVersion"
   )
-end ensureLocalStackInfra
+end ensureLocalStackTofu
+
+// `ensureLocalStackInfra` was here: 219 lines that built a cluster, a VPC, two subnets, a security
+// group, a load balancer, a listener and two IAM roles out of `awslocal` calls, each one wrapped in
+// a describe-or-create to be idempotent. It agreed with the deployed topology only for as long as
+// someone kept it agreeing, and `modules/alb` had already grown rules it did not know about.
+// `ensureLocalStackTofu` applies the same configuration the AWS environments use.
 
 // Shared by api.dev and mcp.dev on purpose: the backoffice writes what the portal reads, so they
 // have to be looking at the same database to be worth running together.
@@ -1835,14 +1768,57 @@ object mcp extends BaseModule:
       val id = os.proc("docker", "ps", "-q", "-f", s"name=$localStackContainer").call().out.trim()
       s"$id $endpoint $licensed"
 
-    /** The cluster, network and load balancer a deploy attaches to, as the environment that names
-      * them. Empty without a licence; see [[ensureLocalStackInfra]].
+    /** The OpenTofu configuration, tracked so that editing it re-applies.
+      *
+      * A plain `Task.Source` would be a path outside this module, which Mill refuses; reading the
+      * files is what makes the content the input.
       */
-    def localStackInfra: T[Map[String, String]] = Task:
+    private def tofuConfig: T[Int] = Task.Input:
+      val dir = terraformDir(Task.env, moduleDir / os.up / os.up)
+      if !os.exists(dir) then
+        0
+      else
+        os.walk(dir)
+          .filter(p => os.isFile(p) && (p.last.endsWith(".tf") || p.last.endsWith(".tfvars")))
+          .sorted
+          .map(p => (p.relativeTo(dir).toString, os.read(p)).hashCode)
+          .sum
+
+    /** The cluster, network and load balancer a deploy attaches to, as the environment that names
+      * them. Empty without a licence; see [[ensureLocalStackTofu]].
+      *
+      * `persistent = true` is what makes the state and the container stay paired, and it is the
+      * whole reason this is not a plain `Task`. A normal task's `dest` is wiped on every
+      * re-evaluation, so editing the configuration would discard the state while LocalStack still
+      * held all seventy resources — and the next apply would plan a create for each of them and
+      * fail with `AlreadyExists`. Persistent keeps the state across re-evaluations, and the
+      * container id in the path keeps it honest: a recreated container is a new id, so it gets an
+      * empty directory and the two are built together.
+      */
+    def localStackInfra: T[Map[String, String]] = Task(persistent = true):
       val parts = localStackStamp().split(" ")
-      // The bucket, because the distribution needs an origin and it has to be the one the suite
-      // writes to -- otherwise an invalidation would be aimed at a prefix nothing is under.
-      ensureLocalStackInfra(localStackContainer, parts(1), parts(2).toBoolean, testBucket())
+      // Read for the dependency, not the value: the hash is what makes a changed `.tf` re-apply.
+      tofuConfig()
+      ensureLocalStackTofu(
+        endpoint = parts(1),
+        licensed = parts(2).toBoolean,
+        configDir = terraformDir(Task.env, moduleDir / os.up / os.up),
+        stateDir = Task.dest / parts(0))
+
+    /** Recreates LocalStack, which is what clears a state that has come apart from it.
+      *
+      * `-v` and not just `-f`: LocalStack keeps its data in an anonymous volume at
+      * `/var/lib/localstack`, which `docker rm -f` leaves behind — the container would come back
+      * carrying every resource the last one had, which is the divergence this exists to clear.
+      *
+      * The state is not deleted here and does not need to be: it is keyed by container id, so the
+      * replacement container reaches a directory that has never existed. The dev buckets do go.
+      * They are emulated and the build recreates them, but a bundle published locally is gone.
+      */
+    def resetLocalStack() = Task.Command:
+      os.proc("docker", "rm", "-fv", localStackContainer).call(check = false)
+      println(
+        s"[tofu] LocalStack removed with its volume; the next run builds the container and its state together")
 
     /** A bucket of this suite's own, so no spec writes into the one `mcp.dev` serves.
       *
