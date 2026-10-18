@@ -243,12 +243,27 @@ private def localStackToken(env: Map[String, String]): Option[String] = env
   * configured gets reused, `ecs` answers 501, and the build still says LocalStack is ready — the
   * failure then surfaces inside a test as an unhelpful `InternalFailure`.
   */
-private def localStackServices(containerName: String): Option[String] = os
+private def localStackEnv(containerName: String, key: String): Option[String] = os
   .proc("docker", "inspect", containerName, "--format", "{{range .Config.Env}}{{println .}}{{end}}")
   .call(check = false, stderr = os.Pipe)
   .out
   .lines()
-  .collectFirst { case line if line.startsWith("SERVICES=") => line.stripPrefix("SERVICES=") }
+  .collectFirst { case line if line.startsWith(s"$key=") => line.stripPrefix(s"$key=") }
+
+private def localStackServices(containerName: String): Option[String] =
+  localStackEnv(containerName, "SERVICES")
+
+/** Whether IAM is being enforced, and softly or not, as one comparable string.
+  *
+  * Part of the reuse check for the reason above, and it matters more here than for `SERVICES`: a
+  * container started before enforcement was asked for allows everything, so the suite passes while
+  * testing nothing about the policy. That failure is invisible — there is no 501 and no error, just
+  * a green run.
+  */
+private def localStackIam(containerName: String): String =
+  val enforcing = localStackEnv(containerName, "ENFORCE_IAM").getOrElse("0")
+  val soft = localStackEnv(containerName, "IAM_SOFT_MODE").getOrElse("0")
+  s"$enforcing/$soft"
 
 /** The image a running container was started from, for the same reason as the services above: a
   * version bump has to replace the container, and a licence refused by an old image is reported
@@ -280,18 +295,45 @@ private def ensureLocalStack(
       s"localstack/localstack-pro:$localStackVersion"
     else
       s"localstack/localstack:$localStackVersion"
+  // Enforcement only where it can work: both settings are licensed features, and without a token
+  // there is no ECS or IAM to evaluate anything against anyway.
+  //
+  // Soft by default, which is a measured limitation rather than a soft landing. `IAM_SOFT_MODE`
+  // evaluates every request against the policy and logs the outcome without denying; hard mode
+  // denies. Hard is unreachable here because LocalStack does not populate the condition keys the
+  // requests carry — the policy gates ECS service calls on `ecs:cluster` and `iam:PassRole` on
+  // `iam:PassedToService`, and its own simulator flips each one from `implicitDeny` to `allowed`
+  // purely by supplying the key. So hard mode would fail the deploy end-to-end test on an emulator
+  // gap, and the alternative — dropping the conditions — is weakening a production policy to suit
+  // a local tool.
+  //
+  // `CAPTAL_IAM_SOFT=0` tries hard anyway, which is what to run when LocalStack starts supplying
+  // them. `DeployE2ESpec` is what keeps soft mode honest: it reads the evaluation log and fails on
+  // any denial that is not one of those two known gaps.
+  val soft =
+    if env.get("CAPTAL_IAM_SOFT").contains("0") then
+      "0"
+    else
+      "1"
+  val iam =
+    if token.isDefined then
+      s"1/$soft"
+    else
+      "0/0"
+
   val running = os.proc("docker", "ps", "-q", "-f", s"name=$containerName").call().out.trim()
   val reusable = running.nonEmpty && localStackServices(containerName).contains(services) &&
-    localStackImage(containerName).contains(image)
+    localStackImage(containerName).contains(image) && localStackIam(containerName) == iam
 
   if reusable then
-    println(s"[localstack] '$containerName' already running: $image, SERVICES=$services")
+    println(
+      s"[localstack] '$containerName' already running: $image, SERVICES=$services, ENFORCE_IAM/IAM_SOFT_MODE=$iam")
   else
     if running.nonEmpty then
       println(
         s"[localstack] '$containerName' is running ${localStackImage(containerName)
             .getOrElse("<unknown>")} with SERVICES=${localStackServices(containerName)
-            .getOrElse("<unset>")}, replacing it with $image / $services")
+            .getOrElse("<unset>")} and IAM=${localStackIam(containerName)}, replacing it with $image / $services / $iam")
     os.proc("docker", "rm", "-f", containerName).call(check = false, stderr = os.Pipe)
     println(
       s"[localstack] Starting '$containerName' on port $hostPort (${
@@ -305,7 +347,15 @@ private def ensureLocalStack(
     val licensedArgs = token
       .toSeq
       .flatMap(value =>
-        Seq("-e", s"LOCALSTACK_AUTH_TOKEN=$value", "-v", "/var/run/docker.sock:/var/run/docker.sock"))
+        Seq(
+          "-e",
+          s"LOCALSTACK_AUTH_TOKEN=$value",
+          "-e",
+          "ENFORCE_IAM=1",
+          "-e",
+          s"IAM_SOFT_MODE=$soft",
+          "-v",
+          "/var/run/docker.sock:/var/run/docker.sock"))
     val started = os
       .proc(
         "docker",
@@ -614,6 +664,14 @@ private def ensureLocalStackTofu(
     .getOrElse(sys.error(
       s"[tofu] the apply reported success but output '$name' is missing or empty. Outputs present: ${parsed.keys.toSeq.sorted.mkString(", ")}"))
 
+  /** An output that is `null` in an environment that does not produce it. */
+  def optionalOutput(name: String): Option[String] = parsed
+    .get(name)
+    .map(_.obj("value"))
+    .filterNot(_.isNull)
+    .map(_.str)
+    .filter(_.nonEmpty)
+
   println(
     s"[tofu] ready: cluster ${output("ecs_cluster_name")}, vpc ${output("vpc_id")}, distribution ${output("cloudfront_distribution_id")}")
 
@@ -622,10 +680,24 @@ private def ensureLocalStackTofu(
     // Matches `aws_region` in the local tfvars. Literal rather than an output because it is an
     // input to that configuration, not something it decides.
     "AWS_REGION" -> "us-east-1",
-    // LocalStack verifies nothing; the SDK's signer only needs a pair to exist. Set here rather
-    // than left to the machine, so the suite does not pick up someone's real profile.
-    "AWS_ACCESS_KEY_ID" -> "test",
-    "AWS_SECRET_ACCESS_KEY" -> "test",
+    // The IAM user this configuration creates for `local`, carrying the same policy the deployed
+    // task role does — so with `ENFORCE_IAM` on, a permission the policy does not grant fails here
+    // instead of in front of an operator.
+    //
+    // `test`/`test` is the fallback and used to be unconditional, which was the problem: with
+    // enforcement off LocalStack accepts any pair and allows everything, so the suite was
+    // exercising its own calls and would have passed against an empty policy. Either way the pair
+    // is set here rather than left to the machine, so no run picks up someone's real profile.
+    "AWS_ACCESS_KEY_ID" -> optionalOutput("mcp_test_user_access_key_id").getOrElse("test"),
+    "AWS_SECRET_ACCESS_KEY" -> optionalOutput("mcp_test_user_secret_access_key").getOrElse("test"),
+    // The bucket this configuration creates, overriding the suite's own fallback below. It has to
+    // be this one under IAM enforcement: `aws_iam_policy.mcp` grants the object actions on
+    // `${assets_bucket_arn}/*`, so a bucket the configuration does not know about is denied. That
+    // was measured with LocalStack's own simulator — `captal-local-assets` allowed,
+    // `captal-assets-mcp-test` implicitDeny — and it is a fixture bug rather than a policy gap:
+    // widening the policy to cover a test-only bucket would be granting production access to
+    // something that only exists here.
+    "ASSETS_BUCKET" -> output("assets_bucket_name"),
     "ECS_CLUSTER" -> output("ecs_cluster_name"),
     "VPC_ID" -> output("vpc_id"),
     "SUBNET_IDS" -> output("subnet_ids"),
@@ -1820,12 +1892,14 @@ object mcp extends BaseModule:
       println(
         s"[tofu] LocalStack removed with its volume; the next run builds the container and its state together")
 
-    /** A bucket of this suite's own, so no spec writes into the one `mcp.dev` serves.
+    /** The unlicensed fallback for `ASSETS_BUCKET`, which [[localStackInfra]] overrides with the
+      * bucket the configuration creates whenever there is a licence to create it.
       *
-      * The end-to-end spec publishes a bundle and clears the prefix first to make its own fixture
-      * deterministic — it had been counting an object a previous version of itself left behind. On
-      * the dev bucket that clearing would delete a developer's assets, which is not a thing a test
-      * gets to do.
+      * Still not the one `mcp.dev` serves, which is why it exists: the end-to-end spec publishes a
+      * bundle and clears the prefix first to make its own fixture deterministic — it had been
+      * counting an object a previous version of itself left behind. On the dev bucket that clearing
+      * would delete a developer's assets, which is not a thing a test gets to do. The
+      * configuration's own bucket is a different name again, so the override keeps that property.
       */
     def testBucket: T[String] = Task:
       val name = "captal-assets-mcp-test"

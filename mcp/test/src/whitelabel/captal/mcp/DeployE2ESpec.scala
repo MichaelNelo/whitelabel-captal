@@ -40,6 +40,7 @@ import whitelabel.captal.infra.{
   SurveyRow,
   VideoStatus
 }
+import scala.io.Source
 import zio.*
 import zio.http.{Client, Header, Headers, TestClient}
 import zio.json.*
@@ -838,6 +839,52 @@ object DeployE2ESpec extends ZIOSpecDefault:
       )
   end lifecycle
 
+  /** Every action LocalStack's policy evaluation refused during this run, as `service:Action`.
+    *
+    * Read from the container's log because that is where soft mode puts it: `IAM_SOFT_MODE`
+    * evaluates each request against the policy and logs the outcome without denying, so without
+    * reading this back the evaluation happens and nobody is told. The line is
+    * `User: <arn> is not authorized to perform: <service>:<Action> because ...`.
+    */
+  private val Denial = """is not authorized to perform: ([A-Za-z0-9]+:[A-Za-z0-9]+)""".r
+
+  private val deniedActions: ZIO[Any, Nothing, Set[String]] = ZIO
+    .attemptBlocking:
+      // `ProcessBuilder` rather than os-lib, which is Mill's and not a dependency of this module.
+      val process = new ProcessBuilder("docker", "logs", "localstack-dev")
+        .redirectErrorStream(true)
+        .start()
+      val output = Source.fromInputStream(process.getInputStream).mkString
+      process.waitFor()
+      Denial.findAllMatchIn(output).map(_.group(1)).toSet
+    // A machine with no container, or no licence, has nothing to report rather than a failure —
+    // the deploy half of this spec has already skipped itself in that case.
+    .orElseSucceed(Set.empty)
+
+  /** Denials that are LocalStack failing to populate a condition key, rather than a policy missing
+    * a permission.
+    *
+    * An allow-list and not a shrug, because each was measured with LocalStack's own
+    * `simulate-principal-policy`: every one flips from `implicitDeny` to `allowed` purely by
+    * supplying the key the real request already carries — `ecs:cluster`, which `Deploy` passes on
+    * every service call, and `iam:PassedToService`, which ECS sets when a task definition names a
+    * role. An unconditioned action in the same policy, `ecs:RegisterTaskDefinition`, is allowed
+    * either way, which is the control.
+    *
+    * This is the set to delete when LocalStack starts supplying them: at that point
+    * `CAPTAL_IAM_SOFT=0` passes and the build stops needing soft mode at all.
+    */
+  private val KnownEmulationGaps = Set(
+    "ecs:CreateService",
+    "ecs:UpdateService",
+    "ecs:DescribeServices",
+    "ecs:DeleteService",
+    "ecs:ListServices",
+    "ecs:ListTasks",
+    "ecs:DescribeTasks",
+    "iam:PassRole"
+  )
+
   def spec =
     suite("a location from zero")(
       test("content, infrastructure, pause, resume, teardown — and the content outlives all of it"):
@@ -845,7 +892,23 @@ object DeployE2ESpec extends ZIOSpecDefault:
           for
             infra  <- ZIO.service[Option[InfraStore]]
             result <- infra.fold(ZIO.succeed(assertCompletes))(store => lifecycle(store, infra))
-          yield result).provideShared(
+          yield result
+      ,
+      test("the deploy needed no permission the backoffice's IAM policy withholds"):
+        // Last, and in this spec rather than one of its own, because what it reports on is what the
+        // test above just did. All of it ran as the IAM user `modules/mcp` creates, carrying the
+        // same policy the deployed task role carries, so a permission that policy withholds shows
+        // up here even though soft mode let the call through.
+        //
+        // This is the point of enforcing IAM locally at all. Before it the suite passed dummy
+        // credentials, LocalStack allowed everything, and this test would have passed against an
+        // empty policy.
+        deniedActions.map: denied =>
+          val unexpected = denied.diff(KnownEmulationGaps).toSeq.sorted
+          assertTrue(unexpected.isEmpty) ??
+            s"denied and not a known emulation gap: ${unexpected.mkString(
+                ", ")}. Either `aws_iam_policy.mcp` in the infrastructure repository withholds it, or the request is reaching a resource the policy does not cover — settle which with `awslocal iam simulate-principal-policy` before widening anything."
+    ).provideShared(
       e2eDatabase >>> Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase),
       AssetStore.layer,
       DeployTargets.layer,

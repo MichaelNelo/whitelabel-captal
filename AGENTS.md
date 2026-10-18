@@ -1352,6 +1352,30 @@ La alternativa que no necesita ningún lock quedó sobre la mesa y sin hacer: sa
 
 Cuándo revisar lo de S3: si alguna vez hace falta tomar el lock **antes** de que la base exista, o cuando está inalcanzable. Hoy es discutible — si no se puede llegar a la base, tampoco se puede migrar.
 
+### 11. La política IAM se evalúa en soft mode, y el log se lee
+
+LocalStack arranca con `ENFORCE_IAM=1` y `IAM_SOFT_MODE=1`, y el suite corre como el usuario IAM que `modules/mcp` crea — el que carga la misma política que el task role desplegado.
+
+**Lo que esto arregla.** Por defecto LocalStack no autentica nada: *"all APIs can be accessed without authentication"*. El suite pasaba `test`/`test`, así que cada llamada tenía éxito sin importar qué concediera la política — el e2e de deploy **pasaba igual con una política vacía**. La entrada 2 otra vez: una garantía que nadie ejercita no es una garantía.
+
+**Por qué soft y no duro.** Hard mode es inalcanzable acá, y es una limitación medida, no una concesión. La política condiciona las llamadas de servicio de ECS a `ecs:cluster` y `iam:PassRole` a `iam:PassedToService`, y **LocalStack no puebla esas claves** aunque la petición las lleve. Medido con su propio `simulate-principal-policy`:
+
+| simulación | decisión |
+|---|---|
+| `ecs:DescribeServices` sin `ecs:cluster` | `implicitDeny` |
+| `ecs:DescribeServices` con la clave | `allowed` |
+| `iam:PassRole` sin `iam:PassedToService` | `implicitDeny` |
+| `iam:PassRole` con la clave | `allowed` |
+| `ecs:RegisterTaskDefinition` (sin condición, control) | `allowed` |
+
+Verificado además que el lado nuestro está bien: `Deploy` pasa `.cluster(targets.cluster)` en cada llamada, `cluster_id` es el ARN completo y no el nombre, y `location_task_role_arn` es el mismo rol que el deploy pasa. Así que hard mode fallaría el e2e por el emulador, y la alternativa — quitar las condiciones — es debilitar una política de producción para complacer una herramienta local. `CAPTAL_IAM_SOFT=0` lo intenta, para cuando LocalStack las provea.
+
+**Y soft mode sin leer el log no sirve de nada**, porque evalúa para nadie. Así que `DeployE2ESpec` termina leyendo las denegaciones del log del contenedor y falla con cualquiera que no esté en `KnownEmulationGaps`. Una acción genuinamente ausente de la política rompe el build; los dos huecos conocidos están nombrados y son lo que se borra el día que el emulador los cubra.
+
+**El único bug real que encontró** fue de otra clase: desajuste de recurso. Las cuatro acciones de S3 se denegaban porque el suite escribía en un bucket propio y la política concede sobre `${assets_bucket_arn}/*` — `captal-local-assets` allowed, `captal-assets-mcp-test` implicitDeny. El arreglo fue que el suite use el bucket que crea la configuración, **no** ampliar la política: eso sería conceder acceso de producción a algo que solo existe en una prueba. Esa distinción es el motivo de usar el simulador antes de tocar un permiso.
+
+Lo que falta para que esto cubra todo: el e2e ejercita las llamadas del deploy, no las de `AssetStore` ni `Assets` por separado, así que un permiso que solo haga falta en un camino que el e2e no recorre sigue sin verificarse.
+
 ---
 
 ## Convenciones de Estilo
