@@ -2,11 +2,12 @@ package whitelabel.captal.api
 
 import sttp.tapir.json.circe.*
 import sttp.tapir.ztapir.*
+import whitelabel.captal.api.schemas.given
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.infrastructure.SessionData
 import whitelabel.captal.core.user
-import whitelabel.captal.endpoints.ApiError
-import whitelabel.captal.endpoints.ApiError.given
+import whitelabel.captal.messages.ApiError
+import whitelabel.captal.messages.ApiError.given
 import whitelabel.captal.platform.session.{CaptivePortalParams, SessionContext, SessionService}
 import zio.*
 

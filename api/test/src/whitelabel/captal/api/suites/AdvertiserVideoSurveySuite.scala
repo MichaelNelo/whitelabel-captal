@@ -100,6 +100,6 @@ object AdvertiserVideoSurveySuite:
             cookie  <- createSession(backend)
             // Still in Welcome phase
             surveyResp <- getNextAdvertiserSurvey(backend, cookie)
-          yield assertTrue(!surveyResp.code.isSuccess || surveyResp.body.contains("wrong_phase"))
+          yield assertTrue(!surveyResp.code.isSuccess || surveyResp.body.contains("WrongPhase"))
       )
 end AdvertiserVideoSurveySuite

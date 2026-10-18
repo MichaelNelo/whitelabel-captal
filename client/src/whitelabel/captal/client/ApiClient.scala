@@ -6,7 +6,7 @@ import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, parser}
 import org.scalajs.dom
 import whitelabel.captal.client.Promises.*
-import whitelabel.captal.endpoints.ApiError
+import whitelabel.captal.messages.ApiError
 
 object ApiClient:
   /** API base path. In production the page is served at `/<slug>/index.html`, so we extract the

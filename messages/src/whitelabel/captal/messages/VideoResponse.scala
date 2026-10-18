@@ -1,15 +1,21 @@
-package whitelabel.captal.endpoints
+package whitelabel.captal.messages
 
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import io.circe.{Decoder as CirceDecoder, Encoder as CirceEncoder}
-import sttp.tapir.json.circe.*
-import sttp.tapir.{Schema, *}
 import whitelabel.captal.core.application.NextStep
 import whitelabel.captal.core.application.commands.NextVideo
-import whitelabel.captal.endpoints.ApiError.given
 
-// Response type for video endpoints - discriminated union
+/** The three types the video endpoints exchange, split out of `VideoEndpoints.scala`.
+  *
+  * That file genuinely held both -- the endpoint definitions and these -- which is why the client
+  * compiled against tapir: `endpoints-js` shares every source in this module, so a browser build
+  * pulled in the tapir dependency to typecheck declarations it never reads. Their `Schema`
+  * instances are in `schemas` now and these three are free of it.
+  *
+  * Together in one file because they are one exchange: ask for the next video, report it watched,
+  * get told the phase that follows.
+  */
 enum VideoResponse:
   case Video(data: NextVideo)
   case Step(data: NextStep)
@@ -38,8 +44,6 @@ object VideoResponse:
           cursor.as[NextStep].map(Step.apply)
         case other =>
           Left(io.circe.DecodingFailure(s"Unknown type: $other", cursor.history))
-
-  given Schema[VideoResponse] = Schema.anyObject
 end VideoResponse
 
 final case class MarkVideoWatchedRequest(durationWatched: Int, completed: Boolean)
@@ -47,38 +51,9 @@ final case class MarkVideoWatchedRequest(durationWatched: Int, completed: Boolea
 object MarkVideoWatchedRequest:
   given CirceEncoder[MarkVideoWatchedRequest] = deriveEncoder
   given CirceDecoder[MarkVideoWatchedRequest] = deriveDecoder
-  given Schema[MarkVideoWatchedRequest] = Schema.derived
 
 final case class VideoWatchedResponse(nextPhase: String)
 
 object VideoWatchedResponse:
   given CirceEncoder[VideoWatchedResponse] = deriveEncoder
   given CirceDecoder[VideoWatchedResponse] = deriveDecoder
-  given Schema[VideoWatchedResponse] = Schema.derived
-
-object VideoEndpoints:
-  import SurveyEndpoints.sessionCookie
-
-  // GET /api/video/next - Get next video to watch
-  val nextVideo: PublicEndpoint[Option[String], ApiError, VideoResponse, Any] = endpoint
-    .get
-    .in("api" / "video" / "next")
-    .in(sessionCookie)
-    .out(jsonBody[VideoResponse])
-    .errorOut(jsonBody[ApiError])
-    .description("Get the next video to watch for the session")
-
-  // POST /api/video/watched - Mark video as watched
-  val markWatched: PublicEndpoint[
-    (Option[String], MarkVideoWatchedRequest),
-    ApiError,
-    VideoWatchedResponse,
-    Any] = endpoint
-    .post
-    .in("api" / "video" / "watched")
-    .in(sessionCookie)
-    .in(jsonBody[MarkVideoWatchedRequest])
-    .out(jsonBody[VideoWatchedResponse])
-    .errorOut(jsonBody[ApiError])
-    .description("Mark video as watched and get next phase")
-end VideoEndpoints

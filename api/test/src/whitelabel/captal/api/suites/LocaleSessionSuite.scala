@@ -40,9 +40,7 @@ object LocaleSessionSuite:
           for
             backend  <- testBackend
             response <- putSetLocale(backend, "es")
-          yield assertTrue(
-            !response.code.isSuccess,
-            response.body.contains("session_missing") || response.body.contains("error"))
+          yield assertTrue(!response.code.isSuccess, response.body.contains("SessionMissing"))
         ,
         test("PUT /api/session/locale with existing session updates locale"):
           for

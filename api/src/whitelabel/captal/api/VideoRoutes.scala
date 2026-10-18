@@ -2,12 +2,13 @@ package whitelabel.captal.api
 
 import sttp.tapir.json.circe.*
 import sttp.tapir.ztapir.*
+import whitelabel.captal.api.schemas.given
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Flow, NextStep, Phase}
-import whitelabel.captal.endpoints.MarkVideoWatchedRequest.given
-import whitelabel.captal.endpoints.VideoResponse.given
-import whitelabel.captal.endpoints.VideoWatchedResponse.given
-import whitelabel.captal.endpoints.{
+import whitelabel.captal.messages.MarkVideoWatchedRequest.given
+import whitelabel.captal.messages.VideoResponse.given
+import whitelabel.captal.messages.VideoWatchedResponse.given
+import whitelabel.captal.messages.{
   ApiError,
   MarkVideoWatchedRequest,
   VideoResponse,

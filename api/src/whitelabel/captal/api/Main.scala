@@ -319,9 +319,12 @@ object Main extends ZIOAppDefault:
       videoRoutes: VideoRoutes,
       advertiserSurveyRoutes: AdvertiserSurveyRoutes,
       finishRoutes: FinishRoutes): List[ZServerEndpoint[FullEnv, Any]] =
+    // `HealthRoutes` left this list: it is a zio-http `Routes` now rather than tapir endpoints, so
+    // it joins at the outer layer where the two are already the same type. This list shrinks as
+    // each remaining route converts.
     val base =
-      HealthRoutes.routes.map(_.widen[FullEnv]) ++ surveyRoutes.routes.map(_.widen[FullEnv]) ++
-        localeRoutes.routes.map(_.widen[FullEnv]) ++ videoRoutes.routes.map(_.widen[FullEnv]) ++
+      surveyRoutes.routes.map(_.widen[FullEnv]) ++ localeRoutes.routes.map(_.widen[FullEnv]) ++
+        videoRoutes.routes.map(_.widen[FullEnv]) ++
         advertiserSurveyRoutes.routes.map(_.widen[FullEnv]) ++
         finishRoutes.routes.map(_.widen[FullEnv])
     val withDev =
@@ -466,11 +469,15 @@ object Main extends ZIOAppDefault:
       videoRoutes,
       advertiserSurveyRoutes,
       finishRoutes)
+    // Where tapir's interpreted output and the converted routes meet: `toHttp` already produces a
+    // zio-http `Routes`, so a route that no longer goes through tapir joins with the same `++`.
+    // That is what lets this move one route at a time with the build green in between.
+    val served = HealthRoutes.routes ++ api
     val baseRoutes =
       if devMode then
-        devLinkerOutput(devStaticRoutes(locationSlug) ++ api ++ spaCatchAllRoutes(locationSlug))
+        devLinkerOutput(devStaticRoutes(locationSlug) ++ served ++ spaCatchAllRoutes(locationSlug))
       else
-        api
+        served
     baseRoutes @@ loggingMiddleware
   end routes
 

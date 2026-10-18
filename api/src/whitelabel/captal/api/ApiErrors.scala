@@ -1,7 +1,7 @@
 package whitelabel.captal.api
 
 import whitelabel.captal.core.application.Flow
-import whitelabel.captal.endpoints.ApiError
+import whitelabel.captal.messages.ApiError
 import whitelabel.captal.platform.session.SessionContext
 import zio.*
 

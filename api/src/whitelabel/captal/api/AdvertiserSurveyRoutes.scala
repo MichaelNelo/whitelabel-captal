@@ -2,11 +2,12 @@ package whitelabel.captal.api
 
 import sttp.tapir.json.circe.*
 import sttp.tapir.ztapir.*
+import whitelabel.captal.api.schemas.given
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Flow, NextStep, Phase}
-import whitelabel.captal.endpoints.AdvertiserSurveyResponse.given
-import whitelabel.captal.endpoints.AnswerRequest.given
-import whitelabel.captal.endpoints.{AdvertiserSurveyResponse, AnswerRequest, ApiError}
+import whitelabel.captal.messages.AdvertiserSurveyResponse.given
+import whitelabel.captal.messages.AnswerRequest.given
+import whitelabel.captal.messages.{AdvertiserSurveyResponse, AnswerRequest, ApiError}
 import whitelabel.captal.platform.session.{SessionContext, SessionService}
 import zio.*
 

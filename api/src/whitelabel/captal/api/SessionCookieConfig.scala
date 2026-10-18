@@ -9,12 +9,14 @@ import sttp.tapir.{EndpointInput, EndpointOutput, cookie, setCookieOpt}
   * them as separate entries and only sends each to its own location's URLs.
   */
 final case class SessionCookieConfig(name: String, path: String):
-  def asMeta(value: String): CookieValueWithMeta = CookieValueWithMeta.unsafeApply(
-    value,
-    path = Some(path))
 
   val tapirInput: EndpointInput[Option[String]] = cookie[Option[String]](name)
   val tapirOutput: EndpointOutput[Option[CookieValueWithMeta]] = setCookieOpt(name)
+
+  def asMeta(value: String): CookieValueWithMeta = CookieValueWithMeta.unsafeApply(
+    value,
+    path = Some(path))
+end SessionCookieConfig
 
 object SessionCookieConfig:
   def fromSlug(slug: Option[String]): SessionCookieConfig =

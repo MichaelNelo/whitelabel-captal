@@ -59,7 +59,7 @@ object EmailSurveySuite:
             _         <- getNextSurvey(backend, cookie)
             emailResp <- postEmailAnswer(backend, cookie, "not-an-email")
           yield assertTrue(
-            !emailResp.code.isSuccess || emailResp.body.contains("error"),
-            emailResp.body.contains("invalid_email"))
+            emailResp.code.code == 400,
+            emailResp.body.contains("InvalidEmailFormat"))
       )
 end EmailSurveySuite

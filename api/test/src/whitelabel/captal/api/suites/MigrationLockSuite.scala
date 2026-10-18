@@ -1,13 +1,11 @@
 package whitelabel.captal.api.suites
 
-import com.typesafe.config.ConfigFactory
 import java.sql.Connection
+
+import com.typesafe.config.ConfigFactory
 import whitelabel.captal.platform.{Migrate, RqliteDataSource}
-// Selective, because `zio.*` and `zio.test.*` both export `test` and neither wins by being second.
-// The other suites get away with the wildcard by extending `ZIOSpecDefault`, where `test` arrives
-// as an inherited member and shadows both imports; a plain object has no such member.
-import zio.{Task, ZIO}
 import zio.test.*
+import zio.{Task, ZIO}
 
 /** That `Migrate.Lock` is load-bearing, and not the thing it is easy to mistake it for.
   *

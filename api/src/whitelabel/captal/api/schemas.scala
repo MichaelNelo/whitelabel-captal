@@ -1,8 +1,5 @@
-package whitelabel.captal.endpoints
+package whitelabel.captal.api
 
-import io.circe.generic.semiauto.*
-import io.circe.syntax.*
-import io.circe.{Decoder as CirceDecoder, Encoder as CirceEncoder}
 import sttp.tapir.Schema
 import whitelabel.captal.core.application.commands.{
   NextAdvertiserSurvey,
@@ -13,38 +10,17 @@ import whitelabel.captal.core.application.{IdentificationSurveyType, NextStep, P
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.core.survey
 import whitelabel.captal.core.survey.question.*
+import whitelabel.captal.messages.*
 
-// Response type for survey endpoints - discriminated union
-enum SurveyResponse:
-  case Survey(data: NextIdentificationSurvey)
-  case Step(data: NextStep)
-
-object SurveyResponse:
-  def from(value: NextIdentificationSurvey | NextStep): SurveyResponse =
-    value match
-      case s: NextIdentificationSurvey =>
-        Survey(s)
-      case n: NextStep =>
-        Step(n)
-
-  given CirceEncoder[SurveyResponse] = CirceEncoder.instance:
-    case Survey(data) =>
-      data.asJson.deepMerge(io.circe.Json.obj("type" -> "survey".asJson))
-    case Step(data) =>
-      data.asJson.deepMerge(io.circe.Json.obj("type" -> "step".asJson))
-
-  given CirceDecoder[SurveyResponse] = CirceDecoder.instance: cursor =>
-    cursor
-      .get[String]("type")
-      .flatMap:
-        case "survey" =>
-          cursor.as[NextIdentificationSurvey].map(Survey.apply)
-        case "step" =>
-          cursor.as[NextStep].map(Step.apply)
-        case other =>
-          Left(io.circe.DecodingFailure(s"Unknown type: $other", cursor.history))
-end SurveyResponse
-
+/** Every tapir `Schema` this server's endpoint descriptions need.
+  *
+  * In `api` because that is the only module with tapir in it now. They used to live in a shared
+  * `endpoints` module beside the request and response types, which put tapir on the browser's
+  * compile classpath for declarations nothing in the browser reads.
+  *
+  * `Schema.string` and `Schema.anyObject` rather than derived wherever the JSON shape is written by
+  * hand: a derived schema would describe a structure the codec does not produce.
+  */
 object schemas:
   // Phase and IdentificationSurveyType
   given Schema[Phase] = Schema.string
@@ -85,32 +61,25 @@ object schemas:
   given Schema[NextAdvertiserSurvey] = Schema.derived
   given Schema[NextStep] = Schema.derived
   given Schema[SurveyResponse] = Schema.anyObject
-end schemas
 
-object i18n:
-  // Circe codecs for nested types
-  given CirceEncoder[I18n.Welcome.Steps] = deriveEncoder
-  given CirceDecoder[I18n.Welcome.Steps] = deriveDecoder
-  given CirceEncoder[I18n.Welcome.Button] = deriveEncoder
-  given CirceDecoder[I18n.Welcome.Button] = deriveDecoder
-  given CirceEncoder[I18n.Welcome.Authorized] = deriveEncoder
-  given CirceDecoder[I18n.Welcome.Authorized] = deriveDecoder
-  given CirceEncoder[I18n.Welcome] = deriveEncoder
-  given CirceDecoder[I18n.Welcome] = deriveDecoder
-  given CirceEncoder[I18n.Loading] = deriveEncoder
-  given CirceDecoder[I18n.Loading] = deriveDecoder
-  given CirceEncoder[I18n.Error] = deriveEncoder
-  given CirceDecoder[I18n.Error] = deriveDecoder
-  given CirceEncoder[I18n.Question] = deriveEncoder
-  given CirceDecoder[I18n.Question] = deriveDecoder
-  given CirceEncoder[I18n.Ready] = deriveEncoder
-  given CirceDecoder[I18n.Ready] = deriveDecoder
-  given CirceEncoder[I18n.Video] = deriveEncoder
-  given CirceDecoder[I18n.Video] = deriveDecoder
-  given CirceEncoder[I18n] = deriveEncoder
-  given CirceDecoder[I18n] = deriveDecoder
+  // Moved here out of the DTO companions, and that is what makes those portable.
+  //
+  // A `given Schema[X]` sitting in `object X` is found by implicit search with no import, which is
+  // convenient and is why they ended up there. It also means every DTO the client shares carries a
+  // tapir dependency for the server's benefit — and `endpoints-js` compiles all of these, so the
+  // browser build pulls in tapir to satisfy declarations nothing in it uses. Here they are one
+  // import away for the five files that need them, and absent from everywhere else.
+  given Schema[ApiError] = Schema.string
+  given Schema[StatusResponse] = Schema.derived
+  given Schema[AnswerRequest] = Schema.derived
+  given Schema[SetLocaleRequest] = Schema.derived
+  given Schema[VideoResponse] = Schema.anyObject
+  given Schema[MarkVideoWatchedRequest] = Schema.derived
+  given Schema[VideoWatchedResponse] = Schema.derived
+  given Schema[AdvertiserSurveyResponse] = Schema.anyObject
 
-  // Tapir schemas for I18n
+  // The translation bundle. Its Circe codecs are in `core.codecs.i18n`, which is what the
+  // browser reads; only these stay here.
   given Schema[I18n.Welcome.Steps] = Schema.derived
   given Schema[I18n.Welcome.Button] = Schema.derived
   given Schema[I18n.Welcome.Authorized] = Schema.derived
@@ -121,4 +90,4 @@ object i18n:
   given Schema[I18n.Question] = Schema.derived
   given Schema[I18n.Video] = Schema.derived
   given Schema[I18n] = Schema.derived
-end i18n
+end schemas

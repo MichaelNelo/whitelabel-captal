@@ -8,7 +8,7 @@ import whitelabel.captal.client.Promises.*
 import whitelabel.captal.client.i18n.I18nClient
 import whitelabel.captal.client.{AppState, ErrorHandler, Router, Runtime, StatusApi, WelcomeApi}
 import whitelabel.captal.core.i18n.I18n
-import whitelabel.captal.endpoints.ApiError
+import whitelabel.captal.messages.ApiError
 
 /** Centralized error page. Shown when an unexpected API error occurs (boot status fail, mid-flow
   * endpoint fail, video load fail, async runtime crash). All copy comes from `i18n.error.{title,

@@ -23,7 +23,7 @@ import whitelabel.captal.core.survey.question.{
   TextRule,
   ops as questionOps
 }
-import whitelabel.captal.endpoints.SurveyResponse
+import whitelabel.captal.messages.SurveyResponse
 
 object IdentificationQuestionView:
   private val answerValue: Var[Option[AnswerValue]] = Var(None)
