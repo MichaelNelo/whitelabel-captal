@@ -19,6 +19,7 @@ object E2ETests extends ZIOSpecDefault:
         MultiQuestionSurveySuite.suite,
         ValidationSuite.suite,
         PhaseValidationSuite.suite,
+        ProtocolRejectionSuite.suite,
         SessionIsolationSuite.suite,
         VideoSuite.suite,
         AdvertiserVideoSurveySuite.suite,
