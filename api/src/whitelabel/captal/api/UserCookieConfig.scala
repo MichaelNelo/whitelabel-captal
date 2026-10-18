@@ -31,7 +31,8 @@ final case class UserCookieConfig(name: String, path: String, maxAgeSeconds: Lon
       isSecure = true,
       isHttpOnly = true,
       maxAge = Some(Duration.fromSeconds(maxAgeSeconds)),
-      sameSite = Some(Cookie.SameSite.Lax)))
+      sameSite = Some(Cookie.SameSite.Lax)
+    ))
 end UserCookieConfig
 
 object UserCookieConfig:

@@ -7,12 +7,12 @@ import whitelabel.captal.core.application.Event
 import whitelabel.captal.core.survey.Event as SurveyEvent
 import whitelabel.captal.core.survey.question.Event as QuestionEvent
 import whitelabel.captal.core.{survey, user}
-import whitelabel.captal.platform.surveySchemas.given
-import whitelabel.captal.platform.{AnswerRow, surveySchemas}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.session.SessionContext
+import whitelabel.captal.platform.surveySchemas.given
+import whitelabel.captal.platform.{AnswerRow, surveySchemas}
 import zio.*
 
 object AnswerPersistenceHandler:

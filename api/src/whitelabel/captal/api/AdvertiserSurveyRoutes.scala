@@ -49,11 +49,10 @@ final class AdvertiserSurveyRoutes(cookieConfig: SessionCookieConfig):
         case Right(defect) =>
           new Exception(s"Defect: ${defect.prettyPrint}"))
 
-  private val nextAdvertiserSurvey =
-    Endpoint(Method.GET / "api" / "survey" / "advertiser" / "next")
-      .header(HeaderCodec.cookie.optional)
-      .out[AdvertiserSurveyResponse]
-      .outError[ApiError](Status.BadRequest)
+  private val nextAdvertiserSurvey = Endpoint(Method.GET / "api" / "survey" / "advertiser" / "next")
+    .header(HeaderCodec.cookie.optional)
+    .out[AdvertiserSurveyResponse]
+    .outError[ApiError](Status.BadRequest)
 
   private val answerAdvertiser = Endpoint(Method.POST / "api" / "survey" / "advertiser")
     .header(HeaderCodec.cookie.optional)
@@ -83,8 +82,7 @@ final class AdvertiserSurveyRoutes(cookieConfig: SessionCookieConfig):
                 .mapError(ApiError.fromThrowable)
             case _ =>
               ZIO.unit
-      yield response
-    ,
+      yield response,
     answerAdvertiser.implement: (cookie, request) =>
       for
         session <- watching(cookie)
@@ -99,6 +97,7 @@ final class AdvertiserSurveyRoutes(cookieConfig: SessionCookieConfig):
         _ <- ZIO
           .serviceWithZIO[SessionService](_.setPhase(session.sessionId, Phase.Ready))
           .mapError(ApiError.fromThrowable)
-      yield AdvertiserSurveyResponse.Step(NextStep(Phase.Ready)))
+      yield AdvertiserSurveyResponse.Step(NextStep(Phase.Ready))
+  )
 
 end AdvertiserSurveyRoutes

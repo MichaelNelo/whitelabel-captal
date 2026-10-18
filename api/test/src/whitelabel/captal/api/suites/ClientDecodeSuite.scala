@@ -123,12 +123,12 @@ object ClientDecodeSuite:
           // fields are absent rather than null, which `WireContractSuite` measures and this reads.
           // Both tests, because the one that matters is the one whose writer is being replaced.
           for
-            _       <- TestFixtures.seedEmailSurvey
-            backend <- testBackend
-            cookie  <- createSession(backend)
-            _       <- getNextSurvey(backend, cookie)
-            _       <- postEmailAnswer(backend, cookie, "converted-route@example.com")
-            _       <- getNextVideo(backend, cookie)
+            _        <- TestFixtures.seedEmailSurvey
+            backend  <- testBackend
+            cookie   <- createSession(backend)
+            _        <- getNextSurvey(backend, cookie)
+            _        <- postEmailAnswer(backend, cookie, "converted-route@example.com")
+            _        <- getNextVideo(backend, cookie)
             response <- postFinish(backend, cookie)
           yield readsAs[StatusResponse]("StatusResponse (finish)", response.body) &&
             assertTrue(response.code.isSuccess) ??

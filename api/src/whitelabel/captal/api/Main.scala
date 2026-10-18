@@ -301,12 +301,11 @@ object Main extends ZIOAppDefault:
 
   type FullEnv =
     SessionContext & SessionService & LocaleService & QuillSqlite & SessionCookieConfig &
-      CurrentLocation & UserCookieConfig & UserLookup & SurveyRoutes &
-      LocaleRoutes & VideoRoutes & AdvertiserSurveyRoutes & FinishRoutes &
-      SurveyRoutes.AnswerEmailFlowType & SurveyRoutes.AnswerProfilingFlowType &
-      SurveyRoutes.AnswerLocationFlowType & SurveyRoutes.NextSurveyFlowType &
-      VideoRoutes.NextVideoFlowType & VideoRoutes.MarkVideoWatchedFlowType &
-      AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
+      CurrentLocation & UserCookieConfig & UserLookup & SurveyRoutes & LocaleRoutes & VideoRoutes &
+      AdvertiserSurveyRoutes & FinishRoutes & SurveyRoutes.AnswerEmailFlowType &
+      SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
+      SurveyRoutes.NextSurveyFlowType & VideoRoutes.NextVideoFlowType &
+      VideoRoutes.MarkVideoWatchedFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType
 
   private def loggingMiddleware[R]: Middleware[R] =
@@ -405,8 +404,7 @@ object Main extends ZIOAppDefault:
         )
   end spaCatchAllRoutes
 
-  /** How this server serialises, which is part of its wire format and not an implementation
-    * detail.
+  /** How this server serialises, which is part of its wire format and not an implementation detail.
     *
     * zio-http's default sets `ignoreEmptyCollections = true`, so a `List` field with nothing in it
     * disappears from the response. circe's derived decoder has no default to fall back on, so an

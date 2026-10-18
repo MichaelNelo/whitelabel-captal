@@ -7,7 +7,6 @@ import io.circe.{Decoder as CirceDecoder, Encoder as CirceEncoder}
 import whitelabel.captal.api.Main
 import whitelabel.captal.api.wire.given
 import whitelabel.captal.core.application.commands.{NextIdentificationSurvey, NextVideo}
-import whitelabel.captal.core.application.commands.NextIdentificationSurvey.given
 import whitelabel.captal.core.application.{IdentificationSurveyType, NextStep, Phase}
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.core.survey
@@ -25,13 +24,11 @@ import whitelabel.captal.core.survey.question.{
   SelectionRule,
   TextRule
 }
-import whitelabel.captal.messages.SurveyResponse
-import whitelabel.captal.messages.SurveyResponse.given
-import whitelabel.captal.platform.surveySchemas.given
 import whitelabel.captal.messages.ApiError.given
 import whitelabel.captal.messages.MarkVideoWatchedRequest.given
 import whitelabel.captal.messages.SetLocaleRequest.given
 import whitelabel.captal.messages.StatusResponse.given
+import whitelabel.captal.messages.SurveyResponse.given
 import whitelabel.captal.messages.VideoResponse.given
 import whitelabel.captal.messages.VideoWatchedResponse.given
 import whitelabel.captal.messages.i18n.given
@@ -40,9 +37,11 @@ import whitelabel.captal.messages.{
   MarkVideoWatchedRequest,
   SetLocaleRequest,
   StatusResponse,
+  SurveyResponse,
   VideoResponse,
   VideoWatchedResponse
 }
+import whitelabel.captal.platform.surveySchemas.given
 import zio.schema.codec.JsonCodec
 import zio.schema.{DeriveSchema, Schema}
 import zio.test.*
@@ -85,8 +84,8 @@ object WireContractSuite:
     * Reading `Main.codecConfig` is what keeps that from recurring. A copy of the value would agree
     * with the server today and drift silently the first time one of them changed.
     */
-  private val config = JsonCodec.Config(
-    ignoreEmptyCollections = Main.codecConfig.ignoreEmptyCollections)
+  private val config = JsonCodec.Config(ignoreEmptyCollections =
+    Main.codecConfig.ignoreEmptyCollections)
 
   private def zioWrites[A: Schema](value: A): String =
     JsonCodec.jsonEncoder(config)(summon[Schema[A]]).encodeJson(value, None).toString
@@ -110,18 +109,19 @@ object WireContractSuite:
     * a disagreement anything can observe: circe's derived encoder writes `"redirectUrl":null` for a
     * `None` and zio-schema omits the field. Every decoder that reads these types reads an `Option`
     * from both — circe's `deriveDecoder` treats a missing field and a null alike, and so does
-    * zio-schema — so the normalisation is the equivalence the two decoders already implement, not
-    * a looser standard adopted to make the test pass.
+    * zio-schema — so the normalisation is the equivalence the two decoders already implement, not a
+    * looser standard adopted to make the test pass.
     *
     * It still fails on everything that does matter: a renamed field, a changed discriminator, a
     * different casing, a `Phase` that stopped being `toDbString`. `ApiError` passes this test byte
     * for byte, having no `Option` fields to differ about.
     */
   private def sameJson(left: String, right: String): Boolean =
-    val parsed = for
-      l <- io.circe.parser.parse(left)
-      r <- io.circe.parser.parse(right)
-    yield l.deepDropNullValues == r.deepDropNullValues
+    val parsed =
+      for
+        l <- io.circe.parser.parse(left)
+        r <- io.circe.parser.parse(right)
+      yield l.deepDropNullValues == r.deepDropNullValues
     parsed.getOrElse(false)
 
   /** The three questions, asked of one type over a list of values that should cover its shape.
@@ -239,7 +239,8 @@ object WireContractSuite:
       steps = I18n.Welcome.Steps("steps.1", "steps.2", "steps.3"),
       button = I18n.Welcome.Button("button.start", "button.connecting"),
       selectLanguage = "welcome.selectLanguage",
-      authorized = I18n.Welcome.Authorized("authorized.title", "authorized.remaining")),
+      authorized = I18n.Welcome.Authorized("authorized.title", "authorized.remaining")
+    ),
     ready = I18n.Ready("ready.title", "ready.subtitle", "ready.resetButton"),
     loading = I18n.Loading("loading.message"),
     error = I18n.Error("error.title", "error.retry", "error.generic"),
@@ -258,7 +259,8 @@ object WireContractSuite:
       ratingOutOfRange = "question.ratingOutOfRange",
       numericOutOfRange = "question.numericOutOfRange",
       dateOutOfRange = "question.dateOutOfRange",
-      invalidAnswer = "question.invalidAnswer"),
+      invalidAnswer = "question.invalidAnswer"
+    ),
     video = I18n.Video(
       pageTitle = "video.pageTitle",
       continueIn = "video.continueIn",
@@ -266,7 +268,9 @@ object WireContractSuite:
       markWatched = "video.markWatched",
       loading = "video.loading",
       noVideoAvailable = "video.noVideoAvailable",
-      payAttention = "video.payAttention"))
+      payAttention = "video.payAttention"
+    )
+  )
 
   private val anOptionId = OptionId.unsafe("22222222-2222-2222-2222-222222222222")
 
@@ -286,7 +290,8 @@ object WireContractSuite:
     placeholder = Some(LocalizedText("tu@correo.com", "es")),
     questionType = QuestionType.Input(List(TextRule.Email)),
     commonRules = List(CommonRule.Required),
-    pointsAwarded = 10)
+    pointsAwarded = 10
+  )
 
   /** The same question with options rather than rules, and both `Option` fields empty.
     *
@@ -301,7 +306,8 @@ object WireContractSuite:
     placeholder = None,
     questionType = QuestionType.Radio(List(option)),
     commonRules = Nil,
-    pointsAwarded = 0)
+    pointsAwarded = 0
+  )
 
   /** The same question with no options at all.
     *
@@ -309,8 +315,7 @@ object WireContractSuite:
     * this suite missed: an empty `List` is the difference between the two libraries that nothing
     * here had an example of. Every fixture above fills its collections.
     */
-  private val anOptionlessQuestion = aRadioQuestion.copy(
-    questionType = QuestionType.Radio(Nil))
+  private val anOptionlessQuestion = aRadioQuestion.copy(questionType = QuestionType.Radio(Nil))
 
   val suite: Spec[Any, Throwable] =
     zio
@@ -326,11 +331,13 @@ object WireContractSuite:
         agreement(
           "VideoResponse",
           List(
-            VideoResponse.Video(NextVideo("https://cdn.test/a.mp4", 30, Some("Title"), Some("Desc"))),
+            VideoResponse.Video(
+              NextVideo("https://cdn.test/a.mp4", 30, Some("Title"), Some("Desc"))),
             VideoResponse.Video(NextVideo("https://cdn.test/b.mp4", 15, None, None)),
             VideoResponse.Step(NextStep(Phase.AdvertiserVideoSurvey)),
             VideoResponse.Step(NextStep(Phase.Ready))
-          )),
+          )
+        ),
         agreement(
           "MarkVideoWatchedRequest",
           List(
@@ -377,7 +384,8 @@ object WireContractSuite:
             QuestionType.Rating(List(RangeRule.Min(1), RangeRule.Max(5))),
             QuestionType.Numeric(List(RangeRule.Max(BigDecimal("10")))),
             QuestionType.Date(List(RangeRule.Min(LocalDate.parse("2020-01-01"))))
-          )),
+          )
+        ),
         agreement(
           "AnswerValue",
           List(
@@ -387,7 +395,8 @@ object WireContractSuite:
             AnswerValue.Rating(4.5f),
             AnswerValue.Numeric(BigDecimal("12.75")),
             AnswerValue.DateValue(LocalDate.parse("2026-10-18"))
-          )),
+          )
+        ),
         agreement("QuestionToAnswer", List(aQuestion, aRadioQuestion, anOptionlessQuestion)),
         agreement(
           "SurveyResponse",
@@ -403,6 +412,7 @@ object WireContractSuite:
                 IdentificationSurveyType.Profiling,
                 aRadioQuestion)),
             SurveyResponse.Step(NextStep(Phase.AdvertiserVideo))
-          ))
+          )
+        )
       )
 end WireContractSuite

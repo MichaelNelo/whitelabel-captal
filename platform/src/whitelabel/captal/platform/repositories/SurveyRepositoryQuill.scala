@@ -1,6 +1,4 @@
 package whitelabel.captal.platform.repositories
-
-import io.circe
 import io.circe.parser.decode
 import io.getquill.*
 import whitelabel.captal.core.application.IdentificationSurveyType
@@ -443,8 +441,8 @@ object SurveyRepositoryQuill:
     * `parseQuestionType` and `buildQuestionToAnswer`, both of which are pure — a change worth
     * making on its own rather than inside this one.
     */
-  private def decodeRules[R: Schema](rules: List[QuestionRuleRow]): List[R] = rules.flatMap(
-    row => surveySchemas.decode[R](row.ruleConfig).toOption)
+  private def decodeRules[R: Schema](rules: List[QuestionRuleRow]): List[R] = rules.flatMap(row =>
+    surveySchemas.decode[R](row.ruleConfig).toOption)
 
   /** Who the video belonged to, when it belonged to anyone.
     *

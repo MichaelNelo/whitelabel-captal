@@ -13,8 +13,8 @@ final case class SessionCookieConfig(name: String, path: String):
     *
     * By hand, because zio-http's cookie codec hands over every cookie the browser sent rather than
     * one by name — where tapir took a `cookie[Option[String]]` input per cookie. Which is the
-    * easier end of the trade: `/api/status` reads two of them, and reading two out of one header
-    * is two calls to this rather than two inputs on the endpoint.
+    * easier end of the trade: `/api/status` reads two of them, and reading two out of one header is
+    * two calls to this rather than two inputs on the endpoint.
     *
     * The header is `Option` on purpose: a required codec would answer a request carrying no cookies
     * with a 400 from the codec, and a missing session is something each route decides about —

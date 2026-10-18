@@ -82,8 +82,7 @@ final class VideoRoutes(cookieConfig: SessionCookieConfig):
                 .mapError(ApiError.fromThrowable)
             case _ =>
               ZIO.unit
-      yield response
-    ,
+      yield response,
     markWatched.implement: (cookie, request) =>
       for
         _    <- session(cookie)
@@ -97,6 +96,7 @@ final class VideoRoutes(cookieConfig: SessionCookieConfig):
           flow
             .execute(command)
             .map((step: NextStep) => VideoWatchedResponse(Phase.toDbString(step.phase))))
-      yield result)
+      yield result
+  )
 
 end VideoRoutes

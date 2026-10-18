@@ -96,10 +96,10 @@ object surveySchemas:
   // three is the rule list of exactly one `QuestionType` case. Named for the same reason the ids
   // are — the type parameter does not reach the synthetic name.
   given rangeRuleIntSchema: Schema[RangeRule[Int]] = DeriveSchema.gen[RangeRule[Int]]
-  given rangeRuleBigDecimalSchema: Schema[RangeRule[BigDecimal]] = DeriveSchema
-    .gen[RangeRule[BigDecimal]]
-  given rangeRuleLocalDateSchema: Schema[RangeRule[LocalDate]] = DeriveSchema
-    .gen[RangeRule[LocalDate]]
+  given rangeRuleBigDecimalSchema
+      : Schema[RangeRule[BigDecimal]] = DeriveSchema.gen[RangeRule[BigDecimal]]
+  given rangeRuleLocalDateSchema
+      : Schema[RangeRule[LocalDate]] = DeriveSchema.gen[RangeRule[LocalDate]]
 
   // ─── The tree ─────────────────────────────────────────────────────────────
 
@@ -116,10 +116,8 @@ object surveySchemas:
     * is written by `mcp` and read by `SurveyRepositoryQuill`, in different modules, and this is the
     * only description either of them uses.
     */
-  def encode[A: Schema](value: A): String = JsonCodec
-    .jsonEncoder(summon[Schema[A]])
-    .encodeJson(value, None)
-    .toString
+  def encode[A: Schema](value: A): String =
+    JsonCodec.jsonEncoder(summon[Schema[A]]).encodeJson(value, None).toString
 
   /** Read a column back, with the reason when it will not read.
     *

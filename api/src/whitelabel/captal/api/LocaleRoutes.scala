@@ -22,8 +22,8 @@ end LocaleRoutes
 
 /** The locale list, the translation bundle, and the route that changes a session's language.
   *
-  * Two of these take no session and two take the cookie, one of which writes it back — which is
-  * the only new thing here. `outHeader(HeaderCodec.setCookie)` is what
+  * Two of these take no session and two take the cookie, one of which writes it back — which is the
+  * only new thing here. `outHeader(HeaderCodec.setCookie)` is what
   * `out(cookieConfig.tapirOutput.and(…))` did, and the cookie it sets comes from `asSetCookie`,
   * deliberately the same name and path as the one `asMeta` builds for the routes still on tapir.
   * Two cookies differing in path would be two entries in the browser rather than one.
@@ -85,7 +85,8 @@ final class LocaleRoutes(cookieConfig: SessionCookieConfig):
             ZIO.succeed(current)
       yield (
         StatusResponse(updated.phase, updated.locale),
-        cookieConfig.asSetCookie(updated.sessionId.asString)))
+        cookieConfig.asSetCookie(updated.sessionId.asString))
+  )
 
   val devRoutes: Routes[FullEnv, Nothing] = Routes(
     resetPhase.implement: cookie =>

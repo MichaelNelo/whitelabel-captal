@@ -1682,6 +1682,15 @@ Si tras redeploy de rqlite (o force-deploy del API) las queries devuelven 500 / 
 
 ### Aislamiento de sesiones por location (API v1.1.0)
 
+> **Tapir ya no existe en el repo, y con él tres detalles de esta sección.** Las once rutas se
+> describen hoy con el `Endpoint` de zio-http, que es la librería sobre la que el servidor ya corría
+> por debajo. En consecuencia: `SessionCookieConfig` ya no tiene `tapirInput`/`tapirOutput` ni
+> `asMeta` — tiene `valueFrom` (saca esta cookie del header `Cookie` completo) y `asSetCookie`;
+> `SessionEndpoint` volvió a ser `object`, porque la clase existía solo para construir el endpoint
+> parcial de tapir; y el módulo `endpoints/` se borró entero. Lo que esta sección describe del
+> *comportamiento* de la cookie — nombre y path por slug, una entrada por location en el browser —
+> sigue siendo exacto, y ahora hay un test que compara los atributos que escribe cada ruta.
+
 - **Bug**: el SPA sirve `/cafe-centro/` y `/valmy/` bajo el mismo dominio; la cookie `session_id` con `Path=/` se enviaba a TODAS las locations → sesiones mezcladas.
 - **Solucion**: cookie name + path slug-aware:
   - Nombre `captal_session_<slug>` (e.g. `captal_session_cafe-centro`)
