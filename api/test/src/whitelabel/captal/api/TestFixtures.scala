@@ -23,12 +23,9 @@ object TestFixtures:
 
   private val testConfig = ConfigFactory.load("test.conf")
 
-  /** Through [[Migrate]] rather than a Flyway assembled here, which is not a style preference.
-    *
-    * rqlite reports a rejected statement inside an HTTP 200 and the driver turns that into zero
-    * rows. DDL run without `Migrate`'s DataSource wrapper therefore does nothing while Flyway
-    * records it as applied — and V22 rebuilds `advertiser_videos`, so a rejected statement there
-    * leaves a half-built table and a history that says otherwise.
+  /** Through [[Migrate]] rather than a Flyway assembled here, so the tests migrate the way the
+    * deployed images do — same config, same lock, same history table. A second Flyway here would be
+    * a second set of settings to keep in step, and `MigrationLockSuite` races this exact path.
     *
     * It also drops `cleanOnValidationError`, which was set here. That flag means "if the history
     * does not match the files, drop every table and start over" — defensible for a throwaway
