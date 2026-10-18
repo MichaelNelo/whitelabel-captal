@@ -5,7 +5,13 @@
   # env.GREET = "devenv";
 
   # https://devenv.sh/packages/
-  packages = [ pkgs.git pkgs.terraform pkgs.scalafmt pkgs.scalafix pkgs.cloudflared ];
+  # `opentofu` alongside `terraform`, because `mcp.test` applies the infrastructure repository's
+  # configuration against LocalStack and that repository is OpenTofu. The two cannot share a
+  # working directory: a state file written by Terraform 1.15 is refused by OpenTofu 1.12 for being
+  # from a newer version, and `.terraform.lock.hcl` records provider hashes from whichever registry
+  # wrote it -- registry.terraform.io or registry.opentofu.org. The build has to run the same
+  # binary an operator runs by hand.
+  packages = [ pkgs.git pkgs.terraform pkgs.opentofu pkgs.scalafmt pkgs.scalafix pkgs.cloudflared ];
 
   # https://devenv.sh/languages/
   languages.scala.enable = true;
