@@ -4,8 +4,8 @@ import scala.scalajs.js
 
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.core.survey.question.AnswerValue
-import whitelabel.captal.endpoints.i18n.given
-import whitelabel.captal.endpoints.{
+import whitelabel.captal.messages.i18n.given
+import whitelabel.captal.messages.{
   AdvertiserSurveyResponse,
   AnswerRequest,
   ApiError,

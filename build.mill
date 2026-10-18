@@ -759,6 +759,8 @@ trait CoreDepsJVM extends ScalaModule:
     mvn"io.circe::circe-core:0.14.10",
     mvn"io.circe::circe-generic:0.14.10",
     mvn"io.circe::circe-parser:0.14.10",
+    mvn"dev.zio::zio-schema:1.4.1",
+    mvn"dev.zio::zio-schema-derivation:1.4.1",
     mvn"io.taig::babel-core:0.5.3",
     mvn"io.taig::babel-generic:0.5.3",
     mvn"io.taig::babel-circe:0.5.3"
@@ -770,6 +772,8 @@ trait CoreDepsJS extends ScalaJSModule:
     mvn"io.circe::circe-core::0.14.10",
     mvn"io.circe::circe-generic::0.14.10",
     mvn"io.circe::circe-parser::0.14.10",
+    mvn"dev.zio::zio-schema::1.4.1",
+    mvn"dev.zio::zio-schema-derivation::1.4.1",
     mvn"io.github.cquiroz::scala-java-time::2.6.0",
     mvn"io.taig::babel-core::0.5.3",
     mvn"io.taig::babel-generic::0.5.3",
@@ -783,29 +787,58 @@ object core extends BaseModule with CoreDepsJVM:
 object `core-js` extends BaseJSModule with CoreDepsJS:
   def sources = core.sources
 
+// `endpoints` and `endpoints-js` were here: a cross-compiled module holding the tapir endpoint
+// descriptions and, beside them, the request and response types the browser reads.
+//
+// The pairing was the problem. `endpoints-js` compiled every source in the module, so the browser
+// build carried tapir on its compile classpath to typecheck declarations nothing in the browser
+// reads — the linker dropped them, 0 of 188 output modules mention tapir, but the dependency and
+// the compile were real. And the shared contract it was supposed to be was not how the server
+// actually worked: `SurveyEndpoints`, `VideoEndpoints` and `FinishEndpoints` had no reference
+// anywhere, `LocaleEndpoints` had two of its five used, and every other route already built its
+// endpoint inline in `api` on `SessionEndpoint`.
+//
+// So the descriptions were deleted, the two live ones moved into `LocaleRoutes` beside the three
+// that were already there, and the tapir `Schema` instances became `api.schemas`, in the one module
+// that still has tapir in it. What was genuinely shared became `messages` below.
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Endpoints: JVM + JS (shared sources) - Tapir definitions
+// Messages: JVM + JS (shared sources) — the request and response vocabulary
 // ─────────────────────────────────────────────────────────────────────────────
 
-trait EndpointsDepsJVM extends ScalaModule:
-  def mvnDeps = Seq(
-    mvn"com.softwaremill.sttp.tapir::tapir-core:1.11.11",
-    mvn"com.softwaremill.sttp.tapir::tapir-json-circe:1.11.11")
-
-trait EndpointsDepsJS extends ScalaJSModule:
-  def mvnDeps = Seq(
-    mvn"com.softwaremill.sttp.tapir::tapir-core::1.11.11",
-    mvn"com.softwaremill.sttp.tapir::tapir-json-circe::1.11.11")
-
-// `platform` was declared here and nothing in the module imported from it — not one reference. It
-// made the HTTP contract look like it depended on persistence, a layering inversion that never
-// existed. Verified by compiling `endpoints` and `api` without it.
-object endpoints extends BaseModule with EndpointsDepsJVM:
+// What `api` answers with and `client` reads: the requests, the responses, `ApiError`, and the
+// circe codecs for the translation bundle. Cross-compiled because both sides need the same types,
+// which is the one thing the module it replaces was right about.
+//
+// Named for what it holds rather than for a layer. `endpoints` invited endpoint descriptions and
+// collected 174 lines of dead ones; `http` or `api-shared` would read as a layer and invite the
+// same. A tapir description is not a message, and the name says so.
+//
+// These lived in `core.codecs` for part of this refactor, which was wrong for the reason the name
+// gave away: `ApiError` is an HTTP error vocabulary — `{"error": …, "data": …}` — and `core` has no
+// business knowing one. It depends on `core` rather than the reverse, which is the right direction:
+// these types translate domain errors and commands into what crosses the wire.
+// `-Xmax-inlines` above the default 32 in both: `ApiError` has exactly 32 variants and circe's
+// derivation inlines once per case, so it fails with "Maximal number of successive inlines (32)
+// exceeded" — a compiler limit reached rather than a type that is too large. Raising it is what
+// lets both codec directions be derived, and the alternative is the hand-written pair that had
+// drifted twenty-two variants apart.
+object messages extends BaseModule:
   def moduleDeps = Seq(core)
+  def scalacOptions = super.scalacOptions() ++ Seq("-Xmax-inlines:64")
+  def mvnDeps = Seq(
+    mvn"io.circe::circe-core:0.14.10",
+    mvn"io.circe::circe-generic:0.14.10",
+    mvn"io.circe::circe-parser:0.14.10")
 
-object `endpoints-js` extends BaseJSModule with EndpointsDepsJS:
+object `messages-js` extends BaseJSModule:
   def moduleDeps = Seq(`core-js`)
-  def sources = endpoints.sources
+  def sources = messages.sources
+  def scalacOptions = super.scalacOptions() ++ Seq("-Xmax-inlines:64")
+  def mvnDeps = Seq(
+    mvn"io.circe::circe-core::0.14.10",
+    mvn"io.circe::circe-generic::0.14.10",
+    mvn"io.circe::circe-parser::0.14.10")
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Infra: JVM only
@@ -850,7 +883,10 @@ end platform
 // ─────────────────────────────────────────────────────────────────────────────
 
 object api extends BaseModule:
-  def moduleDeps = Seq(core, endpoints, platform)
+  // `endpoints` was in here and is gone. It carried `tapir-core`, which this module needs — and
+  // already had, transitively through the `tapir-zio-http-server` declared below. So nothing had to
+  // be added: this is now the only module with tapir in it, which is the point.
+  def moduleDeps = Seq(core, messages, platform)
 
   def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "Dockerfile.api")
 
@@ -1044,7 +1080,10 @@ end api
 // stubs bajo `client/entries`. Lo que cada uno ganaba por separado era su propio runtime — y
 // `maintenance`, además, el Closure Compiler, que no corre sobre output ESModule.
 object client extends BaseJSModule:
-  def moduleDeps = Seq(`core-js`, `endpoints-js`)
+  // `core-js` alone now. The request and response types this reads are `core.codecs`, which
+  // `core-js` cross-compiles; `endpoints-js` existed only to share a module with the tapir
+  // descriptions, and brought tapir into this build to typecheck them.
+  def moduleDeps = Seq(`core-js`, `messages-js`)
 
   /** Two settings the linker defaults leave on the table, and the second is the one that pays.
     *

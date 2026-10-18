@@ -1,12 +1,10 @@
-package whitelabel.captal.endpoints
+package whitelabel.captal.messages
 
 import java.time.Instant
 
 import io.circe.generic.semiauto.*
 import io.circe.{Decoder, Encoder}
-import sttp.tapir.Schema
 import whitelabel.captal.core.application.Phase
-import whitelabel.captal.endpoints.schemas.given
 
 /** @param secondsRemaining
   *   server-computed seconds left of the granted access, present only while `phase == Authorized`.
@@ -38,4 +36,3 @@ object StatusResponse:
 
   given Encoder[StatusResponse] = deriveEncoder
   given Decoder[StatusResponse] = deriveDecoder
-  given Schema[StatusResponse] = Schema.derived

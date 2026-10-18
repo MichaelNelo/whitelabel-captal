@@ -24,7 +24,7 @@ object PhaseValidationSuite:
             response <- postEmailAnswer(backend, cookie, "test@example.com")
           yield assertTrue(
             response.code.code == 400,
-            response.body.contains("wrong_phase"),
+            response.body.contains("WrongPhase"),
             response.body.contains("Welcome"),
             response.body.contains("IdentificationQuestion"))
         ,
@@ -40,7 +40,7 @@ object PhaseValidationSuite:
             response <- postEmailAnswer(backend, cookie, "test@example.com")
           yield assertTrue(
             response.code.code == 400,
-            response.body.contains("wrong_phase"),
+            response.body.contains("WrongPhase"),
             response.body.contains("AdvertiserVideo"))
         ,
         test("email endpoint rejects Ready phase"):
@@ -53,7 +53,7 @@ object PhaseValidationSuite:
             response <- postEmailAnswer(backend, cookie, "test@example.com")
           yield assertTrue(
             response.code.code == 400,
-            response.body.contains("wrong_phase"),
+            response.body.contains("WrongPhase"),
             response.body.contains("Ready"))
         ,
         test("email endpoint accepts IdentificationQuestion phase (no wrong_phase error)"):
@@ -66,7 +66,7 @@ object PhaseValidationSuite:
               user.SessionId.unsafe(cookie),
               Phase.IdentificationQuestion)
             response <- postEmailAnswer(backend, cookie, "test@example.com")
-          yield assertTrue(!response.body.contains("wrong_phase"))
+          yield assertTrue(!response.body.contains("WrongPhase"))
         ,
         // ─────────────────────────────────────────────────────────────────────────
         // POST /api/survey/profiling - requires IdentificationQuestion
@@ -80,7 +80,7 @@ object PhaseValidationSuite:
             cookie = extractSessionCookie(statusResp).get
             // Session starts in Welcome phase
             response <- postProfilingAnswer(backend, cookie, options.head.asString)
-          yield assertTrue(response.code.code == 400, response.body.contains("wrong_phase"))
+          yield assertTrue(response.code.code == 400, response.body.contains("WrongPhase"))
         ,
         test("profiling endpoint rejects AdvertiserVideo phase"):
           for
@@ -93,7 +93,7 @@ object PhaseValidationSuite:
               user.SessionId.unsafe(cookie),
               Phase.AdvertiserVideo)
             response <- postProfilingAnswer(backend, cookie, options.head.asString)
-          yield assertTrue(response.code.code == 400, response.body.contains("wrong_phase"))
+          yield assertTrue(response.code.code == 400, response.body.contains("WrongPhase"))
         ,
         test("profiling endpoint accepts IdentificationQuestion phase (no wrong_phase error)"):
           for
@@ -108,7 +108,7 @@ object PhaseValidationSuite:
               Phase.IdentificationQuestion)
             _ <- TestFixtures.linkSessionToUser(user.SessionId.unsafe(cookie), userFixture.userId)
             response <- postProfilingAnswer(backend, cookie, options.head.asString)
-          yield assertTrue(!response.body.contains("wrong_phase"))
+          yield assertTrue(!response.body.contains("WrongPhase"))
         ,
         // ─────────────────────────────────────────────────────────────────────────
         // GET /api/survey/next - requires Welcome OR IdentificationQuestion
@@ -147,7 +147,7 @@ object PhaseValidationSuite:
             response <- getNextSurvey(backend, cookie)
           yield assertTrue(
             response.code.code == 400,
-            response.body.contains("wrong_phase"),
+            response.body.contains("WrongPhase"),
             response.body.contains("AdvertiserVideo"))
         ,
         test("nextSurvey endpoint rejects Ready phase"):
@@ -160,7 +160,7 @@ object PhaseValidationSuite:
             response <- getNextSurvey(backend, cookie)
           yield assertTrue(
             response.code.code == 400,
-            response.body.contains("wrong_phase"),
+            response.body.contains("WrongPhase"),
             response.body.contains("Ready"))
         ,
         // ─────────────────────────────────────────────────────────────────────────
@@ -238,31 +238,31 @@ object PhaseValidationSuite:
             statusResp.body.contains("authorized"),
             // Each action — 400 wrong_phase mentioning current phase Authorized
             nextSurveyResp.code.code == 400,
-            nextSurveyResp.body.contains("wrong_phase"),
+            nextSurveyResp.body.contains("WrongPhase"),
             nextSurveyResp.body.contains("Authorized"),
             emailResp.code.code == 400,
-            emailResp.body.contains("wrong_phase"),
+            emailResp.body.contains("WrongPhase"),
             emailResp.body.contains("Authorized"),
             profilingResp.code.code == 400,
-            profilingResp.body.contains("wrong_phase"),
+            profilingResp.body.contains("WrongPhase"),
             profilingResp.body.contains("Authorized"),
             locationResp.code.code == 400,
-            locationResp.body.contains("wrong_phase"),
+            locationResp.body.contains("WrongPhase"),
             locationResp.body.contains("Authorized"),
             nextVideoResp.code.code == 400,
-            nextVideoResp.body.contains("wrong_phase"),
+            nextVideoResp.body.contains("WrongPhase"),
             nextVideoResp.body.contains("Authorized"),
             watchedResp.code.code == 400,
-            watchedResp.body.contains("wrong_phase"),
+            watchedResp.body.contains("WrongPhase"),
             watchedResp.body.contains("Authorized"),
             nextAdvResp.code.code == 400,
-            nextAdvResp.body.contains("wrong_phase"),
+            nextAdvResp.body.contains("WrongPhase"),
             nextAdvResp.body.contains("Authorized"),
             advAnswerResp.code.code == 400,
-            advAnswerResp.body.contains("wrong_phase"),
+            advAnswerResp.body.contains("WrongPhase"),
             advAnswerResp.body.contains("Authorized"),
             finishResp.code.code == 400,
-            finishResp.body.contains("wrong_phase"),
+            finishResp.body.contains("WrongPhase"),
             finishResp.body.contains("Authorized")
           )
         ,

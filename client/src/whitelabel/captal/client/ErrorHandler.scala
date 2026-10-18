@@ -1,6 +1,6 @@
 package whitelabel.captal.client
 
-import whitelabel.captal.endpoints.ApiError
+import whitelabel.captal.messages.ApiError
 
 /** Centralized escalation point for unexpected errors. Use from any `case Left(err) => ...` branch
   * (API errors), from non-API failure handlers (video load events, async exceptions), or from

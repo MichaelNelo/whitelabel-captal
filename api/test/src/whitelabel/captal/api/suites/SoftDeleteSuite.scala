@@ -166,9 +166,9 @@ object SoftDeleteSuite:
             after  <- postProfilingTextAnswer(backend, cookie, "Ab")
           yield assertTrue(
             served.exists(_.question.id == ruled.questionId),
-            before.body.contains("text_too_short"),
+            before.body.contains("TextTooShort"),
             after.code.isSuccess,
-            !after.body.contains("text_too_short"))
+            !after.body.contains("TextTooShort"))
         ,
         test("deactivating one rule leaves the other one enforcing"):
           for
@@ -191,8 +191,8 @@ object SoftDeleteSuite:
             lower <- postProfilingTextAnswer(backend, cookie, "ab")
             upper <- postProfilingTextAnswer(backend, cookie, "Ab")
           yield assertTrue(
-            lower.body.contains("invalid_pattern"),
-            !lower.body.contains("text_too_short"),
+            lower.body.contains("InvalidPattern"),
+            !lower.body.contains("TextTooShort"),
             upper.code.isSuccess)
         ,
         test("Required is unaffected by retiring every rule of the question"):
@@ -216,6 +216,6 @@ object SoftDeleteSuite:
             empty <- postProfilingTextAnswer(backend, cookie, "")
             // And "a" now passes, which is what proves both rules really were retired.
             ok <- postProfilingTextAnswer(backend, cookie, "a")
-          yield assertTrue(empty.body.contains("required_answer_missing"), ok.code.isSuccess)
+          yield assertTrue(empty.body.contains("RequiredAnswerMissing"), ok.code.isSuccess)
       )
 end SoftDeleteSuite

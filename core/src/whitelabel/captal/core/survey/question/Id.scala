@@ -2,6 +2,8 @@ package whitelabel.captal.core.survey.question
 
 import java.util.UUID
 
+import zio.schema.Schema
+
 opaque type Id = UUID
 object Id:
   def apply(value: UUID): Id = value
@@ -13,6 +15,11 @@ object Id:
     def value: UUID = id
     def asString: String = id.toString
 
+  // See the note on `survey.Id`: an opaque type is invisible to `DeriveSchema.gen`.
+  given Schema[Id] = Schema[String].transformOrFail(
+    text => fromString(text).toRight(s"Not a question id: $text"),
+    id => Right(id.asString))
+
 opaque type OptionId = UUID
 object OptionId:
   def apply(value: UUID): OptionId = value
@@ -23,3 +30,7 @@ object OptionId:
   extension (id: OptionId)
     def value: UUID = id
     def asString: String = id.toString
+
+  given Schema[OptionId] = Schema[String].transformOrFail(
+    text => fromString(text).toRight(s"Not an option id: $text"),
+    id => Right(id.asString))

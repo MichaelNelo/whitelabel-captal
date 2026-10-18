@@ -12,7 +12,7 @@ import whitelabel.captal.client.i18n.I18nClient
 import whitelabel.captal.client.{AppState, ErrorHandler, Router, Runtime, VideoApi}
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.application.commands.NextVideo
-import whitelabel.captal.endpoints.VideoResponse
+import whitelabel.captal.messages.VideoResponse
 
 object AdvertiserVideoView:
   // A cap on the intro. If `canplaythrough` has not arrived within this window we start anyway —

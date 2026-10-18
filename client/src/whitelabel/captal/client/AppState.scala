@@ -3,7 +3,7 @@ package whitelabel.captal.client
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.application.commands.{NextAdvertiserSurvey, NextIdentificationSurvey}
-import whitelabel.captal.endpoints.ApiError
+import whitelabel.captal.messages.ApiError
 
 object AppState:
   // Locale from server (detected via Accept-Language)

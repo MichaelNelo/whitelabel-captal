@@ -6,7 +6,7 @@ import whitelabel.captal.client.Promises.*
 import whitelabel.captal.client.i18n.I18nClient
 import whitelabel.captal.client.{AppState, ErrorHandler, Router, Runtime, StatusApi, WelcomeApi}
 import whitelabel.captal.core.application.Phase
-import whitelabel.captal.endpoints.SurveyResponse
+import whitelabel.captal.messages.SurveyResponse
 
 object WelcomeView:
   private val isStarting: Var[Boolean] = Var(false)

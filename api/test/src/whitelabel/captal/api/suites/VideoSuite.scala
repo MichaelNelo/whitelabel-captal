@@ -48,7 +48,7 @@ object VideoSuite:
             cookie  <- createSession(backend)
             // Still in Welcome phase
             videoResp <- getNextVideo(backend, cookie)
-          yield assertTrue(!videoResp.code.isSuccess || videoResp.body.contains("wrong_phase"))
+          yield assertTrue(!videoResp.code.isSuccess || videoResp.body.contains("WrongPhase"))
         ,
         test(
           "POST /api/video/watched marks video as watched and transitions to AdvertiserVideoSurvey"):

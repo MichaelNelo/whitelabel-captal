@@ -1,5 +1,7 @@
 package whitelabel.captal.mcp
 
+import scala.io.Source
+
 import com.jamesward.ziohttp.mcp.client.{
   McpClient,
   McpClientConfig,
@@ -55,7 +57,6 @@ import whitelabel.captal.platform.{
   SurveyRow,
   VideoStatus
 }
-import scala.io.Source
 import zio.*
 import zio.http.{Client, Header, Headers, TestClient}
 import zio.json.*

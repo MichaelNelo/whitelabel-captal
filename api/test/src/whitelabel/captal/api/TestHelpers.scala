@@ -13,10 +13,10 @@ import whitelabel.captal.core.application.commands.{
   NextIdentificationSurvey,
   NextVideo
 }
-import whitelabel.captal.endpoints.AdvertiserSurveyResponse.given
-import whitelabel.captal.endpoints.VideoResponse.given
-import whitelabel.captal.endpoints.VideoWatchedResponse.given
-import whitelabel.captal.endpoints.{AdvertiserSurveyResponse, VideoResponse, VideoWatchedResponse}
+import whitelabel.captal.messages.AdvertiserSurveyResponse.given
+import whitelabel.captal.messages.VideoResponse.given
+import whitelabel.captal.messages.VideoWatchedResponse.given
+import whitelabel.captal.messages.{AdvertiserSurveyResponse, VideoResponse, VideoWatchedResponse}
 import zio.*
 
 object TestHelpers:
@@ -65,6 +65,71 @@ object TestHelpers:
     _ => u => i => logDefects(endpoint.logic(rioMonadError)(u)(i)).provideEnvironment(env)
   )
 
+  /** The sttp request as zio-http sees it.
+    *
+    * Only what the suites actually send: a method, a path, headers — the session cookie among them
+    * — and a string body. No multipart and no streaming; if a test needs one, this is where it gets
+    * added rather than worked around.
+    */
+  private def asZioRequest(request: Request[?, ?]): zio.http.Request =
+    val body =
+      request.body match
+        case StringBody(text, _, _) =>
+          zio.http.Body.fromString(text)
+        case _ =>
+          zio.http.Body.empty
+    zio
+      .http
+      .Request(
+        version = zio.http.Version.Http_1_1,
+        method = zio.http.Method.fromString(request.method.method),
+        url = zio.http.URL.decode(request.uri.toString).getOrElse(zio.http.URL.empty),
+        headers = zio
+          .http
+          .Headers(request.headers.map(h => zio.http.Header.Custom(h.name, h.value))),
+        body = body,
+        remoteAddress = None
+      )
+
+  /** Routes that no longer go through tapir, served to the same suites.
+    *
+    * This exists because converting a route off tapir removes it from `TapirStubInterpreter`, and
+    * its tests would then fail for having no server rather than for anything about the route. The
+    * suites speak `basicRequest` with URLs and know nothing about either library, which is what
+    * makes them worth keeping unchanged across the migration — so the adapting happens here.
+    *
+    * zio-http first with tapir as the fallback: `runZIO` answers 404 when no route matches, and
+    * that is the signal to hand the request to the endpoints that have not moved yet. The fallback
+    * goes when the last one does.
+    */
+  private def serveZioHttp(
+      routes: zio.http.Routes[Any, Nothing],
+      fallback: SttpBackend[Task, Any]): SttpBackend[Task, Any] = SttpBackendStub[Task, Any](
+    taskMonadError)
+    .whenAnyRequest
+    .thenRespondF: request =>
+      routes
+        .runZIO(asZioRequest(request))
+        .flatMap: response =>
+          if response.status == zio.http.Status.NotFound then
+            fallback.send(request.asInstanceOf[Request[String, Any]])
+          else
+            response
+              .body
+              .asString
+              .orElseSucceed("")
+              .map: text =>
+                // The headers come across because `extractSessionCookie` reads `Set-Cookie` off
+                // the response, which is how every suite gets a session to work with.
+                Response(
+                  text,
+                  sttp.model.StatusCode(response.status.code),
+                  "",
+                  response
+                    .headers
+                    .toList
+                    .map(h => sttp.model.Header(h.headerName, h.renderedValue)))
+
   def testBackend: ZIO[TestEnv, Nothing, SttpBackend[Task, Any]] = ZIO
     .environment[TestEnv]
     .map: env =>
@@ -80,11 +145,18 @@ object TestHelpers:
         .routes
         .map(e => provideEnvToEndpoint(e, env))
       val finishEndpoints = finishRoutes.routes.map(e => provideEnvToEndpoint(e, env))
-      TapirStubInterpreter(SttpBackendStub[Task, Any](taskMonadError))
+      val tapirBackend = TapirStubInterpreter(SttpBackendStub[Task, Any](taskMonadError))
         .whenServerEndpointsRunLogic(
           surveyEndpoints ++ localeEndpoints ++ videoEndpoints ++ advertiserSurveyEndpoints ++
             finishEndpoints)
         .backend()
+      serveZioHttp(HealthRoutes.routes, tapirBackend)
+
+  /** The health check, which is the one route already off tapir. */
+  def getHealth(backend: SttpBackend[Task, Any]) = basicRequest
+    .get(uri"http://test/api/health")
+    .response(asStringAlways)
+    .send(backend)
 
   def extractSessionCookie(response: Response[String]): Option[String] = response
     .header("Set-Cookie")

@@ -1,7 +1,13 @@
 package whitelabel.captal.api
 
+import sttp.tapir.json.circe.jsonBody
 import sttp.tapir.ztapir.*
-import whitelabel.captal.endpoints.{ApiError, LocaleEndpoints}
+import sttp.tapir.{endpoint, path, stringToPath}
+import whitelabel.captal.api.schemas.given
+import whitelabel.captal.core.i18n.I18n
+import whitelabel.captal.messages.ApiError
+import whitelabel.captal.messages.ApiError.given
+import whitelabel.captal.messages.i18n.given
 import whitelabel.captal.platform.services.LocaleService
 import whitelabel.captal.platform.session.{SessionContext, SessionService}
 import zio.*
@@ -20,17 +26,24 @@ final class LocaleRoutes(sessionEndpoint: SessionEndpoint, cookieConfig: Session
 
   // ─── ListLocales ──────────────────────────────────────────────────────────
 
-  val listLocalesRoute: ZServerEndpoint[LocaleService, Any] = LocaleEndpoints
-    .listLocales
+  // Declared here rather than in a shared module, which is where the other three in this file
+  // already were. `LocaleEndpoints` held five of these and two were used; the module it lived in is
+  // gone, and nothing was sharing the contract anyway — the client reads the response types, never
+  // the endpoint descriptions.
+  val listLocalesRoute: ZServerEndpoint[LocaleService, Any] = endpoint
+    .get
+    .in("api" / "locales")
+    .out(jsonBody[List[String]])
+    .errorOut(jsonBody[ApiError])
+    .description("List available locales")
     .zServerLogic: _ =>
       LocaleService.listAvailable().mapError(ApiError.fromThrowable)
 
   // ─── SetLocale (sets the session cookie) ──────────────────────────────────
 
-  import sttp.tapir.json.circe.*
   import sttp.tapir.header
-  import whitelabel.captal.endpoints.SetLocaleRequest.given
-  import whitelabel.captal.endpoints.{SetLocaleRequest, StatusResponse}
+  import whitelabel.captal.messages.SetLocaleRequest.given
+  import whitelabel.captal.messages.{SetLocaleRequest, StatusResponse}
 
   val setLocaleRoute: ZServerEndpoint[SessionContext & SessionService, Any] = sessionEndpoint
     .secured()
@@ -56,8 +69,12 @@ final class LocaleRoutes(sessionEndpoint: SessionEndpoint, cookieConfig: Session
 
   // ─── GetI18n ──────────────────────────────────────────────────────────────
 
-  val getI18nRoute: ZServerEndpoint[LocaleService, Any] = LocaleEndpoints
-    .getI18n
+  val getI18nRoute: ZServerEndpoint[LocaleService, Any] = endpoint
+    .get
+    .in("api" / "i18n" / path[String]("locale"))
+    .out(jsonBody[I18n])
+    .errorOut(jsonBody[ApiError])
+    .description("Get i18n translations for a locale")
     .zServerLogic: locale =>
       LocaleService.getI18n(locale).mapError(ApiError.fromThrowable)
 

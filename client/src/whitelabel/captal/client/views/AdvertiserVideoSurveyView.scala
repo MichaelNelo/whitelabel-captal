@@ -13,7 +13,7 @@ import whitelabel.captal.core.survey.question.{
   TextRule,
   ops as questionOps
 }
-import whitelabel.captal.endpoints.AdvertiserSurveyResponse
+import whitelabel.captal.messages.AdvertiserSurveyResponse
 
 object AdvertiserVideoSurveyView:
   private val answerValue: Var[Option[AnswerValue]] = Var(None)

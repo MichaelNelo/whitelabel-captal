@@ -58,7 +58,7 @@ object FinishSuite:
             eventLog   <- TestFixtures.queryEventLog
           yield assertTrue(
             !finishResp.code.isSuccess,
-            finishResp.body.contains("wrong_phase"),
+            finishResp.body.contains("WrongPhase"),
             findFinishedEvent(eventLog).isEmpty)
         ,
         test("Reject when in IdentificationQuestion phase"):
@@ -71,7 +71,7 @@ object FinishSuite:
             eventLog   <- TestFixtures.queryEventLog
           yield assertTrue(
             !finishResp.code.isSuccess,
-            finishResp.body.contains("wrong_phase"),
+            finishResp.body.contains("WrongPhase"),
             findFinishedEvent(eventLog).isEmpty)
         ,
         test("Identification only — no video, no survey → finish has only email answer, no video"):

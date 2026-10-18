@@ -38,6 +38,18 @@ object ProtocolRejectionSuite:
     zio
       .test
       .suite("Protocol rejections")(
+        test("a route that no longer goes through tapir is still served to these suites"):
+          // `/api/health` is the first route on zio-http's `Endpoint`, so it exists only on the
+          // other side of the adapter in `TestHelpers`. Without that adapter a converted route
+          // leaves the stub interpreter and its tests fail for having no server rather than for
+          // anything about the route — which is why this is asserted before any route with
+          // coverage moves.
+          for
+            backend  <- testBackend
+            response <- getHealth(backend)
+          yield assertTrue(response.code.isSuccess, response.body.contains("ok")) ??
+            s"status=${response.code.code} body=${response.body}"
+        ,
         test("a body that is not JSON is refused, and not by a handler of ours"):
           for
             _        <- TestFixtures.seedEmailSurvey
