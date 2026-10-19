@@ -7,7 +7,7 @@ domain_name    = "captal.centauroads.com"
 # the next build with nobody deciding it. Name the tag you mean. This environment has nothing
 # running, so being stopped here costs nothing and is the point.
 image_tag         = "latest"
-cloudfront_domain = "production.captal.centauroads.com"
+cloudfront_domain = "captal.centauroads.com"
 
 # RQLite (3-node Raft cluster on ephemeral storage with S3 auto-backup)
 rqlite_desired_count = 3

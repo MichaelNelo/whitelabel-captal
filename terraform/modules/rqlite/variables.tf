@@ -71,6 +71,18 @@ variable "container_memory" {
   default     = 512
 }
 
+variable "http_port" {
+  description = "Port rqlite serves its HTTP API on. Under awsvpc each task has its own address, so this never collides on AWS. It does under LocalStack, which publishes a task's ports on the host and then competes with the plain rqlite container `mill api.dev` and `mill mcp.dev` run on 4001."
+  type        = number
+  default     = 4001
+}
+
+variable "raft_port" {
+  description = "Port rqlite's Raft transport listens on. Moves with http_port for the same reason."
+  type        = number
+  default     = 4002
+}
+
 variable "assign_public_ip" {
   description = "Assign public IP to tasks (needed for public subnets without NAT)"
   type        = bool

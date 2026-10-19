@@ -8,11 +8,11 @@ resource "aws_security_group" "dispatcher" {
   vpc_id      = var.vpc_id
   description = "Captive portal dispatcher Lambda: egress to rqlite + AWS APIs"
 
-  # Egress to rqlite HTTP API (port 4001 inside the cluster).
+  # Egress to rqlite's HTTP API inside the cluster.
   egress {
     description     = "rqlite HTTP API"
-    from_port       = 4001
-    to_port         = 4001
+    from_port       = var.rqlite_http_port
+    to_port         = var.rqlite_http_port
     protocol        = "tcp"
     security_groups = [var.rqlite_security_group_id]
   }
@@ -39,8 +39,8 @@ resource "aws_security_group" "dispatcher" {
 resource "aws_vpc_security_group_ingress_rule" "rqlite_from_dispatcher" {
   security_group_id            = var.rqlite_security_group_id
   referenced_security_group_id = aws_security_group.dispatcher.id
-  from_port                    = 4001
-  to_port                      = 4001
+  from_port                    = var.rqlite_http_port
+  to_port                      = var.rqlite_http_port
   ip_protocol                  = "tcp"
   description                  = "Portal dispatcher Lambda"
 }
@@ -92,7 +92,7 @@ resource "aws_lambda_function" "dispatcher" {
 
   environment {
     variables = {
-      RQLITE_URL      = "http://rqlite.${var.service_discovery_namespace_name}:4001"
+      RQLITE_URL      = "http://rqlite.${var.service_discovery_namespace_name}:${var.rqlite_http_port}"
       CLOUDFRONT_HOST = var.cloudfront_host
     }
   }

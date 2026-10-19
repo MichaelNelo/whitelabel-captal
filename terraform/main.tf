@@ -149,24 +149,25 @@ module "rqlite" {
   container_cpu                    = var.rqlite_cpu
   container_memory                 = var.rqlite_memory
   image_tag                        = var.rqlite_image_tag
+  http_port                        = var.rqlite_http_port
+  raft_port                        = var.rqlite_raft_port
   # Public subnets and no NAT, so a task without an address of its own cannot reach ECR. See the
   # `data "aws_vpc" "default"` block for why the private option is gone.
   assign_public_ip = true
 }
 
-# Debug ingress: let the Tailscale proxy (acting as VPC subnet router) reach
-# rqlite's HTTP API on 4001. Approved tailnet devices with --accept-routes can
-# then query rqlite directly from a developer laptop. Lives in root (not in the
-# rqlite module) because it bridges two sibling modules and the dependency only
-# exists when Tailscale is part of the deployment.
+# Debug ingress: let the Tailscale proxy (acting as VPC subnet router) reach rqlite's HTTP API.
+# Approved tailnet devices with --accept-routes can then query rqlite directly from a developer
+# laptop. Lives in root (not in the rqlite module) because it bridges two sibling modules and the
+# dependency only exists when Tailscale is part of the deployment.
 resource "aws_vpc_security_group_ingress_rule" "rqlite_from_tailscale_proxy" {
   count = var.enable_tailscale ? 1 : 0
 
   security_group_id            = module.rqlite.security_group_id
   description                  = "rqlite HTTP from Tailscale proxy (subnet router for debug)"
   ip_protocol                  = "tcp"
-  from_port                    = 4001
-  to_port                      = 4001
+  from_port                    = var.rqlite_http_port
+  to_port                      = var.rqlite_http_port
   referenced_security_group_id = module.tailscale_proxy[0].security_group_id
 }
 
@@ -184,6 +185,7 @@ module "portal_dispatcher" {
   rqlite_security_group_id         = module.rqlite.security_group_id
   service_discovery_namespace_name = local.service_discovery_namespace
   cloudfront_host                  = var.cloudfront_domain
+  rqlite_http_port                 = var.rqlite_http_port
 }
 
 # Global Accelerator — static IPv4 in front of the ALB so UniFi External Portal

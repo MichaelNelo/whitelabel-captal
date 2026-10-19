@@ -29,7 +29,7 @@ variable "enable_dns" {
 }
 
 variable "mcp_image_tag" {
-  description = "Tag of the captal-mcp image the backoffice runs. No default on purpose: a floating tag means the deployed version changes on the next build with nobody deciding it, which is how `docker/rqlite/Dockerfile` came to run a database engine two major versions from the one the tests use. Every environment names a version, and an environment that has never published an image has nothing to name yet -- which is the correct thing to be stopped by."
+  description = "Tag of the captal-mcp image the backoffice runs. No default on purpose: a floating tag means the deployed version changes on the next build with nobody deciding it, which is how `docker/rqlite.Dockerfile` came to run a database engine two major versions from the one the tests use. Every environment names a version, and an environment that has never published an image has nothing to name yet -- which is the correct thing to be stopped by."
   type        = string
 }
 
@@ -78,7 +78,7 @@ variable "container_port" {
 # at deploy time and sizes it there. The `rqlite_*` and `mcp_*` equivalents below are real.
 
 variable "image_tag" {
-  description = "Tag of the captal-api image every location's task definition runs. No default, and `latest` is rejected: a floating tag means the deployed version changes on the next image build with nobody deciding it. That is not hypothetical here -- `docker/rqlite/Dockerfile` said `:latest` and the database engine drifted two major versions, which nothing would have reported."
+  description = "Tag of the captal-api image every location's task definition runs. No default, and `latest` is rejected: a floating tag means the deployed version changes on the next image build with nobody deciding it. That is not hypothetical here -- `docker/rqlite.Dockerfile` said `:latest` and the database engine drifted two major versions, which nothing would have reported."
   type        = string
 
   validation {
@@ -109,6 +109,18 @@ variable "rqlite_memory" {
   description = "Memory for rqlite container in MB"
   type        = number
   default     = 512
+}
+
+variable "rqlite_http_port" {
+  description = "Port rqlite serves its HTTP API on. Leave it alone outside `local`: under awsvpc each task has its own address and nothing collides. LocalStack publishes a task's ports on the host, where 4001 is already the plain rqlite container the dev commands run."
+  type        = number
+  default     = 4001
+}
+
+variable "rqlite_raft_port" {
+  description = "Port rqlite's Raft transport listens on. Moves with rqlite_http_port."
+  type        = number
+  default     = 4002
 }
 
 variable "rqlite_image_tag" {

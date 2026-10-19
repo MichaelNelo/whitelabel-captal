@@ -1,7 +1,7 @@
 locals {
   name_prefix = "${var.project_name}-${var.environment}-rqlite"
-  http_port   = 4001
-  raft_port   = 4002
+  http_port   = var.http_port
+  raft_port   = var.raft_port
   dns_name    = "rqlite.${var.service_discovery_namespace_name}"
 
   # Single-instance branch: EFS-backed persistence, stop-then-start, FARGATE.
