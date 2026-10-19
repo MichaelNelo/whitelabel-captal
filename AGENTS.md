@@ -29,8 +29,9 @@ Para cualquier task concreta — leé la skill primero, después AGENTS.md, desp
 > **La CLI `captal` y el provisioning por archivos ya no existen.** Se borraron enteros: el binario,
 > los YAML, el árbol `locations/<slug>/` y `shared/`, el motor de diff, las imágenes derivadas y el
 > bundle de OpenTofu que la CLI extraía. El contenido se escribe hoy por las tools del servidor MCP
-> directamente a la base, y la infraestructura vive en un repo aparte
-> (`../whitelabel-captal-infrastructure/`) que se clona cuando hace falta. Si este documento o una
+> directamente a la base, y la infraestructura vive en `terraform/` — era un repo aparte
+> (`../whitelabel-captal-infrastructure/`) y se trajo acá como subtree, con su historia, porque la
+> suite local no podía correr sin ese segundo clon al lado. Si este documento o una
 > skill menciona `captal <algo>`, es un resto que sobrevivió a la limpieza y hay que tratarlo como un
 > bug, no como instrucción — el modelo obedece la documentación.
 
@@ -1799,7 +1800,7 @@ Si tras redeploy de rqlite (o force-deploy del API) las queries devuelven 500 / 
 - **CLI**: `1.0.0` → `1.6.4` (varias rondas: ALB rule fix, target group settings, video CloudFront URL fix, self-update, skills, click_id) → `1.7.0` (deprovision command + push refactor) → `1.7.1` (push-all merged into push 'all' sentinel) → `2.0.1` (UniFi Integration v1 schema break: site→siteId, drop unifiOs) → `2.1.0` (ap_mac→unifi.apMac + redirectUrl + **sistema de migrations declarativo** con YamlPath compile-time validated + auto-warning hook + `captal migrate` command).
 - **rqlite custom image**: `captal-rqlite:1.0.0` → `1.0.4` (peers.json single-node recovery + DNS-based identity + continue_on_failure auto-restore + entrypoint v4 nuclear-clean migration). El módulo TF de rqlite usa `var.rqlite_image_tag` (no más `:latest`) — bump explícito por cada cambio al entrypoint o Dockerfile.
 
-### Infrastructure changes (whitelabel-captal-infrastructure repo)
+### Infrastructure changes (`terraform/`, antes el repo whitelabel-captal-infrastructure)
 
 - **Tailscale proxy module** (`modules/tailscale-proxy/`): ECS Fargate userspace Tailscale daemon exposing HTTP CONNECT proxy on port 1055. Routes API → tailnet → on-prem UCG. Auth key minted automáticamente vía `tailscale/tailscale` TF provider; creds via env vars `TAILSCALE_API_KEY` + `TAILSCALE_TAILNET`.
 - **Global Accelerator + Portal Dispatcher** (`modules/global-accelerator/` + `modules/portal-dispatcher/`): 2 IPv4 anycast estáticas en frente del ALB (UniFi External Portal sólo acepta IPv4). El Lambda dispatcher (Python en VPC) recibe los hits del UCG en `/guest/s/*`, lookup del slug via `SELECT slug, unifi_redirect_url FROM locations WHERE unifi_ap_mac = ?` contra rqlite, y 302 al CloudFront destino. Gatable con `enable_global_accelerator` (default true).

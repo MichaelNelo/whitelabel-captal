@@ -12,7 +12,7 @@ A symptom → cause → fix cheat sheet. Two notes before using it:
   translation or video is missing data, not an unapplied deploy. Start with
   `get_location_readiness` for the slug — it answers most of sections H through M in one call.
 - **There is no `captal` CLI and no deploy tool.** Where an AWS-side fix is needed, it is either an
-  `aws` command or a change in `whitelabel-captal-infrastructure`. See
+  `aws` command or a change under `terraform/`. See
   `read_skill('deploy-location')` for what has no implementation at all.
 
 ## A. SPA loads HTML but assets 404 or 403
@@ -38,7 +38,7 @@ Typically `custom-styles.css.gz`, whose `<link onerror>` only fires reliably on 
 S3 with a private bucket and OAC answers 403 for a missing key unless the principal has
 `s3:ListBucket`, and CloudFront forwards it. The policy in `modules/cloudfront` already grants both
 `s3:GetObject` on `/*` and `s3:ListBucket` on the bucket for exactly this reason — so a 403 here
-means that has drifted. Run `tofu plan` in the infrastructure repo rather than patching the policy by
+means that has drifted. Run `tofu plan` under `terraform/` rather than patching the policy by
 hand.
 
 ## C. Assets requested relative to an SPA route
@@ -155,4 +155,4 @@ Then republish and invalidate (sections A and G).
 
 `AGENTS.md` in this repo has the architectural context, and its "Caveats operativos descubiertos en
 deploy" section enumerates known gotchas. For anything about what is actually deployed, `tofu plan`
-in `whitelabel-captal-infrastructure` outranks every document.
+under `terraform/` outranks every document.

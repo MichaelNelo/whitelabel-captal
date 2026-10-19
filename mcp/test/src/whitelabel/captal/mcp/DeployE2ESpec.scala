@@ -959,7 +959,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
             s"$ProvokedDenial was not refused, so nothing here was being evaluated. The policy does not grant it, which means enforcement is off: check ENFORCE_IAM on the container and that the suite is running as the IAM user rather than a dummy pair." &&
             assertTrue(unexpected.isEmpty) ??
             s"denied and not a known emulation gap: ${unexpected.mkString(
-                ", ")}. Either `aws_iam_policy.mcp` in the infrastructure repository withholds it, or the request is reaching a resource the policy does not cover — settle which with `awslocal iam simulate-principal-policy` before widening anything."
+                ", ")}. Either `aws_iam_policy.mcp` under `terraform/` withholds it, or the request is reaching a resource the policy does not cover — settle which with `awslocal iam simulate-principal-policy` before widening anything."
     ).provideShared(
       e2eDatabase >>> Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase),
       AssetStore.layer,

@@ -125,7 +125,7 @@ healthy would have no sensible synchronous form at all.
 ## Shared infrastructure is not here
 
 The cluster, the ALB, the roles, the distribution and the rqlite service are not created by any
-tool. They live in `whitelabel-captal-infrastructure` and are applied with OpenTofu — see
+tool. They live under `terraform/` and are applied with OpenTofu — see
 `read_skill('configure-aws')`. `deploy_location` reads them from its environment (`ECS_CLUSTER`, the
 subnets, the security group, the listener ARN, the two roles, the image and `DB_URL`).
 

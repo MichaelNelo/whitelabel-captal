@@ -8,11 +8,11 @@ version: 2.0.0
 
 There is no `captal.yaml` and no `captal` CLI. Nothing reads configuration out of an operator's
 workspace: content is written by this server's tools straight to rqlite and S3, and the deployment
-itself is configured through environment variables and the infrastructure repository.
+itself is configured through environment variables and the configuration under `terraform/`.
 
 ## Where the infrastructure lives
 
-A separate repository, `whitelabel-captal-infrastructure`, in OpenTofu/Terraform. Modules under
+`terraform/`, in OpenTofu. It was a separate repository and is a subtree here now. Modules under
 `modules/`, per-environment values under `environments/{dev,prod}/`. Clone it when you need it.
 
 It is deliberately **not** reachable as an MCP tool. This server runs inside the VPC that repo
@@ -52,7 +52,7 @@ Locally, `./mill mcp.dev` supplies all of them against a dev rqlite container an
 None are configured anywhere. The task runs as its ECS task role and the SDK's default provider
 chain picks it up — no key in the image, the task definition or the environment.
 
-The policy is `modules/mcp-iam` in the infrastructure repo; what needs each permission is
+The policy is `terraform/modules/mcp-iam`; what needs each permission is
 `docs/MCP_IAM.md` in this one. **They have to move together**: a tool that needs a permission
 missing from the module fails at runtime, in front of an operator, with an SDK error that names the
 API call and not the fix. `s3:ListBucket` is deliberately absent — nothing enumerates the bucket.

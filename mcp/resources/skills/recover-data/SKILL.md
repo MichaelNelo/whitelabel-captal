@@ -98,6 +98,6 @@ Still failing: `read_skill('troubleshoot-deployment')`.
   `deployment_minimum_healthy_percent` from the node count to keep quorum during rolling deploys —
   trust `tofu plan` over this document.
 - Giving prod the persistent mount dev already has is an infrastructure change
-  (`modules/rqlite` in `whitelabel-captal-infrastructure`), not something this server can do.
+  (`terraform/modules/rqlite`), not something this server can do.
 - Content now has exactly one copy. Until that changes, treat a prod quorum loss as destructive and
   plan the redeploy around it rather than around a re-push that no longer exists.

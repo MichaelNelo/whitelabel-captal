@@ -5,8 +5,8 @@
   # env.GREET = "devenv";
 
   # https://devenv.sh/packages/
-  # `opentofu` alongside `terraform`, because `mcp.test` applies the infrastructure repository's
-  # configuration against LocalStack and that repository is OpenTofu. The two cannot share a
+  # `opentofu` alongside `terraform`, because `mcp.test` applies the configuration under
+  # `terraform/` against LocalStack and that configuration is OpenTofu. The two cannot share a
   # working directory: a state file written by Terraform 1.15 is refused by OpenTofu 1.12 for being
   # from a newer version, and `.terraform.lock.hcl` records provider hashes from whichever registry
   # wrote it -- registry.terraform.io or registry.opentofu.org. The build has to run the same

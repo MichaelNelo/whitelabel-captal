@@ -11,7 +11,7 @@ this document as part of the change rather than as follow-up.
 
 ## Current policy
 
-Defined in the infrastructure repo at `modules/mcp-iam`, attached to the ECS task role. The two
+Defined at `terraform/modules/mcp-iam`, attached to the ECS task role. The two
 have to move together: a permission added here and not there fails at runtime.
 
 ```json
@@ -67,7 +67,7 @@ writing to the wrong bucket is worse than one that does not start.
 
 Two browser-to-AWS paths need a header that no role grants, and both fail mute — the operator sees
 a page that renders and does nothing. Neither is configured by this server; both live in the
-infrastructure repo.
+configuration under `terraform/`.
 
 **The upload PUT, browser to S3 directly.** The presigned URL points at the bucket, and the page
 sends the file's own `Content-Type`. `video/mp4` is not one of the three CORS-safelisted types, so
