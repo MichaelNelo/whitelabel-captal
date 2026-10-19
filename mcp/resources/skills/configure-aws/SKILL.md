@@ -12,16 +12,16 @@ itself is configured through environment variables and the configuration under `
 
 ## Where the infrastructure lives
 
-`terraform/`, in OpenTofu. It was a separate repository and is a subtree here now. Modules under
-`modules/`, per-environment values under `environments/{dev,prod}/`. Clone it when you need it.
+`terraform/` in this repository, in OpenTofu. Modules under `modules/`, per-environment values under
+`environments/{local,prod}/`.
 
-It is deliberately **not** reachable as an MCP tool. This server runs inside the VPC that repo
-creates, so it cannot stand up its own prerequisites, and what Terraform contributes here is the
-state file and the plan.
+It is deliberately **not** reachable as an MCP tool. This server runs inside the VPC that
+configuration creates, so it cannot stand up its own prerequisites, and what Terraform contributes
+here is the state file and the plan.
 
 ```sh
-tofu init -backend-config=environments/dev/backend.tfvars
-tofu plan  -var-file=environments/dev/terraform.tfvars
+tofu init -backend-config=environments/prod/backend.tfvars
+tofu plan  -var-file=environments/prod/terraform.tfvars
 ```
 
 `tofu plan` is the single source of truth for what is deployed — believe it over any document,
