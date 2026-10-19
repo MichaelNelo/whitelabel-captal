@@ -444,7 +444,7 @@ private def ensureLocalStack(
   // guessing at something that is not ours to pin. This is a local bucket holding test videos.
   //
   // The real bucket needs the same configuration and does not get it from here. Until it does,
-  // this works in dev and fails in production — see docs/MCP_IAM.md.
+  // this works in dev and fails in production — see docs/mcp-iam.adoc.
   val cors =
     """{"CORSRules":[{"AllowedOrigins":["*"],"AllowedMethods":["PUT","GET","HEAD"],"AllowedHeaders":["*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":3000}]}"""
   val corsResult = os
@@ -600,7 +600,9 @@ private def ensureLocalStackTofu(
     endpoint: String,
     licensed: Boolean,
     configDir: os.Path,
-    stateDir: os.Path): Map[String, String] =
+    stateDir: os.Path,
+    rqliteImage: String,
+    rqliteTag: String): Map[String, String] =
   // Same signal production uses: no `ECS_CLUSTER` means the deploy tools are not registered and
   // the end-to-end test skips itself, rather than the suite failing on a machine that was never
   // going to run it. ECS and ELBv2 are not in the free tier's registry at all.
@@ -655,6 +657,35 @@ private def ensureLocalStackTofu(
   val initialised = tofu("init", "-input=false")
   if initialised.exitCode != 0 then
     fail("init", initialised)
+
+  // The registry on its own first, because the image has to be in it before the service that pulls
+  // it exists. LocalStack runs an ECS task as a real container, so the three rqlite tasks the local
+  // environment asks for would otherwise sit retrying a pull against an empty repository — which
+  // looks like a broken cluster and is a missing image.
+  //
+  // `-target` is exactly the case it is for: one resource, applied out of order, on purpose.
+  val registry = tofu(
+    "apply",
+    "-auto-approve",
+    "-input=false",
+    "-target=module.rqlite.aws_ecr_repository.rqlite",
+    "-var-file=environments/local/terraform.tfvars",
+    s"-state=$state")
+  if registry.exitCode != 0 then
+    fail("the rqlite registry apply", registry)
+
+  val registryOutputs = tofu("output", "-json", s"-state=$state")
+  if registryOutputs.exitCode != 0 then
+    fail("output after the rqlite registry apply", registryOutputs)
+  val repositoryUrl = ujson
+    .read(registryOutputs.out.text())
+    .obj
+    .get("rqlite_ecr_repository_url")
+    .map(_.obj("value").str)
+    .filter(_.nonEmpty)
+    .getOrElse(sys.error(
+      "[rqlite] the registry apply reported success but rqlite_ecr_repository_url is not among the state's outputs, so there is nowhere to push to"))
+  pushImage(rqliteImage, s"$repositoryUrl:$rqliteTag")
 
   println(s"[tofu] applying the local environment (minutes, on a fresh container)")
   val applied = tofu(
@@ -741,6 +772,68 @@ end ensureLocalStackTofu
 // have to be looking at the same database to be worth running together.
 private val rqliteDevPort = 4001
 private val rqliteDevContainerName = "rqlite-dev"
+
+/** The tag `environments/<env>/terraform.tfvars` names for the rqlite image.
+  *
+  * Read from the file rather than chosen here, so the tag this build pushes and the tag the task
+  * definition pulls cannot drift apart.
+  */
+private def rqliteImageTag(configDir: os.Path, environment: String): String =
+  val file = configDir / "environments" / environment / "terraform.tfvars"
+  """(?m)^\s*rqlite_image_tag\s*=\s*"([^"]+)"""".r
+    .findFirstMatchIn(os.read(file))
+    .map(_.group(1))
+    .getOrElse(sys.error(s"[rqlite] $file sets no rqlite_image_tag, so there is no tag to push"))
+
+// ─────────────────────────────────────────────────────────────────────────────
+// rqlite image
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The database image the ECS cluster runs, as opposed to the plain container the suites talk to.
+  *
+  * `terraform/docker/rqlite/` is the engine pinned to [[rqliteVersion]] plus this repository's
+  * entrypoint, and `modules/rqlite` names it out of ECR by tag. Nothing built it: the tag in each
+  * `terraform.tfvars` was pushed by hand, so a checkout could not reproduce the image its own
+  * configuration deploys.
+  */
+object rqlite extends Module:
+
+  /** The build context. `Task.Sources` is what lets this read inside the build tree, and what makes
+    * a changed entrypoint rebuild.
+    */
+  def dockerSources: T[Seq[PathRef]] = Task.Sources(
+    moduleDir / os.up / "terraform" / "docker" / "rqlite")
+
+  /** Builds `captal-rqlite:<tag>`. Usage: `./mill rqlite.image --tag 1.0.4` */
+  def image(tag: String = "latest") = Task.Command:
+    val context = dockerSources().head.path
+    if !os.exists(context / "Dockerfile") then
+      sys.error(s"[rqlite] no Dockerfile at $context")
+    val name = s"captal-rqlite:$tag"
+    val built = os
+      .proc("docker", "build", "-t", name, ".")
+      .call(cwd = context, check = false, stdout = os.Inherit, stderr = os.Inherit)
+    if built.exitCode != 0 then
+      sys.error("[rqlite] docker build failed")
+    println(s"[rqlite] built $name")
+    name
+
+  /** Pushes it into a registry. Usage:
+    * `./mill rqlite.imagePush --registry 000000000000.dkr.ecr.us-east-1.amazonaws.com --repository captal-rqlite --tag 1.0.4`
+    */
+  def imagePush(registry: String, repository: String, tag: String = "latest") = Task.Command:
+    val local = image(tag)()
+    pushImage(local, s"$registry/$repository:$tag")
+
+/** `docker tag` then `docker push`, as one step that names which half failed. */
+private def pushImage(local: String, remote: String): String =
+  for args <- Seq(Seq("tag", local, remote), Seq("push", remote))
+  do
+    val result = os.proc("docker" +: args).call(check = false, stderr = os.Pipe)
+    if result.exitCode != 0 then
+      sys.error(s"[rqlite] docker ${args.head} to $remote failed: ${result.err.trim()}")
+  println(s"[rqlite] pushed $remote")
+  remote
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Base traits
@@ -1619,23 +1712,34 @@ object mcp extends BaseModule:
     val migrationCp = platform.runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
     val cp = runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
 
-    println("[dev] Step 1/4: Ensuring rqlite...")
+    println("[dev] Step 1/5: Ensuring rqlite...")
     val dbUrl = ensureRqlite(rqliteDevContainerName, rqliteDevPort)
 
-    println("[dev] Step 2/4: Running migrations...")
+    println("[dev] Step 2/5: Running migrations...")
     val migration = os
       .proc("java", "-cp", migrationCp, "whitelabel.captal.platform.Migrate")
       .call(env = Map("DB_URL" -> dbUrl), check = false, stdout = os.Inherit, stderr = os.Inherit)
     if migration.exitCode != 0 then
       sys.error("[dev] Migrations failed; the server would start against a schema-less database.")
 
-    println("[dev] Step 3/4: Ensuring LocalStack...")
+    println("[dev] Step 3/5: Ensuring LocalStack...")
     val endpoint = ensureLocalStack(localStackContainer, localStackPort, devBucket, Task.env)
 
-    println(s"[dev] Step 4/4: Starting MCP backoffice on :$port")
+    // The same configuration the AWS environments use, applied against the same LocalStack
+    // container the suite uses — one state, because two states over one container come apart and
+    // the next apply fails on `AlreadyExists`. What it buys here is the deploy tools: in production
+    // the backoffice is given a cluster, subnets, a listener and two roles, and without them those
+    // tools are not registered at all. Empty without a licence, and then this is a no-op.
+    println("[dev] Step 4/5: Applying the local infrastructure...")
+    val infra = test.localStackInfra()
+    if infra.isEmpty then
+      println("[dev]   no LocalStack licence, so no cluster; the deploy tools stay unregistered")
+
+    println(s"[dev] Step 5/5: Starting MCP backoffice on :$port")
 
     val env =
       forkEnv() ++
+        infra ++
         Map(
           "DB_URL"           -> dbUrl,
           "MCP_PORT"         -> port.toString,
@@ -1668,9 +1772,8 @@ object mcp extends BaseModule:
           "AWS_SECRET_ACCESS_KEY" -> "test"
         )
 
-    // Every tool here is scoped to a location, and none of them can create one — locations still
-    // arrive through provisioning. `api.dev` seeds `cafe-centro` into this same container on boot,
-    // which is the whole reason the two commands share it.
+    // Whether this database has a location at all. `api.dev` does not create one — it serves one —
+    // so on a fresh container every tool here has nothing to be scoped to.
     val seeded =
       val probe = scala
         .util
@@ -1683,7 +1786,7 @@ object mcp extends BaseModule:
               .toURL
           scala.io.Source.fromInputStream(url.openStream()).mkString
       if probe.toOption.exists(_.contains("[[0]]")) then
-        "  No locations in the database yet — run `./mill api.dev` once to seed cafe-centro.\n"
+        "  No locations in the database yet — call `create_location` through this server first.\n"
       else
         ""
 
@@ -1949,11 +2052,22 @@ object mcp extends BaseModule:
       // and the sources are what let this task read them at all.
       tofuConfig()
       tofuSources()
+      val licensed = parts(2).toBoolean
+      val configDir = terraformDir(Task.env, moduleDir / os.up / os.up)
+      // Built here and pushed inside the apply, because a task is what can depend on the
+      // Dockerfile and the apply is what owns the registry it goes into. Skipped unlicensed, where
+      // there is no ECS and nothing to run it.
+      val tag = if licensed && os.exists(configDir) then rqliteImageTag(configDir, "local") else ""
+      // Built under its default tag, because only the remote one matters and the push applies it.
+      // Mill also forbids passing a value defined in this block to a task call.
+      val built = if tag.isEmpty then "" else rqlite.image()()
       ensureLocalStackTofu(
         endpoint = parts(1),
-        licensed = parts(2).toBoolean,
-        configDir = terraformDir(Task.env, moduleDir / os.up / os.up),
-        stateDir = Task.dest / parts(0))
+        licensed = licensed,
+        configDir = configDir,
+        stateDir = Task.dest / parts(0),
+        rqliteImage = built,
+        rqliteTag = tag)
 
     /** Recreates LocalStack, which is what clears a state that has come apart from it.
       *

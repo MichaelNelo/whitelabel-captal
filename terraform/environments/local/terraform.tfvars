@@ -33,24 +33,27 @@ enable_global_accelerator = false
 cloudfront_domain = "local.captal.invalid"
 domain_name       = "captal.invalid"
 
-container_port   = 8080
-container_cpu    = 256
-container_memory = 512
-desired_count    = 1
+container_port = 8080
 
-# Matched to what the Mill build already pulls, so LocalStack -- which runs an ECS task as a real
-# container -- is never waiting on an image nobody can fetch.
-image_tag        = "1.0.1"
-rqlite_image_tag = "1.0.4"
-
-# Zero tasks for both services. What the suite needs from this configuration is the things a
-# location deploy *attaches to* -- the cluster, the listener, the groups, the roles, the bucket,
-# the distribution -- not the services themselves. The suite runs the backoffice in-process, and
-# rqlite as a plain container, because the database has to be migrated before any of this exists.
+# `rqlite_image_tag` is the tag `mill rqlite.image` builds and the apply pushes into this
+# environment's own ECR before the service that pulls it exists. Bump it with the Dockerfile or the
+# entrypoint, and the build follows -- it reads this line rather than carrying a tag of its own.
 #
-# The resources are still created, which is the point: a target group the server registers against
-# is a real target group, and the task definitions are real revisions.
-rqlite_desired_count = 0
+# `image_tag` has no such task yet: nothing pushes `captal-api` here, and with no portal service in
+# this configuration nothing pulls it either. The backoffice stamps its own image into the task
+# definition it registers, and the suite points that at an image already on the machine.
+image_tag        = "1.0.1"
+rqlite_image_tag = "1.0.5"
+
+# Three rqlite tasks on purpose: a real Raft quorum, so leadership, the backup that only the leader
+# takes, and a node coming back to an existing cluster are all exercisable locally instead of only
+# in a deployed environment. LocalStack runs an ECS task as a real container, which is what makes
+# that worth doing and also why the image has to be in ECR first.
+#
+# The backoffice still runs in-process against the plain rqlite container, not against this cluster:
+# the cluster is only addressable as `rqlite.captal.local` through service discovery, and the schema
+# has to be migrated before any of this exists.
+rqlite_desired_count = 3
 rqlite_cpu           = 256
 rqlite_memory        = 512
 
