@@ -1,17 +1,29 @@
 #!/bin/sh
 set -e
 
-# Discover private IP from ECS Fargate metadata endpoint
-PRIVATE_IP=$(wget -qO- "$ECS_CONTAINER_METADATA_URI_V4" \
-  | grep -oE '"IPv4Addresses":\["[0-9.]+"' \
-  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
+# This node's private IP, which is its Raft identity. From the ECS Fargate task metadata endpoint,
+# except under RQLITE_LOCAL, where no such endpoint exists and the container's own address is the
+# only one there is. Chosen by the flag and not by whether the endpoint answers: on Fargate an empty
+# answer means something is wrong, and falling back would start a node under the wrong identity
+# rather than fail.
+if [ "$RQLITE_LOCAL" = "true" ]; then
+  IP_SOURCE="the container's own address (RQLITE_LOCAL)"
+  PRIVATE_IP=$(hostname -i | cut -d' ' -f1) || true
+else
+  IP_SOURCE="the ECS task metadata endpoint"
+  # `|| true` so the check below is what reports it: the pipeline fails under `set -e` when the
+  # endpoint is absent, and the shell exits 1 without saying why.
+  PRIVATE_IP=$(wget -qO- "$ECS_CONTAINER_METADATA_URI_V4" \
+    | grep -oE '"IPv4Addresses":\["[0-9.]+"' \
+    | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+') || true
+fi
 
 if [ -z "$PRIVATE_IP" ]; then
-  echo "ERROR: Could not discover private IP from ECS metadata"
+  echo "ERROR: Could not discover private IP from $IP_SOURCE"
   exit 1
 fi
 
-echo "Discovered private IP: $PRIVATE_IP"
+echo "Discovered private IP: $PRIVATE_IP, from $IP_SOURCE"
 
 # ─── One-time migration: nuke broken state on v4 first boot ──────────────────
 # v1, v2, v3 all targeted /rqlite/file/data/raft as a directory — but rqlite v9
