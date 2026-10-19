@@ -17,15 +17,14 @@ override.tf.json
 # Sensitive files
 *.tfvars
 !environments/*/terraform.tfvars
+# A state bucket's name, which is not a credential: access comes from `.envrc` below. Committed so
+# `tofu init -backend-config=environments/<env>/backend.tfvars` works from a clean clone. Without
+# it, `backend.tf` has `bucket = ""` and nothing in the tree says what the value is.
+!environments/*/backend.tfvars
 
 # Credentials for the AWS and Tailscale providers, read from the environment so they stay out of
 # state. Nothing here is derivable, so it is not committed and not templated either.
 .envrc
-
-# `backend.tf` used to be ignored here, on the grounds that it carried bucket names. It does not:
-# its bucket is `""` and the value comes from `environments/<env>/backend.tfvars`, which is ignored
-# by the rule above. Ignoring the block itself left a clone with no backend at all -- `tofu init`
-# would quietly configure local state and write it next to the module.
 
 # IDE
 .idea/
