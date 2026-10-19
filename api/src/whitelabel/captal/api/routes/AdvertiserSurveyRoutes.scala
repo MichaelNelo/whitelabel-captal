@@ -51,7 +51,8 @@ final class AdvertiserSurveyRoutes(cookieConfig: SessionCookieConfig, base: ApiB
         case Right(defect) =>
           new Exception(s"Defect: ${defect.prettyPrint}"))
 
-  private val nextAdvertiserSurvey = Endpoint(base(Method.GET / "api" / "survey" / "advertiser" / "next"))
+  private val nextAdvertiserSurvey = Endpoint(
+    base(Method.GET / "api" / "survey" / "advertiser" / "next"))
     .header(HeaderCodec.cookie.optional)
     .out[AdvertiserSurveyResponse]
     .outError[ApiError](Status.BadRequest)

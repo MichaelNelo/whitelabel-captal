@@ -1,9 +1,11 @@
 package whitelabel.captal.api
 
 import whitelabel.captal.api.Phases.*
+import whitelabel.captal.api.session.CurrentLocation
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Event, EventHandler, Flow, NextStep}
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository, VideoRepository}
+import whitelabel.captal.platform.UnifiClient
 import whitelabel.captal.platform.eventhandlers.{
   AnswerPersistenceHandler,
   EventLogHandler,
@@ -18,12 +20,7 @@ import whitelabel.captal.platform.eventhandlers.{
 }
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.session.{JobQueue, SessionContext, SessionService}
-import whitelabel.captal.platform.UnifiClient
-import whitelabel.captal.api.session.CurrentLocation
 import zio.*
-// Every `Flow(...)` below needs `cats.Monad[Task]`, which this supplies. It was a file-level
-// import of `Main` and is easy to lose in a move: without it ten of these fail to find an
-// instance, and the error names cats rather than the import.
 import zio.interop.catz.*
 
 /** One layer per command the portal can execute, plus the handler chain they all write through.
@@ -144,9 +141,11 @@ private[api] object Flows:
         eventHandler: EventHandler[Task, Event]) =>
       Flow(AnswerAdvertiserHandler(surveyRepo, userRepo, nextAfterAdvertiserSurvey), eventHandler)
 
-  val finishFlowLayer: ZLayer[UserRepository[
-    Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, FinishCommand, Unit]] = ZLayer
-    .fromFunction: (userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
+  val finishFlowLayer: ZLayer[
+    UserRepository[Task] & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[Task, FinishCommand, Unit]] = ZLayer.fromFunction:
+    (userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
       Flow(FinishHandler(userRepo), eventHandler)
 
   /** Counterpart of [[finishFlowLayer]]: executed by the `JobRunner` when an access expires, not by

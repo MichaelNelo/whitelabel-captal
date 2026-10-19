@@ -471,10 +471,7 @@ object SurveyRepositoryQuill:
       .map(_.question)
       .distinctBy(_.id)
       .flatMap: questionRow =>
-        val rules = rows
-          .filter(_.question.id == questionRow.id)
-          .flatMap(_.rule)
-          .distinctBy(_.id)
+        val rules = rows.filter(_.question.id == questionRow.id).flatMap(_.rule).distinctBy(_.id)
         val problems =
           questionRow.questionType match
             case "checkbox" =>
@@ -493,13 +490,15 @@ object SurveyRepositoryQuill:
                   s"takes no rules, so it is ignored")
             case other =>
               rules.map(row =>
-                s"rule ${row.id} belongs to a question of unknown type '$other', which is read as " +
+                s"rule ${row
+                    .id} belongs to a question of unknown type '$other', which is read as " +
                   "a plain input with no rules")
         problems.map(problem => s"question ${questionRow.id.asString}: $problem")
+  end unreadableRules
 
   /** `unreadableRules` as the log lines it should produce. Called wherever the rows are read. */
-  private def warnUnreadableRules(rows: List[QuestionWithDetails]): UIO[Unit] = ZIO
-    .foreachDiscard(unreadableRules(rows))(ZIO.logWarning(_))
+  private def warnUnreadableRules(rows: List[QuestionWithDetails]): UIO[Unit] =
+    ZIO.foreachDiscard(unreadableRules(rows))(ZIO.logWarning(_))
 
   /** Who the video belonged to, when it belonged to anyone.
     *

@@ -3,6 +3,8 @@ package whitelabel.captal.api
 import io.circe.parser.decode
 import io.circe.syntax.*
 import sttp.client3.*
+import sttp.client3.testing.SttpBackendStub
+import sttp.monad.MonadError
 import whitelabel.captal.api.routes.{
   AdvertiserSurveyRoutes,
   FinishRoutes,
@@ -11,8 +13,6 @@ import whitelabel.captal.api.routes.{
   SurveyRoutes,
   VideoRoutes
 }
-import sttp.client3.testing.SttpBackendStub
-import sttp.monad.MonadError
 import whitelabel.captal.core.application.commands.{
   NextAdvertiserSurvey,
   NextIdentificationSurvey,
@@ -121,9 +121,8 @@ object TestHelpers:
       serveZioHttp(
         (
           HealthRoutes.routes(env.get[ApiBase]) ++ env.get[FinishRoutes].routes ++
-          localeRoutes.routes ++
-            localeRoutes.devRoutes ++ env.get[VideoRoutes].routes ++ env.get[SurveyRoutes].routes ++
-            env.get[AdvertiserSurveyRoutes].routes
+            localeRoutes.routes ++ localeRoutes.devRoutes ++ env.get[VideoRoutes].routes ++
+            env.get[SurveyRoutes].routes ++ env.get[AdvertiserSurveyRoutes].routes
         ).provideEnvironment(env))
 
   /** The health check, which is the one route already off tapir. */

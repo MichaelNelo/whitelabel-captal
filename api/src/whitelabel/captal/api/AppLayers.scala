@@ -130,8 +130,8 @@ private[api] object AppLayers:
   private val locationServiceLayer: ZLayer[QuillSqlite, Nothing, LocationService] = ZLayer.fromZIO:
     ZIO.serviceWith[QuillSqlite](LocationService(_))
 
-  val appLayers: ZLayer[ServerSettings, Throwable, FullEnv & Server.Config & JobRunner] =
-    ZLayer.makeSome[ServerSettings, FullEnv & Server.Config & JobRunner](
+  val appLayers: ZLayer[ServerSettings, Throwable, FullEnv & Server.Config & JobRunner] = ZLayer
+    .makeSome[ServerSettings, FullEnv & Server.Config & JobRunner](
       SessionContext.make,
       RqliteDataSource.layer,
       Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase),
