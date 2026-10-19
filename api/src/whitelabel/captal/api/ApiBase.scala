@@ -12,7 +12,7 @@ import zio.http.codec.PathCodec
   * against the pattern the *endpoint* carries, so a nested route matched `/<slug>/api/health` and
   * then answered
   *
-  *     400 Malformed path /cafe-centro/api/health failed to decode using /api/health
+  * 400 Malformed path /cafe-centro/api/health failed to decode using /api/health
   *
   * while the unprefixed `/api/health` kept returning 200. Both wrong, and in the direction that
   * matters: `Deploy.healthCheckPath` registers each location's target group against
@@ -28,13 +28,13 @@ import zio.http.codec.PathCodec
   * starting the dev server and asking for both paths.
   */
 final case class ApiBase(slug: Option[String]):
-  def apply[A](pattern: RoutePattern[A]): RoutePattern[A] = slug.fold(pattern)(s =>
-    pattern.nest(PathCodec.literal(s)))
+  def apply[A](pattern: RoutePattern[A]): RoutePattern[A] =
+    slug.fold(pattern)(s => pattern.nest(PathCodec.literal(s)))
 
 object ApiBase:
   /** Unprefixed, which is what a server with no `LOCATION_SLUG` serves. */
   val none: ApiBase = ApiBase(None)
 
-  val layer: ZLayer[ServerSettings, Nothing, ApiBase] = ZLayer.fromFunction(
-    (s: ServerSettings) => ApiBase(s.locationSlug))
+  val layer: ZLayer[ServerSettings, Nothing, ApiBase] = ZLayer.fromFunction((s: ServerSettings) =>
+    ApiBase(s.locationSlug))
 end ApiBase

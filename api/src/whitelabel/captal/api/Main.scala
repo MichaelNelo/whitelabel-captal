@@ -54,26 +54,27 @@ object Main extends ZIOAppDefault:
         // The API half of `served`, enumerated for the log. One list, now that there is one
         // library — it was two halves joined for the duration of the tapir migration, so that a
         // route leaving tapir did not quietly drop out of this.
-        routeInfos = HttpApp
-          .apiRoutes(
-            settings.devEndpoints,
-            base,
-            surveyRoutes,
-            localeRoutes,
-            videoRoutes,
-            advertiserSurveyRoutes,
-            finishRoutes)
-          .routes
-          .map(route => s"  ${route.routePattern.render}")
-          .toList
+        routeInfos =
+          HttpApp
+            .apiRoutes(
+              settings.devEndpoints,
+              base,
+              surveyRoutes,
+              localeRoutes,
+              videoRoutes,
+              advertiserSurveyRoutes,
+              finishRoutes)
+            .routes
+            .map(route => s"  ${route.routePattern.render}")
+            .toList
         _ <- ZIO.logInfo(
           s"Server starting on ${settings.config.address.getHostString}:${settings
               .config
               .address
               .getPort}")
-        _      <- ZIO.logInfo(s"Dev mode: ${settings.devMode}, Dev endpoints: ${settings.devEndpoints}")
-        _      <- ZIO.logInfo(s"Session cookie: ${cookieConfig.name} (path=${cookieConfig.path})")
-        _      <- ZIO.logInfo(s"Mounted routes:\n${routeInfos.mkString("\n")}")
+        _ <- ZIO.logInfo(s"Dev mode: ${settings.devMode}, Dev endpoints: ${settings.devEndpoints}")
+        _ <- ZIO.logInfo(s"Session cookie: ${cookieConfig.name} (path=${cookieConfig.path})")
+        _ <- ZIO.logInfo(s"Mounted routes:\n${routeInfos.mkString("\n")}")
         result <- Server.serve(served)
       yield result
     program.provide(ServerSettings.layer, Server.live, AppLayers.appLayers)

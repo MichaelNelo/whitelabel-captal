@@ -101,7 +101,7 @@ object UnreadableRuleSuite:
               SelectionRuleOnAnInputQuestion)
             backend <- testBackend
             cookie  <- createSession(backend)
-            _       <- TestFixtures.linkSessionToUser(user.SessionId.unsafe(cookie), testUser.userId)
+            _ <- TestFixtures.linkSessionToUser(user.SessionId.unsafe(cookie), testUser.userId)
             response <- getNextSurvey(backend, cookie)
             logged   <- warnings
           yield

@@ -1,7 +1,7 @@
 package whitelabel.captal.api
 
-import whitelabel.captal.api.AppLayers.FullEnv
 import whitelabel.captal.api.ApiBase
+import whitelabel.captal.api.AppLayers.FullEnv
 import whitelabel.captal.api.routes.{
   AdvertiserSurveyRoutes,
   FinishRoutes,
@@ -178,8 +178,7 @@ private[api] object HttpApp:
       finishRoutes)
     val baseRoutes =
       if devMode then
-        devLinkerOutput(
-          devStaticRoutes(base.slug) ++ served ++ spaCatchAllRoutes(base.slug))
+        devLinkerOutput(devStaticRoutes(base.slug) ++ served ++ spaCatchAllRoutes(base.slug))
       else
         served
     baseRoutes @@ loggingMiddleware

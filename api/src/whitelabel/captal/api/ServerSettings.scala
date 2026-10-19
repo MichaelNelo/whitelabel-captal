@@ -14,7 +14,7 @@ import zio.http.Server
   *   startup; content comes from the database now. The task definitions that still set them should
   *   drop them — a variable that configures nothing is a promise that something still reads it.
   */
-private[api] final case class ServerSettings(
+final private[api] case class ServerSettings(
     config: Server.Config,
     devMode: Boolean,
     devEndpoints: Boolean,

@@ -25,8 +25,8 @@ object HealthRoutes:
   object HealthResponse:
     given Schema[HealthResponse] = DeriveSchema.gen[HealthResponse]
 
-  /** Takes the base rather than reading it from a field, because this one has no other state and
-    * so stayed an `object` while the rest became classes.
+  /** Takes the base rather than reading it from a field, because this one has no other state and so
+    * stayed an `object` while the rest became classes.
     */
   def routes(base: ApiBase): Routes[Any, Nothing] =
     val health = Endpoint(base(Method.GET / "api" / "health")).out[HealthResponse]

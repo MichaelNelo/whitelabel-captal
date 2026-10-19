@@ -17,7 +17,6 @@ import whitelabel.captal.api.session.{
   UserCookieConfig,
   UserLookup
 }
-import whitelabel.captal.api.ApiBase
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{
   Event,
@@ -256,8 +255,8 @@ object TestLayers:
       VideoRoutes.MarkVideoWatchedFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType & QuillSqlite &
       SessionCookieConfig & ApiBase & CurrentLocation & UserCookieConfig & UserLookup &
-      SurveyRoutes & LocaleRoutes & VideoRoutes & AdvertiserSurveyRoutes & FinishRoutes & TestUnifiClient &
-      JobQueue & JobRunner.ExpireFlow & JobRunner
+      SurveyRoutes & LocaleRoutes & VideoRoutes & AdvertiserSurveyRoutes & FinishRoutes &
+      TestUnifiClient & JobQueue & JobRunner.ExpireFlow & JobRunner
 
   val testEnv: ZLayer[Any, Throwable, TestEnv] = ZLayer.make[TestEnv](
     SessionContext.make,
