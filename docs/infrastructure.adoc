@@ -32,7 +32,8 @@ runs by hand.
 |===
 
 `terraform/backend.tf` declares the S3 backend with `bucket = ""`; the real bucket name comes from
-the environment's own `backend.tfvars`, which is not committed. It is deliberately **not** staged
+the environment's own `backend.tfvars`, which is committed — `terraform/.gitignore` ignores
+`*.tfvars` and excepts those. It is deliberately **not** staged
 into the copy of the configuration `mcp.test` applies — that bucket is created by this same
 configuration's `s3-backend` module, which is a chicken-and-egg locally, and leaving the block out
 is what lets a local `tofu init` fall back to a plain state file instead of waiting on a backend
