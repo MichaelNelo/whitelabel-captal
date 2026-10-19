@@ -10,7 +10,7 @@ import whitelabel.captal.core.application.commands.NextVideo
   * That file genuinely held both -- the endpoint definitions and these -- which is why the client
   * compiled against tapir: `endpoints-js` shares every source in this module, so a browser build
   * pulled in the tapir dependency to typecheck declarations it never reads. Their `Schema`
-  * instances are in `schemas` now and these three are free of it.
+  * instances are in `api.wire` now and these three are free of them.
   *
   * Together in one file because they are one exchange: ask for the next video, report it watched,
   * get told the phase that follows.

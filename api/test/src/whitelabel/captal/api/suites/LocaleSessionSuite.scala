@@ -71,22 +71,24 @@ object LocaleSessionSuite:
             countAfter == countBefore
           ) // No new session created
         ,
-        test("the cookie a converted route sets is the same cookie the others set"):
+        test("both routes that set the session cookie set the same cookie"):
           // `extractSessionCookie` reads the name and value and stops at the first `;`, so the
-          // attributes have never been asserted — and `PUT /api/session/locale` is now the one
-          // route writing them from zio-http's `Cookie.Response` rather than tapir's
-          // `CookieValueWithMeta`. Name and path are what the browser keys an entry on: two routes
-          // disagreeing about either would be writing to two separate entries, and a guest would
-          // appear to lose their session on changing language.
+          // attributes were asserted by nothing until this. Two routes write this cookie —
+          // `/api/status` and `PUT /api/session/locale` — and name and path are what the browser
+          // keys an entry on: disagreeing about either means two separate entries, and a guest who
+          // changes language appears to lose their session.
+          //
+          // Written to compare a converted route against a tapir one; both are zio-http now, and
+          // the comparison is worth keeping for the same reason it was worth making.
           for
             backend    <- testBackend
             statusResp <- getStatus(backend, None)
             cookie = extractSessionCookie(statusResp).get
             localeResp <- putSetLocale(backend, "en", Some(cookie))
-            fromTapir     = statusResp.header("Set-Cookie").map(attributesOf)
-            fromConverted = localeResp.header("Set-Cookie").map(attributesOf)
-          yield assertTrue(fromConverted == fromTapir, fromConverted.contains(Set("path=/"))) ??
-            s"tapir=${statusResp.header("Set-Cookie")} converted=${localeResp.header("Set-Cookie")}"
+            fromStatus = statusResp.header("Set-Cookie").map(attributesOf)
+            fromLocale = localeResp.header("Set-Cookie").map(attributesOf)
+          yield assertTrue(fromLocale == fromStatus, fromLocale.contains(Set("path=/"))) ??
+            s"status=${statusResp.header("Set-Cookie")} locale=${localeResp.header("Set-Cookie")}"
         ,
         test("status creates session, setLocale updates same session"):
           for

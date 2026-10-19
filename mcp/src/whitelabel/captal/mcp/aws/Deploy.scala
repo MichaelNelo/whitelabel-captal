@@ -91,11 +91,15 @@ final case class DeployTargets(
 
   def logGroup(slug: String): String = s"/ecs/captal-$slug"
 
-  /** What CloudFront forwards to the ALB, and what the API answers on: the slug is baked into the
-    * route paths at boot by `prependSecurityIn`, so one service serves exactly one prefix.
+  /** What CloudFront forwards to the ALB, and what the API answers on: the slug is baked into every
+    * route's path at boot by `api.ApiBase`, so one service serves exactly one prefix.
     */
   def pathPattern(slug: String): String = s"/$slug/api/*"
 
+  /** Set when the target group is created, and only then — `ensureTargetGroup` finds or creates,
+    * and nothing here calls `modifyTargetGroup`. A group that already exists with a different path
+    * keeps it, silently, which is worth knowing before concluding a live one is configured right.
+    */
   def healthCheckPath(slug: String): String = s"/$slug/api/health"
 end DeployTargets
 
