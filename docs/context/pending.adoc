@@ -31,7 +31,7 @@ quorum through a single reclamation.
 
 == rqlite: continue_on_failure turns data loss into a healthy boot
 
-`terraform/docker/rqlite/entrypoint.sh` writes one backup config used for both `-auto-backup` and
+`docker/rqlite-entrypoint.sh` writes one backup config used for both `-auto-backup` and
 `-auto-restore`, with `"continue_on_failure": true`. The comment justifies it for a missing backup
 on first boot, which is a development concern; the entrypoint does not distinguish environments.
 

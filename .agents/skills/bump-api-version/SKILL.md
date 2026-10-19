@@ -47,9 +47,12 @@ rejects the literal string `"latest"` — pick a real tag, always.
 ```bash
 TAG=vX.Y.Z
 REPO=$(cd terraform && tofu output -raw api_image_repository_url)
-./mill api.dockerBuild --repoUri "$REPO" --tag "$TAG"
-./mill api.dockerPush  --repoUri "$REPO" --tag "$TAG"
+mill api.imagePush --registry "${REPO%/*}" --repository "${REPO##*/}" --tag "$TAG"
 ```
+
+`api.imagePush` builds `docker/api.Dockerfile` around the jar Mill already has, then tags and pushes
+it. The registry needs a `docker login` first: `aws ecr get-login-password --region us-east-1 |
+docker login --username AWS --password-stdin "${REPO%%/*}"`.
 
 ### 2. Point the environment at the new tag
 

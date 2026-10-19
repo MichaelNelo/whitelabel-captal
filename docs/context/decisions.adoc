@@ -334,7 +334,7 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
 
 * **Single-stage Dockerfiles.** Mill builds the jar where Mill already lives; the image just
   packages it, with a dedicated `*.image` task staging the Dockerfile beside the jar so the build
-  context is two files, not the whole repository. Rejected: the old multi-stage `Dockerfile.api`
+  context is two files, not the whole repository. Rejected: the old multi-stage `api.Dockerfile`
   that re-resolved the entire dependency tree inside the image build on every run (and had rotted
   unnoticed — see `incidents.adoc`).
 * **Migration and server start share one `CMD`.** A failed migration stops the container instead

@@ -38,7 +38,7 @@ view that means:
 
 | rqlite server (the custom production image)
 | `10.6.1`
-| `terraform/docker/rqlite/Dockerfile`, `FROM rqlite/rqlite:10.6.1`
+| `docker/rqlite.Dockerfile`, `FROM rqlite/rqlite:10.6.1`
 
 | JDBC driver
 | `io.rqlite:rqlite-jdbc:10.5.2.1`
@@ -58,7 +58,7 @@ view that means:
 |===
 
 IMPORTANT: The driver version tracks the server version. Moving one means moving the other —
-`terraform/docker/rqlite/Dockerfile`, `rqliteVersion` in `build.mill`, and the `rqlite-jdbc`
+`docker/rqlite.Dockerfile`, `rqliteVersion` in `build.mill`, and the `rqlite-jdbc`
 dependency are three pins on the same decision. Since rqlite 10.6.0 a failed statement carries
 SQLite result codes that only the 10.x driver decodes, which is what makes an error identifiable by
 code rather than by matching its text.

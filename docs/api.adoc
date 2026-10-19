@@ -75,12 +75,12 @@ See xref:database.adoc[Database].
 
 |`SERVER_DEV_MODE`
 |`server.dev-mode`
-|`true` in `application.conf`, `false` in `Dockerfile.api`
+|`true` in `application.conf`, `false` in `docker/api.Dockerfile`
 |Mounts the SPA catch-all, the dev static assets and the Scala.js linker output directories.
 
 |`SERVER_DEV_ENDPOINTS`
 |`server.dev-endpoints`
-|`true` in `application.conf`; a `Dockerfile.api` build arg defaulting to `false`
+|`true` in `application.conf`; a `docker/api.Dockerfile` build arg defaulting to `false`
 |Mounts `LocaleRoutes.devRoutes` (`POST /api/dev/reset-phase`).
 
 |`UNIFI_PROXY_URL`
@@ -404,7 +404,7 @@ a location checks `/<slug>/api/health`.
 `POST /api/dev/reset-phase` resolves the session, sets its phase back to `Phase.Welcome` and
 answers `StatusResponse(Welcome, locale)`. It is the sole member of `LocaleRoutes.devRoutes`, and
 `HttpApp.apiRoutes` appends `devRoutes` only when `ServerSettings.devEndpoints` is true
-(`server.dev-endpoints`, `SERVER_DEV_ENDPOINTS`). `Dockerfile.api` sets that build arg to `false`
+(`server.dev-endpoints`, `SERVER_DEV_ENDPOINTS`). `docker/api.Dockerfile` sets that build arg to `false`
 by default; the dev image sets it to `true`.
 
 The other dev surface — the SPA catch-all, `client/assets`, the linker output directories — is
@@ -752,7 +752,7 @@ they would in a request, and executes `ExpireAccessCommand` through the same cha
 * xref:unifi.adoc[UniFi integration] — the authorize/unauthorize calls behind `/api/finish`.
 * xref:event-sourcing.adoc[Event sourcing] — the handler chain and the event log.
 * xref:testing.adoc[Test strategy] — the suites under `api/test/`.
-* xref:infrastructure.adoc[Infrastructure] — `Dockerfile.api`, task definitions, the ALB and CDN.
+* xref:infrastructure.adoc[Infrastructure] — the images, task definitions, the ALB and CDN.
 * xref:development.adoc[Local development] — `mill api.dev`, the rqlite container, dev flags.
 * xref:context/decisions.adoc[Decisions], xref:context/incidents.adoc[Incidents],
   xref:context/pending.adoc[Pending work] — why the module looks like this.

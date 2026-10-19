@@ -24,7 +24,7 @@ refuses to open, and `.terraform.lock.hcl` records provider hashes from whicheve
 See xref:infrastructure.adoc[Infrastructure]. `cloudflared` is provisioned too, and nothing in this
 build or in any doc currently calls it. `languages.scala.mill.enable` is what puts a working `./mill`
 launcher in the repository root at shell-entry time — it is not a script checked into the repository,
-which is also why `Dockerfile.api`'s old two-stage build (described in
+which is also why `docker/api.Dockerfile`'s old two-stage build (described in
 xref:infrastructure.adoc[Infrastructure]) broke: it assumed a `mill` wrapper that only exists inside
 a devenv shell.
 
@@ -170,12 +170,14 @@ xref:mcp.adoc[MCP backoffice] for the tool catalogue.
 
 == Images
 
-`api.image`/`mcp.image` build the deployed images from an already-assembled jar (fast, and nothing
-re-resolves the dependency tree per build); `api.dockerBuildDev` builds the same image with
-`SERVER_DEV_ENDPOINTS=true` for exercising `/api/dev/reset-phase` without a full deploy; `imagePush`
-(on `mcp`) and `dockerPush` (on `api`) push a built image to a registry — against LocalStack, the one
-`tofu apply` created for the `local` environment. See xref:infrastructure.adoc[Infrastructure] for
-why these images are single-stage and why no tag defaults to `latest`.
+`api.image`, `mcp.image` and `rqlite.image` build the deployed images — the first two from an
+already-assembled jar, so nothing re-resolves the dependency tree per build. `api.image
+--devEndpoints true` builds the same image with `SERVER_DEV_ENDPOINTS=true`, for exercising
+`/api/dev/reset-phase` without a full deploy. `api.imagePush`, `mcp.imagePush` and `rqlite.imagePush`
+tag and push one to a registry — against LocalStack, the registry `tofu apply` created for the
+`local` environment, which is also where `rqlite.imagePush` runs on its own as part of that apply.
+See xref:infrastructure.adoc[Infrastructure] for why these images are single-stage and why no tag
+defaults to `latest`.
 
 == Client bundle and publishing
 
