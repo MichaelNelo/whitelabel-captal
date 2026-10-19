@@ -32,3 +32,9 @@ variable "cloudfront_host" {
   description = "CloudFront-fronted hostname devices are redirected to (e.g. 'staging.captal.centauroads.com'). The Lambda 302s here once the slug is resolved."
   type        = string
 }
+
+variable "rqlite_http_port" {
+  description = "Port rqlite serves its HTTP API on. Has to match the rqlite module's, or this Lambda queries a port nothing listens on."
+  type        = number
+  default     = 4001
+}

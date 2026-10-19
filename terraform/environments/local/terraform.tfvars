@@ -45,6 +45,14 @@ container_port = 8080
 image_tag        = "1.0.1"
 rqlite_image_tag = "1.0.5"
 
+# Off 4001/4002, which is where `mill api.dev` and `mill mcp.dev` run the plain rqlite container the
+# backoffice and the migrations talk to. LocalStack publishes an ECS task's ports on the host, so the
+# first cluster node to start would otherwise take that port and whichever of the two came second
+# would fail -- in either order, depending on nothing. The cluster does not need a host port at all:
+# its nodes find each other by service discovery inside LocalStack's own network.
+rqlite_http_port = 5001
+rqlite_raft_port = 5002
+
 # Three rqlite tasks on purpose: a real Raft quorum, so leadership, the backup that only the leader
 # takes, and a node coming back to an existing cluster are all exercisable locally instead of only
 # in a deployed environment. LocalStack runs an ECS task as a real container, which is what makes
