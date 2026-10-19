@@ -4,6 +4,19 @@ import javax.sql.DataSource
 
 import com.typesafe.config.ConfigFactory
 import io.getquill.jdbczio.Quill
+import whitelabel.captal.api.routes.{
+  AdvertiserSurveyRoutes,
+  FinishRoutes,
+  LocaleRoutes,
+  SurveyRoutes,
+  VideoRoutes
+}
+import whitelabel.captal.api.session.{
+  CurrentLocation,
+  SessionCookieConfig,
+  UserCookieConfig,
+  UserLookup
+}
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{
   Event,

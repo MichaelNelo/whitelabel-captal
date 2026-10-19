@@ -1,6 +1,8 @@
-package whitelabel.captal.api
+package whitelabel.captal.api.routes
 
+import whitelabel.captal.api.session.SessionCookieConfig
 import whitelabel.captal.api.wire.given
+import whitelabel.captal.api.SessionEndpoint
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.messages.{ApiError, SetLocaleRequest, StatusResponse}

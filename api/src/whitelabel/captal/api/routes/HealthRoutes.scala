@@ -1,4 +1,4 @@
-package whitelabel.captal.api
+package whitelabel.captal.api.routes
 
 import zio.*
 import zio.http.endpoint.Endpoint

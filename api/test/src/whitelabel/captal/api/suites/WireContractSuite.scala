@@ -4,7 +4,7 @@ import java.time.LocalDate
 
 import io.circe.syntax.*
 import io.circe.{Decoder as CirceDecoder, Encoder as CirceEncoder}
-import whitelabel.captal.api.Main
+import whitelabel.captal.api.HttpApp
 import whitelabel.captal.api.wire.given
 import whitelabel.captal.core.application.commands.{NextIdentificationSurvey, NextVideo}
 import whitelabel.captal.core.application.{IdentificationSurveyType, NextStep, Phase}
@@ -81,11 +81,11 @@ object WireContractSuite:
     * the server omitted entirely and circe's derived decoder requires — looked fine here while
     * three E2E tests failed on it.
     *
-    * Reading `Main.codecConfig` is what keeps that from recurring. A copy of the value would agree
-    * with the server today and drift silently the first time one of them changed.
+    * Reading `HttpApp.codecConfig` is what keeps that from recurring. A copy of the value would
+    * agree with the server today and drift silently the first time one of them changed.
     */
   private val config = JsonCodec.Config(ignoreEmptyCollections =
-    Main.codecConfig.ignoreEmptyCollections)
+    HttpApp.codecConfig.ignoreEmptyCollections)
 
   private def zioWrites[A: Schema](value: A): String =
     JsonCodec.jsonEncoder(config)(summon[Schema[A]]).encodeJson(value, None).toString

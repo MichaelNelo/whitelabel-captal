@@ -1,544 +1,26 @@
 package whitelabel.captal.api
 
-import com.typesafe.config.ConfigFactory
-import io.getquill.jdbczio.Quill
-import whitelabel.captal.core.application.commands.*
-import whitelabel.captal.core.application.{
-  Event,
-  EventHandler,
-  FallbackPhase,
-  Flow,
-  NextStep,
-  Phase
+import whitelabel.captal.api.routes.{
+  AdvertiserSurveyRoutes,
+  FinishRoutes,
+  LocaleRoutes,
+  SurveyRoutes,
+  VideoRoutes
 }
-import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository, VideoRepository}
-import whitelabel.captal.platform.eventhandlers.{
-  AnswerPersistenceHandler,
-  DbEventHandler,
-  EventLogHandler,
-  SessionExpirationHandler,
-  SessionPhaseHandler,
-  SessionSurveyHandler,
-  SessionVideoHandler,
-  SurveyProgressHandler,
-  TransactionalEventHandler,
-  UnifiAccessHandler,
-  UserPersistenceHandler
-}
-import whitelabel.captal.platform.repositories.{
-  SurveyRepositoryQuill,
-  UserRepositoryQuill,
-  VideoRepositoryQuill
-}
-import whitelabel.captal.platform.schema.QuillSqlite
-import whitelabel.captal.platform.services.{LocaleService, LocaleServiceQuill, LocationService}
-import whitelabel.captal.platform.session.{JobQueue, JobRunner, SessionContext, SessionService}
-import whitelabel.captal.platform.{RqliteDataSource, UnifiAccess, UnifiClient}
+import whitelabel.captal.api.session.SessionCookieConfig
+import whitelabel.captal.platform.session.JobRunner
 import zio.*
-import zio.http.*
-import zio.http.codec.{CodecConfig, PathCodec}
-import zio.interop.catz.*
+import zio.http.Server
 
+/** Starts the portal's API.
+  *
+  * Only startup, which is what the name promises. The server used to be one 596-line object: the
+  * configuration, the phase pipeline, eleven flow layers, the layer composition and the route
+  * assembly, all under `object Main`. Each of those is now the file it was already a commented
+  * section of — `ServerSettings`, `Phases`, `Flows`, `AppLayers`, `HttpApp` — so this reads as the
+  * sequence it is: resolve the settings, start the scheduler, log what is mounted, serve.
+  */
 object Main extends ZIOAppDefault:
-
-  // ─── Configuration ───────────────────────────────────────────────────────────
-
-  private case class ServerSettings(
-      config: Server.Config,
-      devMode: Boolean,
-      devEndpoints: Boolean,
-      locationSlug: Option[String],
-      provisionDir: Option[String],
-      sharedDir: Option[String],
-      unifiProxyUrl: Option[String])
-
-  private val serverSettingsLayer: ZLayer[Any, Throwable, ServerSettings] = ZLayer.fromZIO:
-    ZIO.attempt:
-      val c = ConfigFactory.load()
-      ServerSettings(
-        config = Server.Config.default.binding(c.getString("server.host"), c.getInt("server.port")),
-        devMode = c.getBoolean("server.dev-mode"),
-        devEndpoints = c.getBoolean("server.dev-endpoints"),
-        locationSlug = Option(c.getString("location.slug")).filter(_.nonEmpty),
-        provisionDir = Option(c.getString("provision.dir")).filter(_.nonEmpty),
-        sharedDir = Option(c.getString("shared.dir")).filter(_.nonEmpty),
-        unifiProxyUrl = Option(c.getString("unifi.proxy-url")).filter(_.nonEmpty)
-      )
-
-  // ─── Phase pipeline ───────────────────────────────────────────────────────────
-  // Two kinds of transitions:
-  //   - `nextAfterX: NextStep` — emitted on success by Answer*/MarkVideoWatched
-  //     handlers; also serialized to the client as the response body.
-  //   - `fallbackFromX: FallbackPhase` — destination for Provide* handlers when
-  //     no resource (survey/video) is available for the current location, so
-  //     the user falls back to the next stop in the pipeline.
-
-  private val nextAfterIdentification: NextStep = NextStep(Phase.AdvertiserVideo)
-  private val nextAfterVideo: NextStep = NextStep(Phase.AdvertiserVideoSurvey)
-  private val nextAfterAdvertiserSurvey: NextStep = NextStep(Phase.Ready)
-
-  private val fallbackFromIdentification: FallbackPhase = FallbackPhase(Phase.AdvertiserVideo)
-
-  /** No user and no identification survey means the deployment cannot identify anyone. Sending the
-    * visitor on to the video would hand out access for nothing, so the flow ends here instead.
-    */
-  private val unidentifiableFallback: FallbackPhase = FallbackPhase(Phase.Ready)
-  private val fallbackFromVideo: FallbackPhase = FallbackPhase(Phase.Ready)
-  private val fallbackFromAdvertiserSurvey: FallbackPhase = FallbackPhase(Phase.Ready)
-
-  // ─── Location-aware layers ────────────────────────────────────────────────────
-
-  private def resolveLocationId: ZIO[ServerSettings & LocationService, Throwable, Option[String]] =
-    ZIO.serviceWithZIO[ServerSettings]: settings =>
-      settings.locationSlug match
-        case None =>
-          ZIO.succeed(None)
-        case Some(slug) =>
-          LocationService
-            .resolveSlug(slug)
-            .tapError(e => ZIO.logError(s"Configuration error: ${e.getMessage}"))
-            .tap(id => ZIO.logInfo(s"Resolved location slug '$slug' -> $id"))
-            .map(Some(_))
-
-  private val sessionServiceLayer
-      : ZLayer[QuillSqlite & LocationService & ServerSettings, Throwable, SessionService] = ZLayer
-    .fromZIO:
-      for
-        quill      <- ZIO.service[QuillSqlite]
-        locationId <- resolveLocationId
-      yield SessionService(quill, locationId)
-
-  private val localeServiceLayer
-      : ZLayer[QuillSqlite & LocationService & ServerSettings, Throwable, LocaleService] = ZLayer
-    .fromZIO:
-      for
-        quill      <- ZIO.service[QuillSqlite]
-        locationId <- resolveLocationId
-      yield LocaleServiceQuill(quill, locationId)
-
-  // ─── Event handling & flows ───────────────────────────────────────────────────
-
-  private val eventHandlerLayer: ZLayer[
-    QuillSqlite & SessionContext & CurrentLocation & SessionService & UnifiClient & JobQueue,
-    Nothing,
-    EventHandler[Task, Event]] = ZLayer.fromFunction:
-    (
-        quill: QuillSqlite,
-        ctx: SessionContext,
-        currentLocation: CurrentLocation,
-        sessionService: SessionService,
-        unifiClient: UnifiClient,
-        jobQueue: JobQueue) =>
-      val dbHandler = EventLogHandler(ctx)
-        .andThen(AnswerPersistenceHandler(ctx))
-        .andThen(UserPersistenceHandler(ctx))
-        .andThen(SessionPhaseHandler(ctx, nextAfterIdentification.phase, nextAfterVideo.phase))
-        .andThen(SessionSurveyHandler(ctx))
-        .andThen(SessionVideoHandler(ctx))
-        .andThen(SessionExpirationHandler(ctx))
-        .andThen(SurveyProgressHandler())
-      val transactional = TransactionalEventHandler(dbHandler, quill)
-      val unifiAccess = UnifiAccessHandler(
-        currentLocation.unifi,
-        ctx,
-        sessionService,
-        unifiClient,
-        jobQueue)
-      // unifiAccess corre POST-commit; cualquier fallo HTTP no impacta el chain transaccional.
-      transactional.andThen(unifiAccess)
-
-  private val answerEmailFlowLayer: ZLayer[SurveyRepository[
-    Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, AnswerEmailCommand, NextStep]] =
-    ZLayer.fromFunction:
-      (surveyRepo: SurveyRepository[Task], eventHandler: EventHandler[Task, Event]) =>
-        Flow(AnswerEmailHandler(surveyRepo, nextAfterIdentification), eventHandler)
-
-  private val answerProfilingFlowLayer: ZLayer[
-    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
-    Nothing,
-    Flow.Aux[Task, AnswerProfilingCommand, NextStep]] = ZLayer.fromFunction:
-    (
-        surveyRepo: SurveyRepository[Task],
-        userRepo: UserRepository[Task],
-        eventHandler: EventHandler[Task, Event]) =>
-      Flow(AnswerProfilingHandler(surveyRepo, userRepo, nextAfterIdentification), eventHandler)
-
-  private val answerLocationFlowLayer: ZLayer[
-    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
-    Nothing,
-    Flow.Aux[Task, AnswerLocationCommand, NextStep]] = ZLayer.fromFunction:
-    (
-        surveyRepo: SurveyRepository[Task],
-        userRepo: UserRepository[Task],
-        eventHandler: EventHandler[Task, Event]) =>
-      Flow(AnswerLocationHandler(surveyRepo, userRepo, nextAfterIdentification), eventHandler)
-
-  private val nextSurveyFlowLayer: ZLayer[
-    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
-    Nothing,
-    Flow.Aux[
-      Task,
-      ProvideNextIdentificationSurveyCommand,
-      ProvideNextIdentificationSurveyHandler.Response]
-  ] = ZLayer.fromFunction:
-    (
-        surveyRepo: SurveyRepository[Task],
-        userRepo: UserRepository[Task],
-        eventHandler: EventHandler[Task, Event]) =>
-      Flow(
-        ProvideNextIdentificationSurveyHandler(
-          surveyRepo,
-          userRepo,
-          fallbackFromIdentification,
-          unidentifiableFallback),
-        eventHandler)
-
-  private val nextVideoFlowLayer: ZLayer[
-    VideoRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
-    Nothing,
-    Flow.Aux[Task, ProvideNextVideoCommand, ProvideNextVideoHandler.Response]] = ZLayer
-    .fromFunction:
-      (
-          videoRepo: VideoRepository[Task],
-          userRepo: UserRepository[Task],
-          eventHandler: EventHandler[Task, Event]) =>
-        Flow(ProvideNextVideoHandler(videoRepo, userRepo, fallbackFromVideo), eventHandler)
-
-  private val nextAdvertiserSurveyFlowLayer: ZLayer[
-    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
-    Nothing,
-    Flow.Aux[Task, ProvideNextAdvertiserSurveyCommand, ProvideNextAdvertiserSurveyHandler.Response]
-  ] = ZLayer.fromFunction:
-    (
-        surveyRepo: SurveyRepository[Task],
-        userRepo: UserRepository[Task],
-        eventHandler: EventHandler[Task, Event]) =>
-      Flow(
-        ProvideNextAdvertiserSurveyHandler(surveyRepo, userRepo, fallbackFromAdvertiserSurvey),
-        eventHandler)
-
-  private val answerAdvertiserFlowLayer: ZLayer[
-    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
-    Nothing,
-    Flow.Aux[Task, AnswerAdvertiserCommand, NextStep]] = ZLayer.fromFunction:
-    (
-        surveyRepo: SurveyRepository[Task],
-        userRepo: UserRepository[Task],
-        eventHandler: EventHandler[Task, Event]) =>
-      Flow(AnswerAdvertiserHandler(surveyRepo, userRepo, nextAfterAdvertiserSurvey), eventHandler)
-
-  private val finishFlowLayer: ZLayer[UserRepository[
-    Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, FinishCommand, Unit]] = ZLayer
-    .fromFunction: (userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
-      Flow(FinishHandler(userRepo), eventHandler)
-
-  /** Counterpart of [[finishFlowLayer]]: executed by the `JobRunner` when an access expires, not by
-    * an endpoint. It depends on `eventHandlerLayer` — which is why the scheduler is split into
-    * `JobQueue` (producer, no dependencies) and `JobRunner` (consumer), keeping the graph acyclic.
-    */
-  private val expireAccessFlowLayer: ZLayer[UserRepository[
-    Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, ExpireAccessCommand, Unit]] = ZLayer
-    .fromFunction: (userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
-      Flow(ExpireAccessHandler(userRepo), eventHandler)
-
-  private val markVideoWatchedFlowLayer: ZLayer[
-    VideoRepository[Task] & SessionContext & EventHandler[Task, Event],
-    Nothing,
-    Flow.Aux[Task, MarkVideoWatchedCommand, NextStep]] = ZLayer.fromFunction:
-    (
-        videoRepo: VideoRepository[Task],
-        ctx: SessionContext,
-        eventHandler: EventHandler[Task, Event]) =>
-      import zio.interop.catz.given
-      new Flow[Task, MarkVideoWatchedCommand]:
-        type Result = NextStep
-        def execute(command: MarkVideoWatchedCommand): Task[NextStep] =
-          for
-            session <- ctx.getOrFail
-            handler = MarkVideoWatchedHandler.withSession(videoRepo, session, nextAfterVideo)
-            opResult <- handler.handle(command)
-            result   <- ZIO.fromEither(
-              whitelabel.captal.core.Op.run(opResult).left.map(Flow.HandlerError(_)))
-            (events, value) = result
-            _ <- eventHandler.handle(events)
-          yield value
-
-  // ─── Session cookie config (per-location naming/path) ─────────────────────────
-
-  private val sessionCookieConfigLayer: ZLayer[ServerSettings, Nothing, SessionCookieConfig] =
-    ZLayer.fromFunction((s: ServerSettings) => SessionCookieConfig.fromSlug(s.locationSlug))
-
-  // ─── UniFi HTTP client (trust-all + optional proxy) ───────────────────────────
-
-  private val unifiHttpClientLayer: ZLayer[ServerSettings, Throwable, Client] = ZLayer
-    .service[ServerSettings]
-    .flatMap(env => UnifiClient.trustAllClientLayer(env.get.unifiProxyUrl))
-
-  // ─── Current location snapshot (for soft-validation of AP MAC, etc.) ──────────
-
-  private val currentLocationLayer
-      : ZLayer[ServerSettings & LocationService, Throwable, CurrentLocation] = ZLayer.fromZIO:
-    for
-      settings <- ZIO.service[ServerSettings]
-      locSvc   <- ZIO.service[LocationService]
-      cl       <-
-        settings.locationSlug match
-          case None =>
-            ZIO.succeed(CurrentLocation.empty)
-          case Some(s) =>
-            locSvc
-              .findBySlug(s)
-              .someOrFail(LocationService.LocationNotFound(s))
-              .map: row =>
-                CurrentLocation(
-                  Some(row.id),
-                  Some(row.slug),
-                  row.unifiApMac,
-                  UnifiAccess.fromRow(row))
-    yield cl
-
-  // ─── Routes ───────────────────────────────────────────────────────────────────
-
-  type FullEnv =
-    SessionContext & SessionService & LocaleService & QuillSqlite & SessionCookieConfig &
-      CurrentLocation & UserCookieConfig & UserLookup & SurveyRoutes & LocaleRoutes & VideoRoutes &
-      AdvertiserSurveyRoutes & FinishRoutes & SurveyRoutes.AnswerEmailFlowType &
-      SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
-      SurveyRoutes.NextSurveyFlowType & VideoRoutes.NextVideoFlowType &
-      VideoRoutes.MarkVideoWatchedFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
-      AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType
-
-  private def loggingMiddleware[R]: Middleware[R] =
-    new Middleware[R]:
-      def apply[Env1 <: R, Err](routes: Routes[Env1, Err]): Routes[Env1, Err] = routes.transform[
-        Env1]: handler =>
-        zio
-          .http
-          .Handler
-          .fromFunctionZIO[Request]: request =>
-            val startTime = java.lang.System.currentTimeMillis()
-            handler
-              .runZIO(request)
-              .tap: response =>
-                val duration = java.lang.System.currentTimeMillis() - startTime
-                ZIO.logInfo(
-                  s"${request.method} ${request.url.path} -> ${response
-                      .status
-                      .code} (${duration}ms)")
-              .tapError: error =>
-                val duration = java.lang.System.currentTimeMillis() - startTime
-                ZIO.logError(
-                  s"${request.method} ${request.url.path} -> ERROR (${duration}ms): $error")
-
-  /** Under the slug as well as at the root, because `index.html` sets `<base href="/<slug>/">` and
-    * its `./brand-icon.svg` resolves against it. In production that is right -- the assets live at
-    * `<slug>/` in S3 -- so dev has to answer there too or the icon is a broken image.
-    */
-  private def devStaticRoutes(locationSlug: Option[String]): Routes[Any, Response] =
-    val styles = zio.http.Handler.fromFile(java.io.File("client/assets/styles.css"))
-    val icon = zio.http.Handler.fromFile(java.io.File("client/assets/brand-icon.svg"))
-    val atRoot = Routes(
-      Method.GET / "assets" / "styles.css" -> styles,
-      Method.GET / "brand-icon.svg"        -> icon)
-    val all =
-      locationSlug.fold(atRoot): slug =>
-        atRoot ++
-          Routes(
-            Method.GET / slug / "assets" / "styles.css" -> styles,
-            Method.GET / slug / "brand-icon.svg"        -> icon)
-    all.handleError(e => Response.internalServerError(e.getMessage))
-
-  /** The linker's output directories, served whole.
-    *
-    * These used to be four routes naming `main.js` and its source map, from when the client linked
-    * to a single file. It does not any more: `ModuleKind.ESModule` with `SmallModulesFor` emits one
-    * module per class -- 169 of them at the time of writing -- and `main.js` pulls the rest in by
-    * relative path. Naming files here meant every one of those imports 404'd and the client never
-    * booted, while `main.js` itself still served 200 and made it look like the build was fine.
-    *
-    * Both directories, so dev can run against either build: `fastLinkJS.dest` is what `api.dev`
-    * renders `index.html` against by default because it links in about a second, and `bundle.dest`
-    * is the real artefact -- Vite, terser, hashed chunk names -- for when the question is about the
-    * thing production actually serves.
-    */
-  private def devLinkerOutput(routes: Routes[FullEnv, Response]): Routes[FullEnv, Response] =
-    Seq("fastLinkJS.dest", "bundle.dest").foldLeft(routes): (acc, dir) =>
-      acc @@
-        Middleware.serveDirectory(
-          Path.empty / "out" / "client" / dir,
-          java.io.File(s"out/client/$dir"))
-
-  private def spaCatchAllRoutes(locationSlug: Option[String]): Routes[Any, Response] =
-    val serveIndex = zio
-      .http
-      .Handler
-      .fromFunctionZIO[Request]: _ =>
-        ZIO
-          .attemptBlocking(
-            java.nio.file.Files.readAllBytes(java.io.File("client/index.html").toPath))
-          .map(bytes =>
-            Response(
-              body = Body.fromArray(bytes),
-              headers = Headers(Header.ContentType(MediaType.text.html))))
-          .orElse(ZIO.succeed(Response.notFound))
-    val atRoot = Routes(
-      Method.GET / ""         -> serveIndex,
-      Method.GET / "question" -> serveIndex,
-      Method.GET / "video"    -> serveIndex,
-      Method.GET / "survey"   -> serveIndex,
-      Method.GET / "ready"    -> serveIndex
-    )
-    // Also under the slug, because that is where the API is. `endpoints` prefixes every route with
-    // the location slug when one is configured, and `api.dev` always configures one -- so a page
-    // served from `/` computes `apiBase = "/api"` (ApiClient takes the first path segment) and
-    // every call 404s. Serving it from `/<slug>/` too is what production does: CloudFront puts the
-    // portal at `/<slug>/` and the ALB takes `/<slug>/api/*`.
-    locationSlug.fold(atRoot): slug =>
-      atRoot ++
-        Routes(
-          Method.GET / slug              -> serveIndex,
-          Method.GET / slug / "question" -> serveIndex,
-          Method.GET / slug / "video"    -> serveIndex,
-          Method.GET / slug / "survey"   -> serveIndex,
-          Method.GET / slug / "ready"    -> serveIndex
-        )
-  end spaCatchAllRoutes
-
-  /** How this server serialises, which is part of its wire format and not an implementation detail.
-    *
-    * zio-http's default sets `ignoreEmptyCollections = true`, so a `List` field with nothing in it
-    * disappears from the response. circe's derived decoder has no default to fall back on, so an
-    * absent field is a decode failure rather than an empty list: a radio question whose options had
-    * all been retired answered 200 with `{"Radio":{}}`, and the SPA could not read it.
-    *
-    * Three E2E tests caught that and `WireContractSuite` did not, which is the more useful half of
-    * the lesson. That suite had been encoding through `JsonCodec.jsonEncoder` with no config, where
-    * zio-schema's own default is the opposite — `false` — so it was comparing two libraries through
-    * a setting the server does not use, and an empty list looked fine in both. It reads this value
-    * now, rather than declaring its own, so the format it checks is the format being served.
-    */
-  val codecConfig: CodecConfig = CodecConfig(ignoreEmptyCollections = false)
-
-  /** Every route, under the location slug when there is one.
-    *
-    * The slug prefix is applied once, here, to all of them. It used to be tapir's — `endpoints`
-    * called `prependSecurityIn(slug)` on every endpoint it interpreted — and a route that converted
-    * left that list and lost it. `HealthRoutes` spent a commit that way: a live regression and an
-    * invisible one, since `Deploy.healthCheckPath` registers each location's target group against
-    * `/<slug>/api/health` and a 404 there is an unhealthy task. Only in production, where
-    * `LOCATION_SLUG` is set; the suite runs without one, so nothing in it could fail.
-    */
-  private def apiRoutes(
-      devEndpoints: Boolean,
-      locationSlug: Option[String],
-      surveyRoutes: SurveyRoutes,
-      localeRoutes: LocaleRoutes,
-      videoRoutes: VideoRoutes,
-      advertiserSurveyRoutes: AdvertiserSurveyRoutes,
-      finishRoutes: FinishRoutes): Routes[FullEnv, Nothing] =
-    val base =
-      HealthRoutes.routes ++ finishRoutes.routes ++ localeRoutes.routes ++ videoRoutes.routes ++
-        surveyRoutes.routes ++ advertiserSurveyRoutes.routes
-    val all =
-      if devEndpoints then
-        base ++ localeRoutes.devRoutes
-      else
-        base
-    val prefixed = locationSlug.fold(all)(slug => all.nest(PathCodec.literal(slug)))
-    prefixed @@ CodecConfig.withConfig(codecConfig)
-  end apiRoutes
-
-  private def routes(
-      devMode: Boolean,
-      devEndpoints: Boolean,
-      locationSlug: Option[String],
-      surveyRoutes: SurveyRoutes,
-      localeRoutes: LocaleRoutes,
-      videoRoutes: VideoRoutes,
-      advertiserSurveyRoutes: AdvertiserSurveyRoutes,
-      finishRoutes: FinishRoutes): Routes[FullEnv, Response] =
-    val served = apiRoutes(
-      devEndpoints,
-      locationSlug,
-      surveyRoutes,
-      localeRoutes,
-      videoRoutes,
-      advertiserSurveyRoutes,
-      finishRoutes)
-    val baseRoutes =
-      if devMode then
-        devLinkerOutput(devStaticRoutes(locationSlug) ++ served ++ spaCatchAllRoutes(locationSlug))
-      else
-        served
-    baseRoutes @@ loggingMiddleware
-  end routes
-
-  // ─── App layer composition ────────────────────────────────────────────────────
-
-  /** Reads the locations the backoffice writes, and provisions nothing.
-    *
-    * This layer used to apply the YAML under `PROVISION_DIR` before resolving a slug, which made
-    * starting a container a write to the database — on every deploy, scale-out, task replacement
-    * and OOM restart. Once the backoffice writes those same tables, that makes the result of an
-    * edit a function of when a container last happened to start: an untouched YAML leaves it alone,
-    * an edited one overwrites it, and a lost `provision_manifest` re-creates the location from disk
-    * and sets every `is_active` back to 1. Not "the file wins" or "the tool wins" — whichever ran
-    * last, for reasons unrelated to either.
-    *
-    * So the data stops travelling with the artifact, which was the point of the migration rather
-    * than a detail of it. Content is edited through the MCP server and read from here, and updating
-    * the system becomes re-deploying an image instead of re-applying a directory.
-    *
-    * `LOCATION_SLUG` still does real work: it names which location this task serves.
-    * `PROVISION_DIR` and `SHARED_DIR` are now read and ignored, and the task definitions that set
-    * them should drop them — a variable that configures nothing is a promise that something still
-    * reads it.
-    */
-  private val locationServiceLayer: ZLayer[QuillSqlite, Nothing, LocationService] = ZLayer.fromZIO:
-    ZIO.serviceWith[QuillSqlite](LocationService(_))
-
-  /** `JobRunner` sits outside `FullEnv` on purpose: it is consumed by `run` to start the scheduler
-    * fibers, not by the endpoints, so it has no business in the routes' environment.
-    */
-  private val appLayers: ZLayer[ServerSettings, Throwable, FullEnv & Server.Config & JobRunner] =
-    ZLayer.makeSome[ServerSettings, FullEnv & Server.Config & JobRunner](
-      SessionContext.make,
-      RqliteDataSource.layer,
-      Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase),
-      locationServiceLayer,
-      sessionServiceLayer,
-      localeServiceLayer,
-      sessionCookieConfigLayer,
-      currentLocationLayer,
-      UserCookieConfig.layer,
-      UserLookup.layer,
-      SurveyRoutes.layer,
-      LocaleRoutes.layer,
-      VideoRoutes.layer,
-      AdvertiserSurveyRoutes.layer,
-      FinishRoutes.layer,
-      SurveyRepositoryQuill.layer,
-      UserRepositoryQuill.layer,
-      VideoRepositoryQuill.layer,
-      unifiHttpClientLayer,
-      UnifiClient.layer,
-      eventHandlerLayer,
-      answerEmailFlowLayer,
-      answerProfilingFlowLayer,
-      answerLocationFlowLayer,
-      nextSurveyFlowLayer,
-      nextVideoFlowLayer,
-      markVideoWatchedFlowLayer,
-      nextAdvertiserSurveyFlowLayer,
-      answerAdvertiserFlowLayer,
-      finishFlowLayer,
-      expireAccessFlowLayer,
-      JobQueue.layer,
-      JobRunner.layer,
-      ZLayer.fromFunction((s: ServerSettings) => s.config)
-    )
-
-  // ─── Startup ──────────────────────────────────────────────────────────────────
 
   override val run: ZIO[Any, Throwable, Nothing] =
     val program =
@@ -559,10 +41,8 @@ object Main extends ZIOAppDefault:
         advertiserSurveyRoutes <- ZIO.service[AdvertiserSurveyRoutes]
         finishRoutes           <- ZIO.service[FinishRoutes]
         cookieConfig           <- ZIO.service[SessionCookieConfig]
-        // One list again, now that there is one library. This was two halves joined for the
-        // duration of the migration, so that a route leaving tapir did not quietly drop out of the
-        // startup log.
-        mounted = apiRoutes(
+        served = HttpApp.routes(
+          settings.devMode,
           settings.devEndpoints,
           settings.locationSlug,
           surveyRoutes,
@@ -570,27 +50,32 @@ object Main extends ZIOAppDefault:
           videoRoutes,
           advertiserSurveyRoutes,
           finishRoutes)
-        routeInfos = mounted.routes.map(route => s"  ${route.routePattern.render}").toList
-        _ <- ZIO.logInfo(
-          s"Server starting on ${settings.config.address.getHostString}:${settings
-              .config
-              .address
-              .getPort}")
-        _ <- ZIO.logInfo(s"Dev mode: ${settings.devMode}, Dev endpoints: ${settings.devEndpoints}")
-        _ <- ZIO.logInfo(s"Session cookie: ${cookieConfig.name} (path=${cookieConfig.path})")
-        _ <- ZIO.logInfo(s"Mounted routes:\n${routeInfos.mkString("\n")}")
-        result <- Server.serve(
-          routes(
-            settings.devMode,
+        // The API half of `served`, enumerated for the log. One list, now that there is one
+        // library — it was two halves joined for the duration of the tapir migration, so that a
+        // route leaving tapir did not quietly drop out of this.
+        routeInfos = HttpApp
+          .apiRoutes(
             settings.devEndpoints,
             settings.locationSlug,
             surveyRoutes,
             localeRoutes,
             videoRoutes,
             advertiserSurveyRoutes,
-            finishRoutes))
+            finishRoutes)
+          .routes
+          .map(route => s"  ${route.routePattern.render}")
+          .toList
+        _ <- ZIO.logInfo(
+          s"Server starting on ${settings.config.address.getHostString}:${settings
+              .config
+              .address
+              .getPort}")
+        _      <- ZIO.logInfo(s"Dev mode: ${settings.devMode}, Dev endpoints: ${settings.devEndpoints}")
+        _      <- ZIO.logInfo(s"Session cookie: ${cookieConfig.name} (path=${cookieConfig.path})")
+        _      <- ZIO.logInfo(s"Mounted routes:\n${routeInfos.mkString("\n")}")
+        result <- Server.serve(served)
       yield result
-    program.provide(serverSettingsLayer, Server.live, appLayers)
+    program.provide(ServerSettings.layer, Server.live, AppLayers.appLayers)
   end run
 
 end Main

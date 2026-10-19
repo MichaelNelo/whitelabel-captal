@@ -3,6 +3,14 @@ package whitelabel.captal.api
 import io.circe.parser.decode
 import io.circe.syntax.*
 import sttp.client3.*
+import whitelabel.captal.api.routes.{
+  AdvertiserSurveyRoutes,
+  FinishRoutes,
+  HealthRoutes,
+  LocaleRoutes,
+  SurveyRoutes,
+  VideoRoutes
+}
 import sttp.client3.testing.SttpBackendStub
 import sttp.monad.MonadError
 import whitelabel.captal.core.application.commands.{
@@ -73,11 +81,11 @@ object TestHelpers:
     * request and zio-http's.
     */
   private def serveZioHttp(routes: zio.http.Routes[Any, Nothing]): SttpBackend[Task, Any] =
-    // The server's own `CodecConfig`, not a copy of it — see the note on `Main.codecConfig`.
+    // The server's own `CodecConfig`, not a copy of it — see the note on `HttpApp.codecConfig`.
     // Without it these suites would be reading a wire format the deployed server does not produce,
     // which is how an empty `options` list came to vanish from a radio question's response while
     // every test stayed green.
-    val served = routes @@ CodecConfig.withConfig(Main.codecConfig)
+    val served = routes @@ CodecConfig.withConfig(HttpApp.codecConfig)
     SttpBackendStub[Task, Any](taskMonadError)
       .whenAnyRequest
       .thenRespondF: request =>

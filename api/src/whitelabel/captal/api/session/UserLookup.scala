@@ -1,4 +1,4 @@
-package whitelabel.captal.api
+package whitelabel.captal.api.session
 
 import io.getquill.*
 import whitelabel.captal.core.user

@@ -1,4 +1,4 @@
-package whitelabel.captal.api
+package whitelabel.captal.api.session
 
 import whitelabel.captal.platform.UnifiAccess
 import whitelabel.captal.platform.services.LocationService

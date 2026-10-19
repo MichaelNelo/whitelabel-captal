@@ -1,6 +1,13 @@
-package whitelabel.captal.api
+package whitelabel.captal.api.routes
 
+import whitelabel.captal.api.session.{
+  CurrentLocation,
+  SessionCookieConfig,
+  UserCookieConfig,
+  UserLookup
+}
 import whitelabel.captal.api.wire.given
+import whitelabel.captal.api.{ApiErrors, SessionEndpoint}
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Flow, NextStep, Phase}
 import whitelabel.captal.core.user
