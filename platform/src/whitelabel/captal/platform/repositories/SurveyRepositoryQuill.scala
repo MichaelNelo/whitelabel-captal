@@ -197,6 +197,7 @@ object SurveyRepositoryQuill:
                 lift(questionIdStr + "_desc"),
                 lift(questionIdStr + "_placeholder"),
                 lift(sessionData.locale)))
+            _ <- warnUnreadableRules(rows)
           yield
             val result: Option[Survey[State.WithLocationQuestion]] =
               for
@@ -227,6 +228,7 @@ object SurveyRepositoryQuill:
                 lift(questionIdStr + "_desc"),
                 lift(questionIdStr + "_placeholder"),
                 lift(sessionData.locale)))
+            _ <- warnUnreadableRules(rows)
           yield
             val result: Option[Survey[State.WithAdvertiserQuestion]] =
               for
@@ -271,6 +273,7 @@ object SurveyRepositoryQuill:
               lift(questionIdStr + "_desc"),
               lift(questionIdStr + "_placeholder"),
               lift(sessionData.locale)))
+          _ <- warnUnreadableRules(rows)
         yield
           for
             first    <- rows.headOption
@@ -323,6 +326,7 @@ object SurveyRepositoryQuill:
               lift(questionIdStr + "_desc"),
               lift(questionIdStr + "_placeholder"),
               lift(sessionData.locale)))
+          _ <- warnUnreadableRules(rows)
         yield
           for
             first    <- rows.headOption
@@ -345,6 +349,7 @@ object SurveyRepositoryQuill:
                 lift(questionIdStr + "_desc"),
                 lift(questionIdStr + "_placeholder"),
                 lift(sessionData.locale)))
+            _ <- warnUnreadableRules(rows)
           yield
             for
               first <- rows.headOption
@@ -433,16 +438,68 @@ object SurveyRepositoryQuill:
     * Through `surveySchemas`, which is what writes that column too. Before, this was a circe
     * decoder here and string interpolation there, agreeing by nobody's enforcement.
     *
-    * A row that will not decode is dropped, and dropped silently — unchanged from the `.toOption`
-    * this replaces, and worth stating plainly because it is not a safe default. A rule that fails
-    * to decode is a validation that stops being applied, and a validation that is not applied looks
-    * exactly like one that passed: no error, no log line, no record of which question lost which
-    * rule. Fixing it means carrying the reason out to where an effect can log it, through
-    * `parseQuestionType` and `buildQuestionToAnswer`, both of which are pure — a change worth
-    * making on its own rather than inside this one.
+    * A row that will not decode is still dropped — a question with one unreadable rule is better
+    * asked than withheld — but it is no longer dropped in silence: `unreadableRules` names every
+    * one of them and the five callers log it. That matters because a rule that fails to decode is a
+    * validation that stops being applied, and a validation that is not applied looks exactly like
+    * one that passed.
     */
   private def decodeRules[R: Schema](rules: List[QuestionRuleRow]): List[R] = rules.flatMap(row =>
     surveySchemas.decode[R](row.ruleConfig).toOption)
+
+  /** Every rule row here that will not reach the guest, and why.
+    *
+    * Three ways a rule disappears, and `parseQuestionType` is silent about all three: the config
+    * does not decode against its question's rule type; the question's type takes no rules at all,
+    * so a row attached to it is ignored whatever it says; or the type string itself is unknown, in
+    * which case the question becomes a plain input and every rule goes with it.
+    *
+    * Decoding a second time rather than threading the reasons out of `decodeRules`. That function
+    * is pure and sits under two more pure functions whose five callers destructure the result
+    * inside `Option` comprehensions — carrying a `List[String]` through that shape costs more than
+    * reading at most a handful of rule rows twice, on a path that already ran a six-way join.
+    */
+  private def unreadableRules(rows: List[QuestionWithDetails]): List[String] =
+    def reasons[R: Schema](rules: List[QuestionRuleRow]): List[String] = rules.flatMap: row =>
+      surveySchemas
+        .decode[R](row.ruleConfig)
+        .left
+        .toOption
+        .map(problem => s"rule ${row.id} does not decode ($problem), config was ${row.ruleConfig}")
+
+    rows
+      .map(_.question)
+      .distinctBy(_.id)
+      .flatMap: questionRow =>
+        val rules = rows
+          .filter(_.question.id == questionRow.id)
+          .flatMap(_.rule)
+          .distinctBy(_.id)
+        val problems =
+          questionRow.questionType match
+            case "checkbox" =>
+              reasons[SelectionRule](rules)
+            case "input" =>
+              reasons[TextRule](rules)
+            case "rating" =>
+              reasons[RangeRule[Int]](rules)
+            case "numeric" =>
+              reasons[RangeRule[BigDecimal]](rules)
+            case "date" =>
+              reasons[RangeRule[java.time.LocalDate]](rules)
+            case "radio" | "dropdown" =>
+              rules.map(row =>
+                s"rule ${row.id} is attached to a ${questionRow.questionType} question, which " +
+                  s"takes no rules, so it is ignored")
+            case other =>
+              rules.map(row =>
+                s"rule ${row.id} belongs to a question of unknown type '$other', which is read as " +
+                  "a plain input with no rules")
+        problems.map(problem => s"question ${questionRow.id.asString}: $problem")
+
+  /** `unreadableRules` as the log lines it should produce. Called wherever the rows are read. */
+  private def warnUnreadableRules(rows: List[QuestionWithDetails]): UIO[Unit] = ZIO
+    .foreachDiscard(unreadableRules(rows))(ZIO.logWarning(_))
 
   /** Who the video belonged to, when it belonged to anyone.
     *

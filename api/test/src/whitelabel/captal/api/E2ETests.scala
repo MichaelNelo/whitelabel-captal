@@ -26,7 +26,8 @@ object E2ETests extends ZIOSpecDefault:
         AdvertiserVideoSurveySuite.suite,
         FinishSuite.suite,
         AuthorizedSuite.suite,
-        SoftDeleteSuite.suite
+        SoftDeleteSuite.suite,
+        UnreadableRuleSuite.suite
       ) @@ TestAspect.before(clearAndSeedNoise.orDie),
       // `ProvisioningSuite` sat inside the block above, outside the `before` that clears the
       // database, because it asserted against what a provisioning run had just written. It went
