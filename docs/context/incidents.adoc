@@ -14,7 +14,7 @@ affected* rather than an exception — "a rejected write is otherwise indistingu
 successful one." Fixed by bumping the driver to 10.5.2.1 and the server to 10.6.1, whose release
 note is the whole reason: "failed statements, batches and commits now throw instead of being
 silently ignored." Production had already drifted to rqlite 10.6.1 on its own, because
-`docker/rqlite/Dockerfile` said `:latest`; three driver/server combinations existed at once and
+`docker/rqlite.Dockerfile` said `:latest`; three driver/server combinations existed at once and
 none was the pairing the driver targets.
 
 * **Symptom:** none, visibly — that's the point. Four separate mechanisms were built *against*
@@ -391,12 +391,12 @@ field that feeds it (`of`, which needs a live database and bucket) was not.
   `captal-assets-mcp-test` denied. Fixed by having the suite consume `ASSETS_BUCKET` from the Tofu
   output rather than inventing its own name — not by widening the policy, which would have granted
   production-shaped access to something that only ever exists inside a test.
-* **`Dockerfile.api` did not build, for two independent reasons, and nobody noticed because
+* **`docker/api.Dockerfile` did not build, for two independent reasons, and nobody noticed because
   nothing in CI builds this image.** It copied a `provision/` directory that no longer existed
   (deleted with the YAML provisioning engine) and a `mill` wrapper script that has never existed in
   this repository. Either line alone fails the image build. Replaced with a one-stage Dockerfile
   that packages a jar Mill already built.
-* **`Dockerfile.mcp` did not exist at all, although the Terraform module already referenced
+* **`docker/mcp.Dockerfile` did not exist at all, although the Terraform module already referenced
   `captal-mcp:${var.mcp_image_tag}`** — "the service it deploys had nothing to pull." Writing it
   surfaced two more build facts only discoverable by actually running the resulting image: the
   module has two `ZIOAppDefault` entry points and Mill will not guess which one is `mainClass`

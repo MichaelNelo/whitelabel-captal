@@ -80,7 +80,7 @@ private def preloadLinks(dir: os.Path, entry: String): String =
   * end-to-end deploy puts in its task definition — which only has to be something already pulled.
   *
   * Matched to what production runs, which is the whole point of the number. It was 8.36.2 while the
-  * `terraform/docker/rqlite/Dockerfile` said `FROM rqlite/rqlite:latest` and had
+  * `docker/rqlite.Dockerfile` said `FROM rqlite/rqlite:latest` and had
   * drifted to 10.6.1 — two major versions apart, with the suite on the side that nothing deployed.
   * Both are pinned now; moving one means moving the other, and the driver with them.
   */
@@ -791,27 +791,31 @@ private def rqliteImageTag(configDir: os.Path, environment: String): String =
 
 /** The database image the ECS cluster runs, as opposed to the plain container the suites talk to.
   *
-  * `terraform/docker/rqlite/` is the engine pinned to [[rqliteVersion]] plus this repository's
+  * `docker/rqlite.Dockerfile` is the engine pinned to [[rqliteVersion]] plus this repository's
   * entrypoint, and `modules/rqlite` names it out of ECR by tag. Nothing built it: the tag in each
   * `terraform.tfvars` was pushed by hand, so a checkout could not reproduce the image its own
   * configuration deploys.
   */
 object rqlite extends Module:
 
-  /** The build context. `Task.Sources` is what lets this read inside the build tree, and what makes
-    * a changed entrypoint rebuild.
+  /** The two files the image is built from, declared so Mill permits reading them and so a changed
+    * entrypoint rebuilds.
     */
   def dockerSources: T[Seq[PathRef]] = Task.Sources(
-    moduleDir / os.up / "terraform" / "docker" / "rqlite")
+    moduleDir / os.up / "docker" / "rqlite.Dockerfile",
+    moduleDir / os.up / "docker" / "rqlite-entrypoint.sh")
 
-  /** Builds `captal-rqlite:<tag>`. Usage: `./mill rqlite.image --tag 1.0.4` */
+  /** Builds `captal-rqlite:<tag>`. Usage: `mill rqlite.image --tag 1.0.5` */
   def image(tag: String = "latest") = Task.Command:
-    val context = dockerSources().head.path
-    if !os.exists(context / "Dockerfile") then
-      sys.error(s"[rqlite] no Dockerfile at $context")
+    val sources = dockerSources()
+    val missing = sources.filterNot(ref => os.exists(ref.path))
+    if missing.nonEmpty then
+      sys.error(s"[rqlite] missing from docker/: ${missing.map(_.path.last).mkString(", ")}")
+    val context = sources.head.path / os.up
     val name = s"captal-rqlite:$tag"
     val built = os
-      .proc("docker", "build", "-t", name, ".")
+      // `-f`, because the context now holds every Dockerfile in the repository.
+      .proc("docker", "build", "-f", "rqlite.Dockerfile", "-t", name, ".")
       .call(cwd = context, check = false, stdout = os.Inherit, stderr = os.Inherit)
     if built.exitCode != 0 then
       sys.error("[rqlite] docker build failed")
@@ -831,8 +835,8 @@ private def pushImage(local: String, remote: String): String =
   do
     val result = os.proc("docker" +: args).call(check = false, stderr = os.Pipe)
     if result.exitCode != 0 then
-      sys.error(s"[rqlite] docker ${args.head} to $remote failed: ${result.err.trim()}")
-  println(s"[rqlite] pushed $remote")
+      sys.error(s"[image] docker ${args.head} to $remote failed: ${result.err.trim()}")
+  println(s"[image] pushed $remote")
   remote
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -966,11 +970,6 @@ object platform extends BaseModule:
   def migrate() = Task.Command:
     runMain("whitelabel.captal.platform.Migrate")()
 
-  // `dockerBuild` and `dockerPush` built and shipped `captal-provision`, an image whose only
-  // process was `SharedProvision`. With the ephemeral provisioning task gone there is nothing to
-  // run in it. The ECR repositories `captal-provision-{env}` and `captal-shared-{env}` are now
-  // unreferenced; emptying and removing them is a `tofu apply` under `terraform/`, not
-  // something this build can do.
 end platform
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -983,16 +982,16 @@ object api extends BaseModule:
   // descriptions live beside the routes, which is the only place that ever read them.
   def moduleDeps = Seq(core, messages, platform)
 
-  def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "Dockerfile.api")
+  def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "docker" / "api.Dockerfile")
 
   /** Build the API image. Usage: `./mill api.image` or `./mill api.image --tag v1.2.3`
     *
-    * The same shape as `mcp.image`, and for the reason recorded on `Dockerfile.api`: the previous
+    * The same shape as `mcp.image`, and for the reason recorded on `docker/api.Dockerfile`: the previous
     * arrangement compiled inside the image and had been unbuildable for two separate reasons, each
     * of which nothing would catch because nothing builds this image in CI. A task that produces it
     * from the jar Mill already has is both faster and checkable.
     */
-  def image(tag: String = "latest") = Task.Command:
+  def image(tag: String = "latest", devEndpoints: Boolean = false) = Task.Command:
     val context = Task.dest / "context"
     os.makeDir.all(context)
     os.copy.over(assembly().path, context / "api.jar")
@@ -1000,7 +999,16 @@ object api extends BaseModule:
 
     val name = s"captal-api:$tag"
     val built = os
-      .proc("docker", "build", "-t", name, ".")
+      // `--devEndpoints` turns on `/api/dev/reset-phase`, which the Dockerfile defaults to off. For
+      // exercising a deployed image without a full deploy; never for one that reaches a guest.
+      .proc(
+        "docker",
+        "build",
+        "--build-arg",
+        s"SERVER_DEV_ENDPOINTS=$devEndpoints",
+        "-t",
+        name,
+        ".")
       .call(cwd = context, check = false, stdout = os.Inherit, stderr = os.Inherit)
     if built.exitCode != 0 then
       sys.error("[image] docker build failed")
@@ -1118,73 +1126,20 @@ object api extends BaseModule:
       println("rqlite test container stopped")
   end test
 
-  /** Build the dev Docker image (uses Dockerfile.api with SERVER_DEV_ENDPOINTS=true). Usage: ./mill
-    * api.dockerBuildDev captal-dev 0.1.0
+  /** Builds the image and pushes it. The registry needs a `docker login` of its own first. Usage:
+    * `mill api.imagePush --registry 000000000000.dkr.ecr.us-east-1.amazonaws.com --repository captal-api --tag 1.2.3`
     */
-  def dockerBuildDev(name: String, version: String) = Task.Command:
-    val root = moduleDir / os.up
-    val tag = s"$name:$version"
-    println(s"[docker] Building $tag ...")
-    val result = os
-      .proc(
-        "docker",
-        "build",
-        "-f",
-        (root / "Dockerfile.api").toString,
-        "--build-arg",
-        "SERVER_DEV_ENDPOINTS=true",
-        "-t",
-        tag,
-        root.toString)
-      .call(check = false, stderr = os.Pipe)
-    if result.exitCode != 0 then
-      sys.error(s"[docker] Build failed:\n${result.err.trim()}")
-    println(s"[docker] Built $tag")
-
-  /** Build production base image captal-api. Usage: ./mill api.dockerBuild <ecr-repo-uri> <tag>
-    */
-  def dockerBuild(repoUri: String, tag: String) = Task.Command:
-    val root = moduleDir / os.up
-    val fullTag = s"$repoUri:$tag"
-    println(s"[docker] Building $fullTag ...")
-    val result = os
-      .proc(
-        "docker",
-        "build",
-        "-f",
-        (root / "Dockerfile.api").toString,
-        "-t",
-        fullTag,
-        root.toString)
-      .call(check = false, stderr = os.Pipe)
-    if result.exitCode != 0 then
-      sys.error(s"[docker] Build failed:\n${result.err.trim()}")
-    println(s"[docker] Built $fullTag")
-
-  /** Push image to ECR. Operator must run `aws ecr get-login-password | docker login` first. Usage:
-    * ./mill api.dockerPush <ecr-repo-uri> <tag>
-    */
-  def dockerPush(repoUri: String, tag: String) = Task.Command:
-    val fullTag = s"$repoUri:$tag"
-    println(s"[docker] Pushing $fullTag ...")
-    val result = os.proc("docker", "push", fullTag).call(check = false, stderr = os.Pipe)
-    if result.exitCode != 0 then
-      sys.error(s"[docker] Push failed:\n${result.err.trim()}")
-    println(s"[docker] Pushed $fullTag")
+  def imagePush(registry: String, repository: String, tag: String = "latest") = Task.Command:
+    pushImage(image(tag)(), s"$registry/$repository:$tag")
 end api
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Client: JS only (Laminar app)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Client: JS only (Laminar app)
-// ─────────────────────────────────────────────────────────────────────────────
-
-// `mcpui` y `maintenance` vivían acá, cada uno con su propio linker run. Ahora son módulos
-// públicos de `client`: cuatro entry points de un run, con las fuentes bajo `client/src` y los
-// stubs bajo `client/entries`. Lo que cada uno ganaba por separado era su propio runtime — y
-// `maintenance`, además, el Closure Compiler, que no corre sobre output ESModule.
+/** One linker run, four public entry points: sources under `client/src`, stubs under
+  * `client/entries`.
+  */
 object client extends BaseJSModule:
   // `core-js` alone now. The request and response types this reads are `core.codecs`, which
   // `core-js` cross-compiles; `endpoints-js` existed only to share a module with the tapir
@@ -1804,12 +1759,12 @@ object mcp extends BaseModule:
     os.proc("java", forkArgs(), "-cp", cp, "whitelabel.captal.mcp.Main")
       .call(env = env, stdin = os.Inherit, stdout = os.Inherit, stderr = os.Inherit)
 
-  def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "Dockerfile.mcp")
+  def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "docker" / "mcp.Dockerfile")
 
   /** Build the server's image. Usage: `./mill mcp.image` or `./mill mcp.image --tag v1.2.3`
     *
     * The jar is built here, by the tool that already knows how, and the image only packages it.
-    * `Dockerfile.api` does the opposite — it copies the sources in and runs `./mill api.assembly`
+    * `docker/api.Dockerfile` did the opposite — it copied the sources in and ran `api.assembly`
     * inside the builder stage — and that has rotted twice over: it copies `provision/`, which was
     * deleted with the provisioning system, and a `mill` wrapper script that is not in this
     * repository. Compiling inside the image also re-resolves the whole dependency tree on every
@@ -1843,15 +1798,7 @@ object mcp extends BaseModule:
     * `mcp_image_repository_url` reports.
     */
   def imagePush(registry: String, repository: String, tag: String = "latest") = Task.Command:
-    val local = image(tag)()
-    val remote = s"$registry/$repository:$tag"
-    for args <- Seq(Seq("tag", local, remote), Seq("push", remote))
-    do
-      val result = os.proc("docker" +: args).call(check = false, stderr = os.Pipe)
-      if result.exitCode != 0 then
-        sys.error(s"[image] docker ${args.head} failed: ${result.err.trim()}")
-    println(s"[image] pushed $remote")
-    remote
+    pushImage(image(tag)(), s"$registry/$repository:$tag")
 
   object test extends ScalaTests with ScalafmtModule with ScalafixModule:
     // zio-test 2.1.26 to match what zio-http-mcp pulls in; the rest of the build is on 2.1.14 and

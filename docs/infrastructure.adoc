@@ -486,8 +486,9 @@ portal no longer serves.
 
 Three images, three ECR repositories: `captal-api` and `captal-mcp` from the shared `modules/ecr`
 (keep the last 10 `v`-tagged images, expire untagged ones after 7 days), and the custom rqlite build
-from its own repository inside `modules/rqlite` (keep the last 5 images, any tag). `Dockerfile.api`
-and `Dockerfile.mcp` are both single-stage — `FROM eclipse-temurin:21-jre-noble`, `COPY` one
+from its own repository inside `modules/rqlite` (keep the last 5 images, any tag).
+`docker/api.Dockerfile` and `docker/mcp.Dockerfile` are both single-stage — `FROM
+eclipse-temurin:21-jre-noble`, `COPY` one
 pre-built jar, run it — rather than compiling inside the image, which is the pattern that existed
 before and had rotted twice over by naming a deleted `provision/` directory and a `mill` wrapper
 script absent from the repository, invisible because nothing built these images in CI. `api.image`

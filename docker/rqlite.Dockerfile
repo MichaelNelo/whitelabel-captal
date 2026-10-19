@@ -12,6 +12,6 @@
 # server has carried structured error codes since v10.6.0 that only driver 10.5.2.1 can read.
 FROM rqlite/rqlite:10.6.1
 
-COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=755 rqlite-entrypoint.sh /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
