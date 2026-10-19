@@ -1,0 +1,15 @@
+= terraform
+
+Publishing a new location is only as fast as the ground it runs on. This is that ground:
+everything a deployment needs to exist before a location's server, its backoffice and its
+portal can go live, built so that standing it up — or growing it to cover another location —
+does not mean someone assembling it by hand.
+
+It also carries what keeps a running deployment reachable and recoverable: the public addresses
+locations are served from, and the pieces that let an operator bring a deployment back after an
+outage rather than rebuild it from nothing.
+
+Without it, adding a location, or recovering one, would mean someone hand-assembling the same
+footprint again, at the risk of getting it slightly wrong each time.
+
+Architecture and topology: xref:../docs/infrastructure.adoc[docs/infrastructure.adoc].

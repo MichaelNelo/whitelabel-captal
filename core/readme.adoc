@@ -1,0 +1,17 @@
+= core
+
+The rules of the guest journey live here, in one place, independent of whether they end up
+running in a guest's browser or on the server behind a location.
+
+These are the rules that decide what counts as a valid answer, which question comes next for a
+guest who has already answered some of them, when a video counts as watched, and when a
+device's access is granted and when it expires. Because the browser and the server both run the
+same rules, a guest can never have an answer accepted by the portal and then rejected by the
+server a moment later — the two sides are not two descriptions of the guest journey that might
+drift apart, they are the same one.
+
+If these rules lived separately in the two places that need them, a fix applied on one side
+would leave the other side still wrong, and a guest could end up stuck answering a question the
+business considers already settled, or waved through one it does not.
+
+Architecture: xref:../docs/core.adoc[docs/core.adoc].

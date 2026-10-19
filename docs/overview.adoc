@@ -1,0 +1,122 @@
+= System overview
+:toc:
+:toclevels: 2
+
+Captal is a white-label captive portal. A guest connects to a customer's WiFi, the UniFi
+controller holds their traffic and redirects them to this portal, the portal walks them through an
+identification survey, an advertiser video and a survey about it, and on completion the system
+authorizes that device on the controller for a bounded time. Each customer location gets its own
+portal, its own content and its own branding, served from one codebase.
+
+== What the system is for
+
+Three parties, three things they get:
+
+[cols="1,3"]
+|===
+| Guest | Free WiFi access, in exchange for answering a few questions and watching an ad.
+| Venue | Identification data about the people on its network, and a channel to advertise in.
+| Advertiser | A captive audience with demographic and location data attached to it.
+|===
+
+The guest journey, with the phase the session is in at each step:
+
+. *Welcome* — the portal loads, locale is detected or chosen.
+. *IdentificationQuestion* — email on a first visit, then one or two profiling questions, then one
+  or two hierarchical location questions. Questions already answered by this user are skipped.
+. *AdvertiserVideo* — an advertiser video or a venue promo.
+. *AdvertiserVideoSurvey* / *AdvertiserQuestion* — the survey attached to what was just watched,
+  or a general advertiser survey.
+. *Ready* — the flow is complete and the system is calling the UniFi controller.
+. *Authorized* — the controller confirmed; `accessExpiresAt` is set and the guest has internet.
+
+When the access expires, a scheduled job revokes it on the controller and the session returns to
+*Welcome*, so a reconnecting guest repeats the cycle with whatever questions are still unanswered.
+
+== Modules
+
+[cols="1,3,1"]
+|===
+| Module | What it is | Detail
+
+| `core` / `core-js`
+| The pure domain: the `Op` effect type, the `Phase` machine, the `User` / `Survey` / `Question` /
+  `Video` aggregates, validation rules, repository traits, the i18n key schema. Cross-compiled so
+  the browser validates with the same code as the server.
+| xref:core.adoc[Core]
+
+| `messages` / `messages-js`
+| The wire contract: request and response bodies, the `ApiError` variants, the i18n payload.
+  Cross-compiled for the same reason.
+| xref:messages.adoc[Messages]
+
+| `platform`
+| The JVM side: Quill repositories over rqlite, migrations and their lock, the session service and
+  job scheduler, the event-handler chains, the UniFi controller client.
+| xref:platform.adoc[Platform]
+
+| `api`
+| The guest-facing HTTP server. One process per location. Reads content, never writes it.
+| xref:api.adoc[Guest API]
+
+| `client`
+| The Scala.js front end: the guest portal, the MCP-UI apps, and the maintenance page — one linker
+  run, several public modules.
+| xref:client.adoc[Client]
+
+| `mcp`
+| The backoffice, exposed as an MCP server. Its tools write all content and stand portals up on
+  AWS. An operator drives it through a model, not through files.
+| xref:mcp.adoc[MCP backoffice]
+
+| `terraform`
+| The infrastructure base, a git subtree with its own operator runbook.
+| xref:infrastructure.adoc[Infrastructure]
+|===
+
+There is no `maintenance` module: the maintenance page is an entry point inside `client`. There is
+no `platform` or `client` test module; tests live under `core`, `api` and `mcp`.
+
+== How a request flows
+
+[source]
+----
+browser
+  → CloudFront  (SPA fallback at the edge; static bundle from S3)
+  → ALB         (/<slug>/api/* → the location's target group)
+  → api         session cookie → SessionContext (FiberRef)
+                → command handler in core, returning Op[Event, Error, A]
+                → transactional event handlers write the database in one transaction
+                → post-commit event handlers call the outside world (UniFi)
+  → rqlite      SQLite semantics over HTTP, behind Raft
+----
+
+Writes never come from the guest path alone: content — locations, surveys, videos, translations —
+is written by the MCP backoffice against the same database, and the API only reads it.
+
+== Two sides, one database
+
+[cols="1,1,1"]
+|===
+| | Guest side | Operator side
+
+| Entry point | `api`, one process per location | `mcp`, one server for the deployment
+| Front end | the portal in `client` | an MCP host, plus the MCP-UI apps in `client`
+| Database access | read only | read and write
+| Schema history | `platform/resources/db/migration` | plus its own `mcp/resources/db/migration-mcp`
+|===
+
+== Cross-cutting mechanisms
+
+* xref:event-sourcing.adoc[Event sourcing] — every state change is an event; the transactional
+  chain persists, the post-commit chain reaches outside.
+* xref:database.adoc[Database] — rqlite, the schema, soft delete, the write-verification rule.
+* xref:unifi.adoc[UniFi integration] — the controller contract, the authorize and revoke flows,
+  the network path to an on-premise controller.
+* xref:testing.adoc[Test strategy] — what each test layer owns and what it needs running.
+
+== Where to go next
+
+* Working on the system for the first time: xref:development.adoc[Local development].
+* Looking for why something is the way it is: xref:context/readme.adoc[docs/context].
+* Deploying or changing infrastructure: xref:infrastructure.adoc[Infrastructure].

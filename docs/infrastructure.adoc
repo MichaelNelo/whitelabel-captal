@@ -1,0 +1,528 @@
+= Infrastructure
+:toc:
+:toclevels: 2
+
+`terraform/` is the OpenTofu configuration for every environment Captal runs in, including the one
+`mcp.test` applies against LocalStack before its suite runs. It was a separate repository,
+`whitelabel-captal-infrastructure`, brought in as a git subtree with its own history — see
+xref:context/history.adoc[History] — because the local test suite could not run without it: with
+the configuration a clone away, a checkout of the portal alone was not enough to test the portal.
+
+**OpenTofu, not Terraform.** Every command below is `tofu`. `devenv.nix` installs both `opentofu`
+and `terraform`, because the two cannot share a working directory: a state file written by
+Terraform refuses to open under an older OpenTofu for being from a newer version, and
+`.terraform.lock.hcl` records provider hashes from whichever registry wrote it —
+`registry.terraform.io` or `registry.opentofu.org`. The build has to run the same binary an operator
+runs by hand.
+
+== Environments
+
+[cols="1,2,3"]
+|===
+|Environment |State |Applied by
+
+|`local`
+|A plain local state file under a directory keyed by the LocalStack container's id —
+`out/mcp/test/localStackInfra.dest/<container-id>/terraform.tfstate`
+|`mill mcp.test`, automatically, before the suite runs
+
+|`prod`
+|S3, via `backend.tf` and `environments/prod/backend.tfvars`
+|By hand
+|===
+
+`terraform/backend.tf` declares the S3 backend with `bucket = ""`; the real bucket name comes from
+the environment's own `backend.tfvars`, which is not committed. It is deliberately **not** staged
+into the copy of the configuration `mcp.test` applies — that bucket is created by this same
+configuration's `s3-backend` module, which is a chicken-and-egg locally, and leaving the block out
+is what lets a local `tofu init` fall back to a plain state file instead of waiting on a backend
+that does not exist yet.
+
+One variable is the whole difference between talking to AWS and talking to LocalStack
+(`terraform/versions.tf`):
+
+[source,hcl]
+----
+locals {
+  local_aws = var.aws_endpoint_url != ""
+}
+----
+
+Everything provider-side is derived from it: a `dynamic "endpoints"` block pointing every emulated
+service (ACM, CloudFront, CloudWatch, EC2, ECR, ECS, EFS, ELBv2, IAM, Lambda, Logs, Route 53, S3,
+Secrets Manager, Cloud Map, STS) at `aws_endpoint_url`, `access_key`/`secret_key` fixed to `"test"`
+(LocalStack verifies no signature, but the SDK's signer still needs a pair to exist),
+`skip_credentials_validation`/`skip_requesting_account_id`/`skip_metadata_api_check` all true, and
+`s3_use_path_style` true (the default puts the bucket in the hostname, which resolves against AWS
+and not against a single local endpoint). A second, identically-configured `aws.us_east_1` provider
+alias exists because CloudFront and the certificates CloudFront uses must live in `us-east-1`
+regardless of the deployment's own region, and an aliased provider inherits nothing from the
+default one — omitting the overrides there would send every CloudFront and ACM call to real AWS
+while the rest went to LocalStack.
+
+The `tailscale` provider reads its credentials from `TAILSCALE_API_KEY`/`TAILSCALE_TAILNET` in the
+environment rather than from a variable, to keep them out of state. It still needs a placeholder
+value for `local`: a provider is configured whether or not any resource uses it, so `count = 0` on
+every Tailscale resource is not enough on its own — the plan fails with "credentials are empty"
+before it reaches a single resource.
+
+== prod — the operator runbook
+
+[source,bash]
+----
+cd terraform
+tofu init -backend-config=environments/prod/backend.tfvars
+tofu plan  -var-file=environments/prod/terraform.tfvars
+tofu apply -var-file=environments/prod/terraform.tfvars
+----
+
+AWS and Tailscale provider credentials are read from the environment so they stay out of state;
+`.envrc` is not committed, and nothing in the repository is derivable from what is.
+
+Editing an asset — a Lambda's source, a CloudFront function, a task definition's image tag — without
+running `tofu apply` leaves the deployed resource behind the configuration, and nothing detects that
+for you. Run `tofu plan` before considering a change finished.
+
+`image_tag` (the image every location's API task runs) has a validation that rejects the literal
+string `"latest"`:
+
+[source,hcl]
+----
+validation {
+  condition     = var.image_tag != "latest"
+  error_message = "image_tag must name a version. `latest` is how the rqlite engine moved from the 8 line to 10.6.1 unnoticed; pick the tag you mean, and change it deliberately."
+}
+----
+
+See xref:context/incidents.adoc[Incidents] for the drift that validation exists to stop.
+`mcp_image_tag` carries no default at all, for the same reason. As committed today,
+`environments/prod/terraform.tfvars` still sets `image_tag = "latest"` (which the validation above
+refuses) and `mcp_image_tag = "latest"` (which has never been published) — a `tofu plan` against
+prod with the current `terraform.tfvars` fails validation before it reaches a provider call, which
+is deliberate: nothing is running in that environment yet, so being stopped here costs nothing.
+
+Per-environment sizing, as committed:
+
+[cols="2,1,1,1"]
+|===
+|Variable |`local` |`dev` |`prod`
+
+|`rqlite_desired_count` |0 |1 (EFS) |3 (Raft)
+|`container_cpu` / `container_memory` (API) |256 / 512 |256 / 512 |512 / 1024
+|`desired_count` (API tasks) |1 |1 |2
+|`enable_dns` |false |true |true
+|`enable_tailscale` |false |true |true
+|`enable_global_accelerator` |false |true |true
+|`mcp_create_test_user` |true |true |(unset → false)
+|===
+
+== Local: LocalStack and the keyed state pairing
+
+Nothing here is run by hand. `mill mcp.test` applies this configuration against LocalStack before
+its suite starts, replacing what used to be a 219-line hand-built `awslocal` fixture that had already
+drifted from the real topology — see xref:context/decisions.adoc[Decisions]. The full mechanics of
+that task (`localStackInfra`, `tofuSources`, `resetLocalStack`, IAM soft mode, and what the suite
+itself asserts) belong to xref:testing.adoc[Test strategy]; this section covers the three structural
+facts about the configuration and its state that make that task possible at all.
+
+`environments/local/terraform.tfvars` turns off three things, each for its own reason: `enable_dns`
+(nothing emulates DNS validation, so a certificate would sit in `PENDING_VALIDATION` forever and the
+apply would hang — CloudFront falls back to its own default certificate and generated domain name),
+`enable_tailscale` (the provider would call Tailscale's real API, and reaching into the network from
+a laptop is what `docker exec` already does here), and `enable_global_accelerator` (not emulated,
+and it brings the portal-dispatcher Lambda with it, which exists only for real captive-portal
+hardware). `rqlite_desired_count` and `mcp_desired_count` are both `0`: what the suite needs from
+this configuration is the things a location deploy *attaches to* — the cluster, the listener, the
+security groups, the roles, the assets bucket, the distribution — not the services themselves. The
+suite runs the backoffice in-process and rqlite as a plain container, because the database has to be
+migrated before any of this exists; the resources these variables would otherwise size are still
+created, which is the point — a target group the server registers against is a real target group.
+
+Three operational facts, each costly to rediscover:
+
+* **The state and the LocalStack container are born together.** The state directory is keyed by the
+  running container's id, because LocalStack holds the resources and the state file holds the record
+  of them — either surviving without the other is a divergence `tofu` cannot repair: it plans a
+  create for something that already exists and the apply fails with `AlreadyExists` on roles,
+  buckets and CloudFront policies. `mill mcp.test.resetLocalStack` recreates the container — which
+  also discards the keyed state directory — and the next run builds both together.
+* **`mill clean` breaks it.** `mcp.test.localStackInfra` is a `Task(persistent = true)` precisely so
+  a normal Mill re-evaluation does not wipe its `dest`; `mill clean` discards it anyway, leaving the
+  container holding every resource the discarded state described — exactly the divergence the keying
+  exists to prevent. Run `mill mcp.test.resetLocalStack` immediately after a `mill clean`.
+* **Mill polices reads of this directory, which it did not while `terraform/` was a sibling
+  repository.** `mcp.test.tofuSources` is the `Task.Sources` declaration that permits the apply to
+  read this tree; without it the apply fails with `Reading from terraform not allowed`, a message
+  that names the task and not the read. `CAPTAL_TERRAFORM_DIR` still overrides where the apply reads
+  from, for working on the configuration from a copy elsewhere.
+
+The apply itself runs from a staged copy rather than from this directory directly, which is what
+lets `backend.tf` be left out of that copy and the provider cache kept separate from an operator's
+own. Editing any file under `terraform/` is what re-triggers the apply: the staging task hashes
+every `.tf` and `.tfvars` in the tree.
+
+== Module inventory
+
+The root module (`terraform/main.tf`) wires twelve child modules together. The account's networking
+is a data source rather than a module — `data "aws_vpc" "default"` and `data "aws_subnets" "default"`
+resolve the account's default VPC and its one-per-AZ default subnets, which are public and
+auto-assign addresses, letting every Fargate task reach ECR without a NAT gateway. A `modules/vpc`
+building private subnets existed and was deleted in favour of this: `enable_nat_gateway` defaulted to
+`false` and no environment ever overrode it, so the private half was being paid for
+(~USD 32/month per availability zone) by nobody. The change is in the configuration but **not yet
+applied to any live environment** — see xref:context/pending.adoc[Pending work] for the resource
+replacements a real `tofu apply` would trigger against deployed `dev`.
+
+=== S3 and ECR
+
+`modules/s3-backend` creates one bucket per environment for Terraform's own state
+(`prevent_destroy = true`, versioned, AES256), named independently of the actual bucket
+`backend.tfvars` points the backend at — two paths that name the same *kind* of bucket without being
+cross-wired in code.
+
+`modules/ecr` creates two repositories, `captal-api` and `captal-mcp`, each keeping the last 10
+images tagged with a `v` prefix and expiring untagged images after 7 days. A third image — the
+custom rqlite build — gets its own repository inside `modules/rqlite` instead, with a simpler
+keep-last-5 policy; see <<Images and releases>>. Two now-removed repositories,
+`captal-provision`/`captal-shared`-style per-location images from the deleted CLI, are not declared
+here any more — their emptying and removal is a `tofu apply`, not something a build task can do; see
+xref:context/history.adoc[History].
+
+=== ALB
+
+`modules/alb` creates the load balancer, a security group open on 80 and 443 from anywhere, an HTTP
+listener that redirects everything to HTTPS (`301`), and a default target group pointed at nothing a
+rule forwards to. The root module adds the HTTPS listener itself (`aws_lb_listener.https`, counted
+with `enable_dns`, since a 443 listener with no certificate is rejected outright) with a
+`fixed-response` 403 default action — every real request now arrives through CloudFront, so nothing
+should reach the ALB directly and match the default rule.
+
+Two *more* kinds of rule live on this same listener and are created by things other than this
+module:
+
+* The backoffice's own target group and listener rule — `aws_lb_target_group.mcp`,
+  `aws_lb_listener_rule.mcp_https`/`mcp_http` — are declared inside `modules/mcp`, matched on
+  `host_header` when DNS is enabled and on `path_pattern` (`/mcp`, `/mcp/*`, `/.well-known/*`,
+  `/ui/*`, `/health`) when it is not.
+* A **location's** target group and rule are created by the MCP backoffice's deploy tools at request
+  time, through the AWS SDK — see <<What the deploy tool creates that tofu does not>>.
+
+The portal-dispatcher Lambda gets a third kind of rule, added conditionally by the root module itself
+(`enable_portal_dispatcher_rule`, a plain bool rather than a module attribute, so its `count` can be
+evaluated at plan time): priority 100, path `/guest/s/*`.
+
+=== ECS
+
+`modules/ecs` creates the cluster (`containerInsights` on, `FARGATE` + `FARGATE_SPOT` capacity
+providers, default strategy weighted entirely to `FARGATE`), the shared task execution role
+(`AmazonECSTaskExecutionRolePolicy`), the shared location task role, and an inline policy on the task
+role granting `ssmmessages:CreateControlChannel`/`CreateDataChannel` (and their `Open*` equivalents)
+for ECS Exec — how an operator gets a shell into a running portal container. The root module creates
+its own `ecs_tasks` security group rather than letting this module do it
+(`create_security_group = false`), because the rule needs to reference the ALB's own group, created
+one level up.
+
+=== rqlite
+
+`modules/rqlite` is one configuration with two shapes, selected by `desired_count`
+(validated to `0`, `1`, or an odd number `>= 3` — an even count above one has no majority):
+
+[cols="1,3,3"]
+|===
+| |Single node (`desired_count <= 1`) |Multi-node (`desired_count >= 3`)
+
+|Storage
+|EFS, mounted at `/rqlite/file` through an access point with IAM authorization
+|Ephemeral Fargate storage, with Raft replication
+
+|Capacity provider
+|`FARGATE` (on-demand)
+|`FARGATE_SPOT`
+
+|Deploy strategy
+|Stop-then-start (`min_healthy_percent = 0`, `max_percent = 100`) — SQLite cannot tolerate two
+writers on the same EFS path
+|Rolling, with the percentages derived so the minimum never drops below Raft quorum and the maximum
+never exceeds a one-task surge
+|===
+
+The derivation, in `locals`:
+
+[source,hcl]
+----
+raft_quorum                = floor(var.desired_count / 2) + 1
+rqlite_min_healthy_percent = single_node ? 0   : ceil(raft_quorum * 100 / desired_count)
+rqlite_max_percent         = single_node ? 100 : ceil((desired_count + 1) * 100 / desired_count)
+----
+
+The health check hits `/readyz?noleader` rather than the stricter `/readyz`, because strict leader
+visibility "can flap during snapshots / peers.json recovery / brief Raft state transitions" — a node
+that is healthy but not yet serving as leader should not be replaced by ECS; a client actually trying
+to read or write during that window gets a 5xx from the API, not a restarted task. `startPeriod` is
+180 seconds, because peers.json recovery plus leader election plus SQLite extension loading on warm
+EFS state "can take well over the default 60s."
+
+S3 auto-backup is unconditional — a dedicated, versioned, encrypted `aws_s3_bucket.rqlite_backup`
+that only the rqlite task role can read and write — with `backup_interval` defaulting to `1m` and
+neither `dev` nor `prod` overriding it. The security group's inline `ingress` rules only cover HTTP
+(from the app tasks and between rqlite peers, port 4001) and Raft (between peers, port 4002); it
+carries `lifecycle { ignore_changes = [ingress] }` specifically because sibling modules
+(`portal-dispatcher`, and the root-level Tailscale debug rule) attach their own ingress as separate
+`aws_vpc_security_group_ingress_rule` resources, and without the lifecycle block the group's own
+authoritative `ingress` blocks would revoke those external rules on every apply.
+
+See xref:context/pending.adoc[Pending work] for two risks this shape carries that have not yet been
+settled — production's `FARGATE_SPOT` choice sharing a single reclamation signal across all three
+nodes despite tolerating only individual node loss, and `continue_on_failure: true` in the backup
+entrypoint turning a missing or unreachable S3 backup into a healthy, empty boot rather than a dead
+task. See xref:database.adoc[Database] and xref:platform.adoc[Platform] for rqlite as the database
+rather than as a deployed topology.
+
+=== CloudFront
+
+`modules/cloudfront` owns the assets bucket (`<project>-<env>-assets`, holding `bundle/` and every
+location's own `<slug>/` prefix) behind an Origin Access Control, and the distribution itself:
+two origins (the S3 bucket through the OAC, and the ALB as a custom HTTPS-only origin), a default
+behavior serving the S3 origin with one CloudFront Function attached, and an `ordered_cache_behavior`
+on `/*/api/*` forwarding to the ALB with every HTTP method including the four that write.
+
+One function, `function/spa-fallback.js`, does two jobs, the first ahead of the second on purpose:
+
+* **Refuses two internal prefixes outright** — `/_paused/*` (where a paused location's real page is
+  kept while the edge serves maintenance in its place) and `/bundle/*` (the master copy every
+  location's prefix is copied from) — with a `403` before the extension check below would otherwise
+  let a direct request straight through to a 200, since the bucket policy grants CloudFront the
+  whole bucket.
+* **SPA fallback and the slug redirect.** A request with a file extension passes through unchanged;
+  `/<slug>` with no trailing slash gets a `301` to `/<slug>/` with the query string preserved
+  (UniFi's captive portal lands a guest on `/<slug>?id=…&ap=…&click_id=…&ssid=…`, and dropping those
+  on the redirect leaves the SPA with no portal context for its first `/api/status` call); anything
+  else without an extension rewrites to `/<slug>/index.html`.
+
+The two cache policies are hand-written rather than lookups of AWS's managed ones
+(`Managed-CachingOptimized` and the like), because a managed policy "exists only in a real account,"
+and the configuration has to plan against LocalStack too. `assets` caches on path alone for a day;
+`api` caches nothing (`default_ttl = min_ttl = max_ttl = 0`) and is paired with an origin request
+policy that forwards *every* header, cookie and query string to the ALB — because the API's session
+resolver reads `X-Client-Mac`, `X-Ap-Mac`, `X-Click-Id` and `X-Ssid` on every request (see
+xref:api.adoc[Guest API]'s captive-portal headers), and a cache key that ignored them while an origin
+policy withheld them would mean the API never saw them at all.
+
+`aliases` on the distribution is empty unless a certificate ARN is supplied — in `local`, with
+`enable_dns = false`, the distribution answers at its own generated `*.cloudfront.net` domain with
+CloudFront's own default certificate.
+
+=== Route 53 and ACM
+
+`modules/route53` creates the hosted zone and one alias A record, `<staging|production>.<domain>`,
+pointed at the CloudFront distribution. `modules/acm` requests *two* certificates — one regional
+(for the ALB listener) and an identical one through the `aws.us_east_1` provider alias (because
+CloudFront and its certificates must live in `us-east-1` regardless of where everything else runs)
+— both DNS-validated against the zone `modules/route53` created. ACM has no enable flag of its own:
+it travels with `enable_dns`, because a certificate validated by records in a zone that does not
+exist would sit in `PENDING_VALIDATION` forever and the apply would wait on something that cannot
+happen.
+
+=== Global Accelerator and the portal dispatcher
+
+Two static anycast IPv4 addresses in front of the ALB, because UniFi's External Portal Server field
+validates only IPv4 and the addresses have to survive the ALB itself being recreated.
+`modules/global-accelerator`'s listener is TCP on port 80 only — captive-portal redirect traffic from
+a UniFi gateway is always HTTP, since a device mid-captive-portal does not trust a certificate for a
+literal IP address, and HTTPS traffic still reaches CloudFront directly rather than through the
+accelerator. Its health check tolerates the ALB's own `301` HTTP→HTTPS redirect as a pass
+(`200`–`399`).
+
+`modules/portal-dispatcher` is the Lambda (Python 3.12, VPC-attached, 128 MB, 10-second timeout) that
+the accelerator's listener and an ALB rule (`/guest/s/*`, priority 100) feed: it looks up the AP MAC
+in rqlite and answers a `302` to the matching location's CloudFront URL. Its own security group opens
+port 4001 toward rqlite's and 443 outbound to AWS APIs ("VPC interface endpoints for logs aren't
+provisioned here"); the reciprocal ingress on rqlite's own security group is declared at the *root*
+module rather than inside either module, specifically to avoid a dependency cycle between the two.
+
+=== Tailscale proxy
+
+`modules/tailscale-proxy` runs `tailscale/tailscale:stable` as a userspace daemon
+(`TS_USERSPACE=true`, required because "Fargate does not allow tun/tap") exposing an HTTP CONNECT
+proxy on port 1055, which is how the API reaches an on-premise UniFi controller — see
+xref:unifi.adoc[UniFi integration]. `TS_STATE_DIR=/tmp/tailscale`, because Fargate's filesystem is
+read-only outside `/tmp`. Its auth key is minted by the `tailscale_tailnet_key` resource — reusable,
+ephemeral (the node deletes itself from the tailnet when the task stops), preauthorized — stored in
+Secrets Manager and injected as a secret, never a plain environment variable. The service deploys
+stop-then-start (`0%`/`100%`), deliberately not rolling, because the ephemeral key means only one
+node should be logged in to the tailnet at a time; the roughly 60-second gap this opens is absorbed
+by the API's own UniFi retry handling, with the guest journey staying at `Phase.Ready` until the next
+`/api/finish` rather than failing outright.
+
+The root module creates the secret container and version, mints the key via the provider, and wires
+a security-group rule letting the proxy reach rqlite's HTTP port directly — a debug path: an approved
+tailnet device with `--accept-routes` can query rqlite from a developer laptop, since
+`--advertise-routes=<vpc_cidr>` is appended to the daemon's arguments whenever `vpc_cidr` is
+non-empty.
+
+=== MCP backoffice
+
+`modules/mcp` is the newest and largest module: the server that owns every location's deploy did not
+have one for most of this project's life. What existed before, `modules/mcp-iam`, only granted the
+*shared* ECS task role four S3 and CloudFront actions — the role every location's API also runs as,
+so every location's API could write any other location's assets and invalidate the distribution,
+simply because there was one role. See xref:context/history.adoc[History].
+
+This module gives the backoffice its own task role, carrying its own policy
+(`data.aws_iam_policy_document.mcp`, attached as `aws_iam_policy.mcp`), scoped statement by
+statement:
+
+[cols="2,3"]
+|===
+|Statement |Scope and why
+
+|`LocationAssetObjects` — Get/Put/Delete
+|`<assets-bucket-arn>/*`. `PutObject` is also what authorises the presigned upload URLs the server
+hands a browser — a signature is only as permitted as the identity that signed it.
+
+|`LocationAssetListing` — `s3:ListBucket`
+|The bucket itself. Was deliberately absent, on the reasoning that every key is derived from a slug
+the database already confirmed; stopped being true once `copyBundle` needed to list `bundle/` and
+`destroy_location` needed to list and count a slug's own prefix.
+
+|`AssetCacheInvalidation` — `CreateInvalidation` + `GetInvalidation`
+|The distribution. The second action is easy to miss and `pause_location` depends on it:
+`invalidateAndWait` polls `GetInvalidation` until it reports `Completed`, and with only
+`CreateInvalidation` granted, a pause creates the invalidation, fails on the wait, having already
+swapped the page.
+
+|`TaskDefinitions` — Register/Deregister/Describe/List
+|Unscoped (`*`): there is no ARN to name before a revision exists.
+
+|`LocationServices` — Create/Update/Describe/Delete/List services, list/describe tasks
+|Unscoped action set, gated by condition `ecs:cluster == <this cluster's ARN>`.
+
+|`PassTaskRoles` — `iam:PassRole`
+|The two roles a location's task actually runs as (execution and task), gated by
+`iam:PassedToService == ecs-tasks.amazonaws.com`. Without it, registering a task definition naming
+either role is refused with an error naming the role, not the missing permission.
+
+|`LocationRouting` — target group and listener rule Create/Delete/Describe/Modify, plus
+`DescribeListeners`/`DescribeLoadBalancers`/`AddTags`
+|Unscoped: the mutations that *could* be scoped still cannot be, because `CreateTargetGroup` is
+called before the target group it would scope to exists.
+
+|`LocationLogs` — Create/Delete/Describe log group, `PutRetentionPolicy`
+|Unscoped. The log group is created before the service, so the first lines the container writes
+have somewhere to land.
+|===
+
+The admin token that seeds the row holding every scope (`random_password`, 48 characters) lives in
+Secrets Manager rather than in the task definition's plain `environment` list — that list is visible
+to anyone who can call `DescribeTaskDefinition` — and carries `lifecycle { ignore_changes =
+[secret_string] }`, which is what makes an out-of-band rotation (console, `put-secret-value`) stick
+instead of being overwritten back to the generated value on the next apply. The execution role, not
+the task role, is what reads it, since ECS has to fetch the secret before the container (and
+therefore the task role inside it) exists.
+
+`create_test_user` (`true` only for `local`) creates an IAM user and access key carrying the same
+policy, for running the server outside ECS where the task role is not reachable — the identity
+LocalStack's IAM enforcement evaluates in soft mode during `mcp.test`. See
+xref:context/decisions.adoc[Decisions] for why hard enforcement is not yet the default.
+
+The service itself: one task definition (container name `mcp`), one target group, and a listener
+rule matched on `host_header` (HTTPS, when `enable_dns`) or on a fixed set of paths (`/mcp`,
+`/mcp/*`, `/.well-known/*`, `/ui/*`, `/health`, over HTTP otherwise) — unlike a location's own rule,
+this one *is* declared in Tofu. Its container definition carries roughly seventeen environment
+variables; the ones that matter architecturally are the seven that describe what a deploy attaches
+to — `ECS_CLUSTER`, `VPC_ID`, `SUBNET_IDS`, `SECURITY_GROUP_ID`, `ALB_LISTENER_ARN`,
+`TASK_EXECUTION_ROLE_ARN`, `TASK_ROLE_ARN` — plus `API_IMAGE` and `DB_URL`. All eight are read
+straight from this module's own inputs, which are themselves root-module outputs; see
+<<What the deploy tool creates that tofu does not>>.
+
+== What the deploy tool creates that tofu does not
+
+Tofu builds the *shared* infrastructure every location attaches to — the cluster, the listener, the
+roles, the assets bucket, the distribution. It never creates a location's own service, target group,
+listener rule, task definition, or log group: that is the MCP backoffice's job, done at request time
+through the AWS SDK rather than through a plan. The decision to keep per-location provisioning out
+of Tofu and in an imperative tool is recorded in xref:context/decisions.adoc[Decisions]: the
+backoffice runs *inside* the VPC the base configuration creates, so a tool that created the VPC would
+have to run before there was anywhere to run it; and Tofu's value is the state and the plan, which
+imperative calls have neither of, so there was nothing to gain by routing the request-time half
+through it too.
+
+`DeployTargets` (`mcp/src/whitelabel/captal/mcp/aws/Deploy.scala`) is the typed form of those eight
+environment variables — everything a location's service needs that is not the location itself, read
+once at startup so a deploy only ever has to name a slug. It derives three names and a path straight
+from the slug:
+
+[source,scala]
+----
+def targetGroupName(slug: String): String = s"captal-$slug"     // AWS caps this at 32 chars
+def serviceName(slug: String): String     = s"captal-$slug"
+def logGroup(slug: String): String        = s"/ecs/captal-$slug"
+def pathPattern(slug: String): String     = s"/$slug/api/*"
+def healthCheckPath(slug: String): String = s"/$slug/api/health" // set only when the group is created
+----
+
+`deploy_location` runs five AWS-side steps in a fixed order — log group, target group, listener
+rule, task definition, service — because `CreateService` with a `loadBalancers` block fails with
+"no associated load balancer" when the target group is not yet reachable through a listener; the
+rule has to exist first. `pause_location` updates the edge (swaps in the maintenance page, waits out
+the CloudFront invalidation) *before* touching the API (repoint the rule to a fixed `503` JSON
+response, scale the service to zero) — so a guest is never told "paused" by a page that still looks
+live. `resume_location` reverses that order. `destroy_location` requires the slug typed back as
+confirmation, removes the service, the rule, the target group and every task-definition revision for
+the family, and — only if an operator explicitly says yes to an elicitation — the location's S3
+prefix (its bundle copy, stylesheet, icon and uploaded videos). It keeps the log group on purpose and
+touches nothing in the database or the shared infrastructure: `deploy_location` is one call away from
+putting the portal back. The full tool-level contract (requests, responses, scopes) is
+xref:mcp.adoc[MCP backoffice]'s to describe.
+
+A target group is created once with `healthCheckPath(slug)` and never corrected afterward — nothing
+in `InfraStore` calls `ModifyTargetGroup`. A group created against an older health-check contract
+keeps that path silently; see xref:context/pending.adoc[Pending work] for exactly this gap against
+the ALB module's own default target group, which still probes the unprefixed `/api/health` that the
+portal no longer serves.
+
+== Images and releases
+
+Three images, three ECR repositories: `captal-api` and `captal-mcp` from the shared `modules/ecr`
+(keep the last 10 `v`-tagged images, expire untagged ones after 7 days), and the custom rqlite build
+from its own repository inside `modules/rqlite` (keep the last 5 images, any tag). `Dockerfile.api`
+and `Dockerfile.mcp` are both single-stage — `FROM eclipse-temurin:21-jre-noble`, `COPY` one
+pre-built jar, run it — rather than compiling inside the image, which is the pattern that existed
+before and had rotted twice over by naming a deleted `provision/` directory and a `mill` wrapper
+script absent from the repository, invisible because nothing built these images in CI. `api.image`
+and `mcp.image` (Mill tasks) stage the already-assembled jar beside the Dockerfile so the build
+context is two files, not the whole repository. Both images run migrations and the server as one
+`CMD`, so a failed migration stops the container rather than starting a server against a schema it
+was not written for — `whitelabel.captal.platform.Migrate` for the API, `whitelabel.captal.mcp
+.McpMigrate` for the backoffice, each owning its own history table (`db/migration` versus
+`db/migration-mcp`). Both set a 5-second positive DNS cache TTL with no negative caching
+(`-Dnetworkaddress.cache.ttl=5 -Dnetworkaddress.cache.negative.ttl=0`), because rqlite is reached
+through a Cloud Map service-discovery name whose answer changes whenever its task rotates, and the
+JDK's 30-second default positive / 10-second negative caching would otherwise pin the JDBC client to
+an address that is gone.
+
+None of the three image-tag variables (`image_tag`, `mcp_image_tag`, `rqlite_image_tag`) default to
+or tolerate `latest` in the shared variable (`image_tag` is validated against it directly); see
+xref:context/incidents.adoc[Incidents] for the rqlite version drift that made the point concretely.
+
+The SPA bundle and the MCP-UI apps are not released through Tofu or through ECR: `client.bundle`,
+`client.publishS3` and `client.publish` (Mill tasks, detailed in xref:client.adoc[Client]) write
+straight into the same assets bucket `modules/cloudfront` creates, under `bundle/` and `ui/`
+respectively. There is no separate "releases" bucket any more — `cli_releases`, which held versioned
+CLI artifacts for operators to download, was removed along with the CLI itself; see
+xref:context/history.adoc[History].
+
+== See also
+
+* xref:mcp.adoc[MCP backoffice] — the deploy tools' full request/response contract, the asset store,
+  and everything else the backoffice server does that is not infrastructure.
+* xref:testing.adoc[Test strategy] — `mcp.test`, `resetLocalStack`, IAM soft-mode enforcement, and
+  what `DeployE2ESpec` actually asserts against LocalStack.
+* xref:development.adoc[Local development] — `mill mcp.dev`, running the stack without any of this.
+* xref:database.adoc[Database] and xref:platform.adoc[Platform] — rqlite as the database, rather than
+  as a deployed topology.
+* xref:unifi.adoc[UniFi integration] — what travels over the Tailscale proxy, and why.
+* xref:api.adoc[Guest API] and xref:client.adoc[Client] — the two things this topology serves.
+* xref:context/decisions.adoc[Decisions], xref:context/incidents.adoc[Incidents],
+  xref:context/pending.adoc[Pending work], xref:context/history.adoc[History] — why this is shaped
+  the way it is, what has already broken, what is not yet settled, and what moved from where.

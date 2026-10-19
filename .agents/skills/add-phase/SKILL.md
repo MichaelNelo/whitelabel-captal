@@ -1,0 +1,144 @@
+---
+name: add-phase
+description: Use when extending the captive-portal state machine with a new Phase (between Welcome and Ready). Triggers on "add phase", "new phase", "extender state machine", "fase nueva".
+version: 1.1.0
+---
+
+# Add a new Phase
+
+## State machine overview
+
+A `Phase` represents where the user is in the captive-portal flow. The current enum (`core/.../application/phase.scala`):
+
+```
+Welcome → IdentificationQuestion → AdvertiserVideo → AdvertiserVideoSurvey → AdvertiserQuestion → Ready → Authorized
+```
+
+The phase is persisted on `sessions.phase`, advanced by `SessionPhaseHandler`, validated by `sessionEndpoint.secured(allowedPhases = ...)`, and mapped to a SPA route by `Router.phaseToPage`.
+
+**Phase.Ready vs Phase.Authorized** (gotcha):
+- `Ready` = "the survey is done, waiting for UniFi to authorize the guest".
+- `Authorized` = "UniFi authorized the guest; the session's `accessExpiresAt` is set".
+- The `Ready → Authorized` transition is made **only** by `UnifiAccessHandler`, post-commit (not by `SessionPhaseHandler`). If UniFi fails, the session stays in `Ready` and `/api/finish` can be retried.
+- `Phase.Authorized` maps to `Page.Welcome` on the client (`WelcomeView` shows the countdown when the phase is `Authorized` and `secondsRemaining` is set), not to `Page.Ready`.
+
+## Steps
+
+### 1. Add the case to the enum
+
+`core/src/whitelabel/captal/core/application/phase.scala`:
+
+```scala
+enum Phase:
+  case Welcome
+  case IdentificationQuestion
+  case AdvertiserVideo
+  case AdvertiserVideoSurvey
+  case AdvertiserQuestion
+  case BonusGame             // NEW — placed where it should appear in the flow
+  case Ready
+  case Authorized
+```
+
+Also update `Phase.fromDbString` / `Phase.toDbString` if defined (some places serialize via case name; check the file).
+
+### 2. Decide the transitions
+
+Two places set the phase based on events:
+
+- **`SessionPhaseHandler.scala`** (`platform/.../eventhandlers/`): transitions on identification answer + video watched. If your new phase comes after one of these, add the branch there.
+- **Individual route implementations**: e.g. `VideoRoutes`'s `nextVideo.implement` sets `session.phase = step.phase` when no video matches. If your phase is reached by a route directly, update the route.
+
+`SessionPhaseHandler` is a boolean-predicate chain, not a `match` per phase — follow that shape
+rather than inventing a `match`. Example: if BonusGame should start once the advertiser question is
+answered:
+
+```scala
+// In SessionPhaseHandler, alongside isIdentificationAnswer / isVideoVisualized / ...:
+private def isAdvertiserAnswered(event: Event): Boolean =
+  event match
+    case Event.Survey(SurveyEvent.QuestionAnswered(_, _: QuestionEvent.AdvertiserQuestionAnswered)) =>
+      true
+    case _ =>
+      false
+
+// Then in handle's if/else-if chain:
+else if hasAdvertiserAnswered then
+  run(SessionService.updatePhaseQuery(lift(sessionData.sessionId), lift(Phase.BonusGame))).orDie
+```
+
+There is no `Event.Advertiser` case — an advertiser's question answer is still a
+`Event.Survey(SurveyEvent.QuestionAnswered(...))`, wrapping a `QuestionEvent.AdvertiserQuestionAnswered`.
+`application.Event` has exactly three cases: `Survey`, `User`, `Video`.
+
+### 3. Wire the SPA route
+
+`client/src/whitelabel/captal/client/Router.scala`:
+
+```scala
+enum Page:
+  case Welcome
+  case IdentificationQuestion
+  case AdvertiserVideo
+  case AdvertiserVideoSurvey
+  case BonusGame              // NEW
+  case Ready
+  case Error
+
+// Route pattern
+private val bonusGameRoute: Route[Page.BonusGame.type, Unit] = Route.static(
+  Page.BonusGame,
+  root / "bonus" / endOfSegments,
+  basePath = basePath)
+
+// Add to router routes list, getPageTitle, serializePage, deserializePage
+
+// phaseToPage:
+case Phase.BonusGame => Page.BonusGame
+```
+
+Also extend `splitter.collectStatic(Page.BonusGame)(BonusGameView.render)`.
+
+### 4. Create the view
+
+`client/src/whitelabel/captal/client/views/BonusGameView.scala`. Use `ReadyView` or `WelcomeView` as templates — both are minimal-state views. Use `Layout(content = ..., footer = ..., isLoading = ...)`.
+
+i18n keys (e.g. `bonusGame.title`, `bonusGame.cta`) need to be added to the `I18n` schema in `core/src/whitelabel/captal/core/i18n/I18n.scala` (and to `I18n.descriptions`, required at compile time). `LocaleServiceQuill.getI18n` picks up new keys automatically through `I18nSchema.decode` — there is no per-key mapping to update. Operators then write the new keys per location through the MCP backoffice's `set_translations` tool. See skill `add-i18n-key`.
+
+### 5. Add a new API endpoint (if needed)
+
+If the phase needs a backend interaction (e.g., POST `/api/bonus-game/play`), follow `add-api-endpoint`. Use `sessionEndpoint.secured(allowedPhases = Seq(Phase.BonusGame))` so requests outside that phase return `WrongPhase`.
+
+### 6. Add allowed-phase guards
+
+Audit existing routes that take `allowedPhases`. If a route is supposed to be reachable from your new phase, add it:
+
+```scala
+sessionEndpoint.secured(allowedPhases = Seq(Phase.AdvertiserVideoSurvey, Phase.BonusGame))
+```
+
+### 7. Migration if persisting
+
+If you need new columns to support the phase (e.g., bonus-game score), follow `add-migration`. The `phase` column itself is generic TEXT; no migration needed just for adding an enum case.
+
+### 8. Update skills
+
+Update `add-location` and `troubleshoot-deployment` if the new phase is operator-visible (e.g., shows up in logs, requires a new YAML).
+
+## Tests to add
+
+- **Core**: command emits event that triggers the phase transition.
+- **Infra**: `SessionPhaseHandler` test that asserts the transition.
+- **E2E**: full-flow test in `api/test/.../suites/` that walks through to the new phase and validates `StatusResponse.phase` returns it.
+
+## Verification
+
+After deploy:
+- `curl https://.../slug/api/status` and walk the flow manually — confirm the phase transitions.
+- `aws logs tail /ecs/captal-<slug>` for `setPhase` log lines.
+
+## Anti-patterns
+
+- ❌ Adding a phase without updating `phaseToPage` — Router crashes on the missing case.
+- ❌ Skipping the `allowedPhases` audit — endpoints silently reject requests with `WrongPhase`.
+- ❌ Hardcoding the phase string in queries instead of using the enum — refactor pain.

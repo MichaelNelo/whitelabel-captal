@@ -1,0 +1,614 @@
+= Incidents
+:toc:
+:toclevels: 2
+
+Symptom → root cause → fix → lesson. The recurring theme, stated in the commits themselves:
+"almost everything here fails silently" and "a guarantee nobody exercises is not a guarantee."
+When something you're touching rhymes with one of these, read the whole entry before changing it.
+
+== rqlite / JDBC driver silence — the single most expensive class of bug
+
+**Root cause behind everything in this section.** rqlite reports a rejected statement as an
+`error` field inside an HTTP 200. Driver `rqlite-jdbc` 9.1.2.1 turned that into *zero rows
+affected* rather than an exception — "a rejected write is otherwise indistinguishable from a
+successful one." Fixed by bumping the driver to 10.5.2.1 and the server to 10.6.1, whose release
+note is the whole reason: "failed statements, batches and commits now throw instead of being
+silently ignored." Production had already drifted to rqlite 10.6.1 on its own, because
+`docker/rqlite/Dockerfile` said `:latest`; three driver/server combinations existed at once and
+none was the pairing the driver targets.
+
+* **Symptom:** none, visibly — that's the point. Four separate mechanisms were built *against*
+  this silence and three of them were later found broken by it.
+* **`RqliteDataSource`'s connection proxy forced `autoCommit` true and turned `commit`/`rollback`
+  into no-ops.** Necessary at the time: 9.1.2.1 silently dropped writes when `autoCommit` was
+  false. Consequence: `TransactionalEventHandler` — the *only* place in the codebase that opens a
+  transaction — was never actually transactional and never rolled back, while logging "Event
+  handling failed, transaction rolled back" on every failure. A batch of event handlers failing
+  halfway left an answer persisted without the phase transition that should follow it. The old
+  `agents.adoc` documented this atomicity as a design decision and listed four writes it kept
+  consistent; it was not true. "A guarantee written in the docs, implemented in the code, and
+  switched off two layers below by a workaround for someone else's bug, with nothing connecting
+  the three." **Fix:** remove the proxy once the driver no longer needs it. **Verified, not
+  assumed:** against 10.6.1, `setAutoCommit(false)` sticks and a rolled-back insert is genuinely
+  absent afterwards; 718/718 tests from a clean container; migrations became atomic as a side
+  effect, which is what made V21's broken index (below) visible in the first place.
+* **`Migrate.wrapForMigrations` (removed) was a reflection proxy forcing Flyway's `execute()`
+  through `executeUpdate()`**, because the old driver routed any `INSERT` whose string literal
+  happened to contain the word "select" to rqlite's read-only endpoint, where it silently did
+  nothing while Flyway recorded it as applied. It had also become actively harmful: its handler
+  never unwrapped the `InvocationTargetException` that `Method.invoke` returns, so the moment the
+  driver started throwing for real, every genuine `SQLException` reached Flyway as an
+  `UndeclaredThrowableException` with no attached cause — the end-to-end suite failed exactly this
+  way, with a message naming nothing useful.
+* **`DeviceRow` had no `SchemaMeta`.** Quill derived the table name from the class name and wrote
+  to `device_row`, while migration V6 had created `devices`. `SessionService` writes one
+  `DeviceRow` per session, so that insert had been silently failing since V6 — `devices` is empty
+  wherever this has ever run. **Symptom actually seen:** `/api/status` answering 500, which "took
+  sixty tests down three layers from the cause" before the real fault was found.
+* **`seedLocales` had to become `onConflictIgnore`.** Two test suites seed the same locale keys
+  against one shared database; silently ignoring the conflict is literally what the old driver did
+  by accident, so suites written against that accidental behaviour (e.g. `SoftDeleteSuite`'s
+  deactivation surviving a later reseed) needed it made explicit rather than lost on the bump.
+* **`I18nToolsSpec` contained a test that pinned a bug as a contract**: "a unique-constraint
+  violation never reaches JDBC as an error." Its own comment said "if a future driver starts
+  surfacing it, this test fails and the workaround can be revisited." One did.
+* **`ensureRqlite` did not compare the running container's image tag before reusing it.** A
+  version bump in the build was therefore invisible at test time — old containers kept running and
+  the suite exercised an engine the build no longer declared. This is how 8.36.2 survived in the
+  test fixture long after production had moved to 10.6.1.
+* **Diagnosis was blind during all of this:** a bare 500 with no logged cause is undiagnosable
+  both here and in production. `tapDefect` was the first instinct for logging it and caught
+  nothing, "because in tapir a typed error is a value, and an effect that *fails* in that position
+  is not a defect" — it needed a handler that logs on the actual error channel.
+* **Lesson, stated and worth repeating:** a measurement taken against a buggy dependency can look
+  like it supports an unrelated design choice. One commit temporarily left transactions disabled
+  on the premise "there are no transactions here to worry about" — a conclusion that had only held
+  because the old driver's silence hid the evidence against it.
+
+== Concurrent migrations
+
+* **Symptom:** `mill mcp.test` could delete its own schema under it. Five database-backed specs
+  each built their own Flyway and ran it; Mill forks one JVM per spec, so five migrators raced.
+  Harmless while every migration only ever *added* something — the race just produced "already
+  exists" warnings nobody read. V22 *rebuilds* `advertiser_videos` (SQLite cannot `ALTER` a CHECK
+  constraint in place), so the same race turned destructive: one runner dropped the table while
+  another had already renamed its replacement over it. The resulting error — "No result set
+  returned" from whichever spec reads that table next — names neither the table nor the cause, and
+  is timing-dependent enough that the suite passed often enough to look healthy.
+* **Root cause, measured directly:** two migrators against one fresh rqlite reported 23 and 22
+  migrations applied — *both ran*, and the second's insert into Flyway's history table only
+  collided on `installed_rank` *after* its DDL had already gone through, because `ALTER TABLE ADD
+  COLUMN` is not idempotent. Flyway cannot lock on SQLite/rqlite at all: it logs `Unable to lock
+  "flyway_schema_history" as SQLite does not support locking. No concurrent migration supported.`
+  and proceeds anyway.
+* **Why it matters beyond tests:** every location is its own ECS service running the same API
+  image, and that image migrates on every boot — so a fleet redeploy across twenty locations is
+  twenty migrators hitting one shared history table simultaneously, every release.
+* **A follow-up question worth its own entry, because it was asked and answered by experiment
+  rather than assumption: "Flyway wraps each migration in a transaction — doesn't that already
+  exclude concurrent migrators?"** No, and the first half of the measurement looks like it says
+  yes. With `group = false`, each migration commits alone, so against an *empty* database the
+  migrations' own DDL genuinely conflicts (`CREATE TABLE users` against a table that now exists):
+  18 of 60 concurrent migrators died at commit with SQL State 25000 across ten trials — which looks
+  like exclusion and is not; it's the migration SQL colliding with itself. When the SQL does *not*
+  conflict, nothing stops anyone: six migrators racing one pending `DROP TABLE IF EXISTS`
+  migration wrote three separate history rows for the *same* version, at ranks 23/24/25, within
+  53 ms — ten times out of ten (`installed_rank` is the primary key, `version` is not unique, so
+  migrators reading the same max-rank-so-far and incrementing it land on distinct ranks and never
+  collide). The second case is the one that happens in production: an empty database happens once;
+  a redeploy with one new pending migration happens every release. V22's table rebuild is what
+  turns the second case *expensive* rather than merely untidy — applying it twice duplicates every
+  row the `INSERT INTO advertiser_videos_new` copies, because it carries no `ON CONFLICT`.
+* **Fix:** `Migrate.Lock`, a hand-rolled mutex over rqlite (see `decisions.adoc` for why this
+  primitive and not S3/DynamoDB/EFS/etcd). Acquisition decides on a **read-back**, never on
+  whether the `INSERT` threw: under the old driver's silence, "it threw" and "it affected zero
+  rows" were both indistinguishable from "I lost the race," so only reading back who actually
+  landed settles it.
+* **The expensive failure mode, found live and costing ten minutes to diagnose:** nothing holds
+  the lock and a bid simply doesn't land — which no amount of waiting fixes. It happened against a
+  database still carrying a stale `beat_at NOT NULL` column from an earlier version of the lock
+  table's schema, and the ten-minute timeout's error message blamed a migrator that did not exist.
+  Now this shape of failure is detected in under a second and the message names the table shape to
+  check, not a phantom holder.
+* **`MigrationLockSuite` has two load-bearing structural details, both found by breaking them:**
+  (a) it must be a *suite nested under* `E2ETests`, not its own top-level `ZIOSpecDefault` — a
+  second top-level spec class makes Mill fork a second JVM against the same rqlite container, and
+  that JVM's test-reset step dropped the `migration_lock` table out from under whatever currently
+  held it, wedging `mill __.test` for over an hour; (b) it needs `TestAspect.withLiveClock` — `Lock`
+  waits using `delay`, which reads ZIO's default `Clock`, and ZIO Test replaces that with a
+  `TestClock` that nothing in the test ever advances, so the waiting fibers slept forever and even
+  `Lock`'s own ten-minute timeout — which reads the same substituted clock — could never fire. "It
+  hung rather than failed," which is strictly worse for a CI run.
+* **A separate test-harness bug found while fixing this:** the migration task's Mill cache key
+  didn't include the container id. A plain `Task` caches on its declared inputs, and the rqlite
+  URL string doesn't change when the container behind it is torn down and recreated — so `docker rm`
+  followed by a no-source-change run **skipped the migration** and tested against an empty
+  database, failing in a way that looks exactly like a schema bug rather than a cache bug. Fixed
+  by making the container id part of the task's input.
+* **Four specs (across `mcp.test` and `api.test`) had each assembled their own ad-hoc Flyway
+  instance without `Migrate`'s `DataSource` wrapper**, so their DDL did nothing (same silent-reject
+  class of bug as above) while Flyway's history recorded it as applied regardless — `AuthSpec`
+  already carried a comment admitting it had produced a history row claiming `mcp_tokens` existed
+  against a database where it did not. These specs also set `cleanOnValidationError`, which drops
+  *every* table on a checksum mismatch: "a history those silent no-ops had corrupted would wipe the
+  database on the next run and call it recovery."
+
+== Flow / read-path bugs (what a guest actually experienced)
+
+* **Access granted for nothing — "the business model backwards."** Symptom:
+  `ProvideNextIdentificationSurveyHandler` used one fallback phase for two different situations —
+  an identified visitor who had exhausted the identification pool (correctly advances to the
+  advertiser video) and a visitor with *no user at all and no active identification survey*
+  (incorrectly advanced to the same place, i.e. access without ever answering anything). The bug
+  was reachable because `user_id` could still be `NULL` at that point: `UserPersistenceHandler`
+  only sets it from a `UserCreated` event, while `createGuest` emits `NewUserArrived`, which
+  nothing persists to the session — pushing `VideoRepositoryQuill` into its anonymous-visitor
+  query branch, which carries no `EXISTS` check for pending questions and so happily serves a video
+  with nothing left to ask afterward. **Fix:** the two destinations became separate parameters;
+  an unidentifiable visitor now ends at `Ready` with no access. **Lesson applied elsewhere too:**
+  `SurveyRepositoryQuill` now logs a warning when an unidentified visitor finds no active email
+  survey, specifically because "from the outside the portal looks like it is working" with no
+  signal that it is quietly granting nothing to nobody.
+* **A weighted-random video draw ran on every anonymous request and its result was thrown away on
+  the next line.** `ProvideNextVideoHandler` only failed with `UserNotIdentified` *after* already
+  asking the repository for a video, so `nextAdQueryAnonymous` executed a real weighted random
+  query against the database for every single unidentified request, discarding the result
+  immediately. Fixed by making `findNextForUser` take a `user.Id` directly (not an `Option`), so
+  the lookup happens strictly inside the branch that has one.
+* **`findNextPromo` was fully implemented — cursor rotation over `(priority, created_at)`,
+  wrapping at the end — and never called.** A visitor whose advertiser videos were all seen, or
+  none of which had a remaining question, was sent onward with nothing to watch at all, even
+  though the venue's own promo fallback existed and worked. Everything else needed was already in
+  place (`sessions.last_promo_video_id` since V4, `SessionData` carrying it,
+  `SessionVideoHandler` advancing it); only the actual call to invoke the fallback was missing. The
+  cursor itself moved off a hardcoded `None` parameter with a TODO comment onto the session, where
+  `core` can read it directly the same way it already reads locale and location id.
+* **A promo's own survey question was never served.** The guest watched the promo, went straight
+  to `Ready`, and the endpoint answered `200` with a `NextStep` — the identical shape used for "no
+  question left to ask" — so nothing anywhere recorded that a survey had been silently skipped.
+  Three independent `advertiserId` gates were all conspiring: `fetchAdvertiserQuestionDetails`
+  bound `survey.advertiser_id` inside an `Option`-comprehension (so no advertiser discarded the
+  question with it); `findWithAdvertiserQuestion` did the same on the answering side; and
+  `findAnsweringVideoSurvey` required `sessions.current_advertiser_id` before it would even
+  rebuild the state needed to answer. **Fix:** `advertiserId` became `Option` down that whole path
+  (a promo's survey has none; it travels only so the event log can attribute the answer — `answers`
+  itself has no advertiser column). Verified by putting each gate back individually: the
+  `category = 'advertiser'` filter on the query turned out to be redundant (removed), while the
+  `advertiserId` gate was the one actually load-bearing.
+* **`surveys.location_id` was accepted, stored, and read by *no query at all*.** Worse: the
+  duplicate-active-identification-survey check compared it, so a second active profiling survey
+  with a *different* `location_id` passed the check — and both then became candidates, since
+  selection by category ignores the column entirely. **Fix:** the parameter was removed outright;
+  an advertiser survey's location now derives from its video (the video query already filters by
+  location), with the video itself verified to exist (there's no foreign key from `surveys` to
+  `advertiser_videos`, so a survey naming a nonexistent video previously stored fine and was simply
+  unreachable).
+* **`decodeRules` silently drops a rule it cannot parse, via `.toOption`, with the reason
+  thrown away — three different ways, and `parseQuestionType` was silent about all three:** the
+  stored config doesn't decode against the question's rule type; the question's type accepts no
+  rules at all, so a row attached to it is ignored regardless of content (the hardest case to
+  notice — the config itself is perfectly valid JSON); or the type string itself is unrecognised,
+  in which case the question is read back as a plain input and every rule on it goes with it. "A
+  validation that is not applied looks exactly like one that passed: same 200, same question, no
+  error anywhere." **Fix:** `unreadableRules` now names each dropped rule with its reason and raw
+  bytes at all five read sites that call it; `UnreadableRuleSuite` reads the log via `ZTestLogger`
+  rather than asserting on a response, because the response is — deliberately, by design —
+  identical either way.
+* **`rule_config` and the survey tree were written three uncoordinated ways at once** (API via
+  circe, repository read-back via circe decoders, MCP writer via raw string interpolation), see
+  `decisions.adoc`'s survey-tree entry for the fix. The incident framing: this is the same silent-
+  drop failure mode as `decodeRules` above, one layer up — a mismatch between writer and reader
+  never raised, it just stopped enforcing the rule for every question carrying it.
+* **`Rating` questions rendered in the portal as the literal string `"Rating input - TODO"`.**
+  Every rating question ever created through any path reached a guest as untranslated placeholder
+  text. Worse, the operator-facing skills kept *advertising* `Rating` as a valid choice after the
+  schema had already stopped accepting it, so a model following the skill kept choosing an option
+  that no longer worked. Fix: removed from the creatable formats; the skills explain why it's gone
+  rather than simply omitting it, specifically because "a stale skill is a live failure mode" (see
+  the skills-drift section below).
+* **`ApiError`'s hand-written encoder and decoder silently disagreed about coverage — the single
+  highest-impact bug this codebase has shipped.** The encoder matched all 32 `ApiError` variants
+  (matching an ADT exhaustively is compiler-checked). The decoder matched only 9, as a `match` on a
+  plain `String` with a catch-all case — which the compiler considers exhaustive no matter what it
+  actually covers. The other 23 variants arrived at the browser as
+  `InternalError("Unknown error type: …")`, which `ErrorHandler` routed straight to the generic
+  error page: **a guest who tripped a server-side validation rule saw the error screen instead of
+  the actual reason**, for 23 of 32 possible reasons, silently, for as long as this code existed.
+  Two assertions that should have caught this had asserted nothing at all: `!code.isSuccess ||
+  body.contains("error")` is true of *every* HTTP rejection regardless of which error came back,
+  and a separate test was named for `RequiredAnswerMissing`, a variant the server does not even
+  send. **Fix:** both the encoder and decoder are now derived from one `Schema[ApiError]` (see the
+  wire-format decisions above) — making the gap structurally impossible rather than merely
+  patched.
+* **The `ignoreEmptyCollections` trap.** zio-http's `CodecConfig` defaults
+  `ignoreEmptyCollections = true`; zio-schema's own default is the opposite, `false`. A radio
+  question whose options had all been retired produced a live response of `200 {"Radio":{}}` — the
+  `options` field vanished from the JSON entirely because it was empty — and circe's *derived*
+  decoder on the client side has no default to fall back on for a missing required field, so it
+  could not read that response at all. Three end-to-end tests failed on exactly this. The test
+  suite itself (`WireContractSuite`) had been passing throughout, because it encoded through
+  `JsonCodec.jsonEncoder` with *no explicit config*, silently picking up zio-schema's default
+  rather than the server's actual configured one — "it was comparing two libraries through a
+  setting the server does not use." **Fix:** both the server (`HttpApp.codecConfig`) and the test
+  suite (`TestHelpers`, `WireContractSuite`) now share the exact same `CodecConfig` value, so the
+  format under test is provably the format served. **Lesson:** a wire-contract test that
+  constructs its own codec configuration, even "the same" configuration by separate construction,
+  is testing a coincidence, not a contract.
+
+== MCP schema generation
+
+* **The SDK's `JsonSchemaGen` silently drops zio-schema's discriminator annotation.** The patch
+  (`withDiscriminator`) only repaired the *top-level* schema, so the identical discriminated enum
+  nested inside `create_advertiser_video`'s `questions[]` array came out bare: seven question
+  variants published with nothing distinguishing them, four of which have no property beyond
+  `rules` — "not merely undocumented but indistinguishable from each other." The decoder still
+  demanded the discriminator tag regardless, so the published schema was outright *wrong*, not
+  merely incomplete — a caller following it exactly could not construct a single valid call.
+  "Two agents in a row stopped on the same 'missing subtype' error, both guessing at the field
+  name, both wrong." **Interim fix:** `withDiscriminatorInArray`, walking one level further through
+  `items`. **Actual fix, later:** stop patching the SDK's generator at all — render through
+  zio-http's own OpenAPI generator instead (`decisions.adoc`).
+* **The patch's own `caseIds` list silently drifted from the enum it described.** `caseIds` was a
+  hand-transcribed copy of the enum's declaration order, sitting next to the enum with nothing
+  forcing agreement. Worse: `withDiscriminator` zipped those ids *positionally* against the
+  generated `oneOf` array, with nothing in the type system asserting the two orders actually
+  matched — "they drift and the arity check still passes, so every variant gets labelled as its
+  neighbour: a schema that *looks* correct and misdirects every caller." Verified by deliberately
+  swapping two cases in the enum declaration: the test built to catch this failed with the two
+  tags transposed, exactly as the bug would manifest for a real caller.
+* **`@caseName` is honoured by the JSON codec and silently ignored by `JsonSchemaGen`.** The
+  published schema advertised `"Profiling"` as a legal enum value while the decoder rejected
+  anything but `"profiling"` — confirmed against a live running server, not inferred from reading
+  the generator's source. Same root cause applied to `@discriminatorName` and
+  `@rejectExtraFields`: both were enforced by the compiler-generated decoder at runtime and
+  completely absent from what the published document claimed.
+* **Scala default values do not reach the generated schema at all.** `list_advertisers` marked its
+  `includeInactive` boolean parameter as *required* in the published schema despite the Scala type
+  having a default value — because the schema generator has no way to see a Scala default.
+* **zio-schema synthesises a JSON Schema `description` from a type's doc comment, verbatim.**
+  `CreateSurveyIn`'s internal scaladoc — comment markers and all — leaked directly into the
+  published tool schema an operator's agent reads. Field-level `@description` annotations, written
+  to be read by a caller rather than a maintainer, are the actual fix; scaladoc is not a substitute.
+
+== MCP Apps / the upload page — a saga of host-contract assumptions
+
+Five consecutive bugs in rendering a single sandboxed-iframe page correctly, each discovered only
+by actually running the page against a real host, because — as the commits note repeatedly — "the
+policy only exists inside a host" and no amount of reading the spec in isolation surfaced these.
+
+* **The declared resource URI named a specific video that did not exist yet.**
+  `_meta.ui.resourceUri` was declared as `ui://upload-video/{videoId}`, but a host reads that
+  template literally — the `{videoId}` placeholder is never substituted, because the declaration
+  is built before any tool call has produced a video, and `CallToolResult` carries no `_meta` field
+  to correct it afterward. `resources/read` on the literal, unsubstituted URI answered "No video
+  with id '{videoId}'" — which reached two actual operators as the generic "There was a problem
+  displaying content from captal" error. **Fix:** the URI now names what the page *is* (everything
+  still awaiting a file) rather than which video, with the host told which one via
+  `ui/notifications/tool-result` instead of the URI.
+* **A View can only ever be opened by calling a tool whose definition carries `_meta.ui` — there
+  is no host-side path to render a bare `ui://` resource a user opened on their own.** Per-video
+  resources were readable (`resources/read` answered correctly) but could never actually be
+  *rendered* by any host, because nothing opens a View except a `tools/call`. The earlier reasoning
+  for making them per-video resources — "the listing is where 'which are pending' belongs" — was
+  right about listing and wrong about opening. **Fix:** `resume_video_upload`, a tool specifically
+  so a host has something to call to reopen an abandoned upload; without it, the only way back to
+  an abandoned upload was `create_advertiser_video` again, "which makes a second video, a second
+  survey and a second set of questions" for one physical file.
+* **The page spoke the wrong postMessage protocol entirely.** It posted a bespoke
+  `{type: 'tool', name: …}` envelope, but MCP Apps are themselves MCP *clients*: they must open
+  with `ui/initialize`, answer with `ui/notifications/initialized`, and only then speak ordinary
+  JSON-RPC 2.0 over `postMessage`. No host would ever have read the old envelope at all — the
+  upload would have completed server-side and the on-screen confirmation simply never fired.
+  Separately: a `tools/call` a *page* makes (e.g. confirming the upload) is never surfaced to the
+  model by the host on its own — it executes, a UI element turns green, and the conversation knows
+  nothing. "Exactly the case here: confirming an upload is the thing the agent is waiting on and
+  the one thing it cannot observe." The page now also explicitly sends `ui/message`.
+* **Capability leak via a hidden-but-present signed URL.** Before this was fixed, the page
+  embedded a signed PUT URL for *every* video still awaiting a file, and merely hid in JavaScript
+  the rows it hadn't been opened for. "Hiding a row is not withholding the capability inside it: a
+  page opened for one video carried write access to the others in its markup" — anyone able to
+  read the page's source (trivial, in a browser) had a live upload URL for every pending video,
+  not just the one they were shown. **Fix:** the markup carries no embedded data at all;
+  `resources/read` on a per-video URI returns exactly one video's own ticket, signed at read time.
+* **No declared CSP meant the spec's restrictive default (`connect-src 'self'`) silently blocked
+  the upload.** The page would render normally, the operator would pick a file, and only then
+  would the browser block the `PUT` to S3 as `blocked:csp` — "the first moment anything said so is
+  the last one," since nothing server-side fails and no automated test can cover a browser-enforced
+  CSP. A related, earlier mistake: the CSP was first declared on the *tool*, which the Apps
+  extension's metadata schema has no field for — the host reads CSP from the *resource*, not the
+  tool, so declaring it on the tool did nothing at all, silently.
+
+== Readiness lied about four different things at once
+
+`get_location_readiness` reported a location as serving guests correctly when it was not, in four
+independent ways, all found and fixed together:
+
+* `unifiConfigured` checked only `unifiHost.exists(_.trim.nonEmpty)`, while `UnifiAccess.fromRow`
+  (the thing that actually gates whether guests get authorized) requires host *and* `apiToken`
+  *and* `siteId` together, answering `None` if any one is missing. A location with a host
+  configured and no site id reported itself "configured" and authorized nobody — "the exact
+  failure this tool exists to surface."
+* `missingIdentificationSurveys` checked only that the survey row exists and is active, while the
+  actual serving query joins `questions` and filters on active — so a survey whose every question
+  had been individually retired reported as fine while identifying nobody.
+* Nothing cross-checked a location's active videos against its active advertisers at all: retiring
+  an advertiser takes its videos out of rotation (the selection query joins and filters on
+  advertiser-active), but `activeVideos` kept counting them regardless, so a location could read as
+  well-stocked while serving only its own promos.
+* `advertiserSurveys` was compared against `activeVideos` on the assumption the two were
+  comparable — which stopped being true the moment promos gained the *ability* to carry a survey
+  (a promo plays fine with or without one, unlike an advertiser video), inventing a phantom missing
+  survey for every location that had a promo.
+
+**Coverage gap worth recording on its own:** `OnboardingSpec` *claimed* `Readiness.of` was
+"covered where LocalStack is available," and in fact nothing covered it — which is precisely how
+the `unifiConfigured` bug above survived. The pure parts of `Readiness` (`steps`) were tested; the
+field that feeds it (`of`, which needs a live database and bucket) was not.
+
+== Deploy / infrastructure plumbing
+
+* **`deploy_location` created every ECS service with `assignPublicIp` set to `DISABLED` — the
+  opposite of what the Terraform topology actually builds.** `enable_nat_gateway` is `false` by
+  default and no environment overrides it, so every task runs in a public subnet with no NAT,
+  isolated by security group alone. A task with no address of its own has no route to ECR at all,
+  so the image pull fails and the task never starts — "the service exists, every resource it
+  reports is correct, and the only sign is `CannotPullContainerError` in the log group." The tool's
+  own `running: false` status field had already been describing this exact symptom without the
+  tool knowing it was describing itself. **No test could have caught this, and it is worth
+  understanding why:** LocalStack runs an ECS task as a plain unrouted Docker container, so the
+  end-to-end deploy test passed with the wrong value throughout — "the third thing this session
+  where a decision lived in two places, one moved, and local stayed green." If `enable_nat_gateway`
+  is ever turned on in any environment, this flag has to flip with it, and nothing will force that
+  to happen together.
+* **LocalStack `AlreadyExists` errors on 68 of 70 planned resources were never a CloudFront
+  problem**, despite looking like one (the errors were on cache policies). Root cause: the
+  container had been running for hours holding resources from a *previous* apply whose Tofu state
+  had since been discarded — so the next plan proposed *creating* things that already existed.
+  `docker rm -fv` (not plain `docker rm`) is required to actually clear this: `-f` alone leaves the
+  container's anonymous volume at `/var/lib/localstack` behind, and the replacement container comes
+  back still carrying every old resource. This is the direct motivation for keying the Tofu state
+  directory to the container id (`decisions.adoc`).
+* **LocalStack reports the ALB listener's port as its own edge port (4566), not the configured
+  port 80.** Every single Tofu evaluation sees this as drift and "corrects" it, to no actual
+  effect — one harmless in-place modification per run. Lesson: "no changes" cannot be used as a
+  LocalStack health check, because there is never a truly clean plan against it.
+* **The IAM enforcement check was, for a while, vacuous.** `DeployE2ESpec`'s assertions about
+  denied calls passed identically whether `ENFORCE_IAM` was 1 or 0 — because an empty denial list
+  from *not evaluating anything* reads exactly like an empty denial list from *everything being
+  permitted*. Fixed by requiring the test to provoke and confirm one specific, deliberately-denied
+  call (`s3:ListBuckets`, chosen because it has no side effect even when soft mode would let it
+  through); verified against both the dummy test credentials (returns results, logs nothing) and
+  the real IAM user (refused, logged once). A related hole in the same area: the build's
+  container-reuse check did not compare IAM settings, only `SERVICES` and the image tag — so a
+  LocalStack container started *before* IAM enforcement was requested kept being reused, allowing
+  everything silently, "and the suite passes while testing nothing — no 501 and no error, just a
+  green run." Before enforcement existed at all, the suite connected with literal `test`/`test`
+  credentials, which LocalStack accepts for anything by default — so the deploy end-to-end test
+  would have passed against a completely empty IAM policy.
+* **The one real permission gap IAM enforcement actually found was a resource mismatch, not a
+  missing grant:** the test suite was writing to a bucket of its own while the policy only grants
+  object actions on the configuration's own asset bucket — `captal-local-assets` allowed,
+  `captal-assets-mcp-test` denied. Fixed by having the suite consume `ASSETS_BUCKET` from the Tofu
+  output rather than inventing its own name — not by widening the policy, which would have granted
+  production-shaped access to something that only ever exists inside a test.
+* **`Dockerfile.api` did not build, for two independent reasons, and nobody noticed because
+  nothing in CI builds this image.** It copied a `provision/` directory that no longer existed
+  (deleted with the YAML provisioning engine) and a `mill` wrapper script that has never existed in
+  this repository. Either line alone fails the image build. Replaced with a one-stage Dockerfile
+  that packages a jar Mill already built.
+* **`Dockerfile.mcp` did not exist at all, although the Terraform module already referenced
+  `captal-mcp:${var.mcp_image_tag}`** — "the service it deploys had nothing to pull." Writing it
+  surfaced two more build facts only discoverable by actually running the resulting image: the
+  module has two `ZIOAppDefault` entry points and Mill will not guess which one is `mainClass`
+  (the only symptom is `java -jar` reporting "no main manifest attribute" from a container that had
+  already migrated its database successfully — i.e., everything *before* the missing manifest
+  worked); and declaring a main class makes Mill prepend a launcher script to the assembly, which
+  is refused once the jar passes 65,535 ZIP entries — this assembly is well past that, hence
+  `prependShellScript = ""`.
+* **`client.publishS3` used to publish the *entire* bundle directory, and `Assets.copyBundle`
+  copies that whole directory into every location's `<slug>/` prefix.** Once the MCP App pages'
+  Scala.js build merged into the portal's single linker run (`decisions.adoc`), `upload.js`,
+  `unifi.js` and the chunks they need started sitting beside the portal's own output — so every
+  single location was about to silently carry a full copy of the backoffice's operator pages at a
+  path nothing in the portal addresses or serves. Fixed by subtracting *by import graph*, not by
+  file name, since a shared linker run names a chunk after whichever module happened to pull it in
+  first; the runtime chunk the portal genuinely needs stays, the two App-only entries and their
+  exclusive chunk do not.
+
+== Skills / documentation drift — a repeatedly observed live failure mode
+
+Stated directly in the commits, more than once, because it kept recurring: "a skill describing a
+deleted feature is worse than a missing one, because the model follows it"; "a stale skill is a
+live failure mode"; "we have watched the model obey a stale skill twice."
+
+* An operator-facing skill told the reader to create a YAML file under `shared/surveys/` and
+  pointed the model at it *before* the YAML provisioning engine that read such files was removed —
+  "following them would have produced exactly the wrong thing."
+* Nine of twelve operational skills still described the deleted CLI and YAML tree well after both
+  were gone. The worst: `add-video` (which `create_advertiser_video`'s own tool description
+  directed the model to read) instructed running `captal video add` and warned the operator to
+  edit a `survey.yaml` placeholder full of the literal text `"TODO"` before pushing — the *exact*
+  failure mode `create_advertiser_video` had been specifically built to make impossible by
+  requiring real questions up front.
+* Auditing the skills for staleness turned up outright wrong instructions, not just stale ones:
+  one skill named a required field `question` where the actual API calls it `answer`, so a model
+  following the skill literally would get every call rejected by the decoder; another documented
+  three CSS class names (`.brand-pulse`, `.loader-icon`, `.fade-out`) that do not exist anywhere in
+  the stylesheet or the source, including a "don't break `.brand-pulse`" warning about a class that
+  was never there to break; two i18n skills told the operator to "coordinate with the project
+  owner" to add a new locale, when the actual code makes any locale with rows selectable
+  immediately, with nobody to coordinate with.
+* `i18n-reference` had drifted from the actual `I18n` type: missing two keys added later for the
+  access-expiry countdown, and internally inconsistent about its own total (said 36, listed 37,
+  the type actually had 39). It also claimed a missing i18n key makes the endpoint fail to decode;
+  it doesn't — the portal renders the literal bracketed key name (`[welcome.title]`) to the guest,
+  which is precisely why a missing key is a *silent* failure rather than a loud one. Root fix: stop
+  hand-maintaining the list; derive both the key list and their descriptions from the `I18nSchema`
+  type itself, so adding a field without a description becomes a compile error instead of a
+  documentation gap.
+
+== The location slug prefix was lost twice, by two unrelated mechanisms, both production-only
+
+This is the incident `agents.adoc`'s invariant list and `docs/api.adoc` both point at; it is
+reproduced here in full because no automated test caught either occurrence, and none can without
+deliberately configuring a slug the way production does (`TestLayers` configures none).
+
+* **First loss, during the move off tapir.** `endpoints/` (the predecessor of `messages/`) called
+  `prependSecurityIn(slug)` on every route tapir interpreted, which is where the `/<slug>/` prefix
+  actually lived. Converting `HealthRoutes` to a plain zio-http `Endpoint` dropped that call along
+  with the rest of the tapir description — so the converted health route silently stopped being
+  served under its slug. **Why this is worse than a typical regression:** `Deploy.healthCheckPath`
+  registers each location's ALB target group health check against `/<slug>/api/health`
+  specifically. A 404 there means ECS considers every task for that location unhealthy —
+  **in production only**, since `LOCATION_SLUG` is never set in the test environment and the test
+  suite therefore cannot exercise this path at all.
+* **Second loss, immediately after fixing the first.** The fix was to apply the slug prefix with
+  `Routes#nest`, reasoning that one call in `HttpApp`, wrapping every route, was more central and
+  harder to forget than per-route configuration. This was wrong in a way that only showed up by
+  actually starting the server: `Routes#nest` rewrites the *route pattern* `Routes` matches
+  against, but a zio-http `Endpoint`'s handler decodes the incoming request against the pattern
+  **the endpoint itself carries**, which `nest` never touches. With `LOCATION_SLUG` set, the
+  result was
++
+[source]
+----
+GET /cafe-centro/api/health  -> 400 Malformed path /cafe-centro/api/health
+                                     failed to decode using /api/health
+GET /api/health              -> 200 {"status":"ok"}
+----
++
+  — both answers wrong, and wrong in the direction that matters: the path nothing probes (bare
+  `/api/health`) answered fine, and the path the ALB actually checks (`/cafe-centro/api/health`)
+  400'd. The startup log was simultaneously claiming the server was serving
+  `/cafe-centro/api/health`, because the log reads the route's *nested pattern*, which by this
+  point described a route the endpoint could no longer actually decode.
+* **Fix:** `ApiBase` nests the path pattern **before** it becomes an `Endpoint`, as a constructor
+  parameter passed to every route class — the same construction-time dependency tapir had for the
+  same underlying reason, which had been read as incidental and wasn't. There is now exactly one
+  `RoutePattern` per route, and the codec is built from that same pattern.
+* **Lesson, stated directly in the fix commit:** "no test covers it, and none can" with the
+  current `TestLayers` (which configures no slug at all) — this bug class was only ever going to
+  be caught by starting the dev server with a slug set and hitting it, which is exactly how it was
+  found both times. Anyone changing how the slug prefix is threaded through routing should start
+  a real server with `LOCATION_SLUG` set and check both the slugged and unslugged paths by hand
+  before trusting the test suite's green run.
+
+== Auth / protocol plumbing
+
+* **The OAuth metadata issuer pointed at a hostname that could never resolve, and the failure
+  surfaced four layers away from the cause.** `https://captal.invalid/static-tokens` was chosen on
+  the reasoning that with static bearer tokens there is no authorization server to send anyone to,
+  so the field's value was meaningless either way. It was not meaningless, it was *unreachable*:
+  `.invalid` is reserved by RFC 2606 to never resolve, and a DNS name that never resolves does not
+  fail fast — measured at 10,011 ms per lookup before the resolver gave up. `mcp-remote` performs
+  OAuth discovery on every connect, so each Claude Desktop launch spent roughly 20 seconds doing
+  DNS lookups; Desktop's own connection timeout (~21.7 s) then fired and closed the transport —
+  and closing the transport invalidated the host's resource cache. **The observed symptom was
+  four removes from the cause:** the model could see this server's *tools* (loaded on a path that
+  didn't trip the timeout) and never its *resources*. **Fix:** point the issuer at the server's own
+  origin, where discovery now fails in milliseconds with an honest 404 (later replaced with a real
+  metadata document declaring no grant types at all, which RFC 8414 permits and which is more
+  informative than a 404 — "there is no flow, stop looking," per `decisions.adoc`).
+* **`Grant.scopeOf`'s pattern match silently matched every grant to the same scope.** The `match`
+  used an unqualified, lowercase identifier as a pattern arm (`case i18n_write => …`) intending to
+  match the enum case `Grant.i18n_write`. In Scala, an unqualified lowercase name in a pattern
+  position is a **fresh variable binding**, not a reference to the existing case — so that arm
+  matched *everything*, and `scopeOf` returned `i18n:write` for every grant regardless of which one
+  was actually requested. This was caught only because Scala 3.9 added an unreachable-case warning
+  that happened to point at the now-dead arms below it; nothing about the bug itself was flagged.
+  Had it shipped, `create_token` would have issued tokens carrying a scope nobody asked for while
+  silently withholding the ones they did ask for, and the attenuation check (does a delegated
+  token's scope set stay within its parent's) would have been comparing the wrong set entirely.
+  **Fix:** qualify every pattern arm (`case Grant.i18n_write => …`). **Lesson:** an unqualified
+  lowercase name in a Scala pattern match is a trap that compiles cleanly and matches silently;
+  it only becomes visible if something downstream happens to warn about the cases it shadows.
+* **The AWS SDK's `netty-nio-client` (for async clients) pins netty 4.1.x; zio-http runs on
+  4.2.x, where `DefaultHeaders` moved to a different artifact (`netty-codec-base`).** The stale
+  4.1 `netty-codec` jar ended up shadowing the class on the classpath, and the server answered
+  *every single request* with `NoSuchMethodError: DefaultHeaders.containsAny` — a total outage
+  masquerading as a dependency version mismatch nobody had reason to suspect, since nothing in the
+  application code touches netty directly. **Fix:** exclude `netty-nio-client` from the AWS SDK
+  dependency; this module only ever constructs the synchronous (`apache-client`) AWS clients, so
+  nothing is lost.
+
+== Measured, then reverted: the jsoniter migration
+
+A full migration off circe onto `jsoniter-scala` for the client's wire codecs was built, verified
+byte-for-byte against circe across 26 parity cases (covering every hand-written and derived codec
+family, both directions — encode *and* decode, after an earlier parity gap where comparing only
+encoders missed that the generated decoder couldn't read its own encoder's `null` output), and
+then reverted in its entirety once actually wired into the published bundle.
+
+* **What the parity tests proved, correctly:** the codecs reproduced circe's exact bytes in both
+  directions. This was never in question and was not the problem.
+* **What wiring it up actually measured:** raw (pre-bundling) size dropped from 736,689 to 708,173
+  bytes (‑28,516) — exactly the improvement expected. But the **published**, gzip-compressed
+  bundle *grew*, from 197,067 to 202,401 bytes (+5,334).
+* **Why, once measured rather than assumed:** jsoniter's `JsonReader`/`JsonWriter` runtime is
+  roughly 50 KB of hand-optimised, case-specific generated code that circe has no equivalent of —
+  circe's equivalent work is done through small, highly repetitive combinators. Repetitive code is
+  exactly what gzip is good at compressing; specialised, unrolled generated code is not. The
+  bundle's overall compression ratio fell from 3.75:1 to 3.51:1, more than eating the raw-size win.
+* **Root cause of the original estimate being wrong:** the roughly-20-KB savings that justified
+  starting the migration came from an isolated micro-benchmark probe, where circe's cost looked
+  high because the probe paid for circe's stdlib dependencies (`Vector`, etc.) from zero. In the
+  *real* bundle, Laminar and the rest of the app already pay for most of that same stdlib
+  footprint regardless — so circe's true marginal cost in the shipped bundle was much smaller than
+  the standalone number suggested. "Measuring a marginal cost with a standalone number was the
+  error; the caveat was written down at the time [in the original measurement] and then not
+  applied" when deciding whether to proceed.
+* **Lesson, generalisable beyond this one migration:** a library-swap estimate produced by an
+  isolated probe measures that library in a vacuum, not its marginal cost inside the real,
+  already-dependency-laden bundle it would replace code in. Re-measure after wiring up a real
+  integration before trusting an isolated number, especially when the two implementations compress
+  differently under gzip (hand-written combinators vs. generated/specialised code is exactly such
+  a case). `IsoDate`, a smaller, unrelated change bundled into the same migration, was kept on its
+  own merits even after the revert.
+
+== Client bundle, markup and asset-delivery bugs
+
+* **An unclosed `@keyframes` block silently swallowed the rest of the stylesheet.**
+  `@keyframes checkPulse` had 241 opening braces against 240 closing ones, so the stylesheet
+  technically ended *inside* the keyframes block. This was invisible for a long time because a CSS
+  parser closes any still-open block at end-of-file, so nothing *before* the missing brace broke.
+  It stopped being harmless the instant anything was ever appended after it: every new rule added
+  to the end of the file was parsed as more keyframes content and silently discarded. Found only by
+  adding rules at the end and watching `document.styleSheets[...].cssRules` end at `checkPulse`
+  with the new rules simply absent.
+* **Nested block comments ate their own closing marker.** A comment reading `/<slug>/*` (describing
+  a CloudFront invalidation path) contains the two characters `/*` — and CSS/C-style block comments
+  do not nest, so the comment's own content opened a *second* comment that the actual closing
+  marker then closed instead of the outer, intended one, silently absorbing whatever code followed
+  until the next `*/` in the file.
+* **No `Cache-Control` header on anything meant the cache window grew the *longer* a location went
+  without a deploy, which is backwards from what anyone would expect.** With no explicit header,
+  browsers fall back to heuristic freshness — roughly a tenth of an object's current age. So
+  "roughly a tenth of its age" keeps growing for as long as nobody redeploys: "an index.html last
+  written two months ago reads as fresh for about six days — and no amount of CloudFront
+  invalidation reaches it, because a browser that already considers its own copy fresh sends no
+  request at all," never even seeing the invalidated ETag. Fixed with an explicit one-day
+  `Cache-Control` on the bundle objects and per-location assets, with `index.html` specifically
+  exempted (it revalidates on every single request, because the CloudFront function that decides
+  what to serve per-request cannot do so for a request the browser never makes).
+* **A loader-per-view design left the guest staring at a frozen previous screen during any lazily
+  -loaded view, most visibly the error view.** Because `Page.Error`'s chunk is lazily loaded like
+  every other route chunk, and because the original design turned the navigation loader off
+  immediately after calling `syncWithPhase` rather than waiting for the destination to actually
+  mount, a guest whose request failed would watch the *view where the error happened* sit frozen
+  on screen for as long as the error view's JS chunk took to download — with no visual indication
+  anything was happening. Fixed by the `setNavigating` handoff pattern now documented in
+  `docs/client.adoc` (turned on by whoever triggers navigation, turned off only by the destination
+  view's own `Layout` mount) — see `decisions.adoc` for the pattern itself; this is the bug that
+  made the pattern necessary in the first place.
+* **The advertiser video's `<video>` element was fetched twice and visibly blinked between the
+  intro overlay and the player.** The original implementation appended the `<video>` element
+  imperatively outside Laminar's own rendering, which caused it to be created (and its source
+  fetched) more than once across re-renders. Separately, wrapping the intro card in the shared
+  `Layout` component had unintentionally dropped the `.video-intro` CSS class that made it an
+  opaque full-screen overlay — so for a brief window the card and the video player were both
+  visible stacked on top of each other instead of the intro cleanly hiding the player underneath
+  it. And playback originally started at component mount rather than when the intro was actually
+  dismissed, which let a short (≈2 s) video finish playing entirely hidden behind an intro overlay
+  that hadn't faded out yet. All three were fixed together: the `<video>` element is now
+  Laminar-managed and rendered exactly once, the intro keeps its overlay class, and playback starts
+  on dismissal rather than on mount.

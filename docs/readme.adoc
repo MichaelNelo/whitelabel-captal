@@ -1,0 +1,114 @@
+= Captal documentation
+:toc:
+:toclevels: 2
+
+Two kinds of document live here, and they are kept apart on purpose.
+
+*Architecture* — everything directly under `docs/` — answers *what exists and how it is wired*.
+It is written for a human reader who has to understand or change the system.
+
+*Context* — everything under `docs/context/` — answers *why it is like this, what has already gone
+wrong, and what is still open*. It is written for an agent, and it is dense rather than narrative.
+
+The rule that keeps them apart: if a paragraph is still true after someone changes the decision it
+describes, it is architecture; if it stops making sense, it was context.
+
+`agents.adoc` at the repository root is the entry point and points here.
+
+== Start here
+
+* xref:overview.adoc[System overview] — the product, the guest journey, the modules, how a request
+  flows. Read this first.
+* xref:development.adoc[Local development] — prerequisites, the build, running the stack, the
+  command reference.
+
+== Architecture
+
+[cols="1,3"]
+|===
+| Document | Covers
+
+| xref:core.adoc[Core]
+| The pure domain: the `Op` effect type, the `Phase` machine, the `User` / `Survey` / `Question` /
+  `Video` aggregates, command handlers, validation rules, repository traits, the i18n key schema.
+
+| xref:messages.adoc[Messages]
+| The wire contract between the guest API and the browser: request and response bodies, the
+  `ApiError` variants, the i18n payload.
+
+| xref:platform.adoc[Platform]
+| Quill repositories over rqlite, the schema and row mappings, services, the session service and
+  job scheduler, the event-handler chains, the migration runner and its lock.
+
+| xref:api.adoc[Guest API]
+| The guest-facing HTTP server: boot and layers, the endpoint table, session and identity cookies,
+  captive-portal headers, phase validation, the error model, the finish path.
+
+| xref:client.adoc[Client]
+| The Scala.js front end: the portal, the views and routing, the loading system, error handling,
+  i18n, the MCP-UI apps, and the maintenance entry point.
+
+| xref:client-styling.adoc[Client styling]
+| The CSS custom properties, the layout architecture, state classes and modifiers.
+
+| xref:mcp.adoc[MCP backoffice]
+| The MCP server: the auth model and scopes, the tool catalogue, resources and prompts, protocol
+  extensions, the embedded UI apps, asset handling, the deployment driver, IAM.
+
+| xref:database.adoc[Database]
+| rqlite as the database: the schema, location scoping, soft delete, the two migration histories,
+  the write-verification rule, the dev and production topologies.
+
+| xref:event-sourcing.adoc[Event sourcing]
+| The event catalogue, the command-to-event path, the transactional and post-commit handler
+  chains, the audit trail, and the full guest journey as a flow.
+
+| xref:features.adoc[Features]
+| The guest-facing capabilities and the rules behind them: identification, the advertiser video
+  and venue promo, the survey after it, claiming and losing WiFi access, and returning guests.
+
+| xref:unifi.adoc[UniFi integration]
+| The controller contract, the authorize and revoke flows, per-location configuration, the network
+  path to an on-premise controller, and the known caveats. Not a module: it lives in `platform`.
+
+| xref:infrastructure.adoc[Infrastructure]
+| The deployed topology, the terraform modules, the environments, the CloudFront edge, the portal
+  dispatcher, the rqlite cluster, images and releases, and the operator runbook.
+
+| xref:testing.adoc[Test strategy]
+| What each test layer owns, how suites are aggregated and run, the fixtures, what needs Docker or
+  LocalStack, and the constraints on where a new test can go.
+|===
+
+== Context
+
+[cols="1,3"]
+|===
+| Document | Covers
+
+| xref:context/readme.adoc[Context index]
+| How to use this tree, and what belongs in it.
+
+| xref:context/decisions.adoc[Decisions]
+| Each significant choice, the constraint that forced it, the alternative that was rejected and
+  what rejected it, and when it would be worth revisiting.
+
+| xref:context/incidents.adoc[Incidents]
+| What has broken, in symptom → root cause → fix → lesson form. The most expensive document here
+  to have to rediscover.
+
+| xref:context/history.adoc[History]
+| The timeline: what was built when, what was removed when, and which stale references survive in
+  the repository.
+
+| xref:context/pending.adoc[Pending work]
+| Known gaps, deferred work, open product questions, and ideas that were measured and dropped.
+
+| xref:context/conventions.adoc[Conventions]
+| Code style, query naming, the comment policy, and the invariants an editor must not break.
+|===
+
+== Per-module readmes
+
+Each subproject carries a short `readme.adoc` saying what it does and pointing at its architecture
+document: `core/`, `messages/`, `platform/`, `api/`, `client/`, `mcp/`, `terraform/`.

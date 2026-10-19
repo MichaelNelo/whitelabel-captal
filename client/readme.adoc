@@ -1,0 +1,26 @@
+= client
+
+Everything a guest or an operator looks at in a browser lives here.
+
+== The captive portal
+
+This is the page a guest's device is redirected to: the identification questions, the
+advertiser video and its survey, and the screen that tells them they are online. It is the only
+part of the business a guest ever actually sees, so its wording, its branding and its languages
+are what make a location feel like that location rather than a generic form.
+
+== The backoffice's pages
+
+Running the backoffice is mostly a conversation with a model, but a couple of jobs need a page a
+person can look at and click through directly: uploading a location's images and videos, and
+configuring the venue's WiFi controller. Those pages live here too, embedded inside the
+backoffice.
+
+== The maintenance page
+
+While a location is paused — being set up, or taken offline for a reason the venue needs to
+explain — this is the page its guests see instead of the portal, so "the WiFi is broken" never
+has to be the story.
+
+Architecture: xref:../docs/client.adoc[docs/client.adoc]. CSS reference:
+xref:../docs/client-styling.adoc[docs/client-styling.adoc].

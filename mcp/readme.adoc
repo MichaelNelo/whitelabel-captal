@@ -1,0 +1,15 @@
+= mcp
+
+This is the backoffice: the one place a location gets created, written and published.
+
+An operator uses it to lay out a location from nothing — its questions and their answer
+options, its advertiser videos and branding, the advertisers themselves, the languages the venue
+needs the portal translated into — issues the operator credentials the location needs, and
+publishes it so guests can actually reach it. Nothing a guest sees exists until the backoffice
+has written it: no questions to ask, no video to show, no venue controller to authorize a device
+against.
+
+The operator does this by describing what a location needs to a model, rather than by editing
+files or running commands directly.
+
+Architecture: xref:../docs/mcp.adoc[docs/mcp.adoc].

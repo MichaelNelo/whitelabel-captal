@@ -1,0 +1,346 @@
+= Event sourcing
+:toc:
+:toclevels: 2
+
+Every change the portal makes to its database is caused by a domain event. Command handlers in xref:core.adoc[Core] emit events and write nothing; the handler chain in xref:platform.adoc[Platform] does all the writing, transactionally for the database and post-commit for the UniFi controller. This document is the catalogue of those events, the two chains that consume them, and the guest journey they drive.
+
+== Shape of the model
+
+The model is event-*driven* persistence, not an event store that state is replayed from:
+
+* current state lives in relational tables — `sessions`, `users`, `answers`, `video_views`, `user_survey_progress`;
+* an event is the only thing that causes a write to those tables during a request;
+* `event_log` is an append-only audit trail. Nothing in the application reads it, and no projection is rebuilt from it;
+* `core` contains no SQL and no effect type; it produces `List[Event]` and hands them over.
+
+Three aggregates emit: `user`, `survey` (wrapping `survey.question`) and `video`. `application.Event` is the sum of the three, and the whole chain is written against it.
+
+== From command to events
+
+[source,scala]
+----
+// core/src/whitelabel/captal/core/application/Flow.scala
+def execute(command: C): F[R] =
+  for
+    opResult <- handler.handle(command)
+    result   <- MonadThrow[F].fromEither(Op.run(opResult).left.map(HandlerError(_)))
+    (events, value) = result
+    _ <- eventHandler.handle(events)
+  yield value
+----
+
+The path of one request:
+
+. The route resolves the session and checks the phase (`SessionEndpoint.authorise`), then publishes it into the ambient `SessionContext`. Every repository and every handler reads the session from there, which is why no command carries a session id.
+. The route reads the clock once and builds the command — `occurredAt` is always supplied from outside the domain.
+. The handler queries repositories and returns `F[Op[Result]]`. Nothing has been written yet.
+. `Op.run` yields either a `NonEmptyChain[Error]` — which becomes `Flow.HandlerError`, then an `ApiError` (see xref:messages.adoc[Messages]) — or a pair of `List[Event]` and the result.
+. The events go to the composed `EventHandler[Task, Event]`: first the transactional chain inside one database transaction, then the post-commit chain.
+. The result is serialised. Some routes additionally write `sessions.phase` themselves when the response carries a fallback `NextStep` that no event implies.
+
+A failed command emits nothing, by construction: `Op` only carries events on its success side.
+
+== Event catalogue
+
+=== User events
+
+`core/src/whitelabel/captal/core/user/Event.scala`. All carry `occurredAt: Instant`.
+
+[cols="2,3,2"]
+|===
+| Event | Payload | `event_log.event_type`
+
+| `UserCreated`
+| `userId`, `email`
+| `user.created`
+
+| `NewUserArrived`
+| `userId`, `nextQuestion: Option[FullyQualifiedQuestionId]`
+| `user.new_arrived`
+
+| `SurveyAssigned`
+| `userId`, `nextQuestion: FullyQualifiedQuestionId`
+| `user.survey_assigned`
+
+| `IdentificationCompleted`
+| `userId`
+| `user.identification_completed`
+
+| `VideoAssigned`
+| `userId`, `videoId`, `advertiserId: Option`, `videoType`
+| `user.video_assigned`
+
+| `VideoSurveyAssigned`
+| `userId`, `advertiserId: Option`, `nextQuestion`
+| `user.video_survey_assigned`
+
+| `UserFinishedProcess`
+| `userId`, `videoId: Option`, `answeredQuestionIds: List[FullyQualifiedQuestionId]`
+| `user.finished_process`
+
+| `AccessExpired`
+| `userId`
+| `user.access_expired`
+|===
+
+`advertiserId` is `null` on `VideoAssigned` and `VideoSurveyAssigned` when the content was a promo — the venue's own video, which belongs to no advertiser. Analytics reading the log should treat the two consistently.
+
+=== Survey and question events
+
+`survey.Event` has a single case, `QuestionAnswered(surveyId, event: question.Event)`, so every survey event wraps one of the four question events. Each carries `userId`, `surveyId`, `questionId`, `answer: QuestionAnswer` and `occurredAt`.
+
+[cols="2,3,2"]
+|===
+| Question event | Extra payload | `event_log.event_type`
+
+| `EmailQuestionAnswered` | — | `survey.email_answered`
+| `ProfilingQuestionAnswered` | — | `survey.profiling_answered`
+| `LocationQuestionAnswered` | `hierarchyLevel: HierarchyLevel` | `survey.location_answered`
+| `AdvertiserQuestionAnswered` | `advertiserId: Option[AdvertiserId]` | `survey.advertiser_answered`
+|===
+
+The logged `answer` is the `AnswerValue` encoded with the same circe codec the browser used to send it.
+
+=== Video events
+
+[cols="2,3,2"]
+|===
+| Event | Payload | `event_log.event_type`
+
+| `VideoVisualized`
+| `sessionId`, `userId: Option`, `videoId`, `advertiserId: Option`, `videoType`, `durationWatched: Int`, `completed: Boolean`, `occurredAt`
+| `video.visualized`
+|===
+
+This is the only event that carries a session id in its own payload, because the command that emits it is built from the session rather than from an aggregate.
+
+== The handler chains
+
+Two traits, two lifetimes:
+
+[source,scala]
+----
+// core — the generic one, contravariant, with `andThen` sequencing via `*>`
+trait EventHandler[F[_], -E]:
+  def handle(events: List[E]): F[Unit]
+
+// platform — a handler that must run inside an open transaction
+trait DbEventHandler[-E]:
+  def handle(events: List[E], quill: QuillSqlite): Task[Unit]
+----
+
+`DbEventHandler` has a `Monoid` instance (`combine` is `a.handle(…) *> b.handle(…)`) and the same `andThen` extension, so the chain is ordered and sequential. `TransactionalEventHandler` adapts the composed `DbEventHandler` to an `EventHandler[Task, Event]` by wrapping it in `quill.transaction`, logging and re-raising on failure — so one handler failing rolls back everything the earlier ones wrote.
+
+Composition, from `api/src/whitelabel/captal/api/Flows.scala`:
+
+[source,scala]
+----
+val dbHandler = EventLogHandler(ctx)
+  .andThen(AnswerPersistenceHandler(ctx))
+  .andThen(UserPersistenceHandler(ctx))
+  .andThen(SessionPhaseHandler(ctx, nextAfterIdentification.phase, nextAfterVideo.phase))
+  .andThen(SessionSurveyHandler(ctx))
+  .andThen(SessionVideoHandler(ctx))
+  .andThen(SessionExpirationHandler(ctx))
+  .andThen(SurveyProgressHandler())
+val transactional = TransactionalEventHandler(dbHandler, quill)
+val unifiAccess = UnifiAccessHandler(currentLocation.unifi, ctx, sessionService, unifiClient, jobQueue)
+transactional.andThen(unifiAccess)
+----
+
+Every `Flow` in the application shares this one `EventHandler[Task, Event]` instance.
+
+=== Transactional chain
+
+All eight run inside one transaction, in this order. All live in `platform/src/whitelabel/captal/platform/eventhandlers/`.
+
+[cols="2,2,3"]
+|===
+| Handler | Reacts to | Writes
+
+| `EventLogHandler`
+| every event
+| one `event_log` row per event, inserted one at a time, with the session id and the session's current `userId`
+
+| `AnswerPersistenceHandler`
+| all four `QuestionAnswered` variants
+| one `answers` row per answer, in a single batch insert; `answer_value` is the circe encoding of the `AnswerValue`
+
+| `UserPersistenceHandler`
+| `UserCreated`
+| looks the email up first and reuses the existing `users.id` when it is already registered, otherwise inserts the row; then sets `sessions.user_id`, and updates the ambient `SessionContext` so later handlers and the route see the resolved user id
+
+| `SessionPhaseHandler`
+| `IdentificationCompleted`, any identification answer, `VideoSurveyAssigned`, `VideoVisualized`
+| `sessions.phase`. First match wins: the first two cases set the phase after identification (`AdvertiserVideo`), `VideoSurveyAssigned` sets `AdvertiserVideoSurvey`, `VideoVisualized` sets the configured phase after a video (also `AdvertiserVideoSurvey`). It has no case for `AccessExpired`.
+
+| `SessionSurveyHandler`
+| `SurveyAssigned`, `NewUserArrived` with a next question, `VideoSurveyAssigned`
+| `sessions.current_survey_id` and `sessions.current_question_id`
+
+| `SessionVideoHandler`
+| `VideoAssigned`, `VideoVisualized`
+| on assignment, `sessions.current_video_id` plus `current_advertiser_id` when there is one; on visualisation, a `video_views` row, and `sessions.last_promo_video_id` when the video was a promo (advertiser videos are drawn at weighted random and keep no cursor). It never clears `current_video_id` — the advertiser-survey phase still needs it.
+
+| `SessionExpirationHandler`
+| `AccessExpired`
+| one UPDATE — the same `SessionService.resetForExpirationQuery` the `/api/status` safety net runs — setting `phase = Welcome` and clearing `userId`, `currentSurveyId`, `currentQuestionId`, `currentVideoId`, `currentAdvertiserId` and `accessExpiresAt`. The `users` row and the cross-location `captal_user` cookie survive.
+
+| `SurveyProgressHandler`
+| any `QuestionAnswered`
+| upserts `user_survey_progress` for the `(userId, surveyId)` pair, then marks it complete when `SurveyService.isSurveyCompleteQuery` says every question is answered
+|===
+
+=== Post-commit chain
+
+One handler, outside the transaction, so an HTTP failure against the controller cannot roll back database writes.
+
+[cols="2,3"]
+|===
+| Event | `UnifiAccessHandler` behaviour
+
+| `UserFinishedProcess`
+| `AUTHORIZE_GUEST_ACCESS` for the session's `clientMac`. On success: `sessionService.setAuthorized(sessionId, occurredAt + defaultDurationMinutes)`, then `jobQueue.schedule(ScheduledAt(expiresAt, ExpireAccess(sessionId)))`. On failure: log the error and stop — the session stays at `Ready`.
+
+| `AccessExpired`
+| `UNAUTHORIZE_GUEST_ACCESS`, which also disconnects the client. No session write: `SessionExpirationHandler` already reset the row inside the transaction. An empty `clientMac` is logged and skipped, as is a failure.
+|===
+
+With no UniFi configuration for the current location — dev, tests, a venue with no controller — both branches log a warning and do nothing. See xref:unifi.adoc[UniFi integration].
+
+== event_log
+
+Created by `platform/resources/db/migration/V8__add_event_log.sql`; every column is `TEXT`.
+
+[cols="2,3"]
+|===
+| Column | Contents
+
+| `id` | random UUID per row
+| `event_type` | the dotted type from the catalogue above
+| `event_data` | the event as compact JSON, built by hand per event in `EventLogHandler`
+| `session_id` | the session the command ran in
+| `user_id` | the session's user id at the time of the write; `NULL` before one exists
+| `occurred_at` | the event's own `occurredAt`
+| `created_at` | when the row was written
+|===
+
+`EventLogHandler.extractEventInfo` is total over `application.Event`, so every event emitted by every command is logged. The JSON is written field by field rather than derived, so a payload change is a change to this handler too.
+
+== The guest journey
+
+One pass through the portal, with the endpoint, the phase it requires, the events it emits and what they cause.
+
+[cols="1,2,2,3"]
+|===
+| Step | Request | Phase required | Events and effects
+
+| 1. Connect
+| `GET /api/status` with the captive-portal headers (`X-Client-Mac`, `X-Ap-Mac`, `X-Redirect-Url`, `X-Ssid`, `X-Click-Id`)
+| any
+| No events. The session row is created at `Welcome` (both `clientMac` and `clickId` are required, else `SessionMissing`), the session cookie is set, and the `captal_user` cookie is used to pre-attach a returning user.
+
+| 2. Ask for a question
+| `GET /api/survey/next`
+| `Welcome`, `IdentificationQuestion`
+| The route moves `Welcome` → `IdentificationQuestion` itself. `NewUserArrived` for a first-time visitor, or `SurveyAssigned` for a known one; `IdentificationCompleted` when the pool is exhausted. `SessionSurveyHandler` records the question.
+
+| 3. Answer it
+| `POST /api/survey/email` \| `/profiling` \| `/location`
+| `IdentificationQuestion`
+| `UserCreated` (email only) and `QuestionAnswered`. `answers`, `user_survey_progress` and `sessions.user_id` are written, `sessions.phase` becomes `AdvertiserVideo`, and the response is `Step(advertiser_video)`.
+
+| 4. Ask for a video
+| `GET /api/video/next`
+| `AdvertiserVideo`
+| `VideoAssigned`, and `sessions.current_video_id`. With no video available the response is a `Step` to `Ready` and the route writes that phase. With no identified user the command fails with `UserNotIdentified`.
+
+| 5. Report it watched
+| `POST /api/video/watched`
+| `AdvertiserVideo`
+| `VideoVisualized` → a `video_views` row, the promo cursor advanced if it was a promo, and `sessions.phase` = `AdvertiserVideoSurvey`.
+
+| 6. Ask for the video's question
+| `GET /api/survey/advertiser/next`
+| `AdvertiserVideoSurvey`
+| The video is taken from `sessions.current_video_id`, never from the request. `VideoSurveyAssigned` when there is a question; otherwise a `Step` to `Ready`, written by the route.
+
+| 7. Answer it
+| `POST /api/survey/advertiser`
+| `AdvertiserVideoSurvey`
+| `QuestionAnswered(AdvertiserQuestionAnswered)`. The route then sets `Ready` and answers a literal `Step(ready)` — one question per video.
+
+| 8. Claim access
+| `POST /api/finish`
+| `Ready`
+| `UserFinishedProcess`. Post-commit, `UnifiAccessHandler` authorises on the controller; on success the session becomes `Authorized` with `accessExpiresAt` and an expiry job is scheduled. The response re-reads the session, so `phase` is `Authorized` only if the grant succeeded.
+
+| 9. Browse
+| `GET /api/status` (polled)
+| any
+| No events. While `Authorized`, the response carries `secondsRemaining`.
+
+| 10. Expiry
+| none — the scheduler
+| `Authorized`
+| `AccessExpired`. `SessionExpirationHandler` resets the session to `Welcome` in the transaction; post-commit the controller revokes and disconnects the client.
+|===
+
+Identification asks **one question per visit**: answering any identification question sets the phase to `AdvertiserVideo` straight away. The pool is ordered by `SurveyRepositoryQuill.nextIdentificationSurveyQuery` — the email survey while the user has no email, then profiling until every active profiling question is answered, then location — and already-answered questions are excluded per user. A returning guest therefore answers the next unanswered question, which is what makes the reconnection the moment more profiling data is collected.
+
+NOTE: a deployment with no active email survey cannot identify an unidentified visitor. The repository logs a warning, `ProvideNextIdentificationSurveyHandler` takes its `unidentifiable` fallback, and the flow ends at `Ready` without granting access.
+
+== Ready and Authorized
+
+The two terminal phases are deliberately distinct, and the gap between them is where retries live.
+
+[cols="1,3"]
+|===
+| Phase | Meaning
+
+| `Ready`
+| the guest has completed everything the portal asks for. No network access has been granted, and `accessExpiresAt` is unset.
+
+| `Authorized`
+| the UniFi controller confirmed the grant. `accessExpiresAt` is set, an expiry job exists, and `/api/status` reports `secondsRemaining`.
+|===
+
+`FinishHandler` emits `UserFinishedProcess` and returns an in-memory `User[State.Authorized]`, but it does not write the phase: only `UnifiAccessHandler`, after the transaction, moves `sessions.phase` to `Authorized` — and only on a confirmed grant.
+
+That gives retry for free:
+
+* UniFi fails, or is not configured → the session stays at `Ready`;
+* another `POST /api/finish` finds the user again through the same `findReadyUser()`, re-runs `finish`, re-emits `UserFinishedProcess`, and the post-commit handler tries again;
+* once the grant succeeds the phase is `Authorized`, `findReadyUser()` returns `None`, and a further call fails with `UserNotIdentified` — which the client reads as "you already have access".
+
+=== Expiry
+
+`ExpireAccessCommand` is the counterpart of `FinishCommand` and is executed by the scheduler in `platform/src/whitelabel/captal/platform/session/JobScheduler.scala`, never by a request.
+
+[cols="2,3"]
+|===
+| Piece | Behaviour
+
+| `JobQueue`
+| producer side, an unbounded `Queue[ScheduledAt]`. Separate from the runner to keep the layer graph acyclic: `UnifiAccessHandler` is inside the event-handler layer and has to schedule, while the runner needs a `Flow` that depends on that layer.
+
+| `JobRunner.start`
+| called explicitly from `Main.run` and scoped to the application. Forks one scheduler fiber and one worker fiber, then rehydrates: `SessionService.findPendingExpirations()` re-enqueues one job per `Authorized` session with an `accessExpiresAt`, so a redeploy does not lose deadlines. Deadlines already past fire immediately.
+
+| scheduler fiber
+| keeps pending jobs in a `SortedMap[Instant, List[ScheduledJob]]` and waits with `inbox.take.timeout(wait)`, so an earlier deadline arriving simply recomputes the wait — no fiber is interrupted or recreated.
+
+| worker fiber
+| takes due jobs one at a time (concurrency of 1 against the controller), re-reads the session, populates `SessionContext` with it via `ctx.locally`, and runs the flow exactly as a request would. Errors are logged and swallowed, so neither an unreachable controller nor a database failure can kill the fiber.
+
+| staleness
+| handled in the domain, not the scheduler: `ExpireAccessHandler` is a silent no-op when `findAuthorizedUser()` returns `None`. A guest who redid the flow and got re-authorized leaves the old job harmless, which is why jobs are never cancelled or indexed.
+|===
+
+A second, independent safety net lives in `GET /api/status`: when the session is `Authorized` and `accessExpiresAt` is already past, the route resets the session itself and answers `Welcome`. It runs the same `resetForExpirationQuery` the event handler does, but emits no event — so a reset that happens this way reaches neither `event_log` nor the controller.
+
+`AccessExpired` is a genuine domain event rather than bookkeeping: it is what sends the guest back through the flow, which is the business model. The reset keeps the `users` row and the `captal_user` cookie, so the next visit skips the questions already answered and asks the next one.
+
+== Open product questions
+
+Product-level opportunities, risks and open questions about this model — the points gathered while it was first designed — are not part of this contract. They live in xref:context/pending.adoc[Pending work], alongside xref:context/decisions.adoc[Decisions] and xref:context/history.adoc[History].

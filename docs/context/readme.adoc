@@ -1,0 +1,62 @@
+= Project context
+:toc:
+:toclevels: 2
+
+This tree is written for an agent, not for a human reader. It holds the part of the project that is
+not in the code: which decisions were taken and what forced them, what has already been tried and
+failed, what broke and why, and what is still open.
+
+Read it before changing anything. Most of what is here was expensive to learn.
+
+== How to use it
+
+[cols="1,3"]
+|===
+| Document | Read it when
+
+| xref:decisions.adoc[Decisions]
+| You are about to change an architectural choice, or you are wondering why something obvious was
+  not done. Each entry names the constraint that forced the decision, the alternative that was
+  rejected, the fact that rejected it, and when it would be worth revisiting.
+
+| xref:incidents.adoc[Incidents]
+| Something is behaving strangely, or you are about to touch a mechanism that has bitten before.
+  Entries are symptom → root cause → fix → lesson. This is the document whose absence costs the
+  most.
+
+| xref:history.adoc[History]
+| A document, a skill or a comment refers to something you cannot find. The timeline says what was
+  built when, what was removed when, and which stale references still survive in the repository.
+
+| xref:pending.adoc[Pending work]
+| You are picking up work, or you are about to "improve" something that was already measured and
+  dropped. Known gaps, deferred work, open product questions, and the ideas that did not pay off.
+
+| xref:conventions.adoc[Conventions]
+| You are writing code or a comment in this repository. Style, query naming, the comment policy,
+  and the invariants an editor must not break.
+|===
+
+Architecture — what exists and how it is wired — is one level up, indexed in
+xref:../readme.adoc[docs/readme.adoc]. The entry point for the whole repository is `agents.adoc`.
+
+== What belongs here
+
+The test that separates the two trees: *if a paragraph is still true after someone changes the
+decision it describes, it is architecture; if it stops making sense, it was context.*
+
+So this tree gets rationale, trade-offs, rejected alternatives, measurements, bug narratives,
+removed systems, and open questions. The code gets comments that say what something does and what
+constraint a caller must respect, and nothing more. The architecture docs get the mechanism as it
+stands today.
+
+== How to add to it
+
+* Put a new entry under the heading that matches its *shape*, not its subject area: a choice goes
+  in `decisions.adoc`, a failure goes in `incidents.adoc`, a removal goes in `history.adoc`.
+* Keep every specific — the number, the version, the error message, the hostname. A bullet that
+  says "it was slow" is worth nothing; "10,011 ms per lookup before the resolver gives up" stops
+  the next person from re-measuring it.
+* Cross-reference rather than repeat. One fact, one home.
+* When you fix something listed here, do not delete the entry: say it is fixed and when. The
+  failure mode is the part worth keeping.

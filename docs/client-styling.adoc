@@ -1,0 +1,388 @@
+= Client styling
+:toc:
+:toclevels: 2
+
+One file, `client/assets/styles.css`, styles the whole guest portal: every view in
+xref:client.adoc[Client] renders against it, and a location themes itself by overriding a subset of
+its custom properties. The MCP-UI apps (`mcpui/UploadApp.scala`, `mcpui/unifi/UnifiApp.scala`) are
+styled differently — by the MCP host, through `Bridge.applyHostStyles` — and are out of scope here;
+see xref:client.adoc[Client].
+
+== Per-location theming
+
+The portal's two HTML templates load two stylesheets, in order:
+
+[source,html]
+----
+<link rel="stylesheet" href="{{CSS_PATH}}">
+<link rel="stylesheet" href="./custom-styles.css.gz" onerror="this.remove()">
+----
+
+`{{CSS_PATH}}` is the bundle's own `styles.css` — the file this document describes. The second link
+is a per-location object that, when present, is loaded strictly after the first; because both
+declare the same `:root` selector at equal specificity, the later declaration wins property by
+property. A location's stylesheet therefore only needs to redeclare the properties it wants
+changed — anything it omits keeps the bundle's default. `onerror="this.remove()"` is what makes a
+location with no customisation correct: the object does not exist, the link fails to load, and the
+tag removes itself rather than sitting there as a stylesheet reference to nothing.
+
+`custom-styles.css.gz` is always gzipped and always `text/css`, written by the MCP backoffice's
+`AssetTools.setStyles` → `AssetStore.put` (`mcp/src/whitelabel/captal/mcp/aws/Assets.scala`), which
+also sets `Content-Encoding: gzip` and the same `Cache-Control: public, max-age=86400` the portal
+bundle carries, and invalidates the one CloudFront key the write touched so the change is visible
+without waiting out that cache. The brand icon (`brand-icon.svg`, referenced by `BrandLoader` and by
+the static markup in both HTML templates) follows the same store but is not a CSS property at all —
+`set_location_icon` replaces the file outright, after `AssetTools.validateSvg` rejects anything
+carrying a `<script>` or an `on*` handler, since the icon is served from the portal's own origin and
+would execute there.
+
+An operator discovers the themeable surface and writes it through three MCP tools —
+`get_css_schema`, `get_location_styles`/`set_location_styles`, `get_location_icon`/
+`set_location_icon` — documented in xref:mcp.adoc[MCP backoffice]. `get_css_schema` is not a
+hand-kept list: it is `CssSchema` parsing this file's own `:root` block at startup, so it cannot name
+a variable this stylesheet no longer declares, and a variable this file grows without an entry in
+`CssSchema.Purposes` shows up with an empty purpose rather than not at all — the signal that
+something new needs explaining. `set_location_styles` replaces the whole stored file on each call;
+it is not a patch, and reading back with `get_location_styles` first is how an operator edits rather
+than overwrites.
+
+== Custom properties
+
+The `:root` block groups its declarations under banner comments, which is also how `CssSchema` reads
+its groups. Purposes below are `get_css_schema`'s own prose where the stylesheet has an entry for
+it; the type scale, the spacing scale and `--radius-sm`/`--radius-md`/`--radius-lg` have none today
+— the live tool answers an empty purpose for those — so the column instead gives what the size and
+its call sites show.
+
+=== Theme colors
+
+[cols="2,2,4"]
+|===
+|Variable |Default |Purpose
+
+|`--color-primary` |`#6366f1` |The brand colour. Buttons, links and focus rings derive from it; set this one first.
+|`--color-primary-dark` |`#4f46e5` |Pressed and hovered states of anything primary.
+|`--color-primary-light` |`#818cf8` |Tints: selected option backgrounds and subtle fills.
+|`--color-success` |`#10b981` |Confirmation, and the button that advances once an answer is valid.
+|`--color-error` |`#ef4444` |Validation failures and the error screen.
+|`--color-warning` |`#f59e0b` |Advisory states. Rare in the portal today.
+|===
+
+=== Background
+
+[cols="2,2,4"]
+|===
+|Variable |Default |Purpose
+
+|`--bg-gradient-start` |`#6366f1` |First stop of the page background. The portal's whole backdrop is this gradient, so these two carry most of the perceived identity.
+|`--bg-gradient-end` |`#8b5cf6` |Second stop of the page background.
+|`--bg-gradient-angle` |`135deg` |Direction of the background gradient. `135deg` runs top-left to bottom-right.
+|===
+
+=== Surfaces
+
+[cols="2,2,4"]
+|===
+|Variable |Default |Purpose
+
+|`--surface-primary` |`#ffffff` |Cards and panels that sit over the gradient.
+|`--surface-secondary` |`#f8fafc` |Recessed areas inside a card: inputs, list rows.
+|`--surface-error` |`#fef2f2` |Background of the error panel.
+|===
+
+=== Text
+
+[cols="2,2,4"]
+|===
+|Variable |Default |Purpose
+
+|`--text-primary` |`#1f2937` |Body text on a light surface.
+|`--text-secondary` |`#6b7280` |Supporting text: hints, captions, inactive steps.
+|`--text-inverse` |`#ffffff` |Text on the gradient and on primary buttons. Keep it legible against both.
+|`--text-link` |`var(--color-primary)` |Links. Defaults to the primary colour.
+|===
+
+=== Typography
+
+[cols="2,2,4"]
+|===
+|Variable |Default |Purpose
+
+|`--font-family` |system font stack |The whole portal's typeface. A web font has to be loaded by the stylesheet itself; nothing else fetches one.
+|`--font-size-xs` |`13px` |Legal text, terms.
+|`--font-size-sm` |`15px` |Secondary text.
+|`--font-size-base` |`16px` |Body text.
+|`--font-size-lg` |`17px` |Buttons.
+|`--font-size-xl` |`20px` |Subtitles.
+|`--font-size-2xl` |`28px` |Titles.
+|`--font-weight-normal` |`400` |
+|`--font-weight-medium` |`500` |
+|`--font-weight-semibold` |`600` |
+|`--font-weight-bold` |`700` |
+|`--line-height` |`1.5` |Body line height, unitless.
+|===
+
+=== Spacing
+
+[cols="2,2,4"]
+|===
+|Variable |Default |Purpose
+
+|`--space-xs` |`8px` |
+|`--space-sm` |`12px` |
+|`--space-md` |`16px` |
+|`--space-lg` |`20px` |
+|`--space-xl` |`24px` |
+|`--space-2xl` |`32px` |
+|`--space-3xl` |`40px` |
+|===
+
+The step used most outside its own component is `--space-lg`: it is the viewport padding on `#app`
+and one of the four terms `slideFromCenter` and `slideToTop` solve against to land the brand icon on
+the same point the static loader painted it.
+
+=== Borders and radius
+
+[cols="2,2,4"]
+|===
+|Variable |Default |Purpose
+
+|`--border-color` |`#e5e7eb` |Resting borders on inputs and cards.
+|`--border-color-hover` |`#d1d5db` |Borders under the pointer.
+|`--radius-sm` |`8px` |Buttons, inputs.
+|`--radius-md` |`12px` |Medium elements.
+|`--radius-lg` |`16px` |Cards.
+|`--radius-full` |`9999px` |Pills and circles. Not a size — leave it very large.
+|===
+
+=== Shadows
+
+[cols="2,2,4"]
+|===
+|Variable |Default |Purpose
+
+|`--shadow-sm` |`0 2px 8px rgba(0,0,0,.08)` |Resting elevation of a card.
+|`--shadow-md` |`0 4px 14px rgba(99,102,241,.4)` |A primary button at rest. Tinted with the primary colour, so it needs updating when that changes.
+|`--shadow-lg` |`0 10px 40px rgba(0,0,0,.15)` |Modals and the video player.
+|`--shadow-button-hover` |`0 6px 20px rgba(99,102,241,.5)` |A primary button under the pointer. Also tinted with the primary colour.
+|`--shadow-success` |`0 4px 14px rgba(16,185,129,.4)` |The success button at rest, tinted with the success colour.
+|`--shadow-success-hover` |`0 6px 20px rgba(16,185,129,.5)` |The success button under the pointer.
+|`--shadow-focus` |`0 0 0 3px rgba(99,102,241,.15)` |The focus ring. Keep it visible: it is the only keyboard affordance the portal has.
+|===
+
+=== Glass / overlay colors
+
+For elements laid directly over the background gradient rather than on a surface — the welcome
+screen's panels above all.
+
+[cols="2,2,4"]
+|===
+|Variable |Default |Purpose
+
+|`--glass-bg` |`rgba(255,255,255,.15)` |Translucent panels laid directly over the gradient, as on the welcome screen.
+|`--glass-text` |`rgba(255,255,255,.85)` |Text inside those panels.
+|`--glass-border` |`rgba(255,255,255,.3)` |Their hairline border.
+|`--glass-focus` |`0 0 0 3px rgba(255,255,255,.3)` |The focus ring inside them, which has to read against the gradient rather than a surface.
+|`--error-bg-transparent` |`rgba(239,68,68,.2)` |Error state over the gradient, where a solid surface would break the glass effect.
+|`--error-text-light` |`#fecaca` |Error text over the gradient.
+|`--success-bg-transparent` |`rgba(52,211,153,.4)` |Success state over the gradient.
+|===
+
+=== Transitions
+
+[cols="2,2,4"]
+|===
+|Variable |Default |Purpose
+
+|`--transition-fast` |`.15s ease` |Hovers and colour changes.
+|`--transition-base` |`.2s ease` |The default for everything else.
+|`--transition-slow` |`.3s ease` |Entrances and layout shifts.
+|===
+
+=== Animations (stagger)
+
+[cols="2,2,4"]
+|===
+|Variable |Default |Purpose
+
+|`--animate-fade-in-1` |`fadeInUp .5s ease-out .2s both` |The staggered entrance of a screen's content, step 1. The five together produce the cascade; change the delays to retime it, the keyframe name to replace it.
+|`--animate-fade-in-2` |`… .3s …` |Step 2.
+|`--animate-fade-in-3` |`… .4s …` |Step 3.
+|`--animate-fade-in-4` |`… .5s …` |Step 4.
+|`--animate-fade-in-5` |`… .6s …` |Step 5. Declared; see <<Layout architecture>> for which views actually have a fifth staggered child.
+|===
+
+=== Sizing and timing
+
+[cols="2,2,4"]
+|===
+|Variable |Default |Purpose
+
+|`--icon-size-lg` |`64px` |The brand icon on a screen's header, and in the loader. The loader's initial position is computed from it, so changing it moves the handoff.
+|`--icon-size-md` |`48px` |The brand icon where it appears smaller.
+|`--control-size` |`18px` |Radio and checkbox size. Below about 18px they become hard to hit on a phone.
+|`--loader-ring-out` |`.3s` |First half of `--loader-handoff`: how long the waiting state takes to leave. Named for a ring that no longer exists; the waiting animation is now `breathe` on the icon itself.
+|`--loader-settle` |`.1s` |Second half of `--loader-handoff`: the pause between the wait ending and the icon rising with the content. It is what makes the end of the wait legible; at zero the two movements compete.
+|`--loader-handoff` |`calc(--loader-ring-out + --loader-settle)` |When the icon starts rising. Derived from the two above — override those, not this.
+|`--video-intro-out` |`.4s` |How long the video intro takes to dissolve into the player. Paired with `AdvertiserVideoView.IntroFadeMs`, which decides when the element is removed.
+|===
+
+=== State colors
+
+[cols="2,2,4"]
+|===
+|Variable |Default |Purpose
+
+|`--color-success-disabled` |`rgba(16,185,129,.5)` |The advance button before the answer is valid.
+|`--color-disabled` |`#9ca3af` |Disabled controls generally.
+|===
+
+=== Layout
+
+[cols="2,2,4"]
+|===
+|Variable |Default |Purpose
+
+|`--content-max-width` |`400px` |How wide a screen's content gets on a large display. The portal is designed for a phone held in one hand.
+|`--content-padding` |`28px` |Breathing room inside that column.
+|===
+
+There is deliberately no `--brand-icon-url` or equivalent: the icon is a plain `<img>` whose source
+`set_location_icon` replaces, not a property any stylesheet points at.
+
+[[Layout architecture]]
+== Layout architecture
+
+Every view composes against one shared shell, built once by `Layout` (`client/src/whitelabel/captal/client/views/Layout.scala`) and reused by every route:
+
+[source,scala]
+----
+def apply(
+    content: HtmlElement,
+    footer: HtmlElement,
+    isLoading: Signal[Boolean] = Signal.fromValue(false)): HtmlElement
+----
+
+[source]
+----
+.app-layout
+├── .layout-content
+│   └── .layout-view (.loading-state | .loaded-state)
+│       ├── .view-icon
+│       │   └── .brand-icon (img, via BrandLoader)
+│       └── .view-content (.hidden | .visible)
+│           └── [the view's own content]
+└── .layout-footer (.hidden | .visible)
+    └── [the view's own footer]
+----
+
+`.view-icon` is rendered once and never swapped — only the parent's `loading-state`/`loaded-state`
+class changes — which is what lets the brand icon travel from "centred in the viewport" to "sitting
+above the content" as one continuous element rather than two elements handed off. `.layout-view` and
+`.view-content` track `isLoading` directly; `.layout-footer` tracks the same signal one level up.
+`onMountCallback` on the outer `.app-layout` div also turns `AppState.isNavigating` off — see
+*Navigation integrity* in xref:client.adoc[Client] for the Scala-side protocol this participates in.
+
+[cols="1,4"]
+|===
+|Class |Behaviour
+
+|`.layout-view.loading-state`
+|`position: fixed; inset: 0`, flex-centred: the icon sits in the middle of the viewport, independent
+of where the view will eventually render.
+
+|`.layout-view.loaded-state`
+|Normal flow. `.view-icon` here plays `slideFromCenter`, delayed by `--loader-handoff`, which is
+what produces the rise.
+
+|`.view-content.hidden`
+|`opacity: 0`, `translateY(20px)`, `position: absolute`, `visibility: hidden` — out of flow as well
+as invisible, so it cannot hold space open under the centred loader.
+
+|`.view-content.visible`
+|`opacity: 1`, no transform, with `transition-delay: var(--loader-handoff)` so the fade waits for
+the icon's rise to finish before the content follows it.
+
+|`.layout-footer.hidden` / `.layout-footer.visible`
+|Same opacity/translateY pair as the content. Its *entrance* animation, though, is keyed off the
+content rather than off its own loading flag: `.app-layout:has(.view-content.visible) .layout-footer`
+fires `--animate-fade-in-4`. The footer's own `hidden`/`visible` classes still gate layout (display,
+pointer-events) and the base transition.
+|===
+
+Only the first four direct children of `.view-content` get a staggered entrance —
+`.view-content.visible > :nth-child(1..4)` map to `--animate-fade-in-1`..`-4`, each delayed by
+`--loader-handoff` plus a fixed offset. `--animate-fade-in-5` exists as a property but no selector in
+this stylesheet reaches a fifth child today; a view whose content has five or more top-level
+children will have its later ones appear without a stagger unless a new rule is added for them.
+
+=== Pre-mount and navigation overlays
+
+Two more full-viewport elements sit outside `Layout` entirely, for the two gaps `Layout` itself
+cannot cover:
+
+[cols="1,4"]
+|===
+|Element |Covers
+
+|`.initial-loader`
+|Static markup in both HTML templates (`index.html.template`, `maintenance.html.template`),
+outside `#app`. It is the only thing on screen while the JS bundle and the first view's chunk come
+down, and it is removed outright by `Layout.adopt` the moment the first `Layout` mounts — not by a
+timer. `.initial-loader.is-fading` is declared, pairing with `brandGlowFlash` on the brand icon, but
+nothing in the client sets that class today; the removal is immediate rather than animated.
+
+|`.nav-loader`
+|A permanent overlay in `App.app` (never unmounted — see xref:client.adoc[Client]'s *Navigation
+integrity*), visibility toggled by `.is-visible`, bound to `AppState.isNavigating`. Its background
+repeats the body's gradient, so once visible it opaquely covers the outgoing view while the
+destination route's chunk loads and its `Layout` mounts underneath.
+|===
+
+`.route-slot` (`display: contents`) is the third piece of that same mechanism: `Router.lazily` wraps
+every dynamically-imported view in a div so Laminar's `child <--` binding has a stable parent, and
+`display: contents` is what keeps that wrapper out of the box tree so `.app-layout` stays the direct
+flex child of `.app-root` — otherwise the extra box would break the centring and `min-height` the
+root depends on.
+
+=== The brand icon's own animation
+
+`.brand-icon` breathes continuously while loading (`animation: breathe 1.4s ease-in-out infinite`,
+oscillating opacity between `.65` and `1`). Because `breathe` is symmetric — its `0%` and `100%` are
+identical — two copies of the icon that mount out of phase (the static `.initial-loader` one and the
+first Laminar-rendered one) converge on the same resting appearance with no synchronisation between
+them. On the `loading-state → loaded-state` handoff the icon plays `brandGlowFlash` (a white
+drop-shadow pulse, `forwards` so the filter returns to `none` once it ends) and `slideFromCenter`,
+which lands the icon at the exact point the static loader held it — computed from `--icon-size-lg`,
+`--space-lg` and `--space-2xl` against `50dvh` (with a `50vh` fallback for pre-2022 browsers),
+because the loader is `position: fixed; inset: 0` and centres on the *current* viewport, and mobile
+`vh` resolves against the viewport with the browser chrome hidden while `dvh` follows what is
+actually visible.
+
+`.brand-ring`, the wrapper `BrandLoader` still emits, is a historical name: the ring it was named for
+was replaced by `breathe` on the icon itself, and the CSS that drew it is gone along with the
+`@keyframes ringOut` it used — `ringOut` remains declared in the stylesheet but no rule references
+it. `--brand-icon-url` is the same story one layer up: a masked, multi-layer icon was tried, is fully
+gone, and left no property behind — the icon today is a plain `<img>`.
+
+== State-class pattern
+
+`Layout`'s `loading-state`/`loaded-state` and `hidden`/`visible` pairing is not special to the shell:
+individual views repeat the same shape in their own markup for state that `Layout` does not own —
+`WelcomeView`'s `.welcome-text-content.hidden`/`.visible`, `IdentificationQuestionView`'s
+`.question-content.question-loading`/`.question-loaded` and its own
+`.question-text-content.hidden`/`.visible` nested inside, each wired to that view's own loading
+signal rather than `Layout`'s. The convention held across the stylesheet is: a `-loading`/`-loaded`
+(or bare `loading-state`/`loaded-state`) modifier drives layout and the icon's position, a nested
+`hidden`/`visible` modifier drives the content fade, and the fade is delayed by `--loader-handoff` so
+it never races the icon.
+
+== See also
+
+* xref:client.adoc[Client] — the views and routing this stylesheet renders against, the loading and
+  navigation protocol in Scala, and the MCP-UI apps' own host-driven styling.
+* xref:mcp.adoc[MCP backoffice] — `get_css_schema`, `get_location_styles`/`set_location_styles`,
+  `get_location_icon`/`set_location_icon`, and the `AssetStore` S3/CloudFront plumbing behind them.
+* xref:infrastructure.adoc[Infrastructure] — the CDN these assets are served and invalidated through.
+* xref:context/decisions.adoc[Decisions] — why theming is exposed as tools (`get_css_schema` and
+  friends) rather than as resources.

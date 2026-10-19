@@ -1,0 +1,91 @@
+= Conventions
+
+How to write code, comments and commits in this repository. Short, because every rule here exists to
+settle something that came up more than once.
+
+== Comments
+
+Comments say **what something takes, what it returns and what it does**, very concisely. Nothing
+else.
+
+Not in code:
+
+* Rationale — "because", "which is why", justification of a choice, trade-off discussion.
+* History — "this used to be", "was previously", narrative about deleted code.
+* War stories — a bug that was found, what a test caught, how long something took, measurements.
+* Comparisons with libraries or approaches not chosen.
+
+All of that belongs in xref:decisions.adoc[decisions], xref:incidents.adoc[incidents] or
+xref:history.adoc[history]. A rationale comment in a source file is a documentation bug: it is
+invisible to anyone not already reading that file, and it rots where nobody checks it.
+
+Kept in code, terse:
+
+* What a function, class or parameter is and does.
+* Types, units, ranges, nullability, invariants a caller must respect.
+* `@param`/`@return` where they state a constraint a caller needs.
+* A one-line warning where a non-obvious technical constraint would otherwise be violated — "SQLite
+  must not be opened by two writers". No backstory.
+
+Section dividers (`// ─── Name ───`) are structure, not commentary. `// TODO:` stays.
+
+In `mcp/`, `@description(...)` annotations are **code**: they are the tool schema an LLM reads at
+runtime. They are not comments and the rules above do not apply to them — they should be as
+explanatory as the agent calling the tool needs.
+
+== Documentation
+
+AsciiDoc (`.adoc`), file names lower case with hyphens.
+
+Three homes, and the test that separates them: *if a paragraph is still true after someone changes
+the decision it describes, it is architecture; if it stops making sense, it was context.*
+
+* `docs/context/` — rationale, history, incidents, open questions. For agents.
+* `docs/*.adoc` — architecture: how each part works, as it stands today. For humans.
+* `<subproject>/readme.adoc` — what that subproject does, a few sentences, then a pointer to its
+  architecture document. Resist writing more.
+
+Keep the specifics. "It was slow" is worth nothing; the number, the version, the error message and
+the hostname are what stop the next person from re-measuring.
+
+== Commits
+
+`<scope>: <Message>` — one subject line, nothing else. No body, no trailers. Capitalised message, no
+trailing period, around 72 characters.
+
+Scopes in use: `feat`, `fix`, `refactor`, `tests`, `lint`, `docs`, `build`, `perf`, `chore`,
+`release`. No parenthesised sub-scopes.
+
+Author and committer are the repository owner's identity; nothing else appears in either field.
+
+== Scala
+
+Scala 3 with significant indentation. `.scalafmt.conf` governs formatting — run `mill __.reformat`
+rather than hand-wrapping, and `mill __.fix` for scalafix.
+
+Note two things about the formatting setup:
+
+* The root `mill.scalalib.scalafmt/` task walks every `.scala` under the workspace and fails on the
+  read-only dependency sources Metals extracts into `.metals/readonly/`. Use the per-module
+  `__.reformat`.
+* That root task also reflows `build.mill` differently from how it is committed. Leave `build.mill`
+  formatting alone unless you intend that diff.
+
+A Scala 3 subpackage does not see its parent package's members; `private[pkg]` does reach
+subpackages. Both matter when moving files between packages.
+
+== Editing
+
+Make source changes with editing tools, not with scripts. A `sed` or Python pass over a file leaves
+no reviewable diff of intent — the result is visible but the decision is not, and a mechanical
+substitution that quietly changes meaning is the usual way that goes wrong.
+
+== Checking your work
+
+Confirm behaviour from documentation before measuring it. The library's own contract is the answer;
+a probe only tells you what this version happens to do, which is a weaker claim and sometimes a
+coincidence.
+
+When adding a guard, ask what its failure looks like from outside. If the answer is "the same as
+success" — a dropped rule, an unapplied validation, a path nothing serves — the guard needs a test
+that can tell the two apart. That failure mode has cost this project more than any other.
