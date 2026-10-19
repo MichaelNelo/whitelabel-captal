@@ -1,14 +1,19 @@
 ---
 name: add-migration
 description: Use when adding a new Flyway migration to evolve the rqlite schema. Triggers on "add migration", "new migration", "alter table", "schema change", "migración db", "nueva columna".
-version: 1.0.0
+version: 1.1.0
 ---
 
 # Add a Flyway migration
 
 ## When to use
 
-Any persisted change to the schema (new column, new table, index, soft-delete flag). Migrations run at every API container startup via `platform.Migrate` and on the ephemeral `captal shared push` task.
+Any persisted change to the **portal** schema (new column, new table, index, soft-delete flag) —
+the tree under `platform/resources/db/migration`, owned by the API. (The backoffice has its own,
+separate migration tree under `mcp/resources/db/migration-mcp`, for `mcp_tokens` alone; this skill
+is about the portal's.) Migrations run via `platform.Migrate` as part of the `captal-api` image's
+own startup `CMD`, on every location task that boots on it — there is no separate provisioning task
+any more.
 
 ## Steps
 
@@ -47,9 +52,16 @@ If you added a column, update the `*Row` case class in `platform/src/whitelabel/
 
 ### 5. Update writers / queries
 
-- **EntityWriter**: include the column in `insertValue` and `onConflictUpdate` clauses.
-- **ProvisionService**: pass the value from the YAML (or `None`) when calling the writer.
-- **Repositories**: if the column is read on the hot path, surface it in the relevant `*Repository` queries.
+There is no `EntityWriter` or `ProvisionService` — content is written directly by the MCP
+backoffice's tools, each with its own Quill `insert`/`update` statement:
+
+- **The MCP tool that owns this table**: if an operator needs to write the new column, add it to
+  the relevant `insertValue`/`update` call in `mcp/src/whitelabel/captal/mcp/tools/<Group>Tools.scala`
+  (e.g. `VideoTools` for `advertiser_videos`, `LocationTools` for `locations`), guarded by
+  `Writes.expectOne`/`expectAtLeastOne` like every other write in that module — see
+  `docs/database.adoc`'s write-verification rule.
+- **Repositories**: if the column is read on the guest-facing hot path, surface it in the relevant
+  `platform/repositories/*RepositoryQuill.scala` query.
 
 ### 6. Test
 
@@ -57,21 +69,23 @@ Add a row in `api/test/src/whitelabel/captal/api/TestFixtures.scala` that exerci
 
 ### 7. Deploy
 
-Rebuild both base images (the migrations are baked into the assembly classpath):
+The migration is baked into the `captal-api` image's own classpath — there's no separate
+provisioning image to rebuild. Follow skill `bump-api-version`: build and push `captal-api` with a
+new tag, point the environment's `image_tag` at it, then call `deploy_location` for each location.
+Every location task that starts on the new image runs `Migrate` as part of its own boot; it's
+idempotent, so a location still on the old image and one already moved over both end up correct.
 
-```bash
-./mill api.dockerBuild --repoUri <ecr>/captal-api-dev --tag vX.Y.Z
-./mill api.dockerPush  --repoUri <ecr>/captal-api-dev --tag vX.Y.Z
-./mill platform.dockerBuild --repoUri <ecr>/captal-provision-dev --tag vX.Y.Z
-./mill platform.dockerPush  --repoUri <ecr>/captal-provision-dev --tag vX.Y.Z
-```
-
-Then operator bumps `shared/captal.yaml` images.api/provision → `captal shared push` (runs migration once) → `captal locations push-all` (each API task restart re-runs Flyway harmlessly — it's idempotent).
+If the backoffice now depends on this column (a tool reads or writes it immediately), bump
+`RequiredApiVersion` in `mcp/src/whitelabel/captal/mcp/McpMigrate.scala` to this migration's number.
+`McpMigrate` checks the API's highest applied version at its own startup and refuses to serve
+otherwise — that's what turns "the backoffice was deployed ahead of the API" into a loud boot
+failure instead of a tool call failing on a column that isn't there yet.
 
 ## Verification
 
-After deploy:
-- `aws logs tail /ecs/captal-shared --since 5m` — look for `Migrations complete: N executed` (N includes your new one on first run, then 0).
+After the first location moves to the new image:
+- `aws logs tail /ecs/captal-<slug> --since 5m` — look for a Flyway "Successfully applied N
+  migration(s)" line naming your new version; a location that boots later on the same image logs 0.
 - Query the schema directly: `curl -G "$RQLITE_URL/db/query" --data-urlencode "q=PRAGMA table_info(<table>)"`.
 
 ## Anti-patterns

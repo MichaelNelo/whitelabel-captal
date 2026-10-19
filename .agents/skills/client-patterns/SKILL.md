@@ -1,7 +1,7 @@
 ---
 name: client-patterns
 description: Reference for the Scala.js SPA conventions — Laminar signals, AppState, dom.fetch, cookies, BuildInfo, basePath. Use when working on any client/ change and want to follow project conventions. Triggers on "client patterns", "laminar conventions", "spa pattern", "client reference", "scala js patterns".
-version: 1.0.0
+version: 1.1.0
 ---
 
 # Client (Scala.js SPA) — reference
@@ -15,8 +15,11 @@ This is the orientation doc for working in `client/`. For adding a specific view
 - **Waypoint 9.x** — type-safe router built on Laminar
 - **Circe** — JSON serde
 - **scala-java-time** — `java.time.Instant` polyfill
+- **`js.Promise`**, not `scala.concurrent.Future` — nothing in `client/` uses `Future`.
+  `Promises.scala` adds `map`/`flatMap`/`onFailure` extensions so call sites and for-comprehensions
+  read the way they would with one.
 
-No React, no Redux, no Tapir client interpreter. All HTTP is raw `dom.fetch`.
+No React, no Redux, no generated API client. All HTTP is raw `dom.fetch`.
 
 ## State management — `AppState`
 
@@ -70,7 +73,7 @@ Only inside event handlers. For rendering use signals.
 
 ## HTTP — `ApiClient`
 
-`client/.../ApiClient.scala` wraps `dom.fetch` and returns `Future[Either[ApiError, T]]`.
+`client/.../ApiClient.scala` wraps `dom.fetch` and returns `js.Promise[Either[ApiError, T]]`.
 
 Pattern:
 ```scala
@@ -83,10 +86,14 @@ Runtime.run:
 ```
 
 `Runtime.run`:
-- Drops the Future result (`Unit`).
-- On Future-level failure (network timeout, decode crash) escalates to error page automatically.
+- Drops the promise's result (`Unit`).
+- On a rejected promise (network timeout, decode crash) escalates to the error page automatically,
+  via the `onFailure` extension `Promises.scala` adds.
 
-`ApiClient` does NOT use the Tapir client interpreter — it builds requests manually. **The Tapir endpoint `cookie[Option[String]]("session_id")` inputs are IGNORED by the client**; the browser auto-handles cookies. This is intentional: the API can rename cookies without touching the client.
+`ApiClient` does NOT use any client generated from the server's routes — it builds requests
+manually. **The `Cookie` header every secured zio-http `Endpoint` declares (`HeaderCodec.cookie.optional`) is read only server-side, by `SessionCookieConfig.valueFrom`** — the browser handles
+sending the cookie itself. This is intentional: the API can rename its cookie without touching the
+client.
 
 ### Cookies
 
@@ -118,7 +125,7 @@ private val basePath: String =
 
 In production the SPA is served from `/<slug>/index.html`, so all routes are prefixed with `/<slug>`. In dev no prefix.
 
-`Router.syncWithPhase(phase)` — push state to the page matching the server's reported phase. Called from `Main.syncPhaseOnLoad` and after API responses that change phase.
+`Router.syncWithPhase(phase)` — push state to the page matching the server's reported phase. Called from `App.syncPhaseOnLoad` (in `Main.scala`) and after API responses that change phase.
 
 `Router.navigateToError()` — go to `/error`. Used by `ErrorHandler.escalate`. **Page.Error lives outside the Phase machine** — no phase maps to it.
 
@@ -138,7 +145,9 @@ Use in views:
 child.text <-- I18nClient.i18n.map(_.welcome.title)
 ```
 
-Missing key returns `[welcome.title]` literal (from `LocaleService.buildI18n` fallback). To add new keys see skill `add-i18n-key`.
+Missing key returns `[welcome.title]` literal — `I18nSchema`'s `String` instance decodes a key the
+location's `localized_texts` don't cover to that literal, deliberately. To add new keys see skill
+`add-i18n-key`.
 
 ## Paths and `<base href>`
 
@@ -184,14 +193,14 @@ When UniFi redirects an unauthenticated client to the captive portal, the URL ca
 | `ssid`     | `X-Ssid`         | no                  |
 | `url`      | `X-Redirect-Url` | no                  |
 
-The mapping table lives in `Main.scala:53` and is duplicated in `ErrorView.scala` for the retry button. If you add a new UniFi param, update both.
+The mapping table lives in `Main.scala`'s `parseCaptivePortalHeaders` and is duplicated in `ErrorView.scala` for the retry button. If you add a new UniFi param, update both.
 
 ## Error handling
 
 Three layers, all converge on `ErrorHandler.escalate(err)` → `/error` page:
 
 1. **API call returns `Left(ApiError)`** → escalate. **NO inline `serverError` Var**.
-2. **Future fails outright** (network timeout, decode crash, fetch rejection) → `Runtime.run` catches via `.failed.foreach` and escalates.
+2. **The promise rejects outright** (network timeout, decode crash, fetch rejection) → `Runtime.run` catches it through `Promises`' `onFailure` extension and escalates.
 3. **Video `<video>` element fires `error` event** → handler escalates with `escalateMessage("Video load failed: ...")`.
 
 **Validation errors are different**: user input that's malformed (invalid email, missing required field). Those use a local `validationError: Var[Option[String]]` + `.validation-error` div inline. NOT escalation — the user can fix and retry without leaving the view.
@@ -215,7 +224,7 @@ Every screen uses `Layout(content, footer, isLoading)`:
 
 Layout owns:
 - The brand icon (`assets/brand-icon.svg`)
-- The loading pulse animation (`.brand-pulse`)
+- The loading animation (`breathe`, applied to `.brand-icon` — `.brand-ring` is the wrapper's class name, a historical one left over from a ring that no longer exists)
 - The fade-in/out transitions (`view-content.hidden` ↔ `.visible`)
 
 Don't reinvent these in individual views.
@@ -225,10 +234,12 @@ Don't reinvent these in individual views.
 ```bash
 ./mill clean client.generatedSources       # invalidate BuildInfo cache
 ENVIRONMENT=dev ./mill client.bundle       # produces out/client/bundle.dest/
-./mill client.publishS3 --bucket captal-dev-assets --prefix bundle   # uploads to S3
+./mill client.publishS3 --bucket captal-assets-dev --prefix bundle   # uploads to S3
 ```
 
-Skill `run-locally` covers the full local dev loop. Skill `bump-cli-version` doesn't apply here — bundle is per-deployment, not per-CLI-version.
+Skill `run-locally` covers the full local dev loop. The bundle is published per deployment,
+independently of any API or MCP image tag — see skill `bump-api-version` if you're also releasing
+a server change in the same pass.
 
 ## Anti-patterns
 
@@ -238,5 +249,5 @@ Skill `run-locally` covers the full local dev loop. Skill `bump-cli-version` doe
 - ❌ Absolute paths (`/foo.svg`) in views — breaks under slug prefix.
 - ❌ Inline `style :=` for theming colors — use `cls := "..."` + CSS variables in `styles.css`.
 - ❌ Importing JVM-only Java classes (`java.io.*`) — Scala.js link error.
-- ❌ Treating Tapir endpoint values from `endpoints/` as the client's source of truth — the client only uses the DTO case classes, not the endpoint vals.
+- ❌ Treating the server's zio-http `Endpoint` values in `api/routes/` as the client's source of truth — the client only uses the DTO case classes in `messages/`, never the endpoint definitions (there is no shared `endpoints/` module any more).
 - ❌ Mutating `Var` from inside a Signal observer in render — causes Laminar reentrancy issues. Move mutations to event handlers.

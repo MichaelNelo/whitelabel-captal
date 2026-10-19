@@ -1,7 +1,7 @@
 ---
 name: add-view
 description: Use when adding a new Laminar view in client/views/. Covers Layout wrapper, signal-based reactivity, API calls on mount, Router integration, error handling. Triggers on "add view", "new spa screen", "nueva vista", "laminar view".
-version: 1.0.0
+version: 1.1.0
 ---
 
 # Add a Laminar view
@@ -26,8 +26,6 @@ Read existing views before adding: `WelcomeView` and `ReadyView` are the simples
 
 ```scala
 package whitelabel.captal.client.views
-
-import scala.concurrent.ExecutionContext.Implicits.global
 
 import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.i18n.I18nClient
@@ -92,8 +90,9 @@ private val bonusRoute: Route[Page.BonusGame.type, Unit] = Route.static(
   Page.BonusGame, root / "bonus" / endOfSegments, basePath = basePath)
 
 // Add bonusRoute to routes list, getPageTitle, serializePage, deserializePage
-// Add to splitter:
-.collectStatic(Page.BonusGame)(BonusGameView.render)
+// Add to splitter, wrapped in a dynamic import so the view ships in its own chunk —
+// the import expression has to be written at this call site, not inside a helper:
+.collectStatic(Page.BonusGame)(lazily(js.dynamicImport(BonusGameView.render)))
 ```
 
 If the view is reached via a `Phase` transition, also add `case Phase.BonusGame => Page.BonusGame` in `phaseToPage` (see skill `add-phase`).
@@ -107,11 +106,11 @@ Edit `client/assets/styles.css`. Conventions:
 
 ### 4. Add i18n keys
 
-If your view shows translated copy:
-- Add fields to `core/.../i18n/I18n.scala` (e.g. `final case class BonusGame(title: String, submit: String)` + add to `I18n` case class).
-- Update `platform/.../services/LocaleService.scala` `buildI18n` to populate them.
-- Update the bundled default `cli/resources/templates/location/i18n/{es,en}.yaml`.
-- Update the operator-facing skill `i18n-reference` with the new keys.
+If your view shows translated copy, add fields to `core/.../i18n/I18n.scala` (e.g.
+`final case class BonusGame(title: String, submit: String)` + add to `I18n`'s own case class and to
+`I18n.descriptions`). Nothing else needs updating in code — `LocaleServiceQuill.getI18n` picks up a
+new key automatically — but an operator has to write the new keys for each location through the MCP
+backoffice's `set_translations` tool before this view stops rendering `[bonusGame.title]`.
 
 Detailed flow: skill `add-i18n-key`.
 
@@ -121,9 +120,13 @@ There's no JS test runner in the project (just `./mill client.compile` for type-
 
 ```bash
 ./mill clean client.generatedSources && ENVIRONMENT=dev ./mill client.bundle
-./mill api.dev --slug bonus-test --dir locations/bonus-test --shared-dir shared
+./mill api.dev --slug bonus-test
 # Open http://localhost:8080/bonus/ and walk through
 ```
+
+`api.dev` fails fast with `LocationNotFound` if `bonus-test` doesn't exist in the `locations`
+table yet — there is no directory for it to provision from any more. Create it first with
+`./mill mcp.dev` and the backoffice's `create_location` tool (see skill `run-locally`).
 
 ## Patterns to follow
 
@@ -150,7 +153,7 @@ There's no JS test runner in the project (just `./mill client.compile` for type-
 ### Lifecycle
 - Mount → `onMountCallback { _ => loadInitialData() }`.
 - Unmount → Laminar cleans up signal subscriptions automatically. Don't manually unbind.
-- Mid-flow API call → wrap in `Runtime.run:` (escala Future failures auto).
+- Mid-flow API call → wrap in `Runtime.run:` (escalates a rejected `js.Promise` automatically — the client doesn't use `Future`).
 
 ### Navigation
 - To another phase: `Router.syncWithPhase(phase)`.

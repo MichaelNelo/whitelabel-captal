@@ -1,7 +1,7 @@
 ---
 name: add-phase
 description: Use when extending the captive-portal state machine with a new Phase (between Welcome and Ready). Triggers on "add phase", "new phase", "extender state machine", "fase nueva".
-version: 1.0.0
+version: 1.1.0
 ---
 
 # Add a new Phase
@@ -19,7 +19,7 @@ The phase is persisted on `sessions.phase`, advanced by `SessionPhaseHandler`, v
 **Phase.Ready vs Phase.Authorized** (gotcha):
 - `Ready` = "survey terminado, esperando que UniFi autorice".
 - `Authorized` = "UniFi confirmó el voucher; `accessExpiresAt` poblado en la session".
-- La transición `Ready → Authorized` la hace **únicamente** `UnifiAuthorizationHandler` post-commit (no `SessionPhaseHandler`). Si UniFi falla, la sesión queda en `Ready` y `/api/finish` se puede reintentar.
+- La transición `Ready → Authorized` la hace **únicamente** `UnifiAccessHandler` post-commit (no `SessionPhaseHandler`). Si UniFi falla, la sesión queda en `Ready` y `/api/finish` se puede reintentar.
 - `Phase.Authorized` mapea a `Page.Welcome` en el cliente (la `WelcomeView` detecta `phase=Authorized + accessExpiresAt` y muestra countdown), no a `Page.Ready`.
 
 ## Steps
@@ -47,15 +47,29 @@ Also update `Phase.fromDbString` / `Phase.toDbString` if defined (some places se
 Two places set the phase based on events:
 
 - **`SessionPhaseHandler.scala`** (`platform/.../eventhandlers/`): transitions on identification answer + video watched. If your new phase comes after one of these, add the branch there.
-- **Individual route serverLogic**: e.g. `VideoRoutes.NextVideo` sets `session.phase = step.phase` when no video matches. If your phase is reached by a route directly, update the route.
+- **Individual route implementations**: e.g. `VideoRoutes`'s `nextVideo.implement` sets `session.phase = step.phase` when no video matches. If your phase is reached by a route directly, update the route.
 
-Example: if BonusGame goes after AdvertiserQuestion:
+`SessionPhaseHandler` is a boolean-predicate chain, not a `match` per phase — follow that shape
+rather than inventing a `match`. Example: if BonusGame should start once the advertiser question is
+answered:
 
 ```scala
-// In SessionPhaseHandler — assuming there's an AdvertiserAnswered event:
-case Event.Advertiser(AdvertiserEvent.AnswerAccepted(_, _)) =>
-  setPhase(Phase.BonusGame)   // was Phase.Ready
+// In SessionPhaseHandler, alongside isIdentificationAnswer / isVideoVisualized / ...:
+private def isAdvertiserAnswered(event: Event): Boolean =
+  event match
+    case Event.Survey(SurveyEvent.QuestionAnswered(_, _: QuestionEvent.AdvertiserQuestionAnswered)) =>
+      true
+    case _ =>
+      false
+
+// Then in handle's if/else-if chain:
+else if hasAdvertiserAnswered then
+  run(SessionService.updatePhaseQuery(lift(sessionData.sessionId), lift(Phase.BonusGame))).orDie
 ```
+
+There is no `Event.Advertiser` case — an advertiser's question answer is still a
+`Event.Survey(SurveyEvent.QuestionAnswered(...))`, wrapping a `QuestionEvent.AdvertiserQuestionAnswered`.
+`application.Event` has exactly three cases: `Survey`, `User`, `Video`.
 
 ### 3. Wire the SPA route
 
@@ -89,7 +103,7 @@ Also extend `splitter.collectStatic(Page.BonusGame)(BonusGameView.render)`.
 
 `client/src/whitelabel/captal/client/views/BonusGameView.scala`. Use `ReadyView` or `WelcomeView` as templates — both are minimal-state views. Use `Layout(content = ..., footer = ..., isLoading = ...)`.
 
-i18n keys (e.g. `bonusGame.title`, `bonusGame.cta`) need to be added to the `I18n` schema in `core/src/whitelabel/captal/core/i18n/I18n.scala` AND populated in `LocaleService.buildI18n`. Operators then add the keys to their `locations/<slug>/i18n/{es,en}.yaml`.
+i18n keys (e.g. `bonusGame.title`, `bonusGame.cta`) need to be added to the `I18n` schema in `core/src/whitelabel/captal/core/i18n/I18n.scala` (and to `I18n.descriptions`, required at compile time). `LocaleServiceQuill.getI18n` picks up new keys automatically through `I18nSchema.decode` — there is no per-key mapping to update. Operators then write the new keys per location through the MCP backoffice's `set_translations` tool. See skill `add-i18n-key`.
 
 ### 5. Add a new API endpoint (if needed)
 
