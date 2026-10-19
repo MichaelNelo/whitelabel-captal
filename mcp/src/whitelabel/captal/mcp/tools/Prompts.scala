@@ -6,20 +6,11 @@ import whitelabel.captal.mcp.resources.Readiness
 import whitelabel.captal.platform.schema.QuillSqlite
 import zio.*
 
-/** Onboarding, as far as MCP can express a sequence.
+/** Onboarding as an MCP prompt: user-initiated, and stateful.
   *
-  * MCP has no workflow primitive, deliberately: tools are individual capabilities and the agent is
-  * the orchestrator. A prompt is the closest thing the protocol offers, and it is not an executor —
-  * `get` returns messages. It cannot call a tool, cannot ask for consent, cannot commit anything.
-  *
-  * What it can do is be *user-initiated* and *stateful*. Hosts surface prompts as commands the
-  * operator picks, which a `skill://` resource is not — that has to be fetched by an agent that may
-  * never think to. And `get` reads the database on each invocation, so instead of a procedure that
-  * describes the steps in the abstract, this one names the step you are actually on.
-  *
-  * That is the whole design decision behind it. Onboarding is not a transaction: every tool writes
-  * on the spot and a location half-finished is not invalid, only unfinished. So rather than protect
-  * against stopping in the middle, this makes stopping in the middle cheap to recover from.
+  * `get` returns messages and executes nothing — it cannot call a tool, request consent or commit.
+  * It reads the database on each invocation, so the messages name the step the location is actually
+  * on rather than describing the sequence in the abstract.
   */
 object Prompts:
 
@@ -60,8 +51,7 @@ object Prompts:
        |is fine and this prompt will say where you stopped. Re-run it after a few steps to re-read
        |the state rather than tracking it yourself.
        |
-       |Nothing here deploys. Publishing the location to AWS is still `captal locations push`."""
-      .stripMargin
+       |Nothing here deploys. Standing the location up on AWS is `deploy_location`.""".stripMargin
   end render
 
   private def catalogue(slugs: List[String]): String =
