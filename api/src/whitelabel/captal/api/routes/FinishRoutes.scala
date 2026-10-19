@@ -2,7 +2,7 @@ package whitelabel.captal.api.routes
 
 import whitelabel.captal.api.session.SessionCookieConfig
 import whitelabel.captal.api.wire.given
-import whitelabel.captal.api.{ApiErrors, SessionEndpoint}
+import whitelabel.captal.api.{ApiBase, ApiErrors, SessionEndpoint}
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Flow, Phase}
 import whitelabel.captal.messages.{ApiError, StatusResponse}
@@ -18,8 +18,8 @@ object FinishRoutes:
 
   type FullEnv = SessionContext & SessionService & FinishFlowType
 
-  val layer: ZLayer[SessionCookieConfig, Nothing, FinishRoutes] = ZLayer.fromFunction(
-    FinishRoutes(_))
+  val layer: ZLayer[SessionCookieConfig & ApiBase, Nothing, FinishRoutes] = ZLayer.fromFunction(
+    FinishRoutes(_, _))
 
 end FinishRoutes
 
@@ -38,10 +38,10 @@ end FinishRoutes
   * The constructor takes the cookie config rather than a `SessionEndpoint`, which it no longer has
   * any use for — that class exists to build tapir descriptions.
   */
-final class FinishRoutes(cookieConfig: SessionCookieConfig):
+final class FinishRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
   import FinishRoutes.*
 
-  private val finish = Endpoint(Method.POST / "api" / "finish")
+  private val finish = Endpoint(base(Method.POST / "api" / "finish"))
     .header(HeaderCodec.cookie.optional)
     .out[StatusResponse]
     .outError[ApiError](Status.BadRequest)

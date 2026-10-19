@@ -1,6 +1,7 @@
 package whitelabel.captal.api
 
 import whitelabel.captal.api.AppLayers.FullEnv
+import whitelabel.captal.api.ApiBase
 import whitelabel.captal.api.routes.{
   AdvertiserSurveyRoutes,
   FinishRoutes,
@@ -131,40 +132,37 @@ private[api] object HttpApp:
         )
   end spaCatchAllRoutes
 
-  /** Every API route, under the location slug when there is one.
+  /** Every API route.
     *
-    * The slug prefix is applied once, here, to all of them. It used to be tapir's — `endpoints`
-    * called `prependSecurityIn(slug)` on every endpoint it interpreted — and a route that converted
-    * left that list and lost it. `HealthRoutes` spent a commit that way: a live regression and an
-    * invisible one, since `Deploy.healthCheckPath` registers each location's target group against
-    * `/<slug>/api/health` and a 404 there is an unhealthy task. Only in production, where
-    * `LOCATION_SLUG` is set; the suite runs without one, so nothing in it could fail.
+    * No slug prefixing here, deliberately — it belongs to each `Endpoint`, and `ApiBase` says at
+    * length why. The short version: this function used to call `Routes#nest`, which rewrites the
+    * route pattern and not the endpoint's codec, so `/<slug>/api/health` matched a route and then
+    * failed to decode. It took starting the server to see that.
     */
   def apiRoutes(
       devEndpoints: Boolean,
-      locationSlug: Option[String],
+      base: ApiBase,
       surveyRoutes: SurveyRoutes,
       localeRoutes: LocaleRoutes,
       videoRoutes: VideoRoutes,
       advertiserSurveyRoutes: AdvertiserSurveyRoutes,
       finishRoutes: FinishRoutes): Routes[FullEnv, Nothing] =
-    val base =
-      HealthRoutes.routes ++ finishRoutes.routes ++ localeRoutes.routes ++ videoRoutes.routes ++
-        surveyRoutes.routes ++ advertiserSurveyRoutes.routes
+    val mounted =
+      HealthRoutes.routes(base) ++ finishRoutes.routes ++ localeRoutes.routes ++
+        videoRoutes.routes ++ surveyRoutes.routes ++ advertiserSurveyRoutes.routes
     val all =
       if devEndpoints then
-        base ++ localeRoutes.devRoutes
+        mounted ++ localeRoutes.devRoutes
       else
-        base
-    val prefixed = locationSlug.fold(all)(slug => all.nest(PathCodec.literal(slug)))
-    prefixed @@ CodecConfig.withConfig(codecConfig)
+        mounted
+    all @@ CodecConfig.withConfig(codecConfig)
   end apiRoutes
 
   /** The API, plus everything a dev server also has to answer for the SPA to run. */
   def routes(
       devMode: Boolean,
       devEndpoints: Boolean,
-      locationSlug: Option[String],
+      base: ApiBase,
       surveyRoutes: SurveyRoutes,
       localeRoutes: LocaleRoutes,
       videoRoutes: VideoRoutes,
@@ -172,7 +170,7 @@ private[api] object HttpApp:
       finishRoutes: FinishRoutes): Routes[FullEnv, Response] =
     val served = apiRoutes(
       devEndpoints,
-      locationSlug,
+      base,
       surveyRoutes,
       localeRoutes,
       videoRoutes,
@@ -180,7 +178,8 @@ private[api] object HttpApp:
       finishRoutes)
     val baseRoutes =
       if devMode then
-        devLinkerOutput(devStaticRoutes(locationSlug) ++ served ++ spaCatchAllRoutes(locationSlug))
+        devLinkerOutput(
+          devStaticRoutes(base.slug) ++ served ++ spaCatchAllRoutes(base.slug))
       else
         served
     baseRoutes @@ loggingMiddleware

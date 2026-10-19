@@ -120,7 +120,8 @@ object TestHelpers:
       val localeRoutes = env.get[LocaleRoutes]
       serveZioHttp(
         (
-          HealthRoutes.routes ++ env.get[FinishRoutes].routes ++ localeRoutes.routes ++
+          HealthRoutes.routes(env.get[ApiBase]) ++ env.get[FinishRoutes].routes ++
+          localeRoutes.routes ++
             localeRoutes.devRoutes ++ env.get[VideoRoutes].routes ++ env.get[SurveyRoutes].routes ++
             env.get[AdvertiserSurveyRoutes].routes
         ).provideEnvironment(env))

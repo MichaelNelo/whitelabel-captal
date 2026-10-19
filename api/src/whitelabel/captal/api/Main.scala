@@ -41,10 +41,11 @@ object Main extends ZIOAppDefault:
         advertiserSurveyRoutes <- ZIO.service[AdvertiserSurveyRoutes]
         finishRoutes           <- ZIO.service[FinishRoutes]
         cookieConfig           <- ZIO.service[SessionCookieConfig]
+        base                   <- ZIO.service[ApiBase]
         served = HttpApp.routes(
           settings.devMode,
           settings.devEndpoints,
-          settings.locationSlug,
+          base,
           surveyRoutes,
           localeRoutes,
           videoRoutes,
@@ -56,7 +57,7 @@ object Main extends ZIOAppDefault:
         routeInfos = HttpApp
           .apiRoutes(
             settings.devEndpoints,
-            settings.locationSlug,
+            base,
             surveyRoutes,
             localeRoutes,
             videoRoutes,

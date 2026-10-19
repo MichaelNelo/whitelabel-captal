@@ -40,7 +40,7 @@ private[api] object AppLayers:
     * fibers, not by any endpoint, so it has no business in the routes' environment.
     */
   type FullEnv =
-    SessionContext & SessionService & LocaleService & QuillSqlite & SessionCookieConfig &
+    SessionContext & SessionService & LocaleService & QuillSqlite & SessionCookieConfig & ApiBase &
       CurrentLocation & UserCookieConfig & UserLookup & SurveyRoutes & LocaleRoutes & VideoRoutes &
       AdvertiserSurveyRoutes & FinishRoutes & SurveyRoutes.AnswerEmailFlowType &
       SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
@@ -139,6 +139,7 @@ private[api] object AppLayers:
       sessionServiceLayer,
       localeServiceLayer,
       sessionCookieConfigLayer,
+      ApiBase.layer,
       currentLocationLayer,
       UserCookieConfig.layer,
       UserLookup.layer,

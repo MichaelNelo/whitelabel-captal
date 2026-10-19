@@ -1,5 +1,6 @@
 package whitelabel.captal.api.routes
 
+import whitelabel.captal.api.ApiBase
 import zio.*
 import zio.http.endpoint.Endpoint
 import zio.http.{Method, Routes}
@@ -24,8 +25,10 @@ object HealthRoutes:
   object HealthResponse:
     given Schema[HealthResponse] = DeriveSchema.gen[HealthResponse]
 
-  private val health = Endpoint(Method.GET / "api" / "health").out[HealthResponse]
-
-  val routes: Routes[Any, Nothing] = Routes(
-    health.implement(_ => ZIO.succeed(HealthResponse("ok"))))
+  /** Takes the base rather than reading it from a field, because this one has no other state and
+    * so stayed an `object` while the rest became classes.
+    */
+  def routes(base: ApiBase): Routes[Any, Nothing] =
+    val health = Endpoint(base(Method.GET / "api" / "health")).out[HealthResponse]
+    Routes(health.implement(_ => ZIO.succeed(HealthResponse("ok"))))
 end HealthRoutes

@@ -2,7 +2,7 @@ package whitelabel.captal.api.routes
 
 import whitelabel.captal.api.session.SessionCookieConfig
 import whitelabel.captal.api.wire.given
-import whitelabel.captal.api.SessionEndpoint
+import whitelabel.captal.api.{ApiBase, SessionEndpoint}
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.messages.{ApiError, SetLocaleRequest, StatusResponse}
@@ -17,8 +17,8 @@ object LocaleRoutes:
 
   type FullEnv = SessionContext & SessionService & LocaleService
 
-  val layer: ZLayer[SessionCookieConfig, Nothing, LocaleRoutes] = ZLayer.fromFunction(
-    LocaleRoutes(_))
+  val layer: ZLayer[SessionCookieConfig & ApiBase, Nothing, LocaleRoutes] = ZLayer.fromFunction(
+    LocaleRoutes(_, _))
 
 end LocaleRoutes
 
@@ -30,7 +30,7 @@ end LocaleRoutes
   * deliberately the same name and path as the one `asMeta` builds for the routes still on tapir.
   * Two cookies differing in path would be two entries in the browser rather than one.
   */
-final class LocaleRoutes(cookieConfig: SessionCookieConfig):
+final class LocaleRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
   import LocaleRoutes.*
 
   private def session(cookie: Option[zio.http.Header.Cookie]) = SessionEndpoint.authorise(
@@ -40,7 +40,7 @@ final class LocaleRoutes(cookieConfig: SessionCookieConfig):
 
   // ─── ListLocales ──────────────────────────────────────────────────────────
 
-  private val listLocales = Endpoint(Method.GET / "api" / "locales")
+  private val listLocales = Endpoint(base(Method.GET / "api" / "locales"))
     .out[List[String]]
     .outError[ApiError](Status.BadRequest)
 
@@ -49,7 +49,7 @@ final class LocaleRoutes(cookieConfig: SessionCookieConfig):
   // `Accept-Language` was an input of the tapir description and no handler ever read it — the
   // locale comes from the body. Dropped rather than carried over: an input nothing reads is a
   // claim about the request that nothing honours.
-  private val setLocale = Endpoint(Method.PUT / "api" / "session" / "locale")
+  private val setLocale = Endpoint(base(Method.PUT / "api" / "session" / "locale"))
     .header(HeaderCodec.cookie.optional)
     .in[SetLocaleRequest]
     .out[StatusResponse]
@@ -58,13 +58,13 @@ final class LocaleRoutes(cookieConfig: SessionCookieConfig):
 
   // ─── GetI18n ──────────────────────────────────────────────────────────────
 
-  private val getI18n = Endpoint(Method.GET / "api" / "i18n" / PathCodec.string("locale"))
+  private val getI18n = Endpoint(base(Method.GET / "api" / "i18n" / PathCodec.string("locale")))
     .out[I18n]
     .outError[ApiError](Status.BadRequest)
 
   // ─── ResetPhase (dev only) ────────────────────────────────────────────────
 
-  private val resetPhase = Endpoint(Method.POST / "api" / "dev" / "reset-phase")
+  private val resetPhase = Endpoint(base(Method.POST / "api" / "dev" / "reset-phase"))
     .header(HeaderCodec.cookie.optional)
     .out[StatusResponse]
     .outError[ApiError](Status.BadRequest)

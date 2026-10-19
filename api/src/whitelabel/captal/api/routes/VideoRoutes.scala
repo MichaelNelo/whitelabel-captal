@@ -2,7 +2,7 @@ package whitelabel.captal.api.routes
 
 import whitelabel.captal.api.session.SessionCookieConfig
 import whitelabel.captal.api.wire.given
-import whitelabel.captal.api.{ApiErrors, SessionEndpoint}
+import whitelabel.captal.api.{ApiBase, ApiErrors, SessionEndpoint}
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Flow, NextStep, Phase}
 import whitelabel.captal.messages.{
@@ -24,7 +24,8 @@ object VideoRoutes:
 
   type FullEnv = SessionContext & SessionService & NextVideoFlowType & MarkVideoWatchedFlowType
 
-  val layer: ZLayer[SessionCookieConfig, Nothing, VideoRoutes] = ZLayer.fromFunction(VideoRoutes(_))
+  val layer: ZLayer[SessionCookieConfig & ApiBase, Nothing, VideoRoutes] = ZLayer.fromFunction(
+    VideoRoutes(_, _))
 
 end VideoRoutes
 
@@ -35,7 +36,7 @@ end VideoRoutes
   * pair flattened the payload under a `type` discriminator and a zio-schema `Schema` cannot
   * describe that; see the note on `VideoResponse` for what replaced it.
   */
-final class VideoRoutes(cookieConfig: SessionCookieConfig):
+final class VideoRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
   import VideoRoutes.*
 
   private def session(cookie: Option[zio.http.Header.Cookie]) = SessionEndpoint.authorise(
@@ -57,12 +58,12 @@ final class VideoRoutes(cookieConfig: SessionCookieConfig):
         case Right(defect) =>
           new Exception(s"Defect: ${defect.prettyPrint}"))
 
-  private val nextVideo = Endpoint(Method.GET / "api" / "video" / "next")
+  private val nextVideo = Endpoint(base(Method.GET / "api" / "video" / "next"))
     .header(HeaderCodec.cookie.optional)
     .out[VideoResponse]
     .outError[ApiError](Status.BadRequest)
 
-  private val markWatched = Endpoint(Method.POST / "api" / "video" / "watched")
+  private val markWatched = Endpoint(base(Method.POST / "api" / "video" / "watched"))
     .header(HeaderCodec.cookie.optional)
     .in[MarkVideoWatchedRequest]
     .out[VideoWatchedResponse]

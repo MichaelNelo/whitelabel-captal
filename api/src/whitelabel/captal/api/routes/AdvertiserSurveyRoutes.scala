@@ -2,7 +2,7 @@ package whitelabel.captal.api.routes
 
 import whitelabel.captal.api.session.SessionCookieConfig
 import whitelabel.captal.api.wire.given
-import whitelabel.captal.api.{ApiErrors, SessionEndpoint}
+import whitelabel.captal.api.{ApiBase, ApiErrors, SessionEndpoint}
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Flow, NextStep, Phase}
 import whitelabel.captal.messages.{AdvertiserSurveyResponse, AnswerRequest, ApiError}
@@ -23,8 +23,8 @@ object AdvertiserSurveyRoutes:
   type FullEnv =
     SessionContext & SessionService & NextAdvertiserSurveyFlowType & AnswerAdvertiserFlowType
 
-  val layer: ZLayer[SessionCookieConfig, Nothing, AdvertiserSurveyRoutes] = ZLayer.fromFunction(
-    AdvertiserSurveyRoutes(_))
+  val layer: ZLayer[SessionCookieConfig & ApiBase, Nothing, AdvertiserSurveyRoutes] = ZLayer
+    .fromFunction(AdvertiserSurveyRoutes(_, _))
 
 end AdvertiserSurveyRoutes
 
@@ -34,7 +34,7 @@ end AdvertiserSurveyRoutes
   * question belongs to the video this session was shown, and a request cannot be allowed to name a
   * different one.
   */
-final class AdvertiserSurveyRoutes(cookieConfig: SessionCookieConfig):
+final class AdvertiserSurveyRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
   import AdvertiserSurveyRoutes.*
 
   private def watching(cookie: Option[Header.Cookie]) = SessionEndpoint.authorise(
@@ -51,12 +51,12 @@ final class AdvertiserSurveyRoutes(cookieConfig: SessionCookieConfig):
         case Right(defect) =>
           new Exception(s"Defect: ${defect.prettyPrint}"))
 
-  private val nextAdvertiserSurvey = Endpoint(Method.GET / "api" / "survey" / "advertiser" / "next")
+  private val nextAdvertiserSurvey = Endpoint(base(Method.GET / "api" / "survey" / "advertiser" / "next"))
     .header(HeaderCodec.cookie.optional)
     .out[AdvertiserSurveyResponse]
     .outError[ApiError](Status.BadRequest)
 
-  private val answerAdvertiser = Endpoint(Method.POST / "api" / "survey" / "advertiser")
+  private val answerAdvertiser = Endpoint(base(Method.POST / "api" / "survey" / "advertiser"))
     .header(HeaderCodec.cookie.optional)
     .in[AnswerRequest]
     .out[AdvertiserSurveyResponse]

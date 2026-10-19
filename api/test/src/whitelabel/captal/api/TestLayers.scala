@@ -17,6 +17,7 @@ import whitelabel.captal.api.session.{
   UserCookieConfig,
   UserLookup
 }
+import whitelabel.captal.api.ApiBase
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{
   Event,
@@ -218,6 +219,13 @@ object TestLayers:
   private val sessionCookieConfigLayer: ULayer[SessionCookieConfig] = ZLayer.succeed(
     SessionCookieConfig.fromSlug(None))
 
+  /** And so the routes mount at `/api/...`, unprefixed.
+    *
+    * The same `None` as above, which is why the slug form has no coverage here and is checked by
+    * starting the dev server instead — `ApiBase` records what that caught.
+    */
+  private val apiBaseLayer: ULayer[ApiBase] = ZLayer.succeed(ApiBase.none)
+
   /** Tests have no location row, but they do need UniFi config so `UnifiAccessHandler` walks the
     * real path. `TestUnifiClient` intercepts the transport, so these values never reach the
     * network.
@@ -247,8 +255,8 @@ object TestLayers:
       SurveyRoutes.NextSurveyFlowType & VideoRoutes.NextVideoFlowType &
       VideoRoutes.MarkVideoWatchedFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType & QuillSqlite &
-      SessionCookieConfig & CurrentLocation & UserCookieConfig & UserLookup & SurveyRoutes &
-      LocaleRoutes & VideoRoutes & AdvertiserSurveyRoutes & FinishRoutes & TestUnifiClient &
+      SessionCookieConfig & ApiBase & CurrentLocation & UserCookieConfig & UserLookup &
+      SurveyRoutes & LocaleRoutes & VideoRoutes & AdvertiserSurveyRoutes & FinishRoutes & TestUnifiClient &
       JobQueue & JobRunner.ExpireFlow & JobRunner
 
   val testEnv: ZLayer[Any, Throwable, TestEnv] = ZLayer.make[TestEnv](
@@ -275,6 +283,7 @@ object TestLayers:
     answerAdvertiserFlowLayer,
     finishFlowLayer,
     sessionCookieConfigLayer,
+    apiBaseLayer,
     currentLocationLayer,
     UserCookieConfig.layer,
     UserLookup.layer,
