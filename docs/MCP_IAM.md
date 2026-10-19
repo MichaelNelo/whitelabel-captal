@@ -11,8 +11,9 @@ this document as part of the change rather than as follow-up.
 
 ## Current policy
 
-Defined at `terraform/modules/mcp-iam`, attached to the ECS task role. The two
-have to move together: a permission added here and not there fails at runtime.
+Defined at `terraform/modules/mcp` as `aws_iam_policy.mcp`, attached to the ECS
+task role. The two have to move together: a permission added here and not there
+fails at runtime.
 
 ```json
 {

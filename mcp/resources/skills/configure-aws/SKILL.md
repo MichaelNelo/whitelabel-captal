@@ -52,7 +52,7 @@ Locally, `./mill mcp.dev` supplies all of them against a dev rqlite container an
 None are configured anywhere. The task runs as its ECS task role and the SDK's default provider
 chain picks it up — no key in the image, the task definition or the environment.
 
-The policy is `terraform/modules/mcp-iam`; what needs each permission is
+The policy is `aws_iam_policy.mcp` in `terraform/modules/mcp`; what needs each permission is
 `docs/MCP_IAM.md` in this one. **They have to move together**: a tool that needs a permission
 missing from the module fails at runtime, in front of an operator, with an SDK error that names the
 API call and not the fix. `s3:ListBucket` is deliberately absent — nothing enumerates the bucket.
