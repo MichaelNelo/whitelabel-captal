@@ -25,3 +25,6 @@ devenv.local.yaml
 # pre-commit
 .pre-commit-config.yaml
 url.txt
+
+# Env
+.env
