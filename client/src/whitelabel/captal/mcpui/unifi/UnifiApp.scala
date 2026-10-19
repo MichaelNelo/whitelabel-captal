@@ -9,21 +9,15 @@ import whitelabel.captal.mcpui.Bridge
 /** The behaviour behind `ui://configure-unifi`. The markup is the server's; this fills it, posts
   * the credentials, and tells the host what happened.
   *
-  * The page is addressed bare — `_meta.ui.resourceUri` is fixed when the tool is defined, long
-  * before any slug is known — so everything it works on arrives with the result of the call that
-  * opened it. That includes the ticket, which is what authorises the POST: this page is outside the
-  * MCP protocol the moment it talks to the server directly, and the ticket is what replaces the
-  * protocol's authentication for that one write.
+  * Addressed bare, so everything it works on — including the ticket that authorises the POST —
+  * arrives with the result of the call that opened it.
   *
-  * The token goes to the server and nowhere else. It is never put in a message to the host, never
-  * read back, and cleared from the field once stored — the entire reason this page exists is that a
-  * tool argument would have been recorded in the transcript.
+  * The token goes to the server and nowhere else: never sent to the host, never read back, cleared
+  * from the field once stored.
   */
 object UnifiApp:
 
-  /** Mirrors `UnifiTools.ConfigureResponse`. Field names are the contract between the two, and the
-    * reason this is a type: the server renames one and this stops compiling, rather than rendering
-    * a blank form the operator fills in twice.
+  /** Mirrors `UnifiTools.ConfigureResponse`. Field names are the contract between the two.
     */
   final class Config(raw: js.Dynamic):
     def ticket: String = raw.ticket.asInstanceOf[String]
@@ -53,8 +47,7 @@ object UnifiApp:
         .foreach: structured =>
           structured.ticket.asInstanceOf[js.UndefOr[String]].foreach(_ => start(Config(structured)))
     // After the handshake, not before: a notification sent to a host that has not acknowledged the
-    // frame has nowhere to land. This form is the taller of the two pages, so an unreported height
-    // clips it worst.
+    // frame has nowhere to land.
     val _ = Bridge.handshake().`then`[Unit](_ => Bridge.trackSize())
 
   private def start(config: Config): Unit =
@@ -103,9 +96,8 @@ object UnifiApp:
           status.textContent = outcome.message
           if outcome.ok then
             input("apiToken").value = ""
-            // The one thing the host hears. A call the page makes is invisible to the model
-            // otherwise, so without this the agent would keep offering to configure a location
-            // that is already done.
+            // A call the page makes is invisible to the model; this is what the host hears about
+            // it.
             Bridge.tellTheModel(
               s"Configuré las credenciales de UniFi para la location ${config.slug}.")
     )
@@ -113,11 +105,8 @@ object UnifiApp:
 
   final private case class Outcome(ok: Boolean, message: String)
 
-  /** The fields, named rather than scraped off the form.
-    *
-    * `URLSearchParams` does not take a `FormData` in the typed binding, and listing them has its
-    * own merit: the request carries exactly what the server reads, so a stray input added to the
-    * markup cannot arrive as a field nobody meant to send.
+  /** The fields, named rather than scraped off the form: the request carries exactly what the
+    * server reads, so a stray input added to the markup can't arrive as an unintended field.
     */
   private val Fields = List(
     "host",
@@ -128,9 +117,9 @@ object UnifiApp:
     "redirectUrl",
     "durationMinutes")
 
-  /** Urlencoded rather than JSON on purpose. The iframe's origin is opaque, so this is a
-    * cross-origin POST; `application/x-www-form-urlencoded` is a CORS-safelisted content type and
-    * goes without a preflight, which JSON would require and the server would then have to answer.
+  /** Urlencoded rather than JSON: the iframe's origin is opaque, so this is a cross-origin POST,
+    * and `application/x-www-form-urlencoded` is CORS-safelisted and skips the preflight that JSON
+    * would require.
     */
   private def send(config: Config): js.Promise[Outcome] =
     val payload = new dom.URLSearchParams()

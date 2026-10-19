@@ -25,23 +25,16 @@ import zio.{Chunk, IO, ZEnvironment, ZIO}
 
 import ToolSchema.visibleTo
 
-/** The read-only half of the backoffice server: everything a host can discover and read before any
-  * tool exists to mutate anything.
+/** Assembles the backoffice server: its instructions, resources, prompts, tools and extensions.
   *
-  * Skills are served as Resources under the `skill://` convention, and now also over `skills/list`
-  * and `skills/get` — see [[SkillsExtension]] for why both. The resource convention used to be the
-  * only option: `McpDispatchMethod` was a closed enum and a new JSON-RPC method could not be
-  * registered without patching the SDK. 0.10.0 replaced that with a registry of extensions that
-  * carry their own operations, so the choice is now a choice.
+  * Skills are served as resources under `skill://` and also over `skills/list` and `skills/get` —
+  * see [[SkillsExtension]].
   */
 object CaptalMcp:
   val RequiredI18nKeysUri: String = "i18n://required-keys"
 
-  /** Loaded into every conversation before any tool schema, so it stays an index and not a manual.
-    *
-    * Deliberately carries only URI and name. Each skill's description already travels on its
-    * `ResourceDefinition`, where a host reads it via `resources/list` on demand; repeating it here
-    * would be duplication paid on every single conversation.
+  /** The server instructions, loaded into every conversation before any tool schema — so an index
+    * and not a manual.
     */
   val instructions: String =
     s"""Backoffice for the Captal whitelabel captive portal.
@@ -76,9 +69,8 @@ object CaptalMcp:
     .mimeType("text/markdown")
     .read(uri => ZIO.succeed(Chunk(ResourceContents(uri, Some("text/markdown"), Some(skill.body)))))
 
-  /** Key plus what it is for, both derived: the list from the type, the descriptions from an
-    * [[I18n]] instance the compiler forces to be total. This replaced the hand-written enumeration
-    * in the `i18n-reference` skill, which had drifted and was missing two keys.
+  /** `i18n://required-keys`: every key plus what it is for, both derived — the list from the type,
+    * the descriptions from an [[I18n]] instance the compiler forces to be total.
     */
   private val requiredI18nKeys: McpResourceHandler = McpResource(
     RequiredI18nKeysUri,
@@ -96,21 +88,11 @@ object CaptalMcp:
 
   val resources: List[McpResourceHandler] = requiredI18nKeys :: Skills.all.map(skillResource)
 
-  /** The three extensions this server declares, validated into one registry.
+  /** Tasks, Skills and Apps, validated into one registry.
     *
-    * An effect because of Tasks: its settings carry the runtime, which owns the task store and the
-    * `Ref`s holding running fibers and the promises that wake a handler waiting for input. Nothing
-    * about Apps or Skills needs one — they are capability declarations and a set of operations over
-    * documents in the jar.
-    *
-    * `inMemory` is the store, and that is a decision worth naming: tasks live in this process, so a
-    * task survives a client disconnect but not a task replacement, and `tasks/get` only answers on
-    * the replica that started the work. With one task per location today that is invisible. The
-    * seam for fixing it is `McpTaskStore` — implement it over rqlite and any replica can answer.
-    *
-    * Failure is a programming error: ids must be unique and operations must not shadow a core
-    * method. It is surfaced as a typed failure rather than thrown so that startup reports it as
-    * what it is, rather than as a stack trace from inside server assembly.
+    * An effect because the Tasks runtime owns the task store and the `Ref`s holding running fibers.
+    * The store is in-memory: tasks live in this process, so `tasks/get` only answers on the replica
+    * that started the work. Fails when two ids collide or an operation shadows a core method.
     */
   val extensions: IO[IllegalStateException, McpExtensions[Any]] = McpTasks
     .inMemory
@@ -120,20 +102,17 @@ object CaptalMcp:
         .mapError(error =>
           new IllegalStateException(s"Could not build the MCP extension registry: $error"))
 
-  /** Auth is not optional.
-    *
-    * The SDK ignores `requireScopes` declarations when no `.auth(...)` is configured — silently, so
-    * an unauthenticated server looks exactly like a scoped one from the outside while every tool is
-    * open to anyone who can reach the port.
+  /** Auth is not optional: the SDK silently ignores every `requireScopes` declaration when no
+    * `.auth(...)` is configured, leaving every tool open to anyone who can reach the port.
     */
   def server(
-      // Reaches the database, because tokens live there now rather than in the environment.
+      // Reaches the database, where the tokens live.
       auth: McpAuth[QuillSqlite],
       // Prompts alone need the services in hand: `McpPromptHandler.get` returns `ZIO[Any, ...]`, so
       // it has no environment to ask a database for. Everything else is resolved by the runtime.
       promptEnv: ZEnvironment[QuillSqlite & AssetStore],
-      // The origin the upload page PUTs to, declared in that page's CSP. Resolved once at startup
-      // from the same store that signs the URLs, so the policy and the URL cannot disagree.
+      // The origin the upload page PUTs to, declared in that page's CSP. Resolved from the same
+      // store that signs the URLs, so the policy and the URL cannot disagree.
       uploadOrigin: String,
       // Where the pages' own modules come from, declared in their `resourceDomains`. The same CDN
       // the portal's assets are served from; `client.publish` puts them under `ui/`.
@@ -142,27 +121,18 @@ object CaptalMcp:
       // which belongs to them rather than to the protocol; see [[UiRoutes]].
       uiOrigin: String,
       // Absent in a deployment with no `ECS_CLUSTER`, and then the deploy tools are not registered
-      // at all. Passed by value rather than asked for from the environment so the server's type
-      // does not demand a service such a deployment has no layer for.
+      // at all.
       infra: Option[InfraStore],
-      // Apps, Skills and Tasks, already validated. Built in [[Main]] rather than here because the
-      // Tasks runtime is an effect — it owns the task store and the fibers — and this is a pure
-      // assembly that the test suite calls directly.
+      // Apps, Skills and Tasks, already validated; built in [[Main]], since the Tasks runtime is an
+      // effect and this assembly is pure.
       extensions: McpExtensions[Any],
       name: String = "captal-backoffice",
       version: String = "0.1.0"): McpServer[QuillSqlite & AssetStore] =
     /** Default-deny for the rendered pages: a tool is callable from an App only by being named
-      * here.
+      * here, where the extension's own default is callable by both the model and any App.
       *
-      * The extension's default is the opposite — a tool with nothing declared is callable by both
-      * the model and any App the host renders. Two pages run in that frame, and one of them exists
-      * precisely to keep a UniFi API token out of the conversation; it has no business being able
-      * to reach `create_token`. The HTML is ours and inlined, so nothing exploits this today. The
-      * point is that the restriction becomes a decision rather than an omission.
-      *
-      * `confirm_video_upload` is the whole list. The upload page calls it with the duration it read
-      * from the file, and the model calls it too, in the one case the page cannot close by itself —
-      * a WebM whose header carries no duration. So it is the one tool that is genuinely both.
+      * `confirm_video_upload` is the whole list — the upload page calls it with the duration it
+      * read from the file, and the model calls it for a WebM whose header carries none.
       */
     def restrictToApps[R](tool: McpToolHandlerR[R]): McpToolHandlerR[R] =
       if tool.name.value == "confirm_video_upload" then
@@ -178,24 +148,19 @@ object CaptalMcp:
         UnifiTools.all(uiOrigin) ++ TokenTools.all ++ SkillTools.all
     ).map(restrictToApps).foldLeft[McpServer[QuillSqlite]](withPrompts)(_.tool(_))
     // `deploy_location` is here rather than above because it copies the shared bundle under the new
-    // slug, which is S3 and therefore `AssetStore`. That copy is the step the CLI did first and
-    // nothing did after it was deleted, so a deployed location answered its API and served no SPA.
+    // slug, which is S3 and therefore `AssetStore`.
     val withAssets = (AssetTools.all ++ VideoTools.all ++ Readiness.all ++ DeployTools.all(infra))
       .map(restrictToApps)
       .foldLeft[McpServer[QuillSqlite & AssetStore]](withData)(_.tool(_))
     // One source for everything: `McpServer` holds a single `resourceSrc`, so the upload page and
-    // the entity tree cannot be registered separately. The page is built per video from the row, a
-    // freshly signed URL and the location's stylesheet, none of which a static handler can reach.
+    // the entity tree cannot be registered separately.
     val withSource = withAssets.resourceSource(
       EntityResources(UploadUiSource(uploadOrigin, scriptOrigin), uiOrigin, scriptOrigin))
     // The registry carries `io.modelcontextprotocol/ui`, which is how a host knows the `ui://`
     // resources are meant to be rendered rather than read; `…/skills`, which makes the bundled
     // documents discoverable; and `…/tasks`, without which a tool's `taskExecution` is inert and
-    // every call answers synchronously.
-    //
-    // `withExtensions` replaces rather than merges, which is why the whole registry is assembled in
-    // one place and handed over whole. Validation — duplicate ids, methods shadowing core ones —
-    // happened where it was built.
+    // every call answers synchronously. `withExtensions` replaces rather than merges, so the whole
+    // registry is assembled in one place and handed over whole.
     withSource.withExtensions(extensions)
   end server
 end CaptalMcp

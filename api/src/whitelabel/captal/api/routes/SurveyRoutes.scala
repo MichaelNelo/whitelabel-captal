@@ -39,12 +39,9 @@ object SurveyRoutes:
 
 end SurveyRoutes
 
-/** The identification survey, and the status route every visit starts with.
-  *
-  * The last routes off tapir, and the only ones that used its features rather than just its shape.
-  * `/api/status` carries six optional headers and reads two cookies — and the cookies get simpler
-  * here, not harder: tapir took one `cookie[Option[String]]` input per cookie, while both arrive in
-  * the one `Cookie` header that `valueFrom` picks each out of.
+/** The identification survey, and the status route every visit starts with. `/api/status` carries
+  * six optional headers and reads two cookies — both out of the one `Cookie` header, via
+  * `valueFrom`.
   */
 final class SurveyRoutes(
     cookieConfig: SessionCookieConfig,
@@ -117,11 +114,8 @@ final class SurveyRoutes(
     .outHeader(HeaderCodec.setCookie.optional)
     .outError[ApiError](Status.BadRequest)
 
-  /** Compare incoming `X-Ap-Mac` against the provisioned `location.ap_mac`.
-    *
-    * Soft validation: log a warning on mismatch but accept the request. This catches typos in
-    * `location.yaml` and surfaces tampered URLs in observability without bricking captive-portal
-    * sign-in due to a config error. Promote to a hard fail (403) if/when AP discipline is needed.
+  /** Compare the incoming `X-Ap-Mac` against the provisioned `location.ap_mac`. Soft validation:
+    * logs a warning on mismatch and accepts the request anyway.
     */
   private def softValidateApMac(
       incomingApMac: Option[String],
@@ -138,8 +132,8 @@ final class SurveyRoutes(
 
   private def normalize(mac: String): String = mac.toLowerCase.replace("-", ":").trim
 
-  /** Resolve the on-missing-session strategy. Prefers a CreateForUser when the cross-location
-    * `captal_user` cookie carries a valid, existing user id; falls back to plain Create otherwise.
+  /** Resolve the on-missing-session strategy: `CreateForUser` when the cross-location `captal_user`
+    * cookie carries a valid, existing user id, plain `Create` otherwise.
     */
   private def resolveOnMissing(
       userCookie: Option[String],
@@ -214,11 +208,9 @@ final class SurveyRoutes(
         now    <- Clock.instant
         result <- asApiError(
           flow.execute(ProvideNextIdentificationSurveyCommand(now)).map(SurveyResponse.from))
-        // Mirror the video route: when the response carries a NextStep, propagate the phase
-        // transition to the session so the SPA's follow-up request doesn't fail with a wrong
-        // phase. The session-phase handler only reacts to domain events that imply progress
-        // (IdentificationCompleted, etc.); a fallback NextStep with no identification work — no
-        // surveys seeded for the location, say — emits no such event, so the route owns this.
+        // When the response carries a NextStep, the route propagates the phase to the session:
+        // SessionPhaseHandler only reacts to domain events that imply progress
+        // (IdentificationCompleted, etc.), and a fallback NextStep emits no such event.
         _ <-
           result match
             case SurveyResponse.Step(step) =>
@@ -230,9 +222,9 @@ final class SurveyRoutes(
       yield result,
     status.implement: (cookies, userAgentOpt, clientMac, apMac, redirectUrl, ssid, clickId) =>
       val userAgent = userAgentOpt.getOrElse(defaultUserAgent)
-      // Build portalParams only when both clientMac AND click_id are present (both required by
-      // the UniFi captive-portal redirect contract). If either is missing on a CREATE flow,
-      // session resolution falls through to ApiError.SessionMissing.
+      // portalParams only when both clientMac AND click_id are present (both required by the
+      // UniFi captive-portal redirect contract). If either is missing on a CREATE flow, session
+      // resolution falls through to ApiError.SessionMissing.
       val portalParams =
         (clientMac, clickId) match
           case (Some(mac), Some(cid)) if cid.nonEmpty =>

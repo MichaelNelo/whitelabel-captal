@@ -9,10 +9,7 @@ enum State:
   case AnsweringQuestion(surveyId: survey.Id, questionId: survey.question.Id)
   case WatchingVideo(videoId: video.Id)
 
-  /** `advertiserId` is optional for the reason [[survey.State.WithAdvertiserQuestion]] records: a
-    * promo's survey has no advertiser, and requiring one here meant
-    * `UserRepositoryQuill.findAnsweringVideoSurvey` could not rebuild the state to answer it.
-    */
+  /** `advertiserId` is `None` for a promo's survey, which has no advertiser. */
   case AnsweringVideoSurvey(
       advertiserId: Option[survey.AdvertiserId],
       surveyId: survey.Id,

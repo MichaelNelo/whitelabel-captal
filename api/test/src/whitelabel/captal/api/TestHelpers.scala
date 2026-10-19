@@ -49,8 +49,7 @@ object TestHelpers:
   /** The sttp request as zio-http sees it.
     *
     * Only what the suites actually send: a method, a path, headers — the session cookie among them
-    * — and a string body. No multipart and no streaming; if a test needs one, this is where it gets
-    * added rather than worked around.
+    * — and a string body. No multipart and no streaming.
     */
   private def asZioRequest(request: Request[?, ?]): zio.http.Request =
     val body =
@@ -72,19 +71,13 @@ object TestHelpers:
         remoteAddress = None
       )
 
-  /** The server, as an sttp backend the suites can send to.
-    *
-    * It began as an adapter with a tapir fallback, so that a route converting to zio-http did not
-    * take its tests down with it — the suites speak `basicRequest` with URLs and know nothing about
-    * either library, which is what made them worth keeping unchanged across the migration. The
-    * fallback is gone with the last tapir route; what is left is the translation between sttp's
-    * request and zio-http's.
+  /** The server, as an sttp backend the suites can send to: the translation between sttp's request
+    * and zio-http's. The suites speak `basicRequest` with URLs and know nothing about either
+    * library.
     */
   private def serveZioHttp(routes: zio.http.Routes[Any, Nothing]): SttpBackend[Task, Any] =
-    // The server's own `CodecConfig`, not a copy of it — see the note on `HttpApp.codecConfig`.
-    // Without it these suites would be reading a wire format the deployed server does not produce,
-    // which is how an empty `options` list came to vanish from a radio question's response while
-    // every test stayed green.
+    // The server's own `CodecConfig`, not a copy of it — see the note on `HttpApp.codecConfig` — so
+    // these suites read the wire format the deployed server produces.
     val served = routes @@ CodecConfig.withConfig(HttpApp.codecConfig)
     SttpBackendStub[Task, Any](taskMonadError)
       .whenAnyRequest
@@ -97,8 +90,8 @@ object TestHelpers:
               .asString
               .orElseSucceed("")
               .map: text =>
-                // The headers come across because `extractSessionCookie` reads `Set-Cookie` off
-                // the response, which is how every suite gets a session to work with.
+                // The headers come across so `extractSessionCookie` can read `Set-Cookie` off the
+                // response, which is how every suite gets a session to work with.
                 Response(
                   text,
                   sttp.model.StatusCode(response.status.code),
@@ -109,10 +102,8 @@ object TestHelpers:
                     .map(h => sttp.model.Header(h.headerName, h.renderedValue)))
   end serveZioHttp
 
-  /** Every route the dev server mounts, with the test environment supplied.
-    *
-    * `devRoutes` among them because `/api/dev/reset-phase` is what `TestFixtures` resets with, and
-    * the suites run as the dev server does.
+  /** Every route the dev server mounts, with the test environment supplied — `devRoutes` among
+    * them, for `/api/dev/reset-phase`.
     */
   def testBackend: ZIO[TestEnv, Nothing, SttpBackend[Task, Any]] = ZIO
     .environment[TestEnv]
@@ -125,7 +116,7 @@ object TestHelpers:
             env.get[SurveyRoutes].routes ++ env.get[AdvertiserSurveyRoutes].routes
         ).provideEnvironment(env))
 
-  /** The health check, which is the one route already off tapir. */
+  /** The health check. */
   def getHealth(backend: SttpBackend[Task, Any]) = basicRequest
     .get(uri"http://test/api/health")
     .response(asStringAlways)
@@ -188,13 +179,7 @@ object TestHelpers:
     .response(asStringAlways)
     .send(backend)
 
-  /** The question out of a `/api/survey/next` body, through the wrapper the endpoint returns.
-    *
-    * This decoded `NextIdentificationSurvey` straight off the body, which worked only because the
-    * old codec flattened the payload into the same object and left `type` beside it for circe to
-    * ignore. The wrapper is a real object now, so reading the response means naming it — the way
-    * `parseNextAdvertiserSurvey` always had to.
-    */
+  /** The question out of a `/api/survey/next` body, through the wrapper the endpoint returns. */
   def parseNextSurvey(body: String): Option[NextIdentificationSurvey] = decode[SurveyResponse](body)
     .toOption
     .flatMap:
@@ -203,22 +188,14 @@ object TestHelpers:
       case SurveyResponse.Step(_) =>
         None
 
-  /** An answer body as the browser writes it.
-    *
-    * These were hand-written JSON — `{"answer":{"type":"text","value":"…"}}` — which made the
-    * helpers one more independent rendering of a format that already had several. Encoding an
-    * `AnswerRequest` instead means the suites send what `ApiClient` sends, so every test posting an
-    * answer now also exercises the request direction of the wire contract: the browser's circe
-    * encoder against whatever the server decodes with.
-    *
-    * `postRawBody` stays for `ProtocolRejectionSuite`, which needs to send what no client would.
+  /** An answer body as the browser writes it: an `AnswerRequest` through the encoder `ApiClient`
+    * uses, so every test posting an answer also exercises the request direction of the wire
+    * contract. `postRawBody` is how to send what no client would.
     */
   def answerBody(value: AnswerValue): String = AnswerRequest(value).asJson.noSpaces
 
   /** The suites hold option ids as the strings they read out of a fixture, so this parses one back.
-    *
-    * Throws rather than returning an `Option`: a test that reaches here with something that is not
-    * an option id has a broken fixture, and the useful outcome is a loud failure naming the string.
+    * Throws, naming the string, rather than returning an `Option`.
     */
   private def singleChoice(optionId: String): String = answerBody(
     AnswerValue.SingleChoice(
@@ -229,11 +206,8 @@ object TestHelpers:
   def postEmailAnswer(backend: SttpBackend[Task, Any], sessionCookie: String, email: String) =
     postRawBody(backend, sessionCookie, "email", answerBody(AnswerValue.Text(email)))
 
-  /** A body exactly as given, with no typed request in between.
-    *
-    * Every other helper builds valid JSON, which is the point of them and the reason nothing here
-    * has ever exercised an invalid one. `ProtocolRejectionSuite` needs to send what a client would
-    * never send, so the body has to arrive unexamined.
+  /** A body exactly as given, with no typed request in between, so it arrives unexamined.
+    * `ProtocolRejectionSuite` uses it to send what a client would never send.
     */
   def postRawBody(
       backend: SttpBackend[Task, Any],

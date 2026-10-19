@@ -2,8 +2,8 @@ package whitelabel.captal.client
 
 import com.raquo.laminar.api.L.*
 
-/** The brand icon as an `<img>`. Its waiting animation is `breathe` (scale + opacity, symmetric),
-  * defined in styles.css. In `.loaded-state` the breathing gives way to a glow flash.
+/** The brand icon as an `<img>`. Animated by `breathe` in styles.css; under `.loaded-state` the
+  * breathing gives way to a glow flash.
   */
 object BrandLoader:
 

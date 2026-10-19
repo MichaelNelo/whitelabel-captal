@@ -4,12 +4,8 @@ import utest.*
 
 object I18nSchemaTests extends TestSuite:
 
-  /** Transcribed verbatim from the hand-written `LocaleService.buildI18n` this derivation replaces.
-    *
-    * The point of spelling them out instead of deriving the expectation too: a self-consistent
-    * derivation can still be wrong. This list is what the portal and every existing
-    * `localized_texts` row actually use, so it is the only thing that proves the swap is
-    * behaviour-preserving.
+  /** The key set the portal and the `localized_texts` rows actually use. Must stay spelled out
+    * rather than derived: a self-consistent derivation can still be wrong.
     */
   private val KeysBeforeDerivation: List[String] = List(
     "welcome.title",
@@ -104,15 +100,13 @@ object I18nSchemaTests extends TestSuite:
 
     test("descriptions"):
       test("cover every key, by construction"):
-        // Not really a risk of failing: `I18n.descriptions` is an I18n, so the compiler already
-        // rejects a missing field. Kept as the executable statement of that invariant.
+        // The compiler already rejects a missing field; this states the invariant executably.
         val described = I18nSchema.flatten(I18n.descriptions)
         assert(described.keySet == KeysBeforeDerivation.toSet)
 
       test("are not blank or placeholder text"):
         val described = I18nSchema.flatten(I18n.descriptions)
-        // The derivation's own fallback is `[key]`; seeing one here would mean a description was
-        // never written and the map was built from an empty source.
+        // `[key]` is the derivation's own fallback: one here means a description was never written.
         val bad = described.filter((k, v) => v.isBlank || v == s"[$k]" || v.length < 10)
         assert(bad.isEmpty)
 

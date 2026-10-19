@@ -3,20 +3,9 @@ package whitelabel.captal.core.i18n
 import scala.compiletime.{constValue, erasedValue, summonInline}
 import scala.deriving.Mirror
 
-/** Derives the flat i18n key set from the [[I18n]] type itself.
-  *
-  * The keys used to live in three places at once: the types in [[I18n]], a hand-written enumeration
-  * in `LocaleService.buildI18n`, and the prose of the `i18n-reference` skill. Keeping them in sync
-  * was manual, and the failure mode is silent: a missing key renders as a literal `[welcome.title]`
-  * in the portal rather than failing anywhere a test would catch.
-  *
-  * Deriving every direction from the schema makes the type the single source of truth. Adding a
-  * field to a case class adds it to the required key set, to the decoder, to the documented
-  * descriptions, and to whatever the backoffice reports as missing, all at once.
-  *
-  * Implemented with `Mirror` + `inline` instead of `scala.quoted` macros: the whole thing is a fold
-  * over `MirroredElemLabels` and `MirroredElemTypes`, so quotes buy nothing. It also has to compile
-  * for Scala.js, since `core-js` shares `core.sources`.
+/** Derives the flat i18n key set, decoder and flattener from the [[I18n]] type itself, making that
+  * type the single source of truth for the key set. Must compile for Scala.js — `core-js` shares
+  * `core.sources`.
   */
 trait I18nSchema[A]:
   /** Every key this schema expects, prefixed. The prefix is empty at the root. */
@@ -44,11 +33,8 @@ object I18nSchema:
     "",
     value)
 
-  /** A leaf.
-    *
-    * The `[key]` placeholder is deliberate and predates this typeclass: it renders visibly in the
-    * portal instead of failing at startup, which is how a missing translation gets noticed at all.
-    * Kept identical so replacing `buildI18n` is behaviour-preserving.
+  /** A leaf. A key absent from the map decodes to the literal `[key]` placeholder, which renders
+    * visibly in the portal instead of failing.
     */
   given I18nSchema[String] with
     def keys(prefix: String): List[String] = List(prefix)
@@ -57,10 +43,9 @@ object I18nSchema:
       s"[$prefix]")
     def toMap(prefix: String, value: String): Map[String, String] = Map(prefix -> value)
 
-  /** Named rather than an anonymous `new I18nSchema[A]` inside [[derived]]: an anonymous class in
-    * an inline body is re-emitted at every inline site, which the compiler warns about and which
-    * would multiply classes in the Scala.js bundle the captive portal downloads. Public because
-    * inline expansion lands at the call site, which may be any package.
+  /** Instance carrier for [[derived]]. Must stay a named class, not an anonymous one in the inline
+    * body, which would be re-emitted at every inline site; must stay public, since inline expansion
+    * lands at the call site in any package.
     */
   final class Derived[A](
       keysOf: String => List[String],
@@ -90,8 +75,8 @@ object I18nSchema:
     else
       s"$prefix.$label"
 
-  /** Walks labels and element types in lockstep. The two `erasedValue` matches stay nested rather
-    * than zipped because `Tuple.Zip` does not reduce inside an `inline match`.
+  /** Walks labels and element types in lockstep. The two `erasedValue` matches must stay nested,
+    * not zipped: `Tuple.Zip` does not reduce inside an `inline match`.
     */
   private inline def collectKeys[Labels <: Tuple, Elems <: Tuple](prefix: String): List[String] =
     inline erasedValue[Labels] match
@@ -121,8 +106,8 @@ object I18nSchema:
               path(prefix, constValue[label].asInstanceOf[String]),
               messages) :: collectValues[labels, elems](prefix, messages)
 
-  /** Same lockstep walk, but reading the runtime field values positionally. `index` tracks the
-    * product arity already consumed, which stays aligned with the type-level fold.
+  /** Same lockstep walk, reading the runtime field values positionally. `index` is the product
+    * arity already consumed, kept aligned with the type-level fold.
     */
   private inline def collectEntries[Labels <: Tuple, Elems <: Tuple](
       prefix: String,

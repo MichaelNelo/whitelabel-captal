@@ -3,9 +3,9 @@ package whitelabel.captal.api.session
 object LocaleDetector:
   val defaultLocale: String = "es"
 
-  /** Parses Accept-Language header and returns the preferred locale code. Falls back to "en" if
-    * header is missing or unparseable. The DB query handles fallback if the locale doesn't exist in
-    * localized_texts.
+  /** Parses the `Accept-Language` header and returns the preferred locale code, falling back to
+    * `defaultLocale` when the header is missing or unparseable. A locale absent from
+    * `localized_texts` falls back again in the DB query.
     */
   def detect(acceptLanguage: Option[String]): String = acceptLanguage
     .flatMap(parseAcceptLanguage(_).headOption)

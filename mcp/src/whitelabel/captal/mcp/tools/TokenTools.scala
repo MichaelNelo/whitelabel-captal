@@ -29,14 +29,8 @@ enum Grant:
 object Grant:
   given Schema[Grant] = DeriveSchema.gen
 
-  /** Qualified on purpose.
-    *
-    * An unqualified lowercase name in a pattern is a fresh variable, not the enum case it reads
-    * like — so `case i18n_write =>` matched every grant and this returned `i18n:write` for all
-    * four. `create_token` would have issued tokens holding a scope nobody asked for and silently
-    * withholding the ones they did, and the attenuation check would have compared the wrong set.
-    * The names are lowercase because the schema publishes them; the prefix is what makes them
-    * patterns rather than bindings.
+  /** Qualified on purpose: an unqualified lowercase name in a pattern is a fresh variable, not the
+    * enum case. The prefix makes them patterns rather than bindings.
     */
   def scopeOf(grant: Grant): OauthScope =
     grant match
@@ -56,13 +50,8 @@ end Grant
 
 /** Issuing and revoking operator tokens.
   *
-  * Tokens used to be a list in `MCP_TOKENS`, which meant only whoever deploys could issue one — so
-  * giving a translator their own credential was a deployment, and what happened instead was that
-  * people shared. These are issued here and stored hashed; see [[Tokens]].
-  *
-  * The rule is attenuation: a token may only grant scopes it already holds. Nothing a chain of
-  * delegations produces can reach further than the token at its root, which is what makes handing
-  * `tokens:write` to someone safe — they can extend the chain, never widen it.
+  * Tokens are stored hashed; see [[Tokens]]. The rule is attenuation: a token may only grant scopes
+  * it already holds.
   */
 object TokenTools:
 

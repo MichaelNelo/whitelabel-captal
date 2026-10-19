@@ -38,8 +38,7 @@ object McpSchema:
     * The spec half says which document a `$ref` would point into, and names the right one for a
     * reader that speaks JSON Schema rather than OpenAPI — `#/$defs/` over `#/components/schemas/`.
     * `Inline` emits no refs, so it changes nothing today; it is the honest declaration if this ever
-    * stops being inline. Taking the pair at all is what zio-http 3.8 deprecated the bare
-    * `SchemaStyle` in favour of, and 0.10.0 moved this module from 3.0.1 to 3.11.6.
+    * stops being inline.
     */
   private val Style = JsonSchema.SchemaRef(
     JsonSchema.SchemaSpec.JsonSchema,
@@ -102,12 +101,7 @@ object McpSchema:
     */
   private val WrapperKey = "result"
 
-  /** Shadows `McpOutput.given` for the same reason as the input side.
-    *
-    * No tool returns a discriminated enum today, so nothing is misdescribed right now. It is the
-    * same asymmetry all the same: the encoder honours annotations the renderer drops, and the first
-    * tool to return one would reintroduce the bug that cost this migration two sessions.
-    */
+  /** Shadows `McpOutput.given` for the same reason as the input side. */
   given derivedOutput[A](using schema: Schema[A]): McpOutput[A] with
     private val valueSchema = fromSchema(schema)
     private val isObject = valueSchema.get("type").flatMap(_.asString).contains("object")

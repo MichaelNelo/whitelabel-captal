@@ -218,10 +218,8 @@ object TestLayers:
   private val sessionCookieConfigLayer: ULayer[SessionCookieConfig] = ZLayer.succeed(
     SessionCookieConfig.fromSlug(None))
 
-  /** And so the routes mount at `/api/...`, unprefixed.
-    *
-    * The same `None` as above, which is why the slug form has no coverage here and is checked by
-    * starting the dev server instead — `ApiBase` records what that caught.
+  /** And so the routes mount at `/api/...`, unprefixed. The slug form has no coverage here; it is
+    * checked by starting the dev server.
     */
   private val apiBaseLayer: ULayer[ApiBase] = ZLayer.succeed(ApiBase.none)
 
@@ -230,10 +228,8 @@ object TestLayers:
     * network.
     *
     * `defaultDurationMinutes = 0` makes `expiresAt == occurredAt`: the expiration is already due at
-    * the very instant access is granted, so the scheduler processes it as soon as it starts. This
-    * avoids advancing the `TestClock`, whose plumbing conflicts with `provideShared`, and does not
-    * affect the other tests because the test clock is frozen and `/api/status` checks with
-    * `isBefore(now)`.
+    * the very instant access is granted, so the scheduler processes it as soon as it starts. The
+    * test clock stays frozen and `/api/status` checks with `isBefore(now)`.
     */
   private val currentLocationLayer: ULayer[CurrentLocation] = ZLayer.succeed(
     CurrentLocation(

@@ -96,16 +96,7 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
       mime: String = JsonMime): Chunk[ResourceContents] = Chunk(
     ResourceContents(uri, Some(mime), Some(body)))
 
-  /** A collection, readable both ways.
-    *
-    * It used to be announced as `inode/directory`, which is this codebase's own convention and not
-    * the SDK's — `resources/directory/read` dispatches to [[readDirectory]] without looking at the
-    * mime type. So the only thing that type did was describe a body no host could obtain: an
-    * ordinary `resources/read` on it failed with "No resource at captal://locations", and attaching
-    * one in Claude Desktop reported "Failed to attach resource" while a `skill://` attached fine.
-    *
-    * Now it says what [[readResource]] actually returns.
-    */
+  /** A collection, readable both ways. Returned by [[readResource]]. */
   private def directory(uri: String, name: String, description: String): ResourceDefinition =
     ResourceDefinition(uri, name, Some(description), Some(JsonMime))
 
@@ -147,8 +138,7 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
               s"${Root}surveys",
               "Surveys",
               "Every survey. Only advertiser surveys belong to a location, through their video."),
-            // Listed so a host can see the App exists, though opening it here renders nothing
-            // useful: the page needs the ticket only `configure_unifi` can mint.
+            // Listed here; the page needs the ticket from `configure_unifi`.
             McpApps.resource(
               UnifiUi.AppUri,
               "Configurar UniFi",
@@ -212,9 +202,7 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
           pendingVideos(uri).mapError(ToolError.apply)
         case "videos" :: id :: "upload" :: Nil =>
           uploadTicket(uri, id).mapError(ToolError.apply)
-        // The collections, served to whoever asks for them the ordinary way. Reusing
-        // `readDirectory` rather than querying again is what keeps the two readings of one
-        // collection from disagreeing about which rows it holds.
+        // Collections served via ordinary readResource; reuses readDirectory for consistency.
         case ("locations" | "advertisers" | "surveys") :: Nil =>
           readDirectory(uri, ctx).map: children =>
             contents(
@@ -225,9 +213,7 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
         case _ =>
           ZIO.fail(ToolError(s"No resource at $uri"))
 
-  /** Reuses the tools' own read paths rather than querying again, so a resource and the tool that
-    * answers the same question cannot drift apart.
-    */
+  /** Reads advertiser by id. */
   private def advertiser(uri: String, id: String)
       : ZIO[QuillSqlite, ToolError, Chunk[ResourceContents]] = ZIO.serviceWithZIO[QuillSqlite]:
     quill =>
@@ -251,10 +237,7 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
     .map(v => contents(uri, encode(v)))
     .mapError(ToolError.apply)
 
-  /** The same answer `list_pending_uploads` gives, through the other door. Reusing the tool's query
-    * rather than repeating it is what keeps the two from drifting — the drift being invisible,
-    * since nobody compares a resource against a tool.
-    */
+  /** Pending videos, matching `list_pending_uploads`. */
   private def pendingVideos(uri: String): ZIO[QuillSqlite, String, Chunk[ResourceContents]] =
     VideoTools
       .pending(None)
@@ -265,10 +248,7 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
             PendingVideos(
               waiting.map(v => PendingVideo(v.videoId, v.title, v.slug)).sortBy(_.title))))
 
-  /** No signed URL is listed alongside the others: one read, one video, one signature. The page
-    * used to receive every pending video's URL and hide the ones it was not opened for, which is
-    * not the same as withholding them.
-    */
+  /** Signed upload URL for one video. One signature per read. */
   private def uploadTicket(
       uri: String,
       videoId: String): ZIO[QuillSqlite & AssetStore, String, Chunk[ResourceContents]] = ZIO

@@ -7,37 +7,15 @@ import com.jamesward.ziohttp.mcp.*
 import zio.*
 import zio.json.ast.Json
 
-/** The bundled skills over `skills/list` and `skills/get`, beside the `skill://` resources.
+/** The bundled skills over `skills/list` and `skills/get`.
   *
-  * Beside, not instead of. Three channels now carry the same twelve documents, and each exists
-  * because the one before it is not guaranteed to arrive:
-  *
-  *   - `read_skill`, a tool. The only one a host cannot decline to show a model, which is why it
-  *     stays even though the primitive now exists. Resources were the same bet and lost it: in the
-  *     host these operators use they never reach the model at all.
-  *   - `skill://…` resources, which an operator can attach by hand, and which are also where the
-  *     *content* comes from for this extension — `skills/get` answers with metadata and a digest,
-  *     and the client reads the body through core `resources/read`.
-  *   - this, for a host that implements the extension and can then discover and cache them without
-  *     being told to.
-  *
-  * None of it is new capability; it is the same text reachable three ways. The reason to add the
-  * third is that it is the one a host can act on without an operator in the loop.
-  *
-  * What made this impossible before was real and is now gone: `skills/list` and `skills/get` are
-  * JSON-RPC methods the SDK had no way to register, so the convention of serving skills as
-  * resources was the only option rather than a preference. 0.10.0 made extensions a registry of
-  * operations, and [[McpSkills]] is one.
+  * One of three channels carrying the same documents, alongside the `read_skill` tool and the
+  * `skill://…` resources. `skills/get` answers with metadata and a digest; the client reads the
+  * body through core `resources/read`.
   */
 object SkillsExtension:
 
-  /** A skill the extension cannot advertise, and why.
-    *
-    * Reported rather than fatal, which is how the SDK's own loader behaves. The failure mode here
-    * is a document, and losing a server because one of them has a malformed frontmatter line would
-    * be worse than losing its entry in one of three listings — it is still reachable through
-    * `read_skill` either way.
-    */
+  /** A skill the extension cannot advertise, with the reason. Reported, never fatal. */
   final case class Skipped(slug: String, reason: String)
 
   private def digestOf(body: String): Either[McpSkillDigestError, McpSkillDigest] =

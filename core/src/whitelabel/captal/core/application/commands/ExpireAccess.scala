@@ -14,15 +14,9 @@ import whitelabel.captal.core.user.ops.expire
 final case class ExpireAccessCommand(occurredAt: Instant)
 
 /** Closes the cycle opened by [[FinishCommand]]: the granted access reached its `accessExpiresAt`.
-  *
-  * Executed by the expiration scheduler, not by a request. The handlers reacting to `AccessExpired`
-  * take care of resetting the session (transactional) and revoking on the UCG (post-commit).
-  *
-  * Deliberate difference from [[FinishHandler]]: on `None` it does **not** fail.
-  * `findAuthorizedUser` returns `None` when the session is no longer authorized — typically because
-  * the user redid the flow and got re-authorized with a fresh deadline, leaving the old job stale.
-  * That is expected, not an error, so the command is a silent no-op. This is what lets the
-  * scheduler avoid cancelling or indexing jobs.
+  * Executed by the expiration scheduler, not by a request; the handlers reacting to `AccessExpired`
+  * reset the session (transactional) and revoke on the UCG (post-commit). Unlike [[FinishHandler]],
+  * a `None` from `findAuthorizedUser` is a silent no-op, not a failure: a stale job must not fail.
   */
 object ExpireAccessHandler:
   def apply[F[_]: Monad](userRepo: UserRepository[F]): Handler.Aux[F, ExpireAccessCommand, Unit] =

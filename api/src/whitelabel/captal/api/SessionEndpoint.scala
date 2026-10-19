@@ -7,12 +7,8 @@ import whitelabel.captal.messages.ApiError
 import whitelabel.captal.platform.session.{CaptivePortalParams, SessionContext, SessionService}
 import zio.*
 
-/** How a request becomes a session, for every route that needs one.
-  *
-  * An object and no longer a class: `final class SessionEndpoint(cookieConfig)` existed to build
-  * tapir's `secured` partial endpoint, which carried the cookie input, the error output and the
-  * security logic as one value. zio-http's `Endpoint` describes its own inputs, so what is left is
-  * the logic — and that never needed the cookie config, only the cookie.
+/** How a request becomes a session, for every route that needs one. Takes the cookie value, not the
+  * cookie config: the caller's own codec extracts it.
   */
 object SessionEndpoint:
   enum OnMissing:
@@ -61,14 +57,9 @@ object SessionEndpoint:
       case OnMissing.CreateForUser(userAgent, locale, portalParams, userId) =>
         createSessionForUser(userAgent, locale, portalParams, userId)
 
-  /** Resolve the session, check the phase, publish it — what every secured route does first.
-    *
-    * Lifted out of `secured` so it is not tapir's. The description of a route is a tapir value and
-    * will be a zio-http one, but this is neither: it reads a cookie value and returns a session or
-    * an `ApiError`, and both front ends call it with the cookie their own codec extracted. That is
-    * what keeps a converted route answering exactly as it did — a reimplementation here would be a
-    * second copy of the phase rule, and a route is not converted if its idea of "wrong phase"
-    * drifts.
+  /** Resolve the session, check the phase, publish it into `SessionContext` — what every secured
+    * route does first. An empty `allowedPhases` allows any phase; otherwise a mismatch fails with
+    * `ApiError.WrongPhase`. The single copy of the phase rule.
     */
   def authorise(
       cookie: Option[String],

@@ -9,35 +9,17 @@ import whitelabel.captal.core.survey.question.*
 import zio.schema.codec.JsonCodec
 import zio.schema.{DeriveSchema, Schema}
 
-/** One zio-schema description of the survey question tree, for the three places that write it.
-  *
-  * The tree had three independent renderings of one format and no shared definition of it. The API
-  * served it through circe; `SurveyRepositoryQuill` read `question_rules.rule_config` back through
-  * circe decoders; and the MCP backoffice wrote that same column by building the JSON with string
-  * interpolation — `s"""{"type":"$kind","value":$v}"""` — which agreed with the other two by
-  * nobody's enforcement. The reader dropped what it could not parse with `.toOption`, so a
-  * disagreement did not fail: the rule simply stopped being enforced, silently, for every question
-  * that carried it.
-  *
-  * So this is the definition, and the column and the response are both written from it. In
-  * `platform` because that is the one module `api` and `mcp` share — `core` would put a
-  * serialisation library on the Scala.js classpath, and the browser reads this tree with circe.
-  *
-  * Derived rather than annotated to reproduce the old shape. The old shape was reproducible — a
-  * `@discriminatorName` and a `@caseName`/`@fieldName` per case would have matched it key for key —
-  * but there is nothing to stay compatible with: the format's only persisted instances are rows
-  * this same code writes, and matching it by hand would mean re-stating, in annotations, the
-  * mapping whose three uncoordinated copies are the problem being removed.
+/** The one zio-schema description of the survey question tree: both `question_rules.rule_config`
+  * and the survey response are written from it. In `platform`, the single module `api` and `mcp`
+  * share.
   */
 object surveySchemas:
 
   // ─── Opaque ids ───────────────────────────────────────────────────────────
 
-  // `DeriveSchema.gen` cannot see through an opaque type — it reports "Deriving schema for
-  // survey.Id is not supported" — so these say what the string is. A transform rather than a
-  // primitive, so a malformed id in a request body decodes to an error instead of throwing.
-  // Named, because an opaque type erases to its underlying one and three anonymous `given`s for
-  // three `Id`s collide on the synthetic name the compiler would give them.
+  // `DeriveSchema.gen` cannot see through an opaque type, so these say what the string is; the
+  // transform makes a malformed id decode to an error instead of throwing. They must be named:
+  // opaque types erase to `String`, so anonymous `given`s for several `Id`s would collide.
   given surveyIdSchema: Schema[survey.Id] = Schema[String].transformOrFail(
     text => survey.Id.fromString(text).toRight(s"Not a survey id: $text"),
     id => Right(id.asString))
@@ -59,18 +41,10 @@ object surveySchemas:
   given Schema[LocalizedText] = DeriveSchema.gen[LocalizedText]
   given Schema[QuestionOption] = DeriveSchema.gen[QuestionOption]
 
-  /** The two enums that stay plain strings, because a column already holds them that way.
-    *
-    * `IdentificationSurveyType` is a Quill `MappedEncoding` over `surveys.category` and
-    * `CommonRule` is how `questions.is_required` is read — neither is JSON in the database, and
-    * both also travel to the browser inside `NextIdentificationSurvey`. So the string is the format
-    * on both sides of both boundaries, and these match the circe instances rather than replacing
-    * them. The same arrangement `Phase` has in `api/wire.scala`, for the same reason.
-    *
-    * `HierarchyLevel` is not here: it is read from `questions.hierarchy_level` by quoting the
-    * column and handing it to a circe string decoder, and it reaches no response type — nothing in
-    * `client`, `messages` or `api` mentions it. A `Schema` for it would describe a boundary it
-    * never crosses.
+  /** The two enums that stay plain strings on both sides of both boundaries:
+    * `IdentificationSurveyType` is a Quill `MappedEncoding` over `surveys.category`, `CommonRule`
+    * is how `questions.is_required` is read, and both also travel to the browser inside
+    * `NextIdentificationSurvey`. These match the circe instances rather than replacing them.
     */
   given Schema[CommonRule] = Schema[String].transformOrFail(
     {
@@ -92,9 +66,9 @@ object surveySchemas:
   given Schema[SelectionRule] = DeriveSchema.gen[SelectionRule]
   given Schema[TextRule] = DeriveSchema.gen[TextRule]
 
-  // One per element type, because `RangeRule[A]` is generic and a `Schema` is not: each of the
-  // three is the rule list of exactly one `QuestionType` case. Named for the same reason the ids
-  // are — the type parameter does not reach the synthetic name.
+  // One per element type: `RangeRule[A]` is generic and a `Schema` is not, and each of the three
+  // is the rule list of exactly one `QuestionType` case. Named, since the type parameter does not
+  // reach the synthetic given name.
   given rangeRuleIntSchema: Schema[RangeRule[Int]] = DeriveSchema.gen[RangeRule[Int]]
   given rangeRuleBigDecimalSchema
       : Schema[RangeRule[BigDecimal]] = DeriveSchema.gen[RangeRule[BigDecimal]]
@@ -110,21 +84,11 @@ object surveySchemas:
 
   // ─── What the database column holds ───────────────────────────────────────
 
-  /** Render a value as the JSON a `TEXT` column stores.
-    *
-    * Here rather than at each call site so the reader and the two writers cannot drift: the column
-    * is written by `mcp` and read by `SurveyRepositoryQuill`, in different modules, and this is the
-    * only description either of them uses.
-    */
+  /** Render a value as the JSON a `TEXT` column stores. */
   def encode[A: Schema](value: A): String =
     JsonCodec.jsonEncoder(summon[Schema[A]]).encodeJson(value, None).toString
 
-  /** Read a column back, with the reason when it will not read.
-    *
-    * `Either` and not `Option`, which is the difference that matters: the caller this replaces
-    * discarded the reason, so a rule whose JSON no longer matched the decoder became a rule that
-    * was not enforced, with nothing written anywhere to say so.
-    */
+  /** Read a column back, with the reason on the `Left` when it will not read. */
   def decode[A: Schema](json: String): Either[String, A] = JsonCodec
     .jsonDecoder(summon[Schema[A]])
     .decodeJson(json)

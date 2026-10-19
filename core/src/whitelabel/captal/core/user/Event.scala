@@ -21,9 +21,7 @@ enum Event:
       videoType: video.VideoType,
       occurredAt: Instant)
 
-  /** `advertiserId` is optional, matching [[VideoAssigned]] directly above — the video it follows
-    * may be a promo, which belongs to the venue rather than to an advertiser.
-    */
+  /** `advertiserId` is `None` when the video it follows is a promo. */
   case VideoSurveyAssigned(
       userId: Id,
       advertiserId: Option[AdvertiserId],
@@ -35,10 +33,8 @@ enum Event:
       answeredQuestionIds: List[FullyQualifiedQuestionId],
       occurredAt: Instant)
 
-  /** The access granted after `UserFinishedProcess` has reached its `accessExpiresAt`.
-    *
-    * A genuine domain event: it is what forces the user back through the flow, which is the
-    * business model. Emitted by the expiration scheduler, not by a request.
+  /** The access granted by `UserFinishedProcess` reached its `accessExpiresAt`. Emitted by the
+    * expiration scheduler, not by a request.
     */
   case AccessExpired(userId: Id, occurredAt: Instant)
 end Event

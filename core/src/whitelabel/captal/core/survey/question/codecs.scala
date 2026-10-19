@@ -38,18 +38,8 @@ object codecs:
   // Selection Rules
   // ─────────────────────────────────────────────────────────────────────────────
 
-  /** Derived, where the rule and answer codecs below were all pairs of hand-written matches.
-    *
-    * These describe `question_rules.rule_config` and `answers.answer_value`, which are columns as
-    * much as they are responses: the MCP backoffice writes the first, `SurveyRepositoryQuill` reads
-    * it, and the API serves it. Three renderings of one format with no shared definition — and the
-    * MCP's was string interpolation, agreeing with the other two by nobody's enforcement, while the
-    * reader discarded what it could not parse with `.toOption`, so a disagreement did not fail: the
-    * rule simply stopped being enforced.
-    *
-    * `platform.surveySchemas` is the definition now, and both the column and the response are
-    * written from it. What stays here is the browser's half of the same shape, since the browser
-    * reads this tree with circe — and `WireContractSuite` holds the two derivations to one format.
+  /** Browser-side codec for the `question_rules.rule_config` shape. `platform.surveySchemas` is the
+    * authoritative definition of that format and must stay in step with these derivations.
     */
   given Decoder[SelectionRule] = Decoder.derived
   given Encoder[SelectionRule] = Encoder.AsObject.derived
@@ -65,8 +55,8 @@ object codecs:
   // Range Rules
   // ─────────────────────────────────────────────────────────────────────────────
 
-  // One pair per element type, because `RangeRule[A]` is generic and these instances are not. The
-  // `targetName`s stay: three `given`s for one erased type still collide on the synthetic name.
+  // One pair per element type: `RangeRule[A]` is generic, these instances are not. The
+  // `targetName`s are required — three `given`s for one erased type collide on the synthetic name.
   @targetName("decoderRangeRuleInt")
   given Decoder[RangeRule[Int]] = Decoder.derived
   @targetName("encoderRangeRuleInt")
@@ -77,8 +67,8 @@ object codecs:
   @targetName("encoderRangeRuleBigDecimal")
   given Encoder[RangeRule[BigDecimal]] = Encoder.AsObject.derived
 
-  // `LocalDate` has no circe instance of its own here, so these two carry one. `IsoDate.parse`
-  // rather than `LocalDate.parse` for the reason its own file gives.
+  // The only circe instances for `LocalDate` in this codebase. Decoding goes through
+  // `IsoDate.parse`, not `LocalDate.parse`.
   private given Decoder[LocalDate] = Decoder.decodeString.map(IsoDate.parse)
   private given Encoder[LocalDate] = Encoder.encodeString.contramap(_.toString)
 
@@ -149,10 +139,8 @@ object codecs:
   // QuestionType
   // ─────────────────────────────────────────────────────────────────────────────
 
-  // `QuestionType`'s discriminator mirrored the `questions.question_type` column, but the JSON was
-  // never the column: `SurveyRepositoryQuill.parseQuestionType` builds this from that column and
-  // the rule rows by hand. So the shape here was only ever the response, and nothing persisted
-  // depends on `Select` having been spelled `dropdown`.
+  // Response shape only; `SurveyRepositoryQuill.parseQuestionType` builds `QuestionType` from the
+  // `questions.question_type` column and the rule rows, not from this JSON.
   given Encoder[QuestionType] = Encoder.AsObject.derived
   given Decoder[QuestionType] = Decoder.derived
 
@@ -167,10 +155,8 @@ object codecs:
   // AnswerValue
   // ─────────────────────────────────────────────────────────────────────────────
 
-  // The one type here that travels the other way: the browser encodes an answer and the server
-  // decodes it. `answers.answer_value` holds the same bytes, written by
-  // `AnswerPersistenceHandler` — so this shape is a column too, and `platform.surveySchemas` is
-  // what writes it now.
+  // The one type here that travels browser -> server: the browser encodes, the server decodes. The
+  // same bytes are persisted to `answers.answer_value`.
   given Encoder[AnswerValue] = Encoder.AsObject.derived
   given Decoder[AnswerValue] = Decoder.derived
 end codecs

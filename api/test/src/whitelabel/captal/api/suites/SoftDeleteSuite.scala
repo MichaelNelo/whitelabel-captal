@@ -7,11 +7,10 @@ import whitelabel.captal.core.user
 import zio.ZIO
 import zio.test.*
 
-/** V20 added `is_active` to questions, options, rules and localized texts. The column alone changes
-  * nothing: what makes a soft delete real is the read path honouring it.
-  *
-  * So these assert against the portal's own HTTP surface rather than against the tables. Reverting
-  * any one of the query filters added in V20 makes exactly one of them fail.
+/** Soft delete over V20's `is_active` on questions, options, rules and localized texts, asserted
+  * against the portal's own HTTP surface rather than against the tables: what makes a soft delete
+  * real is the read path honouring the column, and reverting any one of V20's query filters makes
+  * exactly one of these fail.
   */
 object SoftDeleteSuite:
   // Answers seeded for a prior session, mirroring SurveyProgressionSuite: the pool of a category is
@@ -43,8 +42,7 @@ object SoftDeleteSuite:
               previousSessionId,
               email.questionId,
               "retired-question@example.com")
-            // The first one wins on displayOrder, so retiring it is what makes the assertion sharp:
-            // without the filter the flow serves it and the second question is never reached.
+            // The first one wins on displayOrder, so retiring it is what makes the assertion sharp.
             retired  = profiling.questions.head
             survivor = profiling.questions(1)
             _       <- TestFixtures.deactivateQuestion(retired)
@@ -135,10 +133,9 @@ object SoftDeleteSuite:
             served   = parsed.map(p => (p.advertiserId.map(_.asString), p.surveyId, p.question.id))
           yield assertTrue(
             surveyResp.code.isSuccess,
-            // This is the assertion that pins the join filter. Without it the query orders by
-            // displayOrder, picks a retired question, the detail fetch (which does filter) returns
-            // nothing, and the handler falls back to Phase.Ready — a successful response carrying
-            // no survey at all. The survey would be silently lost, not just misordered.
+            // The assertion that pins the join filter: without it the query picks a retired
+            // question, the detail fetch (which does filter) returns nothing, and the handler falls
+            // back to Phase.Ready — a successful response carrying no survey at all.
             parsed.isDefined,
             served.exists(expected.contains),
             !parsed.exists(p => retired.contains(p.question.id))
@@ -185,9 +182,8 @@ object SoftDeleteSuite:
             _ <- TestFixtures.linkSessionToUser(user.SessionId.unsafe(cookie), testUser.userId)
             _ <- getNextSurvey(backend, cookie)
             _ <- TestFixtures.deactivateQuestionRule(ruled.minLengthRuleId)
-            // This is what a one-rule fixture could never show: with min_length retired, "ab" is
-            // still rejected — by the pattern, and only by the pattern. A predicate that dropped
-            // every rule of the question would let it through.
+            // With min_length retired, "ab" is still rejected — by the pattern, and only by the
+            // pattern. A predicate that dropped every rule of the question would let it through.
             lower <- postProfilingTextAnswer(backend, cookie, "ab")
             upper <- postProfilingTextAnswer(backend, cookie, "Ab")
           yield assertTrue(
@@ -214,7 +210,7 @@ object SoftDeleteSuite:
             // Required comes from questions.is_required, not from question_rules. Editing
             // validations in the backoffice must never quietly make a mandatory field optional.
             empty <- postProfilingTextAnswer(backend, cookie, "")
-            // And "a" now passes, which is what proves both rules really were retired.
+            // And "a" now passes, so both rules really were retired.
             ok <- postProfilingTextAnswer(backend, cookie, "a")
           yield assertTrue(empty.body.contains("RequiredAnswerMissing"), ok.code.isSuccess)
       )

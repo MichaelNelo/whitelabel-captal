@@ -28,14 +28,7 @@ import McpSchema.given
 import QuillArrow.->
 import ToolSchema.{readOnly, withUi}
 
-/** Advertiser videos, created together with the survey they are followed by.
-  *
-  * The two are inseparable in the flow: `nextAdQueryAuthenticated` only serves a video whose survey
-  * still has an unanswered question, so a video without one is never shown. `captal video add`
-  * wrote the survey with the literal text "TODO" and left a bold warning in the skill telling the
-  * operator to edit it before pushing — a state that reaches production. Requiring the questions
-  * here makes it unreachable.
-  */
+/** Advertiser videos require a survey with at least one question, which is enforced here. */
 object VideoTools:
   private[mcp] val UploadValidFor: Duration = 30.minutes
 
@@ -329,28 +322,17 @@ object VideoTools:
       import quill.*
       run(activeVideoCountQuery(lift(advertiserId))).orDie.map(_.toInt)
 
-  /** Derived rather than taken from the caller so two advertisers uploading `promo.mp4` cannot
-    * overwrite each other — which is what `captal video add` does today, using the raw file name.
-    */
-  /** No extension. The operator has not chosen a file when the video is created, so a name to take
-    * one from does not exist yet — and S3 addresses objects by key while browsers and CDNs decide
-    * how to play them from the stored content type, not from the path.
+  /** Storage key derived from slug and video id, without extension (read from file's content type).
     */
   private def storageKey(slug: String, videoId: String): String = s"$slug/videos/$videoId"
 
-  /** Names the survey after the video, for an operator scanning list_surveys. Prefers Spanish and
-    * falls back to whatever locale was given.
-    */
+  /** Survey title from localized text, preferring Spanish. */
   private def titleFor(texts: List[LocalizedText]): String = texts
     .find(_.locale == "es")
     .orElse(texts.headOption)
     .map(_.value)
     .getOrElse("video")
 
-  /** No longer takes the bucket's origin. It used to, to declare the CSP on the tool — which is not
-    * where the Apps contract puts it, so the declaration did nothing and the PUT was blocked. The
-    * origin now reaches the page with the page, in [[UploadUiSource]].
-    */
   def create: McpToolHandlerR[QuillSqlite & AssetStore] = createTool
 
   private def createTool: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool(
@@ -395,8 +377,7 @@ object VideoTools:
           store <- ZIO.service[AssetStore]
           url   <- store.presignPut(key, UploadValidFor)
           now = java.time.Instant.now.toString
-          // Inactive until the file is there. The row has to exist first — the survey references
-          // the video — so this is what keeps a half-finished upload out of the rotation.
+          // Inactive until file arrives (survey references video, so row must exist first).
           affected <-
             run(
               query[AdvertiserVideoRow].insertValue(
@@ -406,11 +387,7 @@ object VideoTools:
                     advertiserId = Some(in.advertiserId),
                     videoType = VideoType.Ad,
                     videoUrl = store.publicUrl(key),
-                    // Both unknown until the file exists. The row cannot wait for it — the survey
-                    // references the video — so they are written as zero and filled by
-                    // `confirm_video_upload`, which is also what flips the status. Nothing reads
-                    // either field while the video is pending, because nothing serves a pending
-                    // video.
+                    // Written as zero, filled by confirm_video_upload.
                     durationSeconds = 0,
                     minWatchSeconds = in.minWatchSeconds.getOrElse(0),
                     showCountdown = 1,
@@ -420,15 +397,10 @@ object VideoTools:
                     priority = in.priority.getOrElse(10),
                     createdAt = now,
                     updatedAt = now,
-                    // Carried through untouched. The column has existed since V15 and nothing ever
-                    // wrote it, so every video created by this server until now has none.
                     productCampaignId = in.productCampaignId.map(_.trim).filter(_.nonEmpty)
                   )))).orDie
           _ <- Writes.expectOne(affected, s"Creating video '${videoId.asString}'")
-          // The portal reads these back keyed on the video id, and the description on the id with
-          // a `_desc` suffix — see `VideoRepositoryQuill.fetchLocalizedTexts`. Until this was
-          // written the tool validated that a title was supplied and then dropped it, so every
-          // video created here played untitled.
+          // Portal reads texts keyed on video id; description uses `_desc` suffix.
           _ <- SurveyTools.writeTexts(videoId.asString, in.title, now)
           _ <- SurveyTools.writeTexts(
             s"${videoId.asString}_desc",
@@ -481,26 +453,7 @@ object VideoTools:
     // from the result of the call that opened it.
     .withUi(UploadUi.AppUri)
 
-  /** The house's own videos, which differ from an advertiser's in three ways.
-    *
-    * They have no advertiser: `nextAdQueryAuthenticated` joins `advertisers` and filters on active
-    * ones, and the promo query does not touch that table at all.
-    *
-    * Their survey is optional, where an advertiser's is mandatory. Not because a promo cannot have
-    * one — it can, and the survey is served and answered by the same path — but because the
-    * *selection* differs. The advertiser query requires through an `EXISTS` that a question remain
-    * unanswered, so an advertiser video with nothing left to ask is never served at all; a promo is
-    * served regardless. That is what makes questions required there and optional here. This comment
-    * used to claim promos "have no survey", which is where the belief came from that the read path
-    * was right to filter them out.
-    *
-    * And they are not drawn at random: promos are served in ascending `(priority, createdAt)` with
-    * `sessions.last_promo_video_id` as the cursor, so `priority` here is a position in a sequence
-    * rather than a weight in a lottery.
-    *
-    * The second half of the upload is shared whole: the same signed PUT, the same page, and the
-    * same `confirm_video_upload` reading the duration out of the file.
-    */
+  /** Promo videos: no advertiser, optional survey, served in order (not at random). */
   val createPromo: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("create_promo_video")
     .description(
       "Register a video of the venue's own — not an advertiser's — and hand back a URL to upload the file to. No advertiser; a survey only if you pass questions, since a promo is served whether or not it has any left to ask. Does not ask for the video's length, which is read from the file at confirm_video_upload. The video stays out of rotation until that call finds the file.")
@@ -594,11 +547,7 @@ object VideoTools:
                   required = q.required.getOrElse(true),
                   points = q.points.getOrElse(10),
                   hierarchyLevel = None,
-                  // `index + 1`, matching `create_advertiser_video` above. This wrote `index`, so a
-                  // promo's questions started at 0 and an advertiser's at 1 — harmless, since
-                  // nothing compares the two and `reorder_questions` rewrites to 1-based anyway,
-                  // but two paths disagreeing about the same column is how the harmless kind
-                  // becomes the other kind.
+                  // Display order is 1-based, matching create_advertiser_video.
                   displayOrder = index + 1,
                   now = now
                 )
@@ -614,13 +563,7 @@ object VideoTools:
         end for
     .withUi(UploadUi.AppUri)
 
-  /** What a location actually plays.
-    *
-    * Nothing answered this before — not a tool and not a resource. `list_pending_uploads` sees only
-    * what is waiting for a file and `captal://videos` never existed, so "what does this location
-    * show, and in what order" had no answer at all; the rotation was visible only by reading the
-    * database.
-    */
+  /** Lists all videos at a location with status, length, and rotation weight. */
   val list: McpToolHandlerR[QuillSqlite] = McpTool("list_videos")
     .description(
       "Every video a location plays, with its status, length and rotation weight. Promos and advertiser videos alike. Retired ones are left out unless asked for.")
@@ -646,8 +589,7 @@ object VideoTools:
                 videoId = id,
                 title = titleOf.get(id).flatten.getOrElse(id),
                 slug = row.locationId.flatMap(slugOf.get).getOrElse("—"),
-                // `advertiser`, not `ad`: the field names whose video it is, and that is the word
-                // every other tool in this file uses for the entity. The stored value is `ad`.
+                // "advertiser" (not "ad"): matches the field name and entity terminology.
                 kind =
                   row.videoType match
                     case VideoType.Ad =>
@@ -677,11 +619,7 @@ object VideoTools:
         yield ListVideosResponse(listed)
         end for
 
-  /** Every video registered whose file never arrived.
-    *
-    * Also what `captal://videos/pending` reads, so the resource and the tool cannot disagree about
-    * what is waiting.
-    */
+  /** Fetches pending uploads for a location. */
   private[mcp] def pending(slug: Option[String]): ZIO[QuillSqlite, Nothing, List[PendingUpload]] =
     ZIO.serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
@@ -702,18 +640,10 @@ object VideoTools:
             slug = video.locationId.flatMap(slugOf.get).getOrElse("—"),
             createdAt = video.createdAt)
         .filter(p => wanted.forall(_ == p.slug))
-        // Oldest first: an upload abandoned weeks ago is the one nobody is going to remember on
-        // their own, and the one a listing sorted by title would bury.
+        // Oldest first: easier to spot abandoned uploads.
         .sortBy(_.createdAt)
       end for
 
-  /** The model's way back to an abandoned upload.
-    *
-    * `captal://videos/pending` answered this first and still does — but a resource is not something
-    * every host lets a model read. In Claude Desktop they are offered to the operator as
-    * attachments and never to the model, so the only path back to a half-finished upload ran
-    * through the operator noticing and pasting one in. Which is to say: there was none.
-    */
   val listPending: McpToolHandlerR[QuillSqlite] = McpTool("list_pending_uploads")
     .description(
       "Videos registered but still waiting for their file, oldest first. Each one has a survey and questions already written and is invisible to guests until the file arrives, so finishing one is cheaper than creating another. Pass a videoId to resume_video_upload to open its page.")
@@ -721,18 +651,10 @@ object VideoTools:
     .handle: (in: PendingUploadsRequest) =>
       pending(in.slug).map(PendingUploadsResponse.apply)
 
-  /** When the survey unlocks, once the video's real length is known.
-    *
-    * `create_advertiser_video` stores what was asked for, or zero for "the whole video" — it cannot
-    * resolve either, because at that point no file exists. Both are settled here.
-    *
-    * A request longer than the video is lowered rather than refused. By the time this runs the file
-    * is already in S3, there is no tool to edit the field, and a survey that unlocks after the
-    * video ends never unlocks — so refusing would leave an operator with an upload they cannot
-    * complete and a video they cannot fix.
+  /** Resolves minWatchSeconds: zero means whole video, clamped to duration if longer.
     *
     * @param requested
-    *   what create stored: zero meaning the whole video.
+    *   zero meaning the whole video.
     * @param duration
     *   the length read from the file.
     */
@@ -742,17 +664,6 @@ object VideoTools:
     else
       math.min(requested, duration)
 
-  /** The second half of the upload, and where the file stops being a claim.
-    *
-    * The length used to be an argument to `create_advertiser_video` — supplied before any file
-    * existed, by whoever was describing the video rather than by the video. Nothing checked it, and
-    * a wrong number is not visible anywhere in the backoffice: it shows up as a countdown that ends
-    * early or a survey that unlocks late, to guests, in production.
-    *
-    * It belongs here because here the file exists. The page reads it from the file it is about to
-    * send and passes it along with the confirmation, so the recorded length is measured rather than
-    * declared.
-    */
   val confirm: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("confirm_video_upload")
     .description(
       "Check the file arrived, record its length, and put the video into rotation. Refuses when the object is not there, which is what an abandoned upload looks like. The upload page calls this itself with the duration it read from the file.")
@@ -776,10 +687,7 @@ object VideoTools:
                     .durationSeconds}. The upload page reads it from the file; if it could not, ask the operator and pass it here."))
           store <- ZIO.service[AssetStore]
           key = store.keyOf(row.videoUrl)
-          // A HEAD, not a download: the question is whether the object arrived, and a video can be
-          // hundreds of megabytes. What it was sent as is not checked here — the page puts the
-          // file's own type on the PUT, and re-deciding whether that type is acceptable would be
-          // second-guessing a fact with a list.
+          // HEAD request: check if object exists without downloading.
           present <- store.exists(key)
           _       <-
             ZIO.when(!present)(
@@ -806,16 +714,6 @@ object VideoTools:
         )
         end for
 
-  /** Opens the upload page for a video that already exists.
-    *
-    * A tool rather than a resource because a View is instantiated only by calling a tool whose
-    * definition carries `_meta.ui.resourceUri` — the extension has no path for a host to render a
-    * `ui://` resource a user opened on their own. So "let me upload that one" has to be a call, and
-    * the video it names travels in the result, which the host forwards to the page.
-    *
-    * Without it the only way back to an abandoned upload would be create_advertiser_video, which
-    * would make a second video, a second survey and a second set of questions.
-    */
   def resume: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("resume_video_upload")
     .description(
       "Open the upload page for a video created earlier whose file never arrived. Signs a fresh URL; the previous one having expired does not matter. Does not create anything.")
@@ -826,9 +724,7 @@ object VideoTools:
         for
           rows  <- run(videoByIdQuery(lift(in.videoId))).orDie
           video <- ZIO.succeed(rows.headOption).someOrFail(s"No video with id '${in.videoId}'.")
-          // Only a pending video has a file to upload. A retired one already has its own, and
-          // handing out a signed URL for it would let this path put it back into rotation — which
-          // is what collapsing 'pending' and 'retired' into one flag made possible.
+          // Only pending videos can be resumed; retired videos keep their file and cannot be re-uploaded.
           _ <- ZIO
             .fail(
               s"Video '${in.videoId}' is ${video
@@ -838,7 +734,7 @@ object VideoTools:
           titles    <- run(query[LocalizedTextRow].filter(_.entityId == lift(in.videoId))).orDie
           store     <- ZIO.service[AssetStore]
           key = store.keyOf(video.videoUrl)
-          // From the stored key, not from a caller-supplied name: the object already exists.
+          // Use stored key; object already exists.
           url <- store.presignPut(key, UploadValidFor)
         yield ResumeUploadResponse(
           videoId = in.videoId,
@@ -874,9 +770,7 @@ object VideoTools:
             ZIO.when(in.noRepeatSeconds.exists(_ < 0))(
               ZIO.fail("noRepeatSeconds cannot be negative."))
           now <- Clock.instant.map(_.toString)
-          // Re-resolved against the stored duration, which `confirm_video_upload` read off the
-          // file. A pending video has duration zero and nothing to clamp against, so the request
-          // stands as given and confirm will clamp it later.
+          // Re-resolve against stored duration (zero for pending videos).
           resolved = in
             .minWatchSeconds
             .map: requested =>
@@ -903,8 +797,7 @@ object VideoTools:
               val minWatch = resolved.getOrElse(row.minWatchSeconds)
               val priority = in.priority.getOrElse(row.priority)
               val noRepeat = in.noRepeatSeconds.orElse(row.noRepeatSeconds)
-              // An empty string clears it, which is the only way to say "there is no campaign any
-              // more" through a field that is already optional for "do not touch".
+              // Empty string clears campaign; omitting it means do not touch.
               val campaign =
                 in.productCampaignId
                   .map(_.trim)
@@ -929,16 +822,7 @@ object VideoTools:
         yield UpdateVideoResponse(in.videoId, written, adjusted)
         end for
 
-  /** The off switch V21 made representable and nothing could set.
-    *
-    * `retired` and `pending` are different states on purpose: `pending` never had a file, `retired`
-    * has one and was taken out of rotation deliberately. Before V21 both were `is_active = 0`,
-    * which let `confirm_video_upload` find a retired video's file and put it back into rotation
-    * through a path meant for uploads, without anyone asking.
-    *
-    * So this refuses a pending video rather than activating it. There is nothing to serve, and the
-    * only thing that may make a video active is `confirm_video_upload`, once the file is there.
-    */
+  /** Retires or reactivates a video. Refuses pending videos (must use confirm_video_upload). */
   val setActive: McpToolHandlerR[QuillSqlite] = McpTool("set_video_active")
     .description(
       "Retire a video from rotation, or bring it back. The file and the answers to its survey are kept either way — this is the only removal there is. Refuses a video still waiting for its file: that one becomes active through confirm_video_upload, which is what checks the file is actually there.")

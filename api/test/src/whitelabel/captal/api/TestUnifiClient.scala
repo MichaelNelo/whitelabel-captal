@@ -3,11 +3,8 @@ package whitelabel.captal.api
 import whitelabel.captal.platform.{UnifiAccess, UnifiClient}
 import zio.*
 
-/** Test stub for [[UnifiClient]]: records calls instead of reaching the network.
-  *
-  * Replaces the old `TestUnifiAutoAuthorizeHandler`, which duplicated the real handler's logic
-  * because there was no way to intercept the HTTP. Now that `UnifiClient` is an interface, tests
-  * exercise the production `UnifiAccessHandler` and only swap the transport.
+/** Test stub for [[UnifiClient]]: records calls instead of reaching the network, so the tests
+  * exercise the production `UnifiAccessHandler` with only the transport swapped.
   *
   * Starts **inactive**, and in that state every call fails — reproducing the "UniFi is not
   * answering" path: the handler logs and the session stays in `Ready`, ready to retry.

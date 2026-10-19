@@ -27,19 +27,7 @@ object UploadUi:
     */
   val AppUri: McpUiUri = ToolSchema.uiUri(Uri)
 
-  /** The entry the page loads, by name. `AssetStore.scriptUrl` turns it into a URL.
-    *
-    * It used to be the script itself, read out of the jar and inlined, on the reading that the
-    * iframe's CSP blocks every external host. It does not: `resourceDomains` maps to `script-src`
-    * among the static-resource directives, so a declared origin can serve the module. Inlining cost
-    * 9 KB gzip on every single `resources/read`; a `<script type="module" src>` is fetched once and
-    * cached, and the runtime it shares with the UniFi page becomes one hashed chunk instead of a
-    * copy in each.
-    *
-    * The name is stable and the server knows nothing else about the file — no hash, no content, no
-    * copy in its own resources. Which is the same principle that took the content out of the deploy
-    * artifact.
-    */
+  /** The entry the page loads, by name. `AssetStore.scriptUrl` turns it into a URL. */
   // `private[mcp]` rather than `private`: the render site needs it too, to ask
   // [[AssetStore.scriptPreloads]] which chunks *this* entry imports. Naming it in two places is
   // what the hint would otherwise cost.
@@ -48,15 +36,8 @@ object UploadUi:
   /** The page's own styling, kept minimal so the surrounding themes decide how it looks.
     *
     * Every colour is a two-step fallback: the location's variable first, then the host's, then a
-    * literal. That order is the whole design. The location's names come from `style-reference`, so
-    * a portal that was themed themes this page too without knowing it exists; the host's come from
-    * Claude's design guidelines, so a page opened for a location with no stylesheet of its own
-    * still belongs to the conversation around it.
-    *
-    * It used to stop at the first step, which looked right only because the literals were light. On
-    * a dark host the page rendered as a white slab: every variable it named was one the host does
-    * not define, so every one fell through to its hardcoded value. A fallback chain that ends in a
-    * colour is not a default — it is a decision to ignore the theme.
+    * literal. The location's names come from `style-reference`; the host's come from Claude's
+    * design guidelines.
     */
   private val baseCss =
     """
@@ -168,10 +149,6 @@ object UploadUi:
             h1("Subir video"),
             p(
               id := "intro",
-              // No "elegí un video en la lista de recursos": los hosts que usan estos operadores no
-              // le ofrecen los resources al modelo, que es la razón por la que existe
-              // `resume_video_upload`. Mandar al operador a una lista que nunca va a ver es peor
-              // que no decirle nada.
               video.fold(
                 "Abrí esta página desde create_advertiser_video o create_promo_video. Para retomar una subida a medio camino, pedí resume_video_upload — list_pending_uploads enumera las que esperan archivo.")(
                 _ => "El video queda fuera de rotación hasta que el archivo llegue.")

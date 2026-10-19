@@ -21,19 +21,16 @@ import whitelabel.captal.platform.{
 import zio.*
 import zio.test.*
 
-/** Survey tools against a real rqlite instance.
-  *
-  * The behaviour worth pinning is that retiring never destroys: `answers.question_id` references
-  * `questions`, and a retired question has to keep resolving for everything already recorded.
+/** Survey tools against a real rqlite instance. Retiring never destroys: `answers.question_id`
+  * references `questions`, so a retired question has to keep resolving for everything already
+  * recorded.
   */
 object SurveyToolsSpec extends ZIOSpecDefault:
   private val Now = java.time.Instant.EPOCH.toString
 
   final private case class Fixture(surveyId: String, questionIds: List[String])
 
-  /** Three questions so retiring one still leaves an order to observe; with a single question a
-    * reorder or a retire cannot be told apart from doing nothing.
-    */
+  /** Three questions, so a reorder or a retire can be told apart from doing nothing. */
   private def seed: ZIO[QuillSqlite, Throwable, Fixture] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*
     val surveyId = survey.Id.generate
@@ -101,9 +98,8 @@ object SurveyToolsSpec extends ZIOSpecDefault:
     .Json
     .Obj(Chunk("kind" -> str(kind)) ++ value.fold(Chunk.empty)(v => Chunk("value" -> str(v))))
 
-  /** The discriminated shape: `question` carries the type and whatever that type accepts. Only
-    * surveyId, text and question are required, which is the point — an agent adding a plain text
-    * question supplies the wording and nothing else.
+  /** The discriminated shape: `answer` carries the kind and whatever that kind accepts. Only
+    * surveyId, text and answer are required.
     */
   private def questionJson(
       surveyId: String,
@@ -237,8 +233,8 @@ object SurveyToolsSpec extends ZIOSpecDefault:
         )
       ,
       test("a rule that does not match the question type is refused"):
-        // The whole point: decodeRules drops a mismatched rule at runtime with no error, so a
-        // min_selections rule on an input question would be stored and never applied.
+        // `decodeRules` drops a mismatched rule at runtime with no error, so it has to be caught
+        // here.
         for
           fixture <- seed
           result  <- SurveyTools
@@ -250,7 +246,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
                 rules = Chunk(ruleJson("min_selections", Some("2")))))
         yield assertTrue(
           result.isError.contains(true),
-          // Structural now: the input variant has no selection rules to pass.
+          // The input variant has no selection rules to pass.
           textOf(result).contains("unrecognized string"))
       ,
       test("a matching rule is accepted"):
@@ -294,17 +290,13 @@ object SurveyToolsSpec extends ZIOSpecDefault:
             .call(json("category" -> str("profiling")))
         yield assertTrue(result.isError.contains(true), textOf(result).contains("already exists"))
       ,
-      // The guard used to live in the handler, which meant the schema advertised a `videoId` the
-      // caller could omit and then be told off for omitting. Now the type says it.
       test("an advertiser survey without a video is refused by the schema"):
         for
           _      <- seed
           result <- SurveyTools.createSurvey.call(json())
         yield assertTrue(result.isError.contains(true))
       ,
-      // Splitting the tools is what makes this a schema error rather than prose: there is no
-      // category to pass, so an advertiser survey cannot be created without its video and an
-      // identification survey cannot be created with one.
+      // The split tools take no `category`, so the refusal is a schema error.
       test("an identification survey cannot be asked for as an advertiser one"):
         for
           _      <- seed
@@ -313,24 +305,19 @@ object SurveyToolsSpec extends ZIOSpecDefault:
             .call(json("category" -> str("advertiser")))
         yield assertTrue(result.isError.contains(true))
       ,
-      // The reason the split exists at all: a token that can edit one location's content must not
-      // be able to replace the question every guest of every location answers.
       test("the identification tool is guarded by a different scope than the location one"):
         assertTrue(
           SurveyTools.createSurvey.requiredScopes == Set(Auth.ContentWrite),
           SurveyTools.createIdentificationSurvey.requiredScopes == Set(Auth.IdentityWrite))
       ,
       test("an advertiser survey naming a video that does not exist is refused"):
-        // Nothing else would catch it: advertiser_videos has no foreign key from surveys, so the
-        // row would store fine and the survey would simply be unreachable forever.
+        // `surveys` has no foreign key to `advertiser_videos`, so nothing else would catch it.
         for
           _      <- seed
           result <- SurveyTools.createSurvey.call(json("videoId" -> str("no-such-video")))
         yield assertTrue(result.isError.contains(true), textOf(result).contains("No video with id"))
       ,
       test("the listing carries each question's id and wording, so one call finds it"):
-        // The point of putting questions in the list: acting on one needs its id, and finding the
-        // id used to mean calling get_survey on every survey until the wording matched.
         for
           fixture <- seed
           listed  <- SurveyTools.list.call(json())
@@ -347,8 +334,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
       ,
       test("the slug filter keeps the surveys that belong nowhere"):
         // email, profiling and location surveys are chosen by category with no location filter in
-        // the read path, so they are served at every location. Hiding them under a slug filter
-        // would misreport what a guest there is actually asked.
+        // the read path, so they are served at every location.
         ZIO.serviceWithZIO[QuillSqlite]: quill =>
           import quill.*
           val locationId = UUID.randomUUID.toString
@@ -386,9 +372,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           )
           end for
       ,
-      // The fixture's survey is `profiling`, one of the three deployment-wide ones. Reaching it
-      // through the location-scoped tool is what an operator who looks after one cafe would be
-      // doing when they edit the question every guest of every location answers.
+      // The fixture's survey is `profiling`, one of the three deployment-wide ones.
       test("the location-scoped question tools refuse a deployment-wide survey"):
         for
           fixture <- seed
@@ -403,8 +387,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
         yield assertTrue(
           created.isError.contains(true),
           retired.isError.contains(true),
-          // Names the tool that does take it, because neither call says which kind of survey it
-          // is addressing — one is given a question id and the other a survey id.
+          // Names the tool that does take it.
           textOf(created).contains("create_identification_question"),
           textOf(retired).contains("set_identification_question_active"),
           // And the refusal is before the write, not after it.
@@ -421,8 +404,6 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           stored <- questions
         yield assertTrue(!created.isError.contains(true), stored.size == 4)
       ,
-      // The split exists to put the two halves behind different scopes. If a pair shared one, the
-      // six tools would be ceremony around no boundary at all.
       test("each pair is guarded by a different scope"):
         assertTrue(
           SurveyTools.createQuestion.requiredScopes == Set(Auth.ContentWrite),
@@ -433,15 +414,12 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           SurveyTools.reorderIdentification.requiredScopes == Set(Auth.IdentityWrite)
         )
       ,
-      // Removed from the schema because the portal renders it as the literal "Rating input - TODO".
-      // The enum is what an agent reads to decide what to offer the operator, so leaving it there
-      // is how a question that displays as a to-do note reaches a guest.
+      // Removed from the schema: the portal renders it as the literal "Rating input - TODO".
       test("rating cannot be asked for"):
         val rendered =
           (SurveyTools.createQuestion.definition.inputSchema: zio.json.ast.Json).toString
         assertTrue(!rendered.contains("rating"), rendered.contains("numeric"))
       // The schema is laid down once by `mcp.test` before forking — see `migratedRqliteUrl` in
-      // build.mill. A Flyway run per spec raced, and since V22 rebuilds `advertiser_videos` the race
-      // deleted the table these read.
+      // build.mill.
     ).provideShared(quillLayer) @@ TestAspect.sequential
 end SurveyToolsSpec

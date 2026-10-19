@@ -17,13 +17,11 @@ object Migrate extends ZIOAppDefault:
       baselineOnMigrate = true,
       baselineVersion = MigrationVersion("0"))
 
-  /** The API's own history table, and Flyway's default. Named so the MCP server can ask what
-    * version this one reached without repeating the string.
-    */
+  /** The API's own history table, and Flyway's default. */
   val ApiHistoryTable: String = fly4sConfig.table
 
-  /** Runs one set of migrations against one history table, with nothing else migrating at the same
-    * time. [[Lock]] is taken here rather than by callers, so no path into Flyway migrates unlocked.
+  /** Runs one set of migrations against one history table. Takes [[Lock]] itself, so callers must
+    * not.
     */
   def migrateTo(url: String, location: String, historyTable: String): Task[Int] =
     Lock(url):
@@ -33,15 +31,10 @@ object Migrate extends ZIOAppDefault:
           config = fly4sConfig.copy(locations = List(Location(location)), table = historyTable))
         .use(_.migrate.map(_.migrationsExecuted))
 
-  /** A mutex across every process that might migrate at the same time, built on the one primitive
-    * rqlite offers: a single statement goes through Raft, so of N concurrent `INSERT`s of one
-    * primary key exactly one takes effect and every node agrees which.
-    *
-    * Private, and reachable only through [[migrateTo]] — a lock held around anything but a
-    * migration blocks migrations for a reason no one will think to look for.
-    *
-    * Why this exists at all, given that Flyway has its own locking and that each migration runs in
-    * a transaction: *Decisiones de Diseño* entry 10. Pinned by `MigrationLockSuite`.
+  /** A mutex across every process that might migrate at the same time: a single statement goes
+    * through Raft, so of N concurrent `INSERT`s of one primary key exactly one takes effect and
+    * every node agrees which. Must stay reachable only through [[migrateTo]] — holding it around
+    * anything but a migration blocks migrations.
     */
   private object Lock:
 
@@ -52,9 +45,6 @@ object Migrate extends ZIOAppDefault:
 
     private val PollInterval = 2.seconds
 
-    /** Generous: what it waits for is a schema migration, and the alternative to waiting is serving
-      * against a schema that is halfway through changing.
-      */
     private val Timeout = 10.minutes
 
     private def withConnection[A](url: String)(use: java.sql.Connection => A): Task[A] = ZIO
@@ -87,12 +77,9 @@ object Migrate extends ZIOAppDefault:
         finally
           statement.close()
 
-    /** Insert, then read back who actually holds it.
-      *
-      * The read-back is the answer and the insert is only a bid — hence its failure being kept in
-      * an `Either` and otherwise discarded. Deciding by the insert instead does not work: a
-      * statement rqlite refuses can come back as zero affected rows inside an HTTP 200. The read is
-      * linearizable because it goes through Raft.
+    /** Insert, then read back who actually holds it: the read-back is the answer and the insert
+      * only a bid. rqlite can report a statement it refused as zero affected rows inside an HTTP
+      * 200, so the insert's own result decides nothing.
       */
     private def tryAcquire(url: String, holder: String): Task[Either[String, Boolean]] =
       for
@@ -102,12 +89,10 @@ object Migrate extends ZIOAppDefault:
         if held.contains(holder) then
           Right(true)
         else if held.nonEmpty then
-          // Someone else got there first, which is the ordinary case and not a problem.
+          // Someone else got there first.
           Right(false)
         else
-          // Nothing holds it and the bid did not land, so waiting would never end. Reported rather
-          // than retried: the usual cause is a column left over from an older shape of this table,
-          // which rejects every insert while the read-back keeps answering "free".
+          // Nothing holds it and the bid did not land, so waiting would never end.
           Left(
             bid match
               case Left(e) =>
@@ -118,15 +103,9 @@ object Migrate extends ZIOAppDefault:
     private def release(url: String, holder: String): Task[Unit] =
       update(url, s"DELETE FROM $Table WHERE id = $Row AND holder = '$holder'").unit
 
-    /** Runs `effect` with nothing else migrating, or fails rather than running it alongside
-      * something that is.
-      *
-      * A waiter takes the lock itself rather than skipping, which is safe because Flyway applies
-      * only what is pending: the second holder finds nothing to do and reports zero.
-      *
-      * There is no heartbeat and no takeover, so a holder that dies without releasing blocks every
-      * other migrator until someone deletes the row. That is a known cost, not an oversight —
-      * *Decisiones de Diseño* entry 10.
+    /** Runs `effect` with nothing else migrating, or fails. No heartbeat and no takeover: a holder
+      * that dies without releasing blocks every other migrator until its row in `migration_lock` is
+      * deleted by hand.
       */
     def apply[A](url: String)(effect: Task[A]): Task[A] =
       val holder = holderId()
@@ -152,9 +131,8 @@ object Migrate extends ZIOAppDefault:
           Timeout)
     end apply
 
-    /** Who holds it, for the log line and the conditional `DELETE`. Narrowed to a safe alphabet
-      * rather than quoted, because every statement here is built by interpolation: a hostname
-      * cannot contain a quote in practice, and narrowing means it does not have to be true.
+    /** Lock holder id: hostname plus a random UUID. Every statement here is built by interpolation,
+      * so the hostname is narrowed to letters, digits, `-` and `.`.
       */
     private def holderId(): String =
       val host =
@@ -173,8 +151,8 @@ object Migrate extends ZIOAppDefault:
   end Lock
 
   /** The highest successfully applied version in a history table, or None when the table is not
-    * there yet. Plain JDBC rather than Flyway: building a Flyway instance for someone else's
-    * history would let it create or baseline that history as a side effect of asking.
+    * there yet. Plain JDBC: building a Flyway instance can create or baseline the history it is
+    * asked about.
     */
   def highestApplied(url: String, historyTable: String): Task[Option[Int]] = ZIO
     .attemptBlocking:
@@ -199,7 +177,7 @@ object Migrate extends ZIOAppDefault:
       finally
         connection.close()
     .catchSome:
-      // No history table means nothing has migrated yet, which is an answer rather than a failure.
+      // No history table means nothing has migrated yet.
       case _: java.sql.SQLException =>
         ZIO.none
 

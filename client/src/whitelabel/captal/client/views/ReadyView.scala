@@ -8,16 +8,12 @@ import whitelabel.captal.core.application.Phase
 object ReadyView:
   private val isResetting: Var[Boolean] = Var(false)
 
-  /** Triggered on mount. If UniFi succeeded → response has phase=Authorized and a defined
-    * accessExpiresAt; the router will switch to WelcomeView in Authorized mode (countdown). If
-    * UniFi failed or no config → phase stays Ready, accessExpiresAt = None and we remain on /ready
-    * (a reload re-mounts → retries). Server-side `findReadyUser` is idempotent.
+  /** Triggered on mount. On UniFi success the response carries `phase = Authorized` and the router
+    * switches to WelcomeView's countdown; otherwise phase stays Ready and the view remains on
+    * `/ready`, where a reload re-mounts and retries. Server-side `findReadyUser` is idempotent.
     *
-    * IMPORTANT: do NOT toggle `AppState.setNavigating` here. Doing so flips the App-level child
-    * between navigationLoader and ReadyView, which unmounts then re-mounts this view, firing
-    * `onMountCallback` again — producing an infinite `/api/finish` loop whenever UniFi keeps
-    * returning Ready (e.g. UCG unreachable). The view's own title/subtitle stay visible while the
-    * request is in flight.
+    * IMPORTANT: do NOT toggle `AppState.setNavigating` here — it unmounts and re-mounts this view,
+    * firing `onMountCallback` again in an endless `/api/finish` loop.
     */
   private def callFinish(): Unit = Runtime.run:
     ReadyApi
@@ -52,10 +48,8 @@ object ReadyView:
         cls       := "ready-title",
         styleAttr := "animation-delay: 1000ms",
         child.text <-- I18nClient.i18n.map(_.ready.title)),
-      // Spinner + subtitle stacked, centered on the remaining viewport (mirrors the
-      // welcome-countdown-wrapper layout but without a card background). The spinner is
-      // always mounted while ReadyView is alive; on /api/finish success the router
-      // unmounts this view and renders Welcome/Authorized.
+      // Spinner + subtitle stacked, centered on the remaining viewport. The spinner stays mounted
+      // for ReadyView's whole life; on /api/finish success the router renders Welcome/Authorized.
       div(
         cls := "ready-loader-wrapper",
         div(cls := "spinner spinner--large"),

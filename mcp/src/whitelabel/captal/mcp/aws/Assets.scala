@@ -32,32 +32,26 @@ import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignReques
 import zio.*
 import zio.http.{Client, Request, URL}
 
-/** One asset a location can override, and how it has to be stored.
-  *
-  * The content type and encoding are not incidental: the SPA fetches these by fixed relative name,
-  * so a stylesheet served without `Content-Encoding: gzip` arrives as bytes the browser will not
-  * read, and an icon served as anything but `image/svg+xml` does not render.
+/** One asset a location can override, and how it has to be stored. The SPA fetches these by fixed
+  * relative name, so the content type and encoding are part of the contract.
   */
 enum Asset(val fileName: String, val contentType: String, val gzipped: Boolean):
   case Styles    extends Asset("custom-styles.css.gz", "text/css", true)
   case BrandIcon extends Asset("brand-icon.svg", "image/svg+xml", false)
 
-/** What a bundle copy did, reported because both halves are invisible from the outside.
+/** What a bundle copy did.
   *
   * @param objects
-  *   how many were written. Zero means the bundle prefix is empty — the SPA has never been
-  *   published — which is a different problem from a deploy that failed.
+  *   how many were written. Zero means the bundle prefix is empty.
   * @param iconPreserved
-  *   whether the location's own `brand-icon.svg` was left alone. False is the ordinary case for a
-  *   location with no branding of its own, which then gets the bundle's default.
+  *   whether the location's own `brand-icon.svg` was left alone.
   */
 final case class BundleCopy(objects: Int, iconPreserved: Boolean)
 
 /** S3 and CloudFront access for per-location assets.
   *
   * Credentials are never configured: the container runs with an ECS task role and the SDK's default
-  * provider chain picks it up. The permissions that role needs are tracked in `docs/MCP_IAM.md`,
-  * which has to grow with every operation added here.
+  * provider chain picks it up. The permissions that role needs are tracked in `docs/mcp-iam.adoc`.
   */
 final case class AssetStore(
     bucket: String,
@@ -67,13 +61,9 @@ final case class AssetStore(
     cdn: CloudFrontClient,
     presigner: S3Presigner):
 
-  /** The origin the upload page PUTs to, which the MCP App has to declare in its CSP or the browser
-    * blocks the request. The host defaults `connect-src` to `'self'`, so an undeclared bucket fails
-    * at the PUT and nowhere earlier.
-    *
-    * Taken from a signature rather than rebuilt from the bucket and region, because the shape
-    * differs — path-style against a local endpoint, virtual-hosted against AWS — and a guess that
-    * is close but wrong fails in exactly the same silent way as no declaration at all.
+  /** The origin the upload page PUTs to, which the MCP App has to declare in its CSP `connect-src`
+    * or the browser blocks the request. Taken from a signature, since the shape differs between a
+    * path-style local endpoint and virtual-hosted AWS.
     */
   def uploadOrigin: ZIO[Any, String, String] = presignPut("csp-probe", 1.minute).map: url =>
     val parsed = URI.create(url)
@@ -84,8 +74,8 @@ final case class AssetStore(
         s":${parsed.getPort}"
     s"${parsed.getScheme}://${parsed.getHost}$port"
 
-  /** The key the SPA asks for. Its `index.html` is served from under the slug and references these
-    * by relative name, so each object has to sit beside it under the same prefix.
+  /** The key the SPA asks for: `<slug>/<fileName>`, beside the `index.html` that references it by
+    * relative name.
     */
   def key(slug: String, asset: Asset): String = s"$slug/${asset.fileName}"
 
@@ -104,8 +94,7 @@ final case class AssetStore(
           .key(key(slug, asset))
           .contentType(asset.contentType)
           // Matches what `client.publishS3` puts on the bundle. Without it the browser invents a
-          // freshness window from the object's age, which grows without bound between edits -- and
-          // these two are the assets an operator changes expecting to see the change.
+          // freshness window from the object's age.
           .cacheControl(AssetStore.CacheControl)
         val withEncoding =
           if asset.gzipped then
@@ -132,18 +121,13 @@ final case class AssetStore(
     }
     .mapError(e => s"Could not read ${key(slug, asset)}: ${e.getMessage}")
 
-  /** Without this the edge keeps serving the previous file until the cache expires, so a write
-    * would look applied in the tool and be invisible in the portal.
-    *
-    * `captal locations push` does invalidate, but the whole `<slug>` prefix, because it has just
-    * synced the bundle. Writing one file needs neither that reach nor the deploy.
+  /** Invalidates the one key an asset write touched. Without it the edge keeps serving the previous
+    * file until the cache expires.
     */
   def invalidate(slug: String, asset: Asset): ZIO[Any, String, String] = invalidateNow(slug, asset)
 
-  /** Everything under a location's prefix at once, for the one caller that has just rewritten all
-    * of it. [[invalidate]] names a single key because that is all an asset write touches; a bundle
-    * copy replaces every file the SPA loads, and enumerating them would be a longer path list
-    * saying the same thing.
+  /** Invalidates everything under `/<slug>`, for a caller that has just rewritten every file the
+    * SPA loads.
     */
   def invalidatePrefix(slug: String): ZIO[Any, String, String] = ZIO
     .attemptBlocking:
@@ -165,30 +149,17 @@ final case class AssetStore(
     .mapError(e =>
       s"Copied the bundle to '$slug' but could not invalidate the CDN: ${e.getMessage}")
 
-  /** The shared bundle, copied under one location's own prefix.
+  /** The shared `bundle/` prefix, copied under one location's own prefix. The portal is fetched
+    * from `<slug>/`, so until these objects exist a guest gets a 404 for the page itself.
     *
-    * This is what `captal locations push` did first, and nothing did once the CLI was deleted —
-    * which left a freshly deployed slug answering its API and serving no SPA at all. The portal is
-    * fetched from `<slug>/`, so until these objects exist a guest gets a 404 for the page itself.
-    *
-    * Server-side copies, which is not a detail: `MetadataDirective.COPY` carries `Content-Type` and
-    * `Content-Encoding` across, and the bundle's `.gz` files are unreadable without the latter —
-    * the browser gets gzip bytes labelled as text. It also means no object travels through this
-    * process.
+    * Server-side copies with `MetadataDirective.COPY`, which carries `Content-Type` and
+    * `Content-Encoding` across — the bundle's `.gz` files are unreadable without the latter.
     *
     * Idempotent, and safe to re-run after a bundle publish: a copy overwrites what was there.
     *
-    * The location's own icon is the exception, and the reason this is not a plain recursive copy.
-    * `brand-icon.svg` is *in* the bundle as a default and `set_location_icon` writes to the same
-    * key, so copying it blindly would replace a location's branding with the stock icon on every
-    * deploy.
-    *
-    * What decides is an ETag comparison rather than whether the key exists. Existence cannot tell
-    * an operator's icon from the default this copy itself wrote on the previous deploy, and reading
-    * it that way costs two things: every redeploy would report `iconPreserved` for a location that
-    * has no icon of its own, and no location would ever pick up a change to the default. An
-    * untouched copy still matches its source and is refreshed; anything the operator wrote differs
-    * and is left alone.
+    * A location's own `brand-icon.svg` is kept rather than overwritten by the bundle's default,
+    * decided by an ETag comparison: an untouched copy still matches its source and is refreshed,
+    * anything the operator wrote differs and is left alone.
     */
   def copyBundle(slug: String): ZIO[Any, String, BundleCopy] =
     val prefix = "bundle/"
@@ -197,44 +168,36 @@ final case class AssetStore(
     for
       bundleIcon <- eTagOf(bundleIconKey)
       ownIcon    <- eTagOf(iconKey)
-      // Custom only when both exist and differ. A location with no icon has nothing to preserve,
-      // and a bundle with no default has nothing to overwrite it with.
+      // Custom only when both exist and differ.
       iconIsCustom = ownIcon.isDefined && bundleIcon.isDefined && ownIcon != bundleIcon
       sources <- listPrefix(prefix)
       copied  <-
         ZIO.foreach(sources): source =>
           val destination = s"$slug/${source.stripPrefix(prefix)}"
-          // Skipped rather than copied and then restored: restoring leaves a window in which the
-          // portal serves the wrong icon, and skipping has none.
+          // Skipped rather than copied and then restored, which would leave a window in which the
+          // portal serves the wrong icon.
           if destination == iconKey && iconIsCustom then
             ZIO.succeed(None)
-          // The maintenance page is deliberately not copied here. A pause installs it *as*
-          // `index.html` and sources it from the bundle, so a per-location copy would be a public
-          // URL at every slug that nothing ever asks for — and one that serves a maintenance page
-          // to a guest while the portal is perfectly healthy.
+          // The maintenance page is deliberately not copied: a pause installs it *as* `index.html`
+          // straight from the bundle, and a per-location copy would be a public URL serving
+          // maintenance at every healthy slug.
           else if destination == AssetStore.maintenanceKey(slug) then
             ZIO.succeed(None)
           else
             copyObject(source, destination).as(Some(destination))
-      // Deploying a paused location brings it back, which is already true of the rule and the
-      // service: `ensureRule` forwards and `upsertService` asks for one task. The saved page would
-      // otherwise linger and a later resume would restore something older than what is now live.
+      // Deploying a paused location brings it back, so the saved page must go: a later resume
+      // would otherwise restore something older than what is now live.
       _ <- deleteIfPresent(AssetStore.savedPageKey(slug))
     yield BundleCopy(copied.flatten.size, iconPreserved = iconIsCustom)
     end for
   end copyBundle
 
-  /** Puts the maintenance page where the portal's own page was, and keeps the original.
+  /** Puts the maintenance page where the portal's own page was, and keeps the original under
+    * [[AssetStore.savedPageKey]].
     *
     * The edge serves `<slug>/index.html` for the location and for every SPA route under it, so
-    * replacing that one object is the whole of making the edge serve maintenance — no CloudFront
-    * function, no KeyValueStore, nothing read per request. The state is which object is at that
-    * key, the same way a paused API is which action is on the listener rule.
-    *
-    * The maintenance page comes from the bundle rather than from a per-location copy, and the
-    * original goes to a prefix that is not the location's. Both for the same reason: a page that
-    * exists under `<slug>/` is a page the edge will serve to anyone who asks for it by name, and
-    * neither of these should ever be served except as `index.html` and except while paused.
+    * replacing that one object is the whole of making the edge serve maintenance. The state is
+    * which object sits at that key.
     *
     * Both HTML files reference `./main.js`, `./maintenance.js` and `./styles.css` relatively, and
     * all three already sit under `<slug>/`, so the swapped page resolves its own assets with
@@ -243,18 +206,15 @@ final case class AssetStore(
   def pausePage(slug: String): ZIO[Any, String, Unit] =
     val live = AssetStore.indexKey(slug)
     for
-      // Saved first. If the copy of the maintenance page failed after the original was overwritten,
-      // the location would have no page at all and nothing to restore it from.
+      // Saved first, or a failed maintenance copy leaves the location with no page at all and
+      // nothing to restore it from.
       present <- exists(live)
       _       <- ZIO.when(present)(copyObject(live, AssetStore.savedPageKey(slug)))
       _       <- copyObject(AssetStore.BundleMaintenanceKey, live)
     yield ()
 
-  /** Puts the location's own page back, from the copy [[pausePage]] kept.
-    *
-    * Restores what was live rather than re-copying from the bundle, so a pause and a resume are
-    * exactly reversible: a bundle published in between does not arrive as a side effect of ending a
-    * pause. `deploy_location` is how a location takes a newer bundle, and it says so.
+  /** Puts the location's own page back, from the copy [[pausePage]] kept, so a pause and a resume
+    * are exactly reversible. A bundle published in between is taken by `deploy_location`, not here.
     */
   def resumePage(slug: String): ZIO[Any, String, Boolean] =
     val saved = AssetStore.savedPageKey(slug)
@@ -264,16 +224,9 @@ final case class AssetStore(
       _       <- deleteIfPresent(saved)
     yield present
 
-  /** An invalidation, waited out.
-    *
-    * Dispatching one and returning is not enough for a pause: the point of swapping the page before
-    * the API stops is that a guest told "paused" can be sent to a page that is already being
-    * served. While the edge still has the portal's `index.html` cached, that guarantee is nominal —
-    * the guest gets the SPA, calls an API that is now refusing, and the redirect lands back on a
-    * cached copy of the thing it just left.
-    *
-    * So this polls until CloudFront says `Completed`. That is seconds to minutes, which is what
-    * makes the operation that calls it a task rather than a call.
+  /** Invalidates everything under `/<slug>` and polls until CloudFront reports `Completed`, which
+    * takes seconds to minutes. Fails after 5 minutes. A pause needs the wait: until the edge drops
+    * the portal's cached `index.html`, a guest still gets the SPA and an API that now refuses.
     */
   def invalidateAndWait(slug: String): ZIO[Any, String, String] = invalidatePrefix(slug).flatMap:
     id =>
@@ -292,17 +245,14 @@ final case class AssetStore(
           5.minutes)
         .as(id)
 
-  /** Everything a location has in the bucket, removed. Returns how many objects went.
+  /** Every object under a prefix, removed. Returns how many went.
     *
-    * The trailing slash is load-bearing and is the `familyPrefix` bug one more time: a prefix of
-    * `cafe` also matches `cafe-centro`, and a teardown that took a neighbour's assets with it would
-    * be found by its guests rather than by us. `cafe/` matches only its own.
+    * The caller must pass a trailing slash: `cafe` also matches `cafe-centro`, so `cafe/` is the
+    * only prefix that stays inside one location.
     *
-    * What goes with it is more than the bundle copy: the operator's stylesheet and icon, and every
-    * uploaded video file, which live at `<slug>/videos/<id>`. The rows that reference them are in
-    * the database and survive, so after this a location still lists videos as active whose files
-    * are gone. That is why [[DeployTools]] says so in its next steps rather than leaving it to be
-    * discovered by a guest watching a player that will not load.
+    * This takes the bundle copy, the operator's stylesheet and icon, and every uploaded video file
+    * at `<slug>/videos/<id>`. The database rows referencing them survive, so afterwards a location
+    * still lists videos as active whose files are gone.
     */
   def deletePrefix(prefix: String): ZIO[Any, String, Int] = listPrefix(prefix).flatMap: keys =>
     ZIO.foreachDiscard(keys)(deleteIfPresent).as(keys.size)
@@ -316,10 +266,9 @@ final case class AssetStore(
 
   /** The object's ETag, or `None` when there is no such key.
     *
-    * For an object written in a single request this is the MD5 of its bytes, which is what makes it
-    * usable as "is this still the copy we made". Multipart uploads do not have that property, and
-    * nothing writes these two assets that way: [[put]] sends one `PutObject` and [[copyObject]] one
-    * `CopyObject`.
+    * Usable as "is this still the copy we made" only for objects written in a single request, where
+    * the ETag is the MD5 of the bytes. [[put]] sends one `PutObject` and [[copyObject]] one
+    * `CopyObject`; a multipart upload would not have that property.
     */
   private def eTagOf(key: String): ZIO[Any, String, Option[String]] = ZIO
     .attemptBlocking:
@@ -329,11 +278,7 @@ final case class AssetStore(
     }
     .mapError(e => s"Could not read the ETag of $key: ${e.getMessage}")
 
-  /** Every key under a prefix, following the continuation token.
-    *
-    * Paged because a truncated listing is the kind of bug that appears only once the bundle passes
-    * a thousand objects, and then appears as a portal quietly missing a few hashed assets.
-    */
+  /** Every key under a prefix, following the `ListObjectsV2` continuation token to the end. */
   private[mcp] def listPrefix(prefix: String): ZIO[Any, String, List[String]] =
     def page(token: Option[String]): ZIO[Any, Throwable, (List[String], Option[String])] = ZIO
       .attemptBlocking:
@@ -372,8 +317,7 @@ final case class AssetStore(
 
   private def invalidateNow(slug: String, asset: Asset): ZIO[Any, String, String] = ZIO
     .attemptBlocking:
-      // A caller reference must be unique per request; the key plus the clock is enough, since two
-      // invalidations of the same object in the same millisecond are indistinguishable anyway.
+      // A caller reference must be unique per request.
       val reference = s"mcp-$slug-${asset.fileName}-${java.lang.System.currentTimeMillis()}"
       cdn
         .createInvalidation(
@@ -391,43 +335,31 @@ final case class AssetStore(
         .id()
     .mapError(e => s"Wrote ${asset.fileName} but could not invalidate the CDN: ${e.getMessage}")
 
-  /** What the SPA fetches. The row stores this rather than the key, because the player needs a URL
-    * and the portal has no way to turn a bucket key into one.
+  /** What the SPA fetches. Video rows store this rather than the key, since the player needs a URL.
     */
   def publicUrl(key: String): String = s"${publicBaseUrl.stripSuffix("/")}/$key"
 
-  /** Where an MCP App's script is served from, under a name that never changes.
-    *
-    * Built from the same base the portal's assets use, because the page has to name its script
-    * without knowing anything about its content — that is what keeps the script out of the server's
-    * resources, the same way the content itself stopped travelling in the deploy artifact.
-    * `client.publish` is what puts the file there. The hashed chunks the entry imports are resolved
-    * by the browser against this URL, which is why they are published flat beside it.
+  /** Where an MCP App's script is served from, under a name that never changes: `ui/<name>` on the
+    * same base the portal's assets use. `mill client.publish` puts the file there, and the hashed
+    * chunks the entry imports are resolved by the browser against this URL, so they are published
+    * flat beside it.
     */
   def scriptUrl(name: String): String = publicUrl(s"ui/$name")
 
   /** A local ES import, in both forms the bundler emits: `from"./x"` for a binding and a bare
-    * `import"./x"` for a side effect. Deliberately not `import("./x")`, the dynamic form — a
-    * parenthesis is not a quote, which is what keeps a lazily loaded chunk from being preloaded.
+    * `import"./x"` for a side effect. Deliberately not the dynamic `import("./x")`, so a lazily
+    * loaded chunk is not preloaded.
     */
   private val localImport = """(?:from|import)\s*"\./([^"]+)"""".r
 
   /** The chunks the published entry imports, as URLs for `<link rel="modulepreload">`.
     *
-    * Read from the object that is actually deployed rather than from a list this server carries,
-    * and that choice is the whole design. The chunk names carry a content hash, so a list compiled
-    * in goes stale the next time the bundle is published — and a preload naming a hash nothing
-    * imports any more is *worse* than no preload, because the browser fetches a chunk it will never
-    * use. The published entry is the only thing that cannot be out of step with itself.
+    * Read from the deployed object rather than from a compiled-in list: the chunk names carry a
+    * content hash, and a preload naming a hash nothing imports any more fetches a chunk the browser
+    * will never use.
     *
-    * What the hint buys, measured in a throttled browser: without it the page waits for the HTML,
-    * parses it to find the entry, waits for the entry, parses *that* to find the chunks, and waits
-    * again — three sequential waits. Naming them here makes it two, because the chunks go out
-    * together with the entry. That was 107 ms at 100 ms of round-trip time and 308 ms at 300 ms.
-    *
-    * Failing to silence is deliberate. The page is correct without the hint, the first deploy of an
-    * environment reaches this before anything has ever been published, and an optimisation that can
-    * fail a render is a worse trade than one that can be absent.
+    * Empty on any failure, since the page is correct without the hint and the first deploy of an
+    * environment reaches this before anything has been published.
     */
   def scriptPreloads(entry: String): UIO[Seq[String]] = ZIO
     .attemptBlocking:
@@ -439,38 +371,30 @@ final case class AssetStore(
       localImport.findAllMatchIn(text).map(found => scriptUrl(found.group(1))).toSeq.distinct
     .orElseSucceed(Seq.empty)
 
-  /** Checks the one thing about the MCP App pages that fails without a word.
+  /** Fetches `ui/upload.js` at startup and returns a warning when it would not load as a module.
     *
     * A module script is fetched in CORS mode, so the CDN has to answer
-    * `Access-Control-Allow-Origin` or the browser blocks it — and the page then renders, lays out,
-    * and does nothing. No console entry the operator would see, no failed tool call, nothing in
-    * this server's logs. The same shape of failure as the upload PUT being refused at the
-    * preflight, except that one at least happens while they are looking at the screen.
+    * `Access-Control-Allow-Origin` or the browser blocks it and the page renders inert, with
+    * nothing in the console, the tool call or this server's logs.
     *
-    * So it is asked at startup, by fetching what the page will fetch. A warning and not a failure:
-    * the first deploy of a new environment reaches this before `client.publish` has ever run, and
-    * refusing to start would make the server depend on an artifact it does not own. The point is
-    * that the answer is in the log before an operator finds it by opening a dead page.
-    *
-    * Neither this nor anything else here configures it; see docs/MCP_IAM.md.
+    * A warning and not a failure: the first deploy of a new environment reaches this before
+    * `client.publish` has ever run. Nothing here configures CORS; see docs/mcp-iam.adoc.
     */
   def verifyScriptDelivery: ZIO[Client, Nothing, Option[String]] =
     val target = scriptUrl("upload.js")
     val probe =
       for
         url <- ZIO.fromEither(URL.decode(target)).mapError(e => new RuntimeException(e.getMessage))
-        // Without an `Origin` the response carries no CORS headers whether or not any are
-        // configured, so asking without one proves nothing. A browser would send the sandbox
-        // origin; any value distinguishes a configured `*` from silence.
+        // An `Origin` header is required: without one the response carries no CORS headers whether
+        // or not any are configured. Any value distinguishes a configured `*` from silence.
         request = Request.get(url).addHeader("Origin", "https://probe.invalid")
         response <- ZIO.serviceWithZIO[Client](_.batched(request))
-        // Drained rather than ignored. `batched` has already read the body, and leaving the
-        // response unconsumed is how a client ends up holding connections at startup.
+        // Drained rather than ignored, so the client does not hold the connection.
         _ <- response.body.asString
       yield (response.status.code, response.rawHeader("access-control-allow-origin"))
     probe
-      // Bounded, because this is in the startup path: a CDN that hangs must not stop the server
-      // from serving, and the timeout is itself an answer worth logging.
+      // Bounded: this is in the startup path, so a CDN that hangs must not stop the server from
+      // serving.
       .timeoutFail(new RuntimeException("timed out after 5s"))(5.seconds)
       .fold(
         e => Some(s"could not be reached ($target): ${e.getMessage}"),
@@ -481,15 +405,14 @@ final case class AssetStore(
             Some(s"answered HTTP $status ($target).")
           else if allowOrigin.isEmpty then
             Some(
-              s"is served but without Access-Control-Allow-Origin ($target), so a browser will block it as a module and the page will render inert. See docs/MCP_IAM.md.")
+              s"is served but without Access-Control-Allow-Origin ($target), so a browser will block it as a module and the page will render inert. See docs/mcp-iam.adoc.")
           else
             None
       )
   end verifyScriptDelivery
 
-  /** The origin those scripts come from, for `_meta.ui.csp.resourceDomains` — which maps to
-    * `script-src` among the static-resource directives. Without it the module is blocked and the
-    * page renders inert, with nothing the operator can see.
+  /** The origin those scripts come from, for `_meta.ui.csp.resourceDomains`, which maps to
+    * `script-src`. Without it the module is blocked and the page renders inert.
     */
   def scriptOrigin: String =
     val parsed = URI.create(publicBaseUrl)
@@ -500,21 +423,15 @@ final case class AssetStore(
         s":${parsed.getPort}"
     s"${parsed.getScheme}://${parsed.getHost}$port"
 
-  /** The key behind a stored URL. The inverse of [[publicUrl]], and tested as one.
+  /** The key behind a stored URL. The inverse of [[publicUrl]].
     *
-    * Two readings, in order. A URL this configuration produced is undone exactly, by removing the
-    * base it was built from — no parsing, no guessing. Anything else falls back to the URI path,
-    * which is what lets a row written when the portal lived on another domain still resolve.
+    * Two readings, in this order. A URL this configuration produced is undone exactly by removing
+    * the base it was built from. Anything else falls back to the URI path, so a row written when
+    * the portal lived on another domain still resolves; that fallback drops a leading bucket
+    * segment, which path-style addressing against a local endpoint puts there.
     *
-    * The fallback has to drop a leading bucket segment, and that is where this went wrong. Against
-    * CloudFront the path is the key, which is what it originally assumed; against a single local
-    * endpoint the addressing is path-style and the bucket is the first segment, so a key came back
-    * as `captal-assets-dev/<slug>/videos/…`. Nothing failed, because that is a perfectly valid key:
-    * the upload went there, `exists` found it there, the video was confirmed, and only the portal's
-    * GET came back 404 — a half-gigabyte object one level deeper than anything will ever look.
-    *
-    * Trying the exact base first is what keeps that repair from creating its own bug: a location
-    * whose slug happened to match the bucket name would otherwise lose its first segment.
+    * The exact base has to be tried first, or a location whose slug matches the bucket name loses
+    * its first segment.
     */
   def keyOf(url: String): String =
     val base = s"${publicBaseUrl.stripSuffix("/")}/"
@@ -529,18 +446,11 @@ final case class AssetStore(
           path
       .getOrElse(url)
 
-  /** A URL the browser can PUT the video to directly.
+  /** A URL the browser can PUT the video to directly, valid for `validFor`. The bytes never pass
+    * through this server.
     *
-    * Presigned rather than proxied: the bytes never pass through this server, which has neither the
-    * memory budget nor a reason to see them. The signature carries the content type, so the upload
-    * has to send the same one or S3 rejects it — that is what keeps a caller from storing something
-    * else under a key the portal will serve as video.
-    */
-  /** Signed without binding a Content-Type, so `SignedHeaders` is `host` alone and the browser's
-    * PUT decides what S3 records. Binding it would mean knowing the type before the operator has
-    * chosen a file, which is not a thing that can be known — the old design took it from a name
-    * supplied at creation, which was a claim rather than a fact. `confirm_video_upload` checks what
-    * arrived.
+    * Signed without binding a Content-Type, so `SignedHeaders` is `host` alone and the browser's
+    * PUT decides what S3 records. `confirm_video_upload` checks what arrived.
     */
   def presignPut(key: String, validFor: Duration): ZIO[Any, String, String] = ZIO
     .attemptBlocking:
@@ -556,10 +466,8 @@ final case class AssetStore(
         .toString
     .mapError(e => s"Could not presign an upload for $key: ${e.getMessage}")
 
-  /** Whether the object is actually there.
-    *
-    * The video row is written before the upload, so this is what separates "the operator finished"
-    * from "the operator walked away" — and it is why the row starts inactive.
+  /** Whether the object is actually there. The video row is written before the upload and starts
+    * inactive, so this is what separates a finished upload from an abandoned one.
     */
   def exists(key: String): ZIO[Any, String, Boolean] = ZIO
     .attemptBlocking:
@@ -584,39 +492,35 @@ final case class AssetStore(
 end AssetStore
 
 object AssetStore:
-  /** A day, matching the bundle. These assets change only when an operator edits them, and that
-    * edit invalidates CloudFront -- so the bound that matters is the one on the browser, which
-    * otherwise derives its own from how long the object has sat unchanged.
+  /** A day, matching the bundle. An operator's edit invalidates CloudFront, so this bounds only the
+    * browser's own cache.
     */
   private[mcp] val CacheControl = "public, max-age=86400"
 
   /** The page the edge serves for a location, and for every SPA route beneath it. */
   def indexKey(slug: String): String = s"$slug/index.html"
 
-  /** Where the maintenance page would sit if it were copied per location — which it deliberately is
-    * not. Named so [[AssetStore.copyBundle]] can leave it out and so the reason has somewhere to
-    * live: a maintenance page reachable at `<slug>/maintenance.html` is a page the edge will serve
-    * to anyone who asks for it while the portal is perfectly healthy.
+  /** Where the maintenance page would sit if it were copied per location, which it deliberately is
+    * not: the edge would serve it by name to anyone while the portal is healthy. Named only so
+    * [[AssetStore.copyBundle]] can leave it out.
     */
   def maintenanceKey(slug: String): String = s"$slug/maintenance.html"
 
   /** The one copy of the maintenance page: shared, like the bundle it comes from. */
   val BundleMaintenanceKey: String = "bundle/maintenance.html"
 
-  /** Where a pause keeps the page it replaced.
+  /** Where a pause keeps the page it replaced. Outside the location's own prefix, since anything
+    * under `<slug>/` is served by the edge and would keep the real portal reachable by name for the
+    * whole of a pause.
     *
-    * Deliberately not `<slug>/site.html`, which is what it was going to be: anything under a
-    * location's own prefix is served by the edge, so the real portal would stay reachable by name
-    * for the whole of a pause — which is the one thing a pause is for. Outside that prefix it is at
-    * least not guessable from the slug, and a single deny on the `_paused` prefix at the
-    * distribution closes it properly. That rule, and a matching one on `bundle`, belong to the
-    * infra repository; until they exist this is obscurity rather than a closed door, and the honest
-    * summary is in the `deploy-location` skill.
+    * Closing it properly needs a deny on the `_paused` prefix at the distribution, plus a matching
+    * one on `bundle`; both belong to the infra repository, and until they exist this is obscurity
+    * rather than a closed door.
     */
   def savedPageKey(slug: String): String = s"_paused/$slug/site.html"
 
-  /** Fails startup when the bucket or distribution is missing rather than discovering it on the
-    * first write, which would leave an operator holding a stylesheet nobody stored.
+  /** Requires `ASSETS_BUCKET`, `CLOUDFRONT_DISTRIBUTION_ID` and `PUBLIC_BASE_URL`, and fails
+    * startup without them rather than on the first write.
     */
   val layer: ZLayer[Any, Throwable, AssetStore] = ZLayer.scoped:
     for
@@ -633,10 +537,9 @@ object AssetStore:
   /** `AWS_ENDPOINT_URL` points the S3 client somewhere other than AWS — LocalStack, for testing the
     * upload flow without an account.
     *
-    * Path-style addressing comes with it. The default puts the bucket in the hostname, which works
-    * against AWS and not against a single local endpoint, where `bucket.localhost` resolves to
-    * nothing. The credentials are still required by the signer but never checked: LocalStack does
-    * not verify signatures, so any pair does.
+    * Path-style addressing comes with it: the default puts the bucket in the hostname, and
+    * `bucket.localhost` resolves to nothing. Credentials are still required by the signer but never
+    * checked.
     */
   private[mcp] def s3ClientFor(endpoint: Option[String]): S3Client =
     endpoint match
@@ -645,9 +548,8 @@ object AssetStore:
       case None =>
         S3Client.create()
 
-  /** The same override, for the same reason. Explicit rather than left to the SDK, which does read
-    * `AWS_ENDPOINT_URL` on its own since 2.21 — four clients here set it by hand, and one relying
-    * on an implicit instead reads as an oversight and invites being "fixed" the wrong way.
+  /** The same override, set explicitly rather than left to the SDK's own `AWS_ENDPOINT_URL`
+    * handling, so every client here reads alike.
     */
   private[mcp] def cdnClientFor(endpoint: Option[String]): CloudFrontClient =
     endpoint match
@@ -663,7 +565,7 @@ object AssetStore:
           .builder()
           .endpointOverride(URI.create(url))
           // Without this the signed URL names a host the browser cannot resolve, and the failure
-          // shows up as a network error at upload time rather than here.
+          // shows up as a network error at upload time.
           .serviceConfiguration(
             software
               .amazon

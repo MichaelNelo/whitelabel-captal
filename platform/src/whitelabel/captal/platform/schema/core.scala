@@ -69,13 +69,7 @@ package object core:
   @targetName("videoTypeToString")
   inline given MappedEncoding[video.VideoType, String] = MappedEncoding(video.VideoType.toDbString)
 
-  /** An unrecognised stored type is a failure, not a default.
-    *
-    * `fromDbString` used to answer `Promo` for anything it did not know. A database still holding
-    * the pre-V22 words would therefore have served every advertiser's video as part of the house
-    * rotation — no error anywhere, no advertiser attributed, and the survey that follows it never
-    * reached. Loud is the only safe reading of a value nobody recognises.
-    */
+  /** An unrecognised stored type throws rather than defaulting to one of the two. */
   @targetName("stringToVideoType")
   inline given MappedEncoding[String, video.VideoType] = MappedEncoding(stored =>
     video

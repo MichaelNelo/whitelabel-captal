@@ -5,7 +5,6 @@ import whitelabel.captal.client.{I18nApi, Runtime}
 import whitelabel.captal.core.i18n.I18n
 
 object I18nClient:
-  // Default empty I18n for initial state
   private val emptyI18n: I18n = I18n(
     welcome = I18n.Welcome(
       title = "",

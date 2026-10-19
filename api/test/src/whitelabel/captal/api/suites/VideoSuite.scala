@@ -97,9 +97,6 @@ object VideoSuite:
             videoViews.exists(v => v.completed == 0 && v.durationWatchedSeconds == 10))
         ,
         test("with no advertiser video available, the visitor gets a promo instead of nothing"):
-          // findNextPromo was fully written — cursor rotation over (priority, createdAt), wrapping
-          // at the end — and findNextForUser never called it, so a visitor with no qualifying
-          // advertiser video was sent straight on with nothing to watch.
           for
             _       <- TestFixtures.seedEmailSurvey
             promo   <- TestFixtures.seedPromoVideo(videoTitle = "House promo")

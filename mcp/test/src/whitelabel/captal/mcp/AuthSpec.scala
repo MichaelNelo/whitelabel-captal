@@ -11,12 +11,8 @@ import zio.test.*
 
 import Tokens.given
 
-/** Authentication against the tokens table.
-  *
-  * What these pin is the part that fails open if it is wrong: that the secret is never stored, that
-  * a revoked token stops working without waiting for a reconnect, and that a principal carries the
-  * token's id rather than a name — [[UiTicket]] keys a page's write on that id, so a principal that
-  * carried something else would sign tickets nobody could verify.
+/** Authentication against the tokens table: the secret is never stored, a revoked token stops
+  * working immediately, and a principal carries the token's id rather than its name.
   */
 object AuthSpec extends ZIOSpecDefault:
   private val audience = ResourceUri.unsafe("https://mcp.test/mcp")
@@ -53,13 +49,10 @@ object AuthSpec extends ZIOSpecDefault:
           (secret, view) = issued
           principal <- Auth.verifier(audience).verify(secret)
         yield assertTrue(
-          // The id, not the name: `create_token` records it as `created_by` and `UiTicket` keys on
-          // it, so a principal carrying anything else would break both.
           principal.subject.contains(view.id),
           principal.hasScope(Auth.ContentWrite),
           principal.hasScope(Auth.I18nWrite),
-          !principal.hasScope(Auth.TokensWrite)
-        )
+          !principal.hasScope(Auth.TokensWrite))
       ,
       test("an unknown token is rejected without saying why"):
         for
@@ -70,8 +63,6 @@ object AuthSpec extends ZIOSpecDefault:
           result.swap.toOption.get.isInstanceOf[AuthError.Invalid],
           !result.swap.toOption.get.toString.toLowerCase.contains("revoked"))
       ,
-      // Revocation has to bite on the next call rather than the next connection, which is why the
-      // verifier reads the row every time instead of caching a principal.
       test("a revoked token stops authenticating"):
         for
           _      <- clear
@@ -92,8 +83,6 @@ object AuthSpec extends ZIOSpecDefault:
           row.isDefined,
           row.get.tokenSha256 == Tokens.hash("admin-secret"))
       ,
-      // Rotation is how a deployment replaces the credential, and it must not produce a second
-      // admin: every token issued points at this id through `created_by`.
       test("seeding with a new value rotates the same row"):
         for
           _       <- Tokens.seedAdmin("admin-secret", "admin").orDieWith(new RuntimeException(_))
@@ -113,8 +102,7 @@ object AuthSpec extends ZIOSpecDefault:
           row <- Tokens.byIdentifier("admin")
         yield assertTrue(Tokens.viewOf(row.get).scopes == Auth.AllScopes)
       // Both histories are laid down once by `mcp.test` before forking — see `migratedRqliteUrl` in
-      // build.mill, which runs `Migrate` and then `McpMigrate` for the reasons this spec used to
-      // carry in a comment here.
+      // build.mill, which runs `Migrate` and then `McpMigrate`.
     ).provideShared(
       RqliteDataSource.layer >>> Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)) @@
       TestAspect.sequential

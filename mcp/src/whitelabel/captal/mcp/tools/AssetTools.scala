@@ -15,13 +15,7 @@ import zio.schema.{DeriveSchema, Schema}
 import McpSchema.given
 import ToolSchema.readOnly
 
-/** Per-location overrides of the two assets a location can replace: its stylesheet and its brand
-  * icon.
-  *
-  * Both stay on S3 rather than moving into the database so the portal's render path is untouched
-  * and they stay edge-cached. The write invalidates the one object it touched, which is what turns
-  * a rebrand from a deploy into a call.
-  */
+/** Per-location CSS and SVG icon stored on S3, invalidating CDN after writes. */
 object AssetTools:
   final case class GetRequest(
       @description("Which location's asset to read.")
@@ -101,9 +95,7 @@ object AssetTools:
   private inline def locationBySlugQuery = quote: (slugParam: String) =>
     query[LocationRow].filter(_.slug == slugParam).take(1)
 
-  /** Verified against the database even though the write goes to S3: a typo'd slug would otherwise
-    * create an object under a prefix no portal ever reads, and nothing would report it.
-    */
+  /** Verifies location exists before writing to S3. */
   private def requireLocation(slug: String): ZIO[QuillSqlite, String, Unit] = ZIO.serviceWithZIO[
     QuillSqlite]: quill =>
     import quill.*
@@ -124,13 +116,8 @@ object AssetTools:
       invalidation <- store.invalidate(slug, asset)
     yield SetResponse(slug, bytes, invalidation)
 
-  /** An SVG reaching the browser only through `img` cannot run scripts — but the object is served
-    * from the portal's own origin, so anything that navigates straight to it renders the file as a
-    * document, where they do run. That is the whole of the classic SVG upload problem, and the
-    * cheapest place to close it is before the write.
-    *
-    * Deliberately a refusal rather than a sanitiser: stripping tags from markup nobody asked for
-    * invites the question of what else was silently changed.
+  /** Refuses SVG with scripts or event handlers. Served from portal origin so direct access runs
+    * scripts.
     */
   private[mcp] def validateSvg(svg: String): ZIO[Any, String, Unit] =
     val trimmed = svg.trim
@@ -146,18 +133,13 @@ object AssetTools:
         ZIO.when(lowered.contains("<script"))(
           ZIO.fail(
             "The SVG contains a script element. Served from the portal's own origin, it would run for anyone opening the file directly."))
-      // Any on* attribute. Matched loosely on purpose: the point is to refuse, not to enumerate.
+      // Detect any on* event handler attribute.
       _ <-
         ZIO.when("(?s)<[^>]*\\son[a-z]+\\s*=".r.findFirstIn(lowered).isDefined)(
           ZIO.fail("The SVG carries an event handler attribute. Remove it and try again."))
     yield ()
 
-  /** What there is to theme, as opposed to how. The skill is the how.
-    *
-    * Names, defaults and grouping come from the portal's own stylesheet rather than a list written
-    * here, so a variable that is renamed or dropped cannot keep being recommended. See
-    * [[CssSchema]] — this tool is the door, the derivation is there.
-    */
+  /** CSS custom properties schema: names, defaults, and grouping from portal's stylesheet. */
   val cssSchema: McpToolHandlerR[Any] = McpTool("get_css_schema")
     .description(
       "Every CSS custom property the portal honours, with its default and what it controls, grouped as the stylesheet groups them. Read this before writing a stylesheet with set_location_styles: a location overrides these on `:root`, and a property outside the set is simply never read. Derived from the portal's own stylesheet, so it cannot name a variable that no longer exists.")
@@ -188,8 +170,7 @@ object AssetTools:
     .requireScopes(Auth.ContentWrite)
     .handle: (in: SetStylesRequest) =>
       for
-        // An empty string would store an empty stylesheet, which looks identical to having none
-        // while still costing a request. Removing the override is a different operation.
+        // Reject empty stylesheet; removal is a separate operation.
         _ <-
           ZIO.when(in.css.isBlank)(
             ZIO.fail("The stylesheet is empty. To go back to the base theme, say so explicitly."))

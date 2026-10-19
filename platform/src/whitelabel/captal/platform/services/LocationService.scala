@@ -11,9 +11,7 @@ trait LocationService:
 
 object LocationService:
 
-  /** Error raised when the configured LOCATION_SLUG does not match any row in the locations table.
-    * This is a configuration error — the slug was set but the location hasn't been provisioned yet.
-    */
+  /** Error raised when the configured LOCATION_SLUG matches no row in the locations table. */
   final case class LocationNotFound(slug: String)
       extends RuntimeException(
         s"Location '$slug' not found. Verify LOCATION_SLUG is correct and the location has been provisioned.")

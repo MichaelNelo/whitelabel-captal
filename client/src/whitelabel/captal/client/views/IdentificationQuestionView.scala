@@ -150,7 +150,6 @@ object IdentificationQuestionView:
     val q = survey.question
     answerValue.now() match
       case None =>
-        // Check if required
         if q.commonRules.contains(whitelabel.captal.core.survey.question.CommonRule.Required) then
           validationError.set(Some(I18nClient.current.question.required))
         else

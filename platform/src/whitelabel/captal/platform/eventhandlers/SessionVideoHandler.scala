@@ -61,7 +61,6 @@ object SessionVideoHandler:
                   viewedAt = viz.occurredAt.toString,
                   createdAt = now
                 )
-                // Insert video view
                 _ <- run(query[VideoViewRow].insertValue(lift(viewRow))).orDie
                 // Don't clear currentVideoId — it's needed during AdvertiserVideoSurvey phase
                 // It will be overwritten when a new video is assigned

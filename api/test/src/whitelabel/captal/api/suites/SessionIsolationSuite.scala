@@ -15,17 +15,8 @@ object SessionIsolationSuite:
       .test
       .suite("Session Isolation")(
         test("new session uses its own question assignment, not old session's"):
-          // Regression test for bug where UserRepositoryQuill.findAnswering()
-          // was joining with ANY session of the user instead of the CURRENT session.
-          // This caused the system to validate answers against wrong question.
-          //
-          // Original bug scenario:
-          // - User has multiple sessions (lost cookie, different devices, etc.)
-          // - Session 1 has questionId = Q1 (input type)
-          // - Session 2 has questionId = Q2 (radio type)
-          // - When answering in session 2, system validated against Q1 instead of Q2
-          //
-          // This test simulates:
+          // UserRepositoryQuill.findAnswering() must join on the CURRENT session, not on any
+          // session of the user. The setup:
           // 1. User already answered email in a previous session
           // 2. Session 1: getNextSurvey assigns profiling Q1 to session1
           // 3. User loses session WITHOUT answering
@@ -78,9 +69,7 @@ object SessionIsolationSuite:
             secondNextResp <- getNextSurvey(backend, secondCookie)
             secondParsed = parseNextSurvey(secondNextResp.body)
 
-            // Answer in session2 - THE KEY TEST
-            // Bug: system validated against session1's question
-            // Fix: system now correctly uses session2's question
+            // Answer in session2 - THE KEY ASSERTION
             answerResp <- postProfilingAnswer(backend, secondCookie, optionsQ1.head.asString)
           yield assertTrue(
             // Both sessions should get profiling Q1 (first unanswered profiling question)

@@ -180,16 +180,10 @@ object DeployE2ESpec extends ZIOSpecDefault:
       hierarchyLevel = None
     )
 
-  /** Every content row, deleted before the run rather than after.
+  /** Every content row, deleted before the run rather than after, wholesale not scoped.
     *
-    * Wholesale rather than scoped to the slug, which is what this spec's own database buys. Scoping
-    * was the first version and it does not work: advertisers and the identification surveys are
-    * deployment-wide, so a second run found the advertiser it had created and `create_advertiser`
-    * refused the name. "From zero" has to mean zero, or the counts this asserts are counting
-    * whatever the last run left.
-    *
-    * Before rather than after, because a failure part way through is worth leaving on disk to look
-    * at, and because a run has to be able to follow a crashed one.
+    * Advertisers and the identification surveys are deployment-wide, so deletion must be wholesale
+    * to ensure "from zero" means zero.
     *
     * Children first: nothing here relies on a cascade, and SQLite would not give one anyway with
     * foreign keys off.

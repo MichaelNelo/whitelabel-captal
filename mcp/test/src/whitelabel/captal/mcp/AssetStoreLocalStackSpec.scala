@@ -73,10 +73,8 @@ object AssetStoreLocalStackSpec extends ZIOSpecDefault:
 
   /** A store with a real CloudFront client and the distribution the fixture created.
     *
-    * Separate from [[store]] because the id comes from the environment and is only there on a
-    * licensed LocalStack: CloudFront is not in the free tier's registry, so the test that uses this
-    * skips rather than failing on a machine that was never going to run it -- the same signal the
-    * deploy end-to-end spec uses for the cluster.
+    * `None` without a licensed LocalStack: the distribution id comes from the environment and
+    * CloudFront is not emulated in the free tier. Callers skip rather than fail.
     */
   private val cdnStore: ZIO[Scope, Throwable, Option[AssetStore]] = ZIO
     .attempt(Option(java.lang.System.getenv("CLOUDFRONT_DISTRIBUTION_ID")))
@@ -155,15 +153,9 @@ object AssetStoreLocalStackSpec extends ZIOSpecDefault:
           yield result
       ,
       test("an invalidation is created and waited out, for real"):
-        // The path nothing executed until it reached AWS. There used to be a `cdnEnabled` flag that
-        // turned every invalidation against a local endpoint into the string `"skipped-no-cdn"`,
-        // because CloudFront was not in the free tier's registry when that was written. The two
-        // tests here pinned the skip in both directions, so between them they asserted that the
-        // CloudFront code was not run -- `createInvalidation`, the poll to `Completed`, and the
-        // ordering in `pause_location` that depends on the wait actually waiting.
-        //
-        // Measured before relying on it: against a licensed LocalStack the invalidation reports
-        // `Completed` on the first poll, so `invalidateAndWait`'s five-minute bound is nowhere near.
+        // Exercises `createInvalidation` and the poll to `Completed`. Against a licensed LocalStack
+        // the invalidation completes on the first poll, well inside `invalidateAndWait`'s
+        // five-minute bound.
         cdnStore.flatMap:
           case None =>
             ZIO.succeed(assertCompletes)

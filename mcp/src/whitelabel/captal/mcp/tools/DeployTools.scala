@@ -16,48 +16,10 @@ import zio.schema.{DeriveSchema, Schema}
 
 import McpSchema.given
 
-/** A location's portal in AWS: standing it up, taking it out of service, and removing it.
-  *
-  * Four tools over one [[InfraStore]], and the line between them is what each one leaves behind.
-  * `deploy_location` creates; `pause_location` scales to nothing and makes the load balancer answer
-  * instead of forward; `resume_location` is the deploy's own steps run again; `destroy_location`
-  * removes what the deploy made. None of them writes to the database or to S3, so a location's
-  * content outlives its infrastructure in every direction.
-  *
-  * This is the half of a location that `create_location` does not do, and until now nothing did.
-  * `captal locations push` created the service, the target group and the listener rule; it was
-  * deleted with the rest of the CLI, which left `create_location` writing a row that nothing in AWS
-  * serves. A guest opening `https://…/<slug>/` got the SPA from CloudFront and a 403 from the ALB
-  * on every API call, because no rule matched the path.
-  *
-  * The shared bundle first, copied under this slug in S3 — the step the CLI did first and nothing
-  * did after it was deleted, which left a deployed location answering its API and serving no page.
-  * Before AWS rather than after, so a missing bucket stops the call while there is still nothing to
-  * clean up. Then five resources, in an order that is not arbitrary either:
-  *
-  *   1. the log group, so the task's first lines have somewhere to land
-  *   2. the target group, which the rule forwards to
-  *   3. the **rule**, before the service — `createService` with a `loadBalancers` block fails with
-  *      `400 no associated load balancer` when the target group is not reachable through a
-  *      listener. The CLI had this inverted and it is recorded in AGENTS.md as a historical bug
-  *   4. the task definition, carrying `LOCATION_SLUG` and `DB_URL`
-  *   5. the service, created or updated
-  *
-  * It does not wait for the service to become stable, and that is deliberate. The CLI polled, with
-  * no timeout, which is what made it unusable from a tool call; and waiting would say nothing a
-  * caller cannot ask for. `deploy_location` reports what it created, and whether the portal is
-  * actually answering is a different question with a different answer — `get_location_readiness`
-  * for the content, the service's own events for the container. If a blocking "wait until healthy"
-  * is wanted later, that is what the Tasks extension is for.
-  */
+/** Four tools: create, pause, resume, destroy a location's AWS infrastructure. */
 object DeployTools:
 
-  /** How long any of these waits for the thing it asked for.
-    *
-    * Matched to the service's own 180-second health-check grace period: less would give up on
-    * containers ECS is still willing to wait for, and much more would hold a task open on one that
-    * is not coming up. The tasks' own TTL is 15 minutes, well past this.
-    */
+  /** Health check timeout: 3 minutes (ECS health-check grace period is 180 seconds). */
   private val HealthTimeout: Duration = 3.minutes
 
   final case class DeployRequest(
@@ -107,12 +69,7 @@ object DeployTools:
   private inline def locationBySlugQuery = quote: (slugParam: String) =>
     query[LocationRow].filter(_.slug == slugParam).take(1)
 
-  /** Refuses a slug with no row rather than creating infrastructure for one.
-    *
-    * The resources are all named after the slug, so deploying one that does not exist would leave a
-    * service, a target group and a rule that no content will ever be written for, and nothing to
-    * find them by — `list_locations` reads the database.
-    */
+  /** Requires location row to exist (resources named after slug). */
   private def requireLocation(slug: String): ZIO[QuillSqlite, String, LocationRow] = ZIO
     .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
@@ -122,41 +79,15 @@ object DeployTools:
         .someOrFail(
           s"No location with slug '$slug'. Call create_location first — every resource this creates is named after the slug.")
 
-  /** Everything this tool declares about itself, with no store behind it yet.
-    *
-    * Split out so the scope and the task policy can be read without one. An [[InfraStore]] holds
-    * three AWS clients, and building them resolves a region and credentials from the environment —
-    * so a test that only wants to know what the tool *claims* would otherwise either need an AWS
-    * account or pass under a misconfiguration that silently changed the claim.
-    */
+  /** Tool declaration without store (for testing). */
   private[mcp] val declaration: McpTool = McpTool("deploy_location")
     .description(
       "Stand up a location's portal in AWS: log group, target group, ALB listener rule, task definition and ECS service. Idempotent — a location already deployed has its service updated to a fresh task definition rather than a second one created. Does not wait for the container to pass health checks, so success means the resources exist, not that the portal answers yet.")
     .requireScopes(Auth.InfraDeploy)
-    // `Required`, which this was not. It began as `WhenSupported` on the reasoning that five AWS
-    // calls that wait for nothing are safe to answer in line — true at the time, and no longer: it
-    // now waits for a task to come up and for the load balancer to call it healthy, which is the
-    // difference between reporting that the resources exist and reporting that a guest can load the
-    // portal. A wait of up to three minutes has no sensible synchronous form, and a client cut off
-    // half way through it would be left not knowing which.
-    //
-    // A client that cannot poll gets `-32021` and has created nothing, which is recoverable.
+    // TaskExecution.Required: waits up to 3 minutes for health checks (not synchronous).
     .taskExecution(TaskExecution.Required, ttl = Some(15.minutes))
 
-  /** What to say about how this call was answered, which only matters when it was not a task.
-    *
-    * Read off the request rather than documented, because the answer differs per client and no
-    * document can be right for all of them. The map comes from `McpToolContext`, populated from the
-    * same `_meta.io.modelcontextprotocol/clientCapabilities.extensions` the server itself reads to
-    * decide — so this is the server's own condition rather than a second guess at it. Taken as the
-    * map and not the whole context because that is all it needs, and because a context is not
-    * something a test can construct.
-    *
-    * Silent in the task case on purpose: a client that got a task handle already knows, and a line
-    * on every successful deploy saying "this went well" is the kind of noise that gets `nextSteps`
-    * skipped. What is worth saying is the one thing a synchronous caller cannot work out alone — a
-    * timeout here is not evidence the deploy did not happen.
-    */
+  /** Note for synchronous callers (silent when using tasks extension). */
   private[mcp] def taskNote(capabilities: Map[McpExtensionId, Json]): List[String] =
     if capabilities.contains(McpTasks.Id) then
       Nil
@@ -164,37 +95,24 @@ object DeployTools:
       List(
         "This answered in the call itself, because your client did not declare the tasks extension. If a deploy ever ends in a transport timeout rather than an error, that is not evidence it failed: call deploy_location again — every step is idempotent — and compare what it reports.")
 
-  /** Takes the store by value rather than from the environment, which keeps the server's type as
-    * `QuillSqlite & AssetStore`.
-    *
-    * Asking for `InfraStore` would widen it for every tool, and then a deployment with no cluster
-    * configured could not build the server at all — the type would demand a service it has no layer
-    * for. `UnifiTools.all(uiOrigin)` is parameterised for the same reason.
+  /** Takes store by value (not from environment) to keep server type as QuillSqlite & AssetStore.
     */
   private def deployWith(store: InfraStore): McpToolHandlerR[QuillSqlite & AssetStore] = declaration
     .handleWithContext: (in: DeployRequest, ctx: McpToolContext) =>
       for
         location <- requireLocation(in.slug)
         assets   <- ZIO.service[AssetStore]
-        // The bundle first, before anything in AWS exists. Two reasons: a missing bucket should
-        // stop the call before it has created a service and a listener rule to clean up, and the
-        // SPA being in place when the container first answers is one less transient 404.
+        // Copy bundle first (before AWS resources exist).
         bundle       <- assets.copyBundle(in.slug)
         invalidation <- assets.invalidatePrefix(in.slug)
-        // The order the comments above record. Written as a sequence rather than a parallel fan-out
-        // because each step feeds the next, and because a half-built deploy is easier to read when
-        // it stopped at a named step.
+        // Log group, target group, rule, task def, service (sequential order).
         logGroup    <- store.ensureLogGroup(in.slug)
         targetGroup <- store.ensureTargetGroup(in.slug)
         rule        <- store.ensureRule(in.slug, targetGroup)
         taskDef     <- store.registerTaskDefinition(in.slug)
         result      <- store.upsertService(in.slug, taskDef, targetGroup)
         (serviceArn, created) = result
-        // Waited for, not assumed. This used to return the moment the five resources existed, which
-        // is a different claim from "a guest can load the portal" — and the only one a caller
-        // actually wants. The rule already forwards by now, so the target group is routed to and the
-        // load balancer will health-check it; before the rule exists it reports `unused` and is
-        // never checked at all.
+        // Wait for task to be running (not just resources created).
         running <- store.awaitRunning(in.slug, _ >= 1, HealthTimeout)
         healthy <- store.awaitHealthyTarget(in.slug, HealthTimeout)
       yield DeployResponse(
@@ -227,9 +145,7 @@ object DeployTools:
           ) ++ bundleNote(bundle) ++ taskNote(ctx.extensionCapabilities)
       )
 
-  /** Said only when the copy found nothing, which is the one outcome a caller cannot read off the
-    * other fields: every AWS resource exists, the call succeeded, and the portal's own page 404s.
-    */
+  /** Note when bundle objects are zero (portal page 404s). */
   private def bundleNote(bundle: BundleCopy): List[String] =
     if bundle.objects > 0 then
       Nil
@@ -320,47 +236,25 @@ object DeployTools:
   given Schema[DestroyRequest] = DeriveSchema.gen
   given Schema[DestroyResponse] = DeriveSchema.gen
 
-  /** Out of service without being dismantled.
-    *
-    * Two changes, and both are needed. Scaling to zero stops the tasks, which is what makes the
-    * portal actually unreachable rather than merely discouraged. Repointing the rule is what makes
-    * the result an answer: a forward rule to a target group with no healthy members returns an
-    * empty 503, which the portal cannot tell from an outage, so it would retry and show an error.
-    * The fixed response says `paused`, and the load balancer serves it with nothing running behind.
-    *
-    * Nothing is written to the database, which is the whole point — the location, its translations,
-    * its videos and its branding are all untouched, and `deploy_location` brings it back because it
-    * already sets the rule to forward and the service to one task.
-    */
+  /** Pause: scale service to zero and repoint rule to fixed response. Database untouched. */
   private def pauseWith(store: InfraStore): McpToolHandlerR[QuillSqlite & AssetStore] = McpTool(
     "pause_location")
     .description(
       "Take a location's portal out of service without dismantling it. In order: the maintenance page replaces the location's index.html at the edge, the CloudFront invalidation is waited out, and only then is the API stopped — the ALB rule answers a fixed 'paused' JSON and the ECS service is scaled to zero. Writes nothing to the database. resume_location puts every part of it back.")
     .requireScopes(Auth.InfraDeploy)
-    // `Required`, unlike the deploy, for a reason this tool has and that one does not: it waits out
-    // a CloudFront invalidation, which is seconds to minutes. There is no sensible synchronous
-    // version of that wait — a client cut off by a transport timeout half way through leaves the
-    // edge serving maintenance and the API still live, which is the one state this whole sequence
-    // exists to avoid. A client that cannot poll gets `-32021` and has changed nothing.
+    // TaskExecution.Required: waits for CloudFront invalidation (minutes).
     .taskExecution(TaskExecution.Required, ttl = Some(15.minutes))
     .handle: (in: PauseRequest) =>
       for
         _      <- requireLocation(in.slug)
         assets <- ZIO.service[AssetStore]
-        // The edge first, and this ordering is the point. Swapping the page and then waiting for the
-        // invalidation means that by the time anything can receive the paused response, the page it
-        // will be sent to is already the one being served. The other way round, a guest is told
-        // "paused" and redirected to a URL the edge still answers with the cached portal.
+        // Update edge before API: ensures guest sees maintenance page before paused response.
         _            <- assets.pausePage(in.slug)
         invalidation <- assets.invalidateAndWait(in.slug)
-        // Now the API, rule before scale-down: the reverse leaves a window where the target group
-        // is empty and a forward rule answers an empty 503 that nothing can interpret.
+        // API: rule (to fixed response) before scale-down (avoid empty 503).
         rule <- store.pauseRule(in.slug)
         _    <- store.scaleService(in.slug, 0)
-        // Waited out, so "paused" means the tasks are gone rather than asked to go. Nothing reaches
-        // them either way — the rule stopped forwarding first — so this is not about correctness of
-        // the pause; it is so that a caller who pauses in order to then change something underneath
-        // knows the containers are not still running against it.
+        // Wait for tasks to actually stop (not just requested).
         drained <- store.awaitRunning(in.slug, _ == 0, HealthTimeout)
       yield PauseResponse(
         slug = in.slug,
@@ -376,42 +270,24 @@ object DeployTools:
         )
       )
 
-  /** The exact inverse, and deliberately built out of the deploy's own steps.
-    *
-    * `ensureTargetGroup` and `ensureRule` are idempotent and set the rule back to forwarding, so
-    * resuming is the same code that deployed it rather than a second implementation that could
-    * drift from it.
-    */
+  /** Resume: inverse of pause, using deploy's idempotent steps. */
   private def resumeWith(store: InfraStore): McpToolHandlerR[QuillSqlite & AssetStore] = McpTool(
     "resume_location")
     .description(
       "Put a paused location back in service, in the reverse order of the pause: the ALB rule forwards again and the service is scaled back to one task, then the location's own page replaces the maintenance one at the edge. Restores the page that was live rather than the current bundle — deploy_location is how a location takes a newer one. Idempotent, and safe on a location that was never paused.")
     .requireScopes(Auth.InfraDeploy)
-    // Also `Required`, and also because of the invalidation. The order is the mirror of the pause,
-    // so the exposure if it is cut off half way is the mirror too: the edge still serving
-    // maintenance over an API that is already answering.
+    // TaskExecution.Required: waits for CloudFront invalidation (mirror of pause).
     .taskExecution(TaskExecution.Required, ttl = Some(15.minutes))
     .handle: (in: PauseRequest) =>
       for
         _      <- requireLocation(in.slug)
         assets <- ZIO.service[AssetStore]
-        // The API first, which is the inverse of the pause for the same reason: nothing should be
-        // able to reach the real page while the thing it calls is still refusing.
+        // API first (inverse of pause): ensure it's answering before changing page.
         targetGroup <- store.ensureTargetGroup(in.slug)
         _           <- store.scaleService(in.slug, 1)
-        // And a task has to be *healthy* before the rule stops answering and starts forwarding. A
-        // forward rule to a target group with nothing healthy in it answers an empty 503 — the
-        // uninterpretable failure the paused body exists to replace — so flipping it over an empty
-        // target group trades a deliberate "paused" for an accidental "broken" for as long as the
-        // container takes to boot.
-        //
-        // This is the wait `deploy_location` does not need, which is worth stating because the two
-        // look alike: creating has nothing to break, and a redeploy rolls under the service's
-        // `minimumHealthyPercent(100)`, which keeps the old task until the new one is healthy.
+        // Wait for healthy target (avoid empty 503 on empty target group).
         running <- store.awaitRunning(in.slug, _ >= 1, HealthTimeout)
-        // Refused rather than forced, leaving the location exactly as it was — paused, with the
-        // maintenance page still at the edge. A resume onto a container that will not come up should
-        // end with the guest still seeing maintenance, not a 503.
+        // Fail if task won't start (keep location paused, not in broken state).
         _ <-
           ZIO.unless(running):
             ZIO.fail(
@@ -419,12 +295,7 @@ object DeployTools:
                   .toSeconds}s — so the rule still answers 'paused' and the edge still serves the maintenance page, which is the safe end of a container that will not start. Check ${store
                   .targets
                   .logGroup(in.slug)} and run resume_location again.")
-        // Only now can the rule forward, and only after it does can the target be health-checked at
-        // all — AWS reports a target group nothing routes to as `unused`. So this order is forced:
-        // running task, then rule, then health. There is a short window after the flip in which the
-        // load balancer has not yet health-checked the new target and answers 503; that is what
-        // `healthCheckGracePeriodSeconds` exists for and it cannot be designed away with one target
-        // group.
+        // Order: running task, then rule (AWS requires active target before forwarding).
         rule         <- store.ensureRule(in.slug, targetGroup)
         healthy      <- store.awaitHealthyTarget(in.slug, HealthTimeout)
         restored     <- assets.resumePage(in.slug)
@@ -447,18 +318,7 @@ object DeployTools:
         )
       )
 
-  /** Everything the deploy created, removed — and nothing else.
-    *
-    * Gated on the slug being typed out again rather than on an elicitation round trip. MRTR was the
-    * plan and it is the wrong gate for this one tool: `elicitation/create` is a client capability,
-    * and a host that does not implement it would leave the only destructive operation here either
-    * unusable or, worse, ungated. An argument the caller has to repeat works everywhere and is
-    * equally hard to do by accident.
-    *
-    * What it does not touch is as much the contract as what it does: no row, no translation, no
-    * video, no stylesheet, no icon, and not the log group. A destroyed location is one
-    * `deploy_location` away from serving again.
-    */
+  /** Remove AWS resources but keep database and log group. Requires slug confirmation. */
   private def destroyWith(store: InfraStore): McpToolHandlerR[QuillSqlite & AssetStore] = McpTool(
     "destroy_location")
     .description(
@@ -473,15 +333,7 @@ object DeployTools:
             ZIO.fail(
               s"Refused: `confirm` has to be '${in.slug}' exactly, and it was '${in
                   .confirm}'. This removes the service, the rule, the target group and every task definition revision for the location.")
-        // The question first, before anything is touched, and that ordering is forced rather than
-        // stylistic. An elicitation under MRTR is not a pause: the server answers `input_required`,
-        // the client retries the whole call with the answer, and **the handler runs again from the
-        // top**. So everything above an `elicit` happens twice. With the teardown above it, the
-        // first pass deleted the service, the rule and the target group and then suspended, and the
-        // second pass reported zeros for all of it because it found nothing left — which is exactly
-        // what this spec caught.
-        //
-        // Above the elicit there are now only reads, so running them twice costs two listings.
+        // Elicit assets deletion before teardown (handler re-runs on retry).
         assets <- ZIO.service[AssetStore]
         keys   <- assets.listPrefix(s"${in.slug}/")
         videos = keys.count(_.startsWith(s"${in.slug}/videos/"))
@@ -512,18 +364,12 @@ object DeployTools:
             )
           )
           .mapError(error => s"Could not ask about the S3 objects: ${error.message}")
-        // Accepting the question is the yes. The boolean is read only to honour a client that
-        // renders the schema as a form and sends it back false — accepting while answering "no"
-        // means no.
+        // Accepting the question with deleteAssets=true means delete.
         wanted =
           answer.action == "accept" &&
             !answer.content.flatMap(_.get("deleteAssets")).flatMap(_.asBoolean).contains(false)
-        // Only now the effects, which run once: this is the pass that has the answer.
-        //
-        // Drained before anything is deleted. `deleteService(force = true)` stops the tasks, but
-        // asynchronously, so without this the target group and the rule go while containers are
-        // still running against them — and a teardown that reports success with tasks alive is the
-        // kind that gets run twice.
+        // Run effects only on answered pass (after elicit).
+        // Drain tasks before deleting resources.
         _       <- store.scaleService(in.slug, 0).either
         drained <- store.awaitRunning(in.slug, _ == 0, HealthTimeout)
         report  <- store.destroy(in.slug)
@@ -553,18 +399,7 @@ object DeployTools:
         )
       )
 
-  /** Registered only when the environment has deploy configuration, so a content-only deployment
-    * does not advertise tools whose first call would fail on a missing cluster name. `tools/list`
-    * not mentioning them is better than tools that exist and cannot work.
-    */
-  /** All four, or none.
-    *
-    * One list rather than two because three of them reach S3 — the deploy copies the bundle, and
-    * pause and resume swap the page the edge serves — so they all want `AssetStore`.
-    * `destroy_location` does not, and does not need to be separated for it: `McpToolHandlerR` is
-    * contravariant in its environment, so a handler that asks for less fits a server that offers
-    * more.
-    */
+  /** All four tools, or none. Registered only when deploy configuration exists. */
   def all(store: Option[InfraStore]): List[McpToolHandlerR[QuillSqlite & AssetStore]] = store
     .toList
     .flatMap(value =>

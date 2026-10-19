@@ -12,17 +12,14 @@ object MultiQuestionSurveySuite:
       .suite("Multi-Question Survey")(
         test("after answering email, user transitions to advertiser video (1 question per visit)"):
           for
-            _       <- TestFixtures.seedEmailSurvey
-            _       <- TestFixtures.seedMultiQuestionProfilingSurvey
-            backend <- testBackend
-            cookie  <- createSession(backend)
-            // First call returns email question
+            _         <- TestFixtures.seedEmailSurvey
+            _         <- TestFixtures.seedMultiQuestionProfilingSurvey
+            backend   <- testBackend
+            cookie    <- createSession(backend)
             emailNext <- getNextSurvey(backend, cookie)
             emailParsed = parseNextSurvey(emailNext.body)
-            // Answer email - response should contain next step
             answerResp <- postEmailAnswer(backend, cookie, "multi@example.com")
-            // Verify session phase in database
-            dbState <- TestFixtures.queryDbState
+            dbState    <- TestFixtures.queryDbState
           yield assertTrue(
             emailParsed.isDefined,
             emailParsed.get.surveyType == IdentificationSurveyType.Email,

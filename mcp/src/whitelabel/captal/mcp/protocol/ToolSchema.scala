@@ -6,16 +6,7 @@ import zio.{Chunk, NonEmptyChunk}
 
 /** Pointing a tool at its MCP App.
   *
-  * This used to be a decorator over `McpToolHandlerR` that wrote `_meta` by hand, because the SDK
-  * had no notion of Apps and the builder did not expose the field. It does now — `McpApps.tool` is
-  * the same decorator, written by the library and typed, so what is left here is the call shape
-  * that keeps the builder chains readable.
-  *
-  * The CSP deliberately does not appear here any more. It belonged on the tool in the hand-rolled
-  * version, which is simply not where the contract puts it: `McpAppsToolMeta` has no field for it,
-  * and the host reads it from the resource. Declaring it here produced a policy nobody applied and
-  * a PUT that died as `blocked:csp`. See [[UploadUiSource]] and [[EntityResources]], which attach
-  * it to the page itself.
+  * The CSP is attached to the page in [[UploadUiSource]] and [[EntityResources]], not to the tool.
   */
 object ToolSchema:
 
@@ -70,11 +61,8 @@ object ToolSchema:
       * — most tools render nothing and still need to say who may call them.
       *
       * Being hand-written is also why every member of the trait has to be forwarded explicitly,
-      * including ones added after this was. `taskPolicy` is the live example: 0.10.0 added it to
-      * the trait with a `TaskPolicy.never` default and added the forward to its own
-      * `AppsToolHandler` in the same change. Leaving it out here would not fail to compile — the
-      * default would quietly apply — and since [[CaptalMcp]] wraps *every* tool in this, one
-      * missing line would make `taskExecution` a no-op server-wide.
+      * including those needed to preserve their defaults. Since [[CaptalMcp]] wraps every tool in
+      * this, missing a forward would apply it server-wide.
       */
     def visibleTo(values: McpAppsVisibility*): McpToolHandlerR[R] =
       val visibility: Json = Json.Arr(

@@ -132,7 +132,7 @@ object EventLogHandler:
             Json.obj(
               "userId" -> Json.fromString(userId.asString),
               // Null for a promo's survey, the same way `user.video_assigned` above reports a
-              // promo's video. Analytics reading this should treat the two consistently.
+              // promo's video.
               "advertiserId" -> advertiserId.fold(Json.Null)(id => Json.fromString(id.asString)),
               "nextQuestion" ->
                 Json.obj(
@@ -226,8 +226,8 @@ object EventLogHandler:
                 Json.obj(
                   "userId"   -> Json.fromString(userId.asString),
                   "surveyId" -> Json.fromString(surveyId.asString),
-                  // Null when the question followed a promo: the venue's own content, with no
-                  // advertiser to attribute the answer to.
+                  // Null when the question followed a promo, which has no advertiser to attribute
+                  // the answer to.
                   "advertiserId" ->
                     advertiserId.fold(Json.Null)(id => Json.fromString(id.asString)),
                   "questionId" -> Json.fromString(questionId.asString),

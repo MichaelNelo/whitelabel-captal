@@ -6,8 +6,8 @@ import org.scalajs.dom
 import whitelabel.captal.client.Promises.*
 
 object Runtime:
-  /** Run a promise, ignoring the result. Errors are logged to console AND escalated to the
-    * centralized error page so the user gets feedback instead of a silent failure.
+  /** Run a promise, ignoring the result. Failures are logged to the console and escalated to the
+    * error page.
     */
   def run[A](body: => js.Promise[A]): Unit =
     val _ = body.onFailure: e =>

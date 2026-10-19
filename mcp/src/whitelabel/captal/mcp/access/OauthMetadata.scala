@@ -3,25 +3,12 @@ package whitelabel.captal.mcp.access
 import zio.http.*
 import zio.json.ast.Json
 
-/** The authorization server metadata this server has to publish, saying honestly that there is no
-  * authorization server.
+/** The RFC 8414 authorization server metadata, saying that there is no authorization server.
   *
-  * RFC 9728 lets a protected resource name the issuers whose tokens it accepts, and an issuer
-  * identifier is not a label — by RFC 8414 it is the base URL its metadata is fetched from. So
-  * whatever we name, some client eventually dereferences it. That is how an unresolvable
-  * `captal.invalid` cost 10 seconds per DNS lookup, pushed Claude Desktop's handshake past its
-  * timeout, and cost the host its resource cache.
-  *
-  * Naming ourselves fixed the delay and left a smaller untruth: we claimed to be an authorization
-  * server and answered 404. This is the document that makes it true.
-  *
-  * `grant_types_supported: []` is the whole point. Tokens for this resource exist and none of them
+  * `grant_types_supported: []` is the substance: tokens for this resource exist and none of them
   * are obtainable through an OAuth flow — they are issued out of band by `create_token` and stored
-  * hashed. With no grants declared, RFC 8414 does not require an authorization or token endpoint,
-  * so omitting both is consistent rather than missing.
-  *
-  * And it beats the 404 it replaces: a 404 says "nothing here, perhaps try again", while this says
-  * "there is no flow, stop looking" and names the scopes that do exist.
+  * hashed. With no grants declared, RFC 8414 requires neither an authorization nor a token
+  * endpoint, so omitting both is consistent rather than missing.
   */
 object OauthMetadata:
 
@@ -30,7 +17,7 @@ object OauthMetadata:
     */
   private[mcp] def document(issuer: String): Json = Json.Obj(
     "issuer" -> Json.Str(issuer),
-    // Deliberately empty, and the most informative field here.
+    // Empty: no OAuth flow issues these tokens.
     "grant_types_supported"    -> Json.Arr(),
     "response_types_supported" -> Json.Arr(),
     "scopes_supported"         ->
@@ -38,8 +25,8 @@ object OauthMetadata:
         zio.Chunk.fromIterable(Auth.AllScopes.map(_.toString).toList.sorted.map(Json.Str(_))))
   )
 
-  /** At the bare path because our issuer is the bare origin. RFC 8414 appends the issuer's path
-    * component when it has one; ours has none.
+  /** Served at the bare `/.well-known/oauth-authorization-server`: RFC 8414 appends the issuer's
+    * path component when it has one, and ours is the bare origin.
     */
   def routes(issuer: String): Routes[Any, Response] =
     val body = document(issuer).toString

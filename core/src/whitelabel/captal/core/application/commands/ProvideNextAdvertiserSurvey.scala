@@ -57,7 +57,6 @@ object ProvideNextAdvertiserSurveyHandler:
               .convertError
               .as(next: Response)
           case (_, None) =>
-            // No more questions for this advertiser — redirect to fallback
             CoreOp.pure(NextStep(fallback.phase): Response)
           case (None, _) =>
             CoreOp.pure(NextStep(fallback.phase): Response)

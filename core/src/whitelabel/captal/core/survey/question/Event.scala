@@ -27,7 +27,7 @@ enum Event:
       occurredAt: Instant)
 
   /** An answer to a question that followed a video. `advertiserId` is absent when that video was a
-    * promo — the venue's own content, which has no advertiser to attribute the answer to.
+    * promo, which has no advertiser to attribute the answer to.
     */
   case AdvertiserQuestionAnswered(
       userId: user.Id,

@@ -49,15 +49,12 @@ object ProvideNextVideoHandler:
             userOpt match
               case None =>
                 // Reaching AdvertiserVideo without a verified email means identification was
-                // either skipped (no surveys seeded) or short-circuited. Surface the condition
-                // so the SPA can recover, instead of silently sending the user to Ready.
+                // skipped or short-circuited; fail so the SPA can recover instead of silently
+                // sending the user to Ready.
                 Monad[F].pure(
                   CoreOp.fail[whitelabel.captal.core.application.Event, Error, Response](
                     Error.UserNotIdentified))
               case Some(user) =>
-                // Asked for only once there is a user to ask for. Previously the lookup ran first
-                // and its result was discarded on this same branch — a weighted draw against the
-                // database whose answer nobody ever read.
                 for videoOpt <- videoRepo.findNextForUser(user.id)
                 yield videoOpt match
                   case Some(videoToWatch) =>
@@ -71,7 +68,6 @@ object ProvideNextVideoHandler:
                       .convertError
                       .as(NextVideo.fromVideoToWatch(videoToWatch): Response)
                   case None =>
-                    // No video available — redirect to the fallback phase
                     CoreOp.pure(NextStep(fallback.phase): Response)
         yield result
 end ProvideNextVideoHandler

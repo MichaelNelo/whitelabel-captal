@@ -29,12 +29,8 @@ object VideoRoutes:
 
 end VideoRoutes
 
-/** The advertiser video: ask for the next one, report it watched.
-  *
-  * Both are `Phase.AdvertiserVideo` only, and both answer a type the browser decodes — which made
-  * `VideoResponse` the first shape this migration had to change rather than merely move. Its circe
-  * pair flattened the payload under a `type` discriminator and a zio-schema `Schema` cannot
-  * describe that; see the note on `VideoResponse` for what replaced it.
+/** The advertiser video: ask for the next one, report it watched. Both routes are
+  * `Phase.AdvertiserVideo` only.
   */
 final class VideoRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
   import VideoRoutes.*
@@ -44,11 +40,8 @@ final class VideoRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
     SessionEndpoint.OnMissing.Fail,
     Seq(Phase.AdvertiserVideo))
 
-  /** Whatever a flow failed with, as the `ApiError` the route answers.
-    *
-    * The same `catchAllCause` both routes carried verbatim: a typed failure goes through
-    * `ApiErrors`, and a defect is wrapped so its cause reaches the log rather than becoming a
-    * response with no record of why.
+  /** Whatever a flow failed with, as the `ApiError` the route answers: a typed failure goes through
+    * `ApiErrors`, and a defect is wrapped so its cause still reaches the log.
     */
   private def asApiError[A](result: Task[A]): IO[ApiError, A] = result.catchAllCause: cause =>
     ApiErrors.failWith(

@@ -25,10 +25,8 @@ import zio.interop.catz.*
 
 /** One layer per command the portal can execute, plus the handler chain they all write through.
   *
-  * Every entry has the same shape — a `Flow` pairing one command handler with the event handler —
-  * so what varies is only which repositories a handler reads and which `Phases` value it emits.
-  * Collected here because `appLayers` lists them all and nothing else references any of them
-  * individually.
+  * Every entry is a `Flow` pairing one command handler with the event handler; what varies is which
+  * repositories the handler reads and which `Phases` value it emits.
   */
 private[api] object Flows:
 
@@ -149,19 +147,16 @@ private[api] object Flows:
       Flow(FinishHandler(userRepo), eventHandler)
 
   /** Counterpart of [[finishFlowLayer]]: executed by the `JobRunner` when an access expires, not by
-    * an endpoint. It depends on `eventHandlerLayer` — which is why the scheduler is split into
-    * `JobQueue` (producer, no dependencies) and `JobRunner` (consumer), keeping the graph acyclic.
+    * an endpoint.
     */
   val expireAccessFlowLayer: ZLayer[UserRepository[
     Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, ExpireAccessCommand, Unit]] = ZLayer
     .fromFunction: (userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
       Flow(ExpireAccessHandler(userRepo), eventHandler)
 
-  /** The one flow built by hand rather than by `Flow(...)`.
-    *
-    * `MarkVideoWatchedHandler.withSession` needs the session, so the handler cannot be constructed
-    * until the request is in flight — which is what `Flow`'s constructor assumes it can do once, at
-    * layer-building time.
+  /** The one flow built by hand rather than by `Flow(...)`: `MarkVideoWatchedHandler.withSession`
+    * needs the session, so the handler can only be constructed per request, not at layer-build
+    * time.
     */
   val markVideoWatchedFlowLayer: ZLayer[
     VideoRepository[Task] & SessionContext & EventHandler[Task, Event],

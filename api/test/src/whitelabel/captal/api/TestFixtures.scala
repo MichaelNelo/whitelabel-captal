@@ -16,23 +16,17 @@ import zio.*
 
 object TestFixtures:
   // Deterministic timestamp matching what ZIOSpecDefault's TestClock returns by default
-  // (Instant.EPOCH). Using a literal here keeps the seed helpers pure-data without
-  // requiring each one to be wrapped in `Clock.instant.flatMap`. If a test ever needs
-  // control over time, it can call TestClock.setTime / TestClock.adjust before invoking
-  // the fixture (the seeded rows are static, but downstream code-under-test reads from
-  // Clock.instant which the test can advance).
+  // (Instant.EPOCH). Seeded rows are static, so a test needing control over time calls
+  // TestClock.setTime / TestClock.adjust before invoking the fixture.
   private val FixedNow: String = java.time.Instant.EPOCH.toString
 
   private val testConfig = ConfigFactory.load("test.conf")
 
-  /** Through [[Migrate]] rather than a Flyway assembled here, so the tests migrate the way the
-    * deployed images do — same config, same lock, same history table. A second Flyway here would be
-    * a second set of settings to keep in step, and `MigrationLockSuite` races this exact path.
+  /** Through [[Migrate]], so the tests migrate the way the deployed images do — same config, same
+    * lock, same history table.
     *
-    * It also drops `cleanOnValidationError`, which was set here. That flag means "if the history
-    * does not match the files, drop every table and start over" — defensible for a throwaway
-    * database right up to the moment it fires for a reason nobody intended. A checksum mismatch now
-    * fails the run with Flyway's own message, and the fix is to remove the container deliberately.
+    * No `cleanOnValidationError`: a checksum mismatch fails the run with Flyway's own message, and
+    * the fix is to remove the container deliberately.
     */
   def migrate: ZIO[Any, Throwable, Unit] =
     ZIO
@@ -194,14 +188,7 @@ object TestFixtures:
               run(query[LocalizedTextRow].insertValue(lift(txtRow)))
       yield optionsWithText.map(_._1.id)
 
-  /** Seed a rule as the rule, not as the JSON a rule happens to look like.
-    *
-    * These took a hand-written `ruleConfig` string — `{"type":"min_length","value":8}` — which made
-    * the fixtures a fourth independent rendering of a format that already had three. A test that
-    * spells the column itself passes when the fixture and the reader agree with each other and the
-    * writer agrees with neither, which is precisely the failure `surveySchemas` exists to remove.
-    * So the caller passes a `TextRule` and the one encoder renders it.
-    */
+  /** Seeds a rule as the rule: the caller passes a `TextRule` and the one encoder renders it. */
   def addTextRule(
       questionId: survey.question.Id,
       rule: TextRule): ZIO[QuillSqlite, Throwable, String] = addQuestionRule(
@@ -228,11 +215,9 @@ object TestFixtures:
       minLengthRuleId: String,
       patternRuleId: String)
 
-  /** A profiling survey whose single question is `input` and carries TWO text rules.
-    *
-    * Two, not one, on purpose: with a single rule a test cannot tell "the right row was filtered"
-    * apart from "every rule of the question was dropped". The regex deliberately avoids backslashes
-    * so it survives being embedded in a JSON string without escaping.
+  /** A profiling survey whose single question is `input` and carries TWO text rules: with a single
+    * rule a test cannot tell "the right row was filtered" apart from "every rule of the question
+    * was dropped". The regex avoids backslashes so it survives embedding in JSON unescaped.
     */
   def seedProfilingInputSurveyWithRules(
       minLength: Int = 8,
@@ -245,9 +230,7 @@ object TestFixtures:
   // ─────────────────────────────────────────────────────────────────────────────
   // Soft-delete helpers
   //
-  // These do what the backoffice will do: flip is_active, never DELETE. The suite that uses them
-  // asserts the row stops reaching the portal, which is the half a migration adding the column
-  // does not give you for free.
+  // These do what the backoffice will do: flip is_active, never DELETE.
   // ─────────────────────────────────────────────────────────────────────────────
 
   def deactivateQuestion(questionId: survey.question.Id): ZIO[QuillSqlite, Throwable, Unit] = ZIO
@@ -404,15 +387,8 @@ object TestFixtures:
     * so whichever runs second offers rows that are already there and collides with the unique index
     * over `(entity_id, locale)`.
     *
-    * It worked for as long as it did because the old rqlite JDBC driver reported a refused
-    * statement as zero affected rows inside an HTTP 200, raising nothing: the second caller's
-    * inserts did nothing and nobody was told. Driver 10.5.2.1 throws, and the seed took 59 tests
-    * down with it — every one of them failing on a missing session, three layers from the cause.
-    *
-    * `onConflictIgnore` and not delete-then-insert on purpose. Ignoring is exactly what the old
-    * driver did, so the suites keep the behaviour they were written against — including that
-    * `SoftDeleteSuite`'s deactivation of `ui.locale.pt` survives a later seed. Replacing the rows
-    * would quietly undo it, and which suite that breaks would depend on the order they run in.
+    * `onConflictIgnore` and not delete-then-insert, so `SoftDeleteSuite`'s deactivation of
+    * `ui.locale.pt` survives a later seed.
     */
   def seedLocales(locales: List[String]): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[
     QuillSqlite]: quill =>
@@ -717,9 +693,7 @@ object TestFixtures:
     *
     * `promo = true` seeds the venue's own video instead of an advertiser's: no advertiser row, no
     * `advertiser_id` on either the video or the survey, and `video_type = 'promo'`. Everything else
-    * — the survey, its questions, their options and texts — is identical, because the flow after
-    * the video is identical. That shared body is the point: a promo's survey was unreachable for
-    * two separate reasons and no test distinguished the two cases at all.
+    * — the survey, its questions, their options and texts — is identical.
     *
     * `advertiserId` in the returned fixture is empty for a promo, as in [[seedPromoVideo]].
     */
@@ -842,8 +816,7 @@ object TestFixtures:
         .toList
 
       for
-        // No advertiser row for a promo. Seeding one would leave the ad selection a candidate and
-        // the test would no longer be about the promo path.
+        // No advertiser row for a promo, so the ad selection has no candidate.
         _ <- ZIO.unless(promo)(run(query[AdvertiserRow].insertValue(lift(advertiserRow))))
         _ <- run(query[AdvertiserVideoRow].insertValue(lift(videoRow)))
         _ <- run(query[LocalizedTextRow].insertValue(lift(titleRow)))

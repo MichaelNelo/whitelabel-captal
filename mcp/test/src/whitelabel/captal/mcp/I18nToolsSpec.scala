@@ -12,12 +12,9 @@ import whitelabel.captal.platform.{LocalizedTextRow, LocationRow, RqliteDataSour
 import zio.*
 import zio.test.*
 
-/** Exercises the tools against a real rqlite instance.
-  *
-  * The two behaviours worth proving are exactly the ones `EntityWriter` gets wrong: that the upsert
-  * keys on `(entity_id, locale, location_id)` rather than on the primary key — which is what the
-  * unique index from V12 actually enforces — and that writing a retired translation brings it back
-  * instead of colliding.
+/** Exercises the tools against a real rqlite instance: the upsert keys on
+  * `(entity_id, locale, location_id)` — the unique index from V12 — and writing a retired
+  * translation brings it back instead of colliding.
   */
 object I18nToolsSpec extends ZIOSpecDefault:
   private val Slug = "mcp-test-location"
@@ -107,11 +104,9 @@ object I18nToolsSpec extends ZIOSpecDefault:
           forKey = rows.filter(r => r.entityId == SomeKey && r.locale == Locale)
         yield assertTrue(
           !first.isError.contains(true),
-          // The one that would fail with onConflictUpdate(_.id) and a surrogate id.
           !second.isError.contains(true),
           forKey.size == 1,
-          forKey.head.value == "Hola"
-        )
+          forKey.head.value == "Hola")
       ,
       test("removing retires the row, and writing again revives the same row"):
         for
@@ -156,9 +151,7 @@ object I18nToolsSpec extends ZIOSpecDefault:
             .content
             .exists {
               case ToolContent.Text(text, _) =>
-                // Names the offending key and where the legal ones are. That used to be the
-                // `i18n://` URI, and a failure message is the worst place to send someone to a
-                // door that may not open for them.
+                // Names the offending key and the tool that lists the legal ones.
                 text.contains("welcome.doesNotExist") && text.contains("get_i18n_schema")
               case _ =>
                 false
@@ -189,23 +182,8 @@ object I18nToolsSpec extends ZIOSpecDefault:
         )
       ,
       test("a unique-constraint violation reaches JDBC as an error"):
-        // This asserted the opposite until the driver bump, and it said so: "rqlite reports the
-        // failure as a per-statement `error` field inside an HTTP 200 response, and the JDBC driver
-        // does not translate that into a SQLException. If a future driver starts surfacing it, this
-        // test fails and the workaround can be revisited."
-        //
-        // One did, and it did. `rqlite-jdbc` 10.5.2.1 states it outright: "failed statements,
-        // batches and commits now throw instead of being silently ignored".
-        //
-        // What the old version pinned was a bug in a dependency, held as a contract. Four other
-        // things here were written against the same silence and three were broken by it: a
-        // reflection proxy whose own exception handling had never once run, migration V21 reporting
-        // success on a statement SQLite 3.53 refuses, and `DeviceRow` writing to a table that does
-        // not exist — on every session since V6, found only because this driver finally said so.
-        //
-        // The validation each write tool does in Scala still earns its place: a tool that names
-        // which key collided beats one that forwards a constraint name. What changed is that the
-        // schema is a backstop now rather than a silence.
+        // Requires `rqlite-jdbc` 10.5.2.1 or newer, where a failed statement throws rather than
+        // being reported inside an HTTP 200 and ignored.
         for
           locationId <- resetFixture
           _          <- insertRaw(locationId, SomeKey, "uno", "id-a")
@@ -213,18 +191,17 @@ object I18nToolsSpec extends ZIOSpecDefault:
           rows       <- rowsFor(locationId)
           forKey = rows.filter(_.entityId == SomeKey)
         yield assertTrue(
-          // Asserted on the message rather than the type alone: the point is that the reason
-          // survives the trip out of rqlite's HTTP 200 into the exception, which is what makes it
-          // diagnosable at all.
+          // Asserted on the message rather than the type alone: the reason has to survive the trip
+          // out of rqlite into the exception.
           outcome
             .left
             .toOption
             .exists(e => Option(e.getMessage).exists(_.contains("UNIQUE constraint failed"))),
-          // And the write is still gone, which was true before and is the half that mattered.
+          // And the write is still gone.
           forKey.size == 1,
           forKey.head.value == "uno"
         )
       // The schema is laid down once by `mcp.test` before forking — see `migratedRqliteUrl` in
-      // build.mill. A Flyway run per spec raced.
+      // build.mill.
     ).provideShared(quillLayer) @@ TestAspect.sequential
 end I18nToolsSpec

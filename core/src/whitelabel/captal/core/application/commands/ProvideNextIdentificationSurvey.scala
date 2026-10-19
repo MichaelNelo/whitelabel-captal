@@ -34,11 +34,9 @@ object ProvideNextIdentificationSurveyHandler:
     *   where an identified visitor goes once the identification pool has nothing left to ask. The
     *   normal end of this phase.
     * @param unidentifiable
-    *   where a visitor goes when there is nobody to identify them with — no user yet and no active
-    *   identification survey to offer. Distinct from [[exhausted]] on purpose: sending them onward
-    *   through the flow would grant access in exchange for nothing, which is the business model
-    *   backwards. It means the deployment is misconfigured, and the only safe destination is the
-    *   end of the flow.
+    *   where a visitor goes when there is no user yet and no active identification survey to offer.
+    *   Must stay distinct from [[exhausted]] and terminate the flow: continuing would grant access
+    *   in exchange for nothing.
     */
   def apply[F[_]: Monad](
       surveyRepo: SurveyRepository[F],

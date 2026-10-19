@@ -39,7 +39,7 @@ object SurveyProgressionSuite:
             parsed.get.question.questionType.isInstanceOf[QuestionType.Radio]
           ) ?? s"status=${nextResp.code.code} body=${nextResp.body}"
         // The `??` stays: `parseNextSurvey` answers `None` both for a `Step` and for a body it
-        // cannot decode, and telling those apart without the body took a round trip.
+        // cannot decode, and the body is what tells those apart.
         ,
         test("user who exhausted profiling pool is offered location survey"):
           for

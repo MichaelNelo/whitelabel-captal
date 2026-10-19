@@ -8,11 +8,8 @@ import zio.test.*
 
 object LocaleSessionSuite:
 
-  /** A `Set-Cookie` header's attributes, lowercased, without the name=value pair itself.
-    *
-    * Lowercased because the casing is the one thing here that genuinely does not matter: `Path` and
-    * `path` are the same attribute to a browser, and the two libraries need not agree on which to
-    * write.
+  /** A `Set-Cookie` header's attributes, without the name=value pair itself. Lowercased: `Path` and
+    * `path` are the same attribute to a browser.
     */
   private def attributesOf(header: String): Set[String] =
     header.split(";").drop(1).map(_.trim.toLowerCase).filter(_.nonEmpty).toSet
@@ -72,14 +69,11 @@ object LocaleSessionSuite:
           ) // No new session created
         ,
         test("both routes that set the session cookie set the same cookie"):
-          // `extractSessionCookie` reads the name and value and stops at the first `;`, so the
-          // attributes were asserted by nothing until this. Two routes write this cookie —
-          // `/api/status` and `PUT /api/session/locale` — and name and path are what the browser
-          // keys an entry on: disagreeing about either means two separate entries, and a guest who
-          // changes language appears to lose their session.
-          //
-          // Written to compare a converted route against a tapir one; both are zio-http now, and
-          // the comparison is worth keeping for the same reason it was worth making.
+          // `extractSessionCookie` reads the name and value and stops at the first `;`, so nothing
+          // else asserts the attributes. Two routes write this cookie — `/api/status` and
+          // `PUT /api/session/locale` — and name and path are what the browser keys an entry on:
+          // disagreeing about either means two separate entries, and a guest who changes language
+          // appears to lose their session.
           for
             backend    <- testBackend
             statusResp <- getStatus(backend, None)
