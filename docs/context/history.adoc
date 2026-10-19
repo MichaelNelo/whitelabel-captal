@@ -1,0 +1,131 @@
+= History
+
+What was built, what was removed, and which references to removed things still survive. Read this
+when a document, a skill or a comment names something you cannot find in the tree.
+
+Dates are the commit dates of this repository, not release dates.
+
+== Removed systems
+
+=== The `captal` CLI and file-based provisioning
+
+Gone entirely: the binary, the YAML files, the `locations/<slug>/` and `shared/` trees, the diff
+engine, the derived images, and the OpenTofu bundle the CLI used to extract. Content is written by
+the MCP server's tools straight to the database.
+
+What this replaced mattered more than the CLI itself. Starting a container used to apply a directory
+to the database — on every deploy, scale-out, task replacement and OOM restart — which made the
+result of an edit a function of when a container last happened to start. An untouched YAML left the
+tables alone, an edited one overwrote them, and a lost `provision_manifest` re-created the location
+from disk and reset every `is_active` to 1. Not "the file wins" or "the tool wins", but whichever
+ran last, for reasons unrelated to either.
+
+`LOCATION_SLUG` still does real work: it names which location a task serves. `PROVISION_DIR` and
+`SHARED_DIR` are read and ignored; task definitions that still set them should drop them.
+
+**Stale references to expect.** Any mention of `captal <something>` as a command is a leftover and
+should be treated as a bug in the document, not as an instruction.
+
+=== tapir
+
+The HTTP layer was tapir; it is now zio-http's own `Endpoint`. All eleven routes moved, and tapir is
+out of `build.mill`. The server was already running on zio-http underneath — `ZioHttpInterpreter`
+interpreted tapir's descriptions into it — so this removed a layer rather than changing the
+transport.
+
+The `endpoints/` module went with it. It existed so the API could describe routes as values, and the
+request and response types rode along in the same module; nothing in `client` ever imported an
+endpoint, only the types. Those types are `messages/` now, cross-compiled for both sides, and the
+route descriptions live beside the routes.
+
+**Stale references to expect.** `api/schemas.scala` (tapir `Schema` instances — replaced by
+`api/wire.scala`, which holds zio-schema `Schema`s and is not the same kind of thing),
+`prependSecurityIn` (how the slug prefix used to be applied — `ApiBase` does it now),
+`jsonBody`, `ZServerEndpoint`, `TapirStubInterpreter`.
+
+=== The `infra/` module
+
+Renamed to `platform/`. Same code, same package move: `whitelabel.captal.infra` →
+`whitelabel.captal.platform`.
+
+=== `modules/vpc`
+
+Deleted from the OpenTofu configuration in favour of the account's default VPC. **Not applied** —
+see xref:pending.adoc[pending work], where the consequences are spelled out, because deployed
+environments still live in the VPC that module created.
+
+=== `modules/mcp-iam`
+
+Replaced by `modules/mcp`, which deploys the backoffice service and grants it what it actually
+calls. The IAM policy is `aws_iam_policy.mcp` inside that module.
+
+**Stale references to expect.** `modules/mcp-iam` as a path. Mentions of it inside `terraform/`
+speak of it in the past tense and are accurate; mentions of it as a current path are not.
+
+== Structural moves
+
+=== `terraform/` came in from a separate repository
+
+It was `whitelabel-captal-infrastructure`, a sibling clone. `mcp.test` applies that configuration
+against LocalStack, so a checkout of the portal was not enough to test the portal — and nothing said
+so until `tofu` failed on a directory that was not there.
+
+Brought in as a git subtree with its nine commits. When the history was later flattened those nine
+commits left `main`'s ancestry; they remain reachable from the tag `backup/pre-flatten-rewrite`.
+
+Two consequences worth knowing:
+
+* `terraformDir` in `build.mill` defaults to `terraform/`. `CAPTAL_TERRAFORM_DIR` still overrides
+  it, for pointing at a working copy elsewhere.
+* Mill polices reads inside the build's own tree, which it did not while the configuration was
+  outside. `mcp.test.tofuSources` is the `Task.Sources` declaration that permits the staging copy;
+  without it the apply fails with `Reading from terraform not allowed`, a message that names the
+  task and not the read.
+
+=== `api/` was split out of one object
+
+`Main.scala` was 596 lines holding eight commented sections. Each is now its own file:
+`ServerSettings`, `Phases`, `Flows`, `AppLayers`, `HttpApp`. `Main` is the startup sequence and
+nothing else. The six route classes moved to `api/routes/`, and the cookie, lookup and
+current-location types to `api/session/`.
+
+A Scala 3 subpackage does not see its parent's members, so files under `routes/` name their imports
+explicitly. `private[api]` does reach subpackages, so the layers stay invisible outside the module.
+
+=== Codecs were consolidated
+
+Several formats had more than one hand-written rendering. Each is now one definition with the others
+derived:
+
+* `ApiError` — both circe halves derived. The hand-written pair had disagreed for 22 of 32 variants.
+* `VideoResponse`, `SurveyResponse`, `AdvertiserSurveyResponse` — derived, which changed the wire
+  shape from a flattened `type` discriminator to the payload nested under the case name.
+* The survey rule tree — `platform.surveySchemas` is the single definition, used by the API
+  response, the repository read and the MCP backoffice write.
+
+== Documentation
+
+The repository has carried, at various points, `agents.adoc` as a catch-all, Markdown files with
+upper-case names under `docs/`, a `docs/handoff/` tree of numbered AsciiDoc, and `client/STYLING.md`.
+The convention now is AsciiDoc with lower-case names, architecture under `docs/`, context under
+`docs/context/`, and a short `readme.adoc` in each subproject saying what it does. The migration is
+not finished — xref:pending.adoc[pending work] lists what is left.
+
+== Stale-reference checklist
+
+When something cannot be found, check this list before assuming it was renamed:
+
+[cols="2,3"]
+|===
+| Reference | What it is now
+
+| `captal <command>` | Nothing. The CLI is gone; use the MCP tools.
+| `PROVISION_DIR`, `SHARED_DIR` | Read and ignored.
+| `api/schemas.scala` | `api/wire.scala`, with zio-schema instances.
+| `prependSecurityIn` | `ApiBase`, applied per `Endpoint`.
+| `whitelabel.captal.infra` | `whitelabel.captal.platform`.
+| `modules/mcp-iam` | `modules/mcp`, policy `aws_iam_policy.mcp`.
+| `modules/vpc` | Removed from configuration; still live in deployed environments.
+| `../whitelabel-captal-infrastructure` | `terraform/` in this repository.
+| `endpoints/` | `messages/` for the types; route descriptions in `api/routes/`.
+|===

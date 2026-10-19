@@ -1,0 +1,280 @@
+= Messages
+:toc:
+:toclevels: 2
+
+`messages` is the wire vocabulary shared by the server and the browser: the request and response bodies, the `ApiError` model, and the circe codecs for the translation bundle. It is cross-compiled — `messages` for xref:api.adoc[API], `messages-js` for xref:client.adoc[Client] — so both ends name the same types.
+
+== Module shape
+
+[source,scala]
+----
+object messages extends BaseModule:
+  def moduleDeps = Seq(core)
+  def scalacOptions = super.scalacOptions() ++ Seq("-Xmax-inlines:64")
+  def mvnDeps = Seq(circe-core, circe-generic, circe-parser)
+
+object `messages-js` extends BaseJSModule:
+  def moduleDeps = Seq(`core-js`)
+  def sources = messages.sources
+  def scalacOptions = super.scalacOptions() ++ Seq("-Xmax-inlines:64")
+----
+
+One source tree, eight files, compiled twice. The dependency direction is `messages` → `core` and never the reverse: these types translate the domain into HTTP, and xref:core.adoc[Core] has no HTTP vocabulary.
+
+`-Xmax-inlines:64` is required to compile, not an optimisation: `ApiError` has 32 variants and circe's derivation inlines once per case, which hits the default limit of 32.
+
+== Where the codecs live
+
+Two serialisation libraries describe one format. circe instances travel with the types (here, or in `core` for the domain types they nest); the server's zio-schema instances are JVM-only and declared elsewhere.
+
+[cols="2,2,2"]
+|===
+| Type | circe instance | zio-schema instance
+
+| `ApiError` | `messages/ApiError.scala`, both directions derived | `api/wire.scala`, `DeriveSchema.gen`
+| `StatusResponse` | `messages/StatusResponse.scala`, `deriveEncoder`/`deriveDecoder` | `api/wire.scala`
+| `SetLocaleRequest` | `messages/SetLocaleRequest.scala` | `api/wire.scala`
+| `AnswerRequest` | `messages/AnswerRequest.scala` | `api/wire.scala`
+| `SurveyResponse` | `messages/SurveyResponse.scala` | `api/wire.scala`
+| `AdvertiserSurveyResponse` | `messages/AdvertiserSurveyResponse.scala` | `api/wire.scala`
+| `VideoResponse`, `MarkVideoWatchedRequest`, `VideoWatchedResponse` | `messages/VideoResponse.scala` | `api/wire.scala`
+| `I18n` | `messages/i18n.scala` (babel instances are in `core`) | `api/wire.scala`
+| `NextStep`, `NextVideo`, `NextAdvertiserSurvey` | declared in `core` beside the types | `api/wire.scala`
+| `Phase` | `core/application/phase.scala`, a bare string | `api/wire.scala`, hand-written `Schema[String].transform(fromDbString, toDbString)` to match
+| `QuestionToAnswer`, `QuestionType`, `AnswerValue`, the rule enums, the id types, `NextIdentificationSurvey` | `core/survey/question/codecs.scala` | `platform/surveySchemas.scala`, shared with xref:mcp.adoc[MCP backoffice]
+|===
+
+IMPORTANT: `Phase` is the one type whose zio-schema instance is written by hand. A derived enum schema would write `{"Welcome":{}}`, while the browser reads `Phase` as a string via `Decoder.decodeString.map(fromDbString)`. Everything else derives both sides, so the two stay in step automatically.
+
+=== The derived sum shape
+
+Every enum here is derived with `Encoder.AsObject.derived` / `Decoder.derived`, which nests the payload under the case name rather than flattening it beside a discriminator:
+
+[source,json]
+----
+{"Video":{"data":{"videoUrl":"https://…","durationSeconds":8,"title":null,"description":null}}}
+{"Step":{"data":{"phase":"ready"}}}
+{"SessionMissing":{}}
+----
+
+A parameterless case is an empty object under its name. zio-schema cannot express a flattened discriminator, so the shape is not negotiable from the server side.
+
+NOTE: circe writes `"field":null` for a `None`; zio-schema omits the field. Both decoders treat an absent field and a `null` alike, and the contract suite compares the two serialisations after dropping nulls.
+
+== Requests
+
+[cols="2,2,3"]
+|===
+| Type | Fields | JSON
+
+| `AnswerRequest`
+| `answer: AnswerValue`
+| `{"answer":{"Text":{"value":"guest@example.test"}}}`
+
+| `SetLocaleRequest`
+| `locale: String`
+| `{"locale":"en"}`
+
+| `MarkVideoWatchedRequest`
+| `durationWatched: Int`, `completed: Boolean`
+| `{"durationWatched":8,"completed":true}`
+|===
+
+`AnswerValue` is the one type that travels browser → server, and the same bytes are persisted to `answers.answer_value`. Its variants encode as `{"SingleChoice":{"optionId":"<uuid>"}}`, `{"MultipleChoice":{"optionIds":["<uuid>"]}}`, `{"Text":{"value":"…"}}`, `{"Rating":{"value":4}}`, `{"Numeric":{"value":42}}`, `{"DateValue":{"value":"2026-01-31"}}`. Dates are `YYYY-MM-DD`, decoded through `IsoDate.parse`.
+
+== Responses
+
+=== SurveyResponse
+
+`GET /api/survey/next`, `POST /api/survey/{email,profiling,location}`.
+
+[source,scala]
+----
+enum SurveyResponse:
+  case Survey(data: NextIdentificationSurvey)
+  case Step(data: NextStep)
+
+def from(value: NextIdentificationSurvey | NextStep): SurveyResponse
+----
+
+`from` is how a route lifts the handler's union-typed result into something serialisable.
+
+[source,json]
+----
+{"Survey":{"data":{
+  "surveyId":"7f1c…",
+  "surveyType":"email",
+  "question":{
+    "id":"a39b…",
+    "text":{"value":"Your email","locale":"en"},
+    "description":null,
+    "placeholder":null,
+    "questionType":{"Input":{"rules":[{"Email":{}}]}},
+    "commonRules":["required"],
+    "pointsAwarded":0}}}}
+----
+
+`surveyType` is `email` / `profiling` / `location`. `questionType` carries the rule tree the browser renders and pre-validates from.
+
+=== AdvertiserSurveyResponse
+
+`GET /api/survey/advertiser/next`, `POST /api/survey/advertiser`. Same two cases, with `NextAdvertiserSurvey(surveyId, advertiserId: Option[AdvertiserId], question)` in place of the identification payload. `advertiserId` is `null` when the video was a promo; the portal does not read it — it travels because the type is shared.
+
+=== VideoResponse
+
+`GET /api/video/next`.
+
+[source,scala]
+----
+enum VideoResponse:
+  case Video(data: NextVideo)
+  case Step(data: NextStep)
+----
+
+`NextVideo(videoUrl, durationSeconds, title: Option[String], description: Option[String])` — declared in `core` next to the command handler, and flattened from `VideoToWatch` by `NextVideo.fromVideoToWatch`, which drops the locale off each `LocalizedText`.
+
+=== VideoWatchedResponse
+
+`POST /api/video/watched` answers `{"nextPhase":"advertiser_video_survey"}` — a single string field, not a `Phase` and not a `NextStep`. The route builds it from the flow's `NextStep` with `Phase.toDbString`.
+
+=== StatusResponse
+
+`GET /api/status`, `POST /api/finish`, `PUT /api/session/locale`, and the dev-only `POST /api/dev/reset-phase`.
+
+[source,scala]
+----
+final case class StatusResponse(
+    phase: Phase,
+    locale: String,
+    redirectUrl: Option[String] = None,
+    secondsRemaining: Option[Int] = None)
+----
+
+[source,json]
+----
+{"phase":"authorized","locale":"es","redirectUrl":"https://example.test/after","secondsRemaining":1800}
+----
+
+[cols="1,3"]
+|===
+| Field | Contract
+
+| `phase` | the session's phase as its DB string
+| `locale` | the session's locale
+| `redirectUrl` | the captive-portal return URL, present only when the session stored a non-empty one
+| `secondsRemaining` | server-computed seconds of access left, present only while the session is `Authorized` with an `accessExpiresAt`
+|===
+
+`accessExpiresAt` is **not** a field of this response. It is session state (`sessions.access_expires_at`, surfaced in `core.infrastructure.SessionData`), and the only thing the client receives is the difference:
+
+[source,scala]
+----
+def secondsRemainingFrom(expiresAt: Option[Instant], now: Instant): Option[Int] =
+  expiresAt.map: at =>
+    val seconds = java.time.Duration.between(now, at).getSeconds
+    math.max(0L, math.min(seconds, Int.MaxValue.toLong)).toInt
+----
+
+IMPORTANT: the client must count down from `secondsRemaining`, never from an absolute instant. Behind a captive portal the device clock may be unsynced, so an absolute deadline is not comparable against `Date.now()`. The type is `Int` rather than `Long` because Scala.js has no native 64-bit integers.
+
+`GET /api/status` has a second behaviour worth knowing: when the session is `Authorized` and its `accessExpiresAt` is already in the past, the route resets the session and answers `StatusResponse(Phase.Welcome, locale, None)` — no `secondsRemaining`. `POST /api/finish` re-reads the session after the post-commit handlers ran, so the `phase` it returns is `Authorized` only if the UniFi grant succeeded (see xref:unifi.adoc[UniFi integration]).
+
+=== I18n
+
+`GET /api/i18n/{locale}` answers the translation bundle as a nested object of strings:
+
+[source,json]
+----
+{"welcome":{"title":"…","subtitle":"…",
+            "steps":{"step1":"…","step2":"…","step3":"…"},
+            "button":{"start":"…","connecting":"…"},
+            "selectLanguage":"…",
+            "authorized":{"title":"…","remaining":"…"}},
+ "ready":{…},"loading":{…},"error":{…},"question":{…},"video":{…}}
+----
+
+`messages/i18n.scala` holds the circe pair for `I18n` and each of its nine nested types, derived with `deriveEncoder`/`deriveDecoder`. The type itself, its babel instances and the key schema are in xref:core.adoc[Core].
+
+== Error model
+
+`ApiError` is the closed set of things an endpoint can answer with. Every route declares `.outError[ApiError](Status.BadRequest)`, so the body is an `ApiError` object and the status is 400 unless a route says otherwise.
+
+[cols="2,2,3"]
+|===
+| Variant | Payload | Produced by
+
+| `SessionMissing` | — | `SessionEndpoint` when no session can be resolved or created; also `ApiErrors.toApiError` for `SessionContext.NotSet`
+| `SessionInvalid` | `reason: String` | `SessionEndpoint.resolveSession` on a malformed session cookie
+| `SessionExpired` | — | `SessionEndpoint.resolveSession` when the cookie names a session that no longer exists and the route does not create one
+| `WrongPhase` | `current: String`, `expected: List[String]` | `SessionEndpoint.authorise` when the session's phase is not in the route's allowed set
+| `NoSurveyAssigned` | — | `Error.NoSurveyAssigned`
+| `UserNotIdentified` | — | `Error.UserNotIdentified`
+| `InvalidEmailFormat` | `value: String` | `Error.InvalidEmailFormat` and `user.Error.InvalidEmailFormat`
+| `RequiredAnswerMissing` | `questionId` | `survey.Error.RequiredAnswerMissing`
+| `InvalidOptionSelected` | `questionId`, `optionId` | `survey.Error.InvalidOptionSelected`
+| `InvalidOptionsSelected` | `questionId`, `optionIds: List[String]` | `survey.Error.InvalidOptionsSelected`
+| `TooFewSelections` | `questionId`, `min`, `actual` | `survey.Error.TooFewSelections`
+| `TooManySelections` | `questionId`, `max`, `actual` | `survey.Error.TooManySelections`
+| `TextTooShort` | `questionId`, `minLength`, `actual` | `survey.Error.TextTooShort`
+| `TextTooLong` | `questionId`, `maxLength`, `actual` | `survey.Error.TextTooLong`
+| `InvalidPattern` | `questionId`, `pattern` | `survey.Error.InvalidPattern`
+| `InvalidEmail` | `questionId` | `survey.Error.InvalidEmail`
+| `InvalidUrl` | `questionId` | `survey.Error.InvalidUrl`
+| `RatingOutOfRange` | `questionId`, `min: Float`, `max: Float`, `actual: Float` | `survey.Error.RatingOutOfRange`
+| `NumericOutOfRange` | `questionId`, `min`, `max`, `actual` — all `String` | `survey.Error.NumericOutOfRange`, stringified
+| `DateOutOfRange` | `questionId`, `min`, `max`, `actual` — all `String` | `survey.Error.DateOutOfRange`, stringified
+| `IncompatibleAnswerType` | `questionId`, `expectedType: String` | `survey.Error.IncompatibleAnswerType`
+| `QuestionAlreadyAnswered` | `questionId` | `survey.Error.QuestionAlreadyAnswered`
+| `QuestionNotFound` | `questionId` | `survey.Error.QuestionNotFound`
+| `HierarchyViolation` | `questionId`, `expectedLevel: String` | `survey.Error.HierarchyViolation`
+| `EmailAlreadyRegistered` | `userId` | `user.Error.EmailAlreadyRegistered`
+| `UserSessionExpired` | `sessionId` | `user.Error.SessionExpired` — renamed to avoid colliding with the transport-level `SessionExpired`
+| `NoPendingQuestions` | `userId` | `user.Error.NoPendingQuestions`
+| `QuestionNotPending` | `userId`, `questionId` | `user.Error.QuestionNotPending`
+| `VideoNotFound` | `videoId` | `video.Error.VideoNotFound`
+| `NoVideoAvailable` | — | `video.Error.NoVideoAvailable`
+| `LocationNotFound` | `slug: String` | nothing constructs it today
+| `InternalError` | `message: String` | `ApiError.fromThrowable`, and the two routes that reject a session with no `currentVideoId`
+|===
+
+Thirty-two variants; every opaque id becomes a `String`, and every numeric bound that is not a `Float` becomes a `String`, so the enum carries no domain types.
+
+=== Translation
+
+[source,scala]
+----
+def fromAppErrors(errors: NonEmptyChain[AppError]): ApiError = fromAppError(errors.head)
+def fromAppError(err: AppError): ApiError
+def fromThrowable(cause: Throwable): ApiError
+----
+
+`fromAppErrors` keeps only the head of the chain: validation accumulates every broken rule inside `Op`, and exactly one of them reaches the client. `fromAppError` dispatches to the three private per-aggregate functions, each total over its aggregate's `Error`. `fromThrowable` yields `InternalError(message)`, falling back to `"Unknown error"` when the throwable has none.
+
+On the server side, `api/ApiErrors.scala` is the single translation point: `Flow.HandlerError` goes through `fromAppErrors`, `SessionContext.NotSet` becomes `SessionMissing`, and anything else is logged with its cause before becoming an `InternalError`.
+
+Both codec directions are derived, so neither can drift from the enum.
+
+== Bodies built outside this module
+
+Not every response the API writes is declared here.
+
+[cols="2,3"]
+|===
+| Where | What
+
+| `api/routes/HealthRoutes.scala`
+| `HealthResponse(status: String)` is declared in the route file with its own `DeriveSchema.gen` and no circe instance — `GET /api/health` answers `{"status":"ok"}` and nothing in `client` reads it.
+
+| `api/routes/VideoRoutes.scala`
+| the `VideoWatchedResponse` *value* is assembled in the route from the flow's `NextStep` via `Phase.toDbString`, rather than serialising the `NextStep` itself.
+
+| `api/routes/AdvertiserSurveyRoutes.scala`
+| `POST /api/survey/advertiser` discards the flow's `NextStep` and answers a literal `AdvertiserSurveyResponse.Step(NextStep(Phase.Ready))`, because one question follows one video.
+
+| `api/HttpApp.scala`
+| the SPA shell, `assets/styles.css` and `brand-icon.svg` are served as raw bodies; the load balancer's maintenance body is likewise not an `ApiError`, and the browser's `ApiClient` sniffs for it before attempting to decode.
+|===
+
+== Tests
+
+`messages` has no test module. The contract is pinned from `api/test`: `suites/WireContractSuite.scala` asserts that zio-schema and circe write the same JSON for every value of every shared type and that each reads the other back, and `suites/ClientDecodeSuite.scala` decodes real response bodies with the instances the browser uses. See xref:testing.adoc[Test strategy].

@@ -1,0 +1,284 @@
+= Test strategy
+:toc:
+:toclevels: 2
+
+There is no shared test module. Each module that has behaviour worth pinning carries its own
+`test` submodule, run with `./mill <module>.test`; a module with nothing module-specific to assert
+has none, and is exercised through whichever module above it does.
+
+[cols="1,2,3"]
+|===
+|Module |Test module |What it owns
+
+|`core`
+|`core.test` (utest + ScalaCheck)
+|Pure domain logic: command handlers, validation. See xref:core.adoc[Core].
+
+|`messages`
+|none
+|Pinned by `api.test`'s wire-contract suite — see <<The wire-contract suite>>.
+
+|`platform`
+|none
+|Exercised through `api.test` and `mcp.test`, which is also where the migration lock and the
+rqlite driver's write semantics get pinned. See xref:platform.adoc[Platform].
+
+|`api`
+|`api.test` (zio-test)
+|The subject of most of this document: an end-to-end suite against a real rqlite, plus the
+wire-contract and client-decode suites.
+
+|`mcp`
+|`mcp.test` (zio-test)
+|Tool-level specs against a real rqlite, a handful against LocalStack directly, and one
+wire-protocol end-to-end spec covering both.
+
+|`client`
+|none
+|Scala.js; see <<What is deliberately not covered>> for exactly where that boundary falls.
+|===
+
+== api.test — the end-to-end suite against real rqlite
+
+`E2ETests.scala` is the one spec class:
+
+[source,scala]
+----
+suite("E2E")(
+  suite("Identification Survey Flow")( /* sixteen suites */ ) @@ TestAspect.before(clearAndSeedNoise.orDie),
+  MigrationLockSuite.suite,   // migrates itself; must stay in this spec, not its own ZIOSpecDefault
+  WireContractSuite.suite     // pure serialisation; needs none of the layers above
+) @@ TestAspect.sequential
+----
+
+The inner suite — `LocaleSessionSuite`, `SessionManagementSuite`, `EmailSurveySuite`,
+`SurveyProgressionSuite`, `MultiQuestionSurveySuite`, `ValidationSuite`, `PhaseValidationSuite`,
+`ProtocolRejectionSuite`, `ClientDecodeSuite`, `SessionIsolationSuite`, `VideoSuite`,
+`AdvertiserVideoSurveySuite`, `FinishSuite`, `AuthorizedSuite`, `SoftDeleteSuite`,
+`UnreadableRuleSuite` — runs `TestFixtures.clearAllData *> TestFixtures.seedNoiseData *>
+TestUnifiClient.disable *> TestUnifiClient.reset` before each test. `MigrationLockSuite` and
+`WireContractSuite` sit outside that block deliberately: the first runs its own migration against
+its own history table and clearing the application schema around it would prove nothing; the
+second needs no database at all. Keeping `MigrationLockSuite` inside this one spec class rather
+than its own `ZIOSpecDefault` matters structurally — a second spec class in this module would be
+handed to Mill's own claim queue and forked into a *second* JVM racing the first against one shared
+rqlite, when the whole point of the suite is exercising `Migrate.Lock` against a single real
+container.
+
+`TestLayers.scala` wires the production pieces with two substitutions:
+
+* **The database is real.** `dataSourceLayer` reads `database.jdbcUrl` from
+  `api/test/resources/test.conf` (overridable with `TEST_DB_URL`; see xref:api.adoc[Guest API]) and
+  every repository, service and event handler is the production implementation running against it.
+* **The UniFi transport is a recorder, not the controller's business logic.** `TestUnifiClient`
+  implements `UnifiClient` and starts **inactive**, so every call fails until a test calls
+  `TestUnifiClient.enable` — reproducing "the controller is not answering" without a controller.
+  `UnifiAccessHandler` itself is the real production class; only its HTTP transport is swapped.
+* **There is no slug.** `ApiBase.none` is what `apiBaseLayer` provides, so every route in this
+  suite mounts unprefixed at `/api/...`. The slug-prefixed form has no automated coverage; see
+  <<What is deliberately not covered>>.
+
+`TestFixtures.scala` is the seeding and read-back layer the suites share: `seedEmailSurvey`,
+`seedProfilingSurvey`, `seedAllIdentificationSurveys`, `seedMultiQuestionProfilingSurvey`,
+`seedAdvertiserWithVideo[AndSurvey]`, `seedPromoVideo`, `addQuestionRule`/`addQuestionOptions`,
+`createUser`/`createAnswer`/`linkSessionToUser`, `deactivate*` for the soft-delete suites, and
+direct read-backs (`queryDbState`, `getSession`, `countUsersByEmail`, `queryEventLog`,
+`getVideoViews`) for assertions a response body cannot carry. `TestHelpers.scala` is the transport
+bridge: `serveZioHttp` turns the production `Routes` into an sttp backend so every suite speaks
+plain `basicRequest`/`sttp` and knows nothing about `zio-http`, and does it through the server's own
+`HttpApp.codecConfig` — not a copy of it — so a suite reads exactly the wire format the deployed
+server produces.
+
+One Docker container, `rqlite-test` on port 4011, shared by the whole suite. It is checked fresh on
+every invocation (`Task.Input`, not a cached `Task`) specifically so an operator removing the
+container between runs is caught and restarted rather than silently producing connection failures
+that look like a schema problem.
+
+== The wire-contract suite
+
+`WireContractSuite.scala` exists because the server serialises with zio-schema (what zio-http's
+`Endpoint` requires) and the browser decodes with circe, and nothing but a suite reading both keeps
+them describing the same bytes. It asks three questions per type, over a hand-enumerated list of
+values chosen to cover every variant and every `Option` state (a parameterised enum cannot be
+enumerated at runtime, so a variant nobody lists here is a variant nobody checked):
+
+. Do zio-schema and circe write the *same* JSON for every value? (Compared after
+`deepDropNullValues` on both sides, because circe writes `"field":null` for a `None` and zio-schema
+omits the field, and every decoder already treats the two alike — so that normalisation is the
+equivalence the decoders themselves implement, not a loosening of the check.)
+. What zio-schema writes, does circe read back to the same value? (The response path: if this
+fails, the browser cannot read what the server sent.)
+. What circe writes, does zio-schema read back to the same value? (The request path: what a
+route's `.in[A]` depends on.)
+
+It reads `HttpApp.codecConfig` from the server rather than restating the flag, because
+`ignoreEmptyCollections` differs between zio-schema's own default (`true`) and the server's
+(`false`), and a copied value would silently drift the first time either changed. Coverage spans
+every `ApiError` variant, every `Phase`, the full 38-key `I18n` bundle (built so each field holds
+its own name, so a decoder that pairs the wrong name with the wrong value is visible rather than
+accidentally symmetric), and the survey question tree types (`QuestionType`, `AnswerValue`,
+`TextRule`, `SelectionRule`, `RangeRule[_]`, …) — which this suite checks twice over, because those
+same bytes are also what `question_rules.rule_config` and `answers.answer_value` store; agreement
+here is simultaneously "the browser can read the response" and "what the MCP backoffice writes is
+what the portal can read back." See xref:messages.adoc[Messages] and xref:platform.adoc[Platform]
+for the types and the column format this pins.
+
+`ClientDecodeSuite.scala` is the companion, and checks something `WireContractSuite` cannot: that
+real response bodies a live request produced decode with the *browser's own* `Decoder` instances.
+It cannot run `ApiClient` itself — `client` is Scala.js with no test module, and `fetchApi` goes
+through `dom.fetch` and `dom.window.location` — but `ApiClient` does exactly three things with a
+body (`parser.decode[A](text)` on success, a check for the load balancer's paused-location body,
+`parser.decode[ApiError](text)` otherwise), and all three resolve `Decoder` instances from
+`core.codecs`, which cross-compile to the JVM unchanged. So this suite exercises the identical
+decoding code path the browser runs, byte for byte; what it does not reach is the fetch itself, the
+HTTP-status branching around it, and the `ApiError.InternalError(s"HTTP $status: $text")` fallback
+— browser concerns, covered in <<What is deliberately not covered>>.
+
+== Asserting on log output
+
+`UnreadableRuleSuite.scala` is the one place a suite asserts on a log line instead of a response
+body, because the response is identical whether or not the thing under test happened: a survey
+question whose rule fails to decode is still served, just without that rule applied, so the only
+observable difference is a warning naming the rule and why it was dropped. zio-test installs
+`zio.test.ZTestLogger` by default, and the pattern is:
+
+[source,scala]
+----
+private def warnings = ZTestLogger.logOutput
+  .map(_.filter(_.logLevel == zio.LogLevel.Warning).map(_.message()).toList)
+----
+
+read back after the request completes and filtered for the offending id or message substring.
+Nothing else in the suite installs or configures a logger — `ZTestLogger` is ambient the moment a
+test runs under `zio.test`.
+
+== mcp.test
+
+Needs Docker for rqlite like `api.test` does, and — for part of the suite — LocalStack, licensed.
+S3 is the only service the LocalStack free tier covers; `ecs`, `elbv2`, `cloudfront`, `ec2`, `iam`,
+`sts`, `efs`, `secretsmanager`, `servicediscovery`, `route53` and `ecr` all need a token in
+`LOCALSTACK_AUTH_TOKEN` (or this project's own `LOCALSTACK_TOKEN`, read from `.envrc`). Without one,
+every spec that needs only S3 still runs; the deploy fixture and its end-to-end spec skip
+themselves rather than failing on a service LocalStack answers with a plain `UnrecognizedClientException`
+for.
+
+Before the suite starts, the build applies the real OpenTofu configuration under
+`terraform/environments/local` against LocalStack — the cluster, the ALB, the security groups, the
+assets bucket, the distribution, everything a location deploy *attaches to*. That fixture's own
+mechanics — the state directory keyed by the LocalStack container's id, `resetLocalStack`, why
+`mill clean` breaks the pairing, `tofuSources` — are xref:infrastructure.adoc[Infrastructure]'s to
+describe in full; what matters here is that it is a precondition of `mcp.test`, applied
+automatically, not something a spec does for itself.
+
+=== Three rqlite containers, not one
+
+`rqlite-mcp-test` (port 4012) serves the ordinary tool specs; `rqlite-mcp-e2e` (port 4013) serves
+`DeployE2ESpec` alone; `api.test`'s own `rqlite-test` (port 4011) is a third, separate again. They
+are kept apart because the specs are not isolated from each other on a shared schema in the ways
+that matter: `SurveyToolsSpec` has deleted a survey `DeployE2ESpec` needed mid-run, and `AuthSpec`
+has revoked a token `DeployE2ESpec` had just seeded. `DeployE2ESpec` additionally takes its database
+URL from `E2E_DB_URL` rather than the default, for the same reason in the other direction — several
+of the rows it reads (advertisers, the identification surveys, operator tokens) are deployment-wide
+rather than per-location, so sharing lets `get_location_readiness` count what *other* suites wrote
+during the same run.
+
+Both schemas are migrated through the real `Migrate`/`McpMigrate` binaries as two ordered external
+processes against one URL — the API's schema first, since the backoffice's own tables assume the
+portal's already exist — rather than through a Flyway instance assembled inline in the test code.
+Two reasons, both load-bearing: Flyway cannot lock a migration on SQLite and says so in its own log
+("does not support locking. No concurrent migration supported"), so running it inline in several
+forked JVMs at once used to race; and rqlite reports a rejected DDL statement inside an ordinary
+HTTP 200, which a Flyway instance without the production `DataSource` wrapper reads as "applied"
+rather than "refused" — four specs that once assembled their own Flyway also set
+`cleanOnValidationError`, which drops every table on a corrupted history and calls it recovery. The
+race was survivable while every migration only added things; once a migration had to rebuild a
+table in place (SQLite cannot `ALTER` a `CHECK` constraint), one runner dropped the table while
+another had already renamed its replacement over it, and the suite deleted its own schema. The
+symptom named neither the table nor the cause — just "No result set returned" from whichever spec
+read it next.
+
+=== What the specs cover without LocalStack
+
+Most of `mcp.test` needs only rqlite: `CaptalMcpSpec` (the bundled skills and resources, asserted
+as a host would see them — definition plus body, so a packaging mistake fails here rather than at
+runtime), `OnboardingSpec` (the pure, step-list half of `Readiness`; the half that actually reads a
+database and a bucket belongs to the end-to-end spec below), `AuthSpec` and `GrantSpec` (tokens and
+scopes against the real `tokens` table), `AdvertiserToolsSpec`, `SurveyToolsSpec`,
+`LocationToolsSpec`, `VideoToolsSpec`, `I18nToolsSpec`, and the rest of the tool-level specs — each
+calling a handler directly against a real rqlite, with no LocalStack and no wire protocol in
+between.
+
+=== AssetStoreLocalStackSpec
+
+Exercises `AssetStore`'s S3 calls — put, get, invalidate — directly against LocalStack, with
+credentials the signer accepts and the server never validates. Skips cleanly when LocalStack is not
+reachable at all (a one-second health-check probe against `/_localstack/health`), so the suite
+stays green on a machine with no Docker rather than failing for a reason unrelated to the change
+under test.
+
+=== DeployE2ESpec
+
+The large one: one location taken from an empty database to a portal standing up in AWS, driven as
+a client rather than by calling handlers — `TestClient` serves this server's own `statelessRoutes`
+to a real `McpClient` with no socket between them, which is what brings JSON-RPC dispatch, the auth
+middleware and its scopes, decoding from raw JSON rather than a codec round trip, and `TaskExecution`
+polling into scope at all; no single-tool test reaches any of that. It runs content creation, the
+AWS-side deploy, a pause, a resume, and a teardown in sequence, and asserts the content a dozen
+earlier calls wrote is what `get_location_readiness` reads as finished and that the infrastructure
+`deploy_location` created is attached to the location those calls described — the join between the
+two halves that neither side can see on its own.
+
+The whole spec skips itself when `ECS_CLUSTER` is unset — the same signal `DeployTargets.layer`
+uses to decide whether the deploy tools exist on the server at all — so a machine with no
+LocalStack licence runs the rest of `mcp.test` and passes this test for a reason unrelated to the
+change under test, rather than failing on one.
+
+Its last test is the point of enforcing IAM locally rather than against dummy credentials: the
+whole lifecycle above runs as the IAM user `modules/mcp` creates (carrying the exact policy a
+deployed task role would carry), with the LocalStack container started under `IAM_SOFT_MODE=1` —
+every call evaluated against that policy and logged, never denied. The test:
+
+. Calls `s3:ListAllMyBuckets` deliberately (`provokeDenial`) — an action the policy withholds that
+has no effect even if it *were* allowed, chosen because S3 is a service LocalStack's own IAM
+coverage documents, unlike ECS.
+. Reads `docker logs` for every `"is not authorized to perform: <service>:<Action>"` line the run
+produced.
+. Asserts the provoked denial is actually in that set — proof enforcement is switched on at all;
+without it, an unenforced container produces an empty denial set for the wrong reason and the
+suite would pass vacuously.
+. Asserts every *other* denial is in a fixed `KnownEmulationGaps` set — the ECS service calls
+(`CreateService`, `UpdateService`, `DescribeServices`, …) and `iam:PassRole`, all gated in the real
+policy on a condition key (`ecs:cluster`, `iam:PassedToService`) that LocalStack's own
+`simulate-principal-policy` confirms is outside its documented condition-key coverage, not a gap in
+the policy itself. An unexpected denial outside that set fails the suite rather than being silently
+tolerated, so widening the tolerated set is a deliberate edit, not a side effect of a flaky run.
+
+== What is deliberately not covered
+
+* **The slug-prefixed route form.** `TestLayers` always builds `ApiBase.none`, so every suite
+exercises routes mounted at `/api/...`, never `/<slug>/api/...`. The prefixed form is verified today
+by starting `mill api.dev` and asking for both paths by hand; nothing automated would catch a
+regression in `ApiBase`'s nesting. See xref:context/pending.adoc[Pending work].
+* **The browser fetch path.** `ClientDecodeSuite` covers every byte `ApiClient` decodes once a
+response body exists, using the same cross-compiled `Decoder` instances the browser resolves — but
+not the `dom.fetch` call itself, the branching on HTTP status that picks which decoder to run, or
+the `InternalError(s"HTTP $status: $text")` fallback when decoding fails. `client` has no test
+module at all, because that half is Scala.js and genuinely browser-shaped; see
+xref:client.adoc[Client].
+
+== See also
+
+* xref:core.adoc[Core] — `core.test`'s own suites.
+* xref:api.adoc[Guest API] — the module `api.test` exercises; `TEST_DB_URL`, `ApiBase`, the endpoint
+table these suites drive.
+* xref:mcp.adoc[MCP backoffice] — the tool catalogue `mcp.test`'s specs cover one by one, and the
+deploy tools `DeployE2ESpec` drives end to end.
+* xref:messages.adoc[Messages] and xref:platform.adoc[Platform] — the wire types and the column
+format `WireContractSuite` pins from both directions.
+* xref:infrastructure.adoc[Infrastructure] — the LocalStack fixture `mcp.test` applies before it
+runs, and the IAM policy its last test evaluates against.
+* xref:development.adoc[Local development] — running `api.test`/`mcp.test` locally, and the Docker
+containers they depend on.
+* xref:context/pending.adoc[Pending work], xref:context/decisions.adoc[Decisions],
+xref:context/incidents.adoc[Incidents] — the slug-prefix gap, why IAM is enforced in soft mode, and
+what has already broken in this harness.

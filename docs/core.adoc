@@ -1,0 +1,513 @@
+= Core
+:toc:
+:toclevels: 2
+
+`core` is the pure domain module: the `Op` effect, the phase machinery, the command handlers, the three aggregates (user, survey, video), the repository traits and the i18n key schema. It has no effect type, no database and no HTTP, and its sources are compiled twice — as `core` for the JVM and as `core-js` for Scala.js.
+
+== Module shape
+
+Both modules are declared in `build.mill` and share one source tree:
+
+[source,scala]
+----
+object core extends BaseModule with CoreDepsJVM:
+  object test extends ScalaTests with TestModule.Utest …
+
+object `core-js` extends BaseJSModule with CoreDepsJS:
+  def sources = core.sources
+----
+
+[cols="1,3"]
+|===
+| | Dependencies
+
+| `core`
+| cats-core, circe (core/generic/parser), babel (`io.taig::babel-core`, `babel-generic`, `babel-circe`)
+
+| `core-js`
+| the same, plus `io.github.cquiroz::scala-java-time` for the `java.time` types the domain uses
+|===
+
+Everything in the tree is JS-visible, because `core-js` compiles the same files: the browser reuses `AnswerValue`, `QuestionToAnswer`, `QuestionType`, the rule enums, `IsoDate`, `Phase` and the circe codecs, so the portal renders and pre-validates forms against the domain's own types instead of a parallel copy. The repository traits are abstract in `F[_]`; the implementations are JVM-only and live in xref:platform.adoc[Platform].
+
+== Op[Evt, E, A]
+
+`core/src/whitelabel/captal/core/Op.scala` is the domain's only effect. It is an opaque type over a writer transformer:
+
+[source,scala]
+----
+opaque type Op[Evt, E, A] =
+  WriterT[[X] =>> Either[NonEmptyChain[E], X], Chain[Evt], A]
+----
+
+So the underlying value is `Either[NonEmptyChain[E], (Chain[Evt], A)]`:
+
+* events accumulate in a `Chain`, appended in O(1);
+* events exist only on the success side — a failed `Op` carries errors and no events;
+* `flatMap` is fail-fast; `parMapN` / `parTupled` / `parTraverse` accumulate errors into the `NonEmptyChain`.
+
+=== Operations
+
+[cols="2,3"]
+|===
+| Operation | Meaning
+
+| `pure(a)`
+| success, no events
+
+| `emit(event, a)` / `emit(event)`
+| success carrying one event (the second form yields `Unit`)
+
+| `emitAll(events, a)`
+| success carrying a `Seq` of events
+
+| `fail(err)` / `failAll(errs)`
+| failure with one error, or with a `NonEmptyChain` of them
+
+| `failIf(cond, err)` / `failUnless(cond, err)`
+| guard clauses; the error is by-name
+
+| `fromEither(either)` / `fromOption(opt, ifNone)`
+| lift an existing result
+
+| `run(op)`
+| `Either[NonEmptyChain[E], (List[Evt], A)]` — the only way out
+
+| `convertEvent[Evt2]` / `convertError[E2]`
+| widen an aggregate-local `Op` to the application-level one, through a `Conversion`
+|===
+
+Instances: `Monad[[A] =>> Op[Evt, E, A]]` and `Parallel[[A] =>> Op[Evt, E, A]]`, both in the companion. The `Parallel` instance is what makes rule validation accumulate rather than stop at the first broken rule.
+
+=== Widening
+
+Aggregate operations are typed in their own event and error ADTs (`Op[user.Event, user.Error, A]`, and likewise for `survey` and `video`). `core/src/whitelabel/captal/core/application/conversions.scala` supplies the six `Conversion` instances that lift them into `application.Event` / `application.Error`, and handlers apply them with `.convertEvent.convertError`:
+
+[source,scala]
+----
+user.finish(cmd.occurredAt).convertEvent.convertError.void
+----
+
+`convertError` collapses a whole `NonEmptyChain[user.Error]` into a single `Error.User(errors)`, so the application-level chain holds one element per aggregate that failed.
+
+=== Consumption
+
+`core/src/whitelabel/captal/core/application/Flow.scala` is the one consumer:
+
+[source,scala]
+----
+def execute(command: C): F[R] =
+  for
+    opResult <- handler.handle(command)
+    result   <- MonadThrow[F].fromEither(Op.run(opResult).left.map(HandlerError(_)))
+    (events, value) = result
+    _ <- eventHandler.handle(events)
+  yield value
+----
+
+Errors surface as `Flow.HandlerError(errors: NonEmptyChain[Error])`, a `java.lang.Exception`; the API translates it to `ApiError` (see xref:messages.adoc[Messages]). Events reach the handler chain only after `Op.run` succeeded, which is what makes "no events on failure" an end-to-end property rather than a convention.
+
+== Phases and flow machinery
+
+=== Phase
+
+`application/phase.scala` holds the portal's seven phases plus their database spelling. `sessions.phase` stores the string.
+
+[cols="2,2,3"]
+|===
+| `Phase` | DB string | What the guest is doing
+
+| `Welcome` | `welcome` | landed on the portal, no survey assigned yet
+| `IdentificationQuestion` | `identification_question` | answering email / profiling / location questions
+| `AdvertiserVideo` | `advertiser_video` | watching the assigned video
+| `AdvertiserVideoSurvey` | `advertiser_video_survey` | answering the question that follows the video
+| `AdvertiserQuestion` | `advertiser_question` | declared, not used by any transition in `api.Phases`
+| `Ready` | `ready` | flow complete, access not granted yet
+| `Authorized` | `authorized` | access granted, counting down to `accessExpiresAt`
+|===
+
+`Phase.fromDbString` is total: any unknown string decodes to `Welcome`. The circe instances are `Encoder.encodeString.contramap(toDbString)` and the matching decoder, so `Phase` is a bare JSON string on the wire.
+
+=== IdentificationSurveyType
+
+`Email`, `Profiling`, `Location`, with `email` / `profiling` / `location` as DB strings (`surveys.category`) and the same string-based circe pair. `fromDbString` defaults to `Email`.
+
+=== NextStep and FallbackPhase
+
+Two single-field wrappers around `Phase`, distinguished by intent:
+
+[cols="1,3"]
+|===
+| Type | Meaning
+
+| `NextStep(phase)`
+| the success transition. Emitted by the `Answer*` and `MarkVideoWatched` handlers and serialised to the client as the response body (`application/NextStep.scala`, derived circe pair).
+
+| `FallbackPhase(phase)`
+| where a `Provide*` handler sends the guest when the location has no such resource — no next identification survey, no video, no advertiser survey. Never serialised; it is a constructor parameter of the handler.
+|===
+
+The concrete values live in `api/src/whitelabel/captal/api/Phases.scala`, as data rather than logic: `nextAfterIdentification = AdvertiserVideo`, `nextAfterVideo = AdvertiserVideoSurvey`, `nextAfterAdvertiserSurvey = Ready`, and the fallbacks `fallbackFromIdentification = AdvertiserVideo`, `unidentifiableFallback = Ready`, `fallbackFromVideo = Ready`, `fallbackFromAdvertiserSurvey = Ready`.
+
+=== Flow and Handler
+
+[source,scala]
+----
+trait Handler[F[_], C]:          // application/commands/package.scala
+  type Result
+  def handle(command: C): F[Op[Result]]
+
+trait Flow[F[_], C]:             // application/Flow.scala
+  type Result
+  def execute(command: C): F[Result]
+----
+
+Both carry the result as a type member with an `Aux` alias (`Handler.Aux[F, C, R]`, `Flow.Aux[F, C, R]`), which is how the API names a flow in a `ZLayer` signature. `commands.Op[A]` is the module-wide alias for `CoreOp[Event, Error, A]`.
+
+=== EventHandler
+
+[source,scala]
+----
+trait EventHandler[F[_], -E]:
+  def handle(events: List[E]): F[Unit]
+----
+
+Contravariant in the event type, with one extension — `andThen`, sequencing two handlers with `*>`. The server builds its chain from this (see xref:event-sourcing.adoc[Event sourcing]).
+
+=== Application Event and Error
+
+`application/Event.scala` is the three-way sum the handler chain consumes:
+
+[source,scala]
+----
+enum Event:
+  case Survey(event: survey.Event)
+  case User(event: user.Event)
+  case Video(event: video.Event)
+----
+
+`application/Error.scala` mirrors it, plus three errors that belong to no aggregate:
+
+[source,scala]
+----
+enum Error:
+  case NoSurveyAssigned
+  case UserNotIdentified
+  case InvalidEmailFormat(value: String)
+  case Survey(errors: NonEmptyChain[survey.Error])
+  case User(errors: NonEmptyChain[user.Error])
+  case Video(errors: NonEmptyChain[video.Error])
+----
+
+== Command handlers
+
+All under `core/src/whitelabel/captal/core/application/commands/`. Every command carries `occurredAt: Instant` — the domain never reads a clock itself.
+
+[cols="2,2,1,2,2"]
+|===
+| Command | Handler | Result | Repositories | Events emitted
+
+| `AnswerEmailCommand(answer, occurredAt)`
+| `AnswerEmailHandler`
+| `NextStep`
+| `SurveyRepository`
+| `UserCreated`, `QuestionAnswered(EmailQuestionAnswered)`
+
+| `AnswerProfilingCommand(answer, occurredAt)`
+| `AnswerProfilingHandler`
+| `NextStep`
+| `SurveyRepository`, `UserRepository`
+| `QuestionAnswered(ProfilingQuestionAnswered)`
+
+| `AnswerLocationCommand(answer, occurredAt)`
+| `AnswerLocationHandler`
+| `NextStep`
+| `SurveyRepository`, `UserRepository`
+| `QuestionAnswered(LocationQuestionAnswered)`
+
+| `AnswerAdvertiserCommand(answer, occurredAt)`
+| `AnswerAdvertiserHandler`
+| `NextStep`
+| `SurveyRepository`, `UserRepository`
+| `QuestionAnswered(AdvertiserQuestionAnswered)`
+
+| `ProvideNextIdentificationSurveyCommand(occurredAt)`
+| `ProvideNextIdentificationSurveyHandler`
+| `NextIdentificationSurvey` or `NextStep`
+| `SurveyRepository`, `UserRepository`
+| `NewUserArrived`, `SurveyAssigned`, `IdentificationCompleted`
+
+| `ProvideNextVideoCommand(occurredAt)`
+| `ProvideNextVideoHandler`
+| `NextVideo` or `NextStep`
+| `VideoRepository`, `UserRepository`
+| `VideoAssigned`
+
+| `ProvideNextAdvertiserSurveyCommand(videoId, occurredAt)`
+| `ProvideNextAdvertiserSurveyHandler`
+| `NextAdvertiserSurvey` or `NextStep`
+| `SurveyRepository`, `UserRepository`
+| `VideoSurveyAssigned`
+
+| `MarkVideoWatchedCommand(durationWatched, completed, occurredAt)`
+| `MarkVideoWatchedHandler.withSession`
+| `NextStep`
+| `VideoRepository` + a `SessionData`
+| `VideoVisualized`
+
+| `FinishCommand(occurredAt)`
+| `FinishHandler`
+| `Unit`
+| `UserRepository`
+| `UserFinishedProcess`
+
+| `ExpireAccessCommand(occurredAt)`
+| `ExpireAccessHandler`
+| `Unit`
+| `UserRepository`
+| `AccessExpired`
+|===
+
+The `Result` of the three `Provide*` handlers is a union type, exposed as `Handler.Aux[F, C, Response]` with `type Response = NextVideo | NextStep` (and the survey equivalents). xref:messages.adoc[Messages] wraps each union in an enum for serialisation.
+
+=== Handler notes
+
+`AnswerEmailHandler` is the only handler that creates a user and the only one that parses a value itself: a non-`Text` answer, or a `Text` that `user.Email.fromString` rejects, fails with `Error.InvalidEmailFormat` before the survey is even loaded. On success it chains `UserOps.createWithEmail` and then `answerEmail`, so both events come out of one `Op`.
+
+The other three `Answer*` handlers follow one shape: find the user in the state the answer requires (`findAnswering`, or `findAnsweringVideoSurvey` for the advertiser case), then load the survey in the matching state. `None` for the user is `Error.UserNotIdentified`; `None` for the survey is `Error.NoSurveyAssigned`. The answer itself is validated inside `survey.ops`.
+
+`ProvideNextIdentificationSurveyHandler` takes two fallbacks and the difference is load-bearing:
+
+[cols="1,3"]
+|===
+| Parameter | Chosen when
+
+| `exhausted`
+| a user exists and the identification pool has nothing left — the normal end of the phase, emitting `IdentificationCompleted`
+
+| `unidentifiable`
+| there is no user *and* no active identification survey, so nobody can be identified; a guest is still created (`NewUserArrived` with no next question) and sent straight to the fallback
+|===
+
+`ProvideNextVideoHandler` fails with `Error.UserNotIdentified` when no user has an email: reaching the video phase unidentified is treated as a broken flow, not as a case to serve. With a user and no video, it returns `NextStep(fallback.phase)` and emits nothing.
+
+`MarkVideoWatchedHandler` has two constructors. `withSession` is the one the server uses — it reads `session.currentVideoId`, looks the video up to recover `advertiserId` and `videoType`, and emits `VideoVisualized`; a missing `currentVideoId` fails with `video.Error.NoVideoAvailable` and an unknown id with `video.Error.VideoNotFound`. The plain `apply` emits no event and returns the next step unchanged.
+
+`FinishHandler` and `ExpireAccessHandler` are the two ends of one cycle and differ deliberately on the empty case: `FinishHandler` fails with `Error.UserNotIdentified` when `findReadyUser()` is `None`, while `ExpireAccessHandler` is a silent no-op when `findAuthorizedUser()` is `None`. See xref:event-sourcing.adoc[Event sourcing] for what that buys the scheduler.
+
+== Queries
+
+`application/queries/` declares a `Query[F, Q]` trait (`execute(query: Q): F[Either[Error, Result]]` with the same `Aux` pattern) plus `GetIdentificationSurvey` and an `IdentificationSurveyResponse` enum (`Email`, `Profiling`, `Location`, `Completed`). Nothing outside the package references either: the read side of the portal goes through the repositories and the `Provide*` commands.
+
+== Aggregates
+
+Each aggregate is one package holding `Id`, `Event`, `Error`, a `State`, a case class parameterised by that state, and an `ops` object of extension methods returning `Op`.
+
+=== user
+
+`User[S <: State](id: Id, state: S)` — type-state, so an operation is only in scope for the state it applies to.
+
+[cols="2,2,3"]
+|===
+| State | Fields | Entered by
+
+| `Guest` | — | `ops.createGuest`
+| `WithEmail` | `email` | `ops.createWithEmail`
+| `AnsweringQuestion` | `surveyId`, `questionId` | `assignSurvey(Some(q), …)`
+| `WatchingVideo` | `videoId` | `assignVideo(…)`
+| `AnsweringVideoSurvey` | `advertiserId: Option`, `surveyId`, `questionId` | `assignVideoSurvey(Some(q), …)`
+| `Ready` | `redirectUrl`, `watchedVideoId: Option`, `answeredQuestionIds: List` | rebuilt by `UserRepository.findReadyUser()`
+| `Authorized` | same three fields | `finish(…)`, and rebuilt by `findAuthorizedUser()`
+|===
+
+`advertiserId` is optional in `AnsweringVideoSurvey` because a promo's survey has no advertiser.
+
+`user/ops.scala`:
+
+[cols="2,2,2,2"]
+|===
+| Operation | Receiver state | Emits | Returns
+
+| `createWithEmail(email, now)` | — | `UserCreated` | `User[WithEmail]`
+| `createGuest(nextQuestion, now)` | — | `NewUserArrived` | `User[Guest.type]`
+| `assignSurvey(nextQuestion, terminalPhase, now)` | `WithEmail` | `SurveyAssigned` or `IdentificationCompleted` | `User[AnsweringQuestion]` or `NextStep`
+| `assignVideo(videoId, advertiserId, videoType, now)` | `WithEmail` | `VideoAssigned` | `User[WatchingVideo]`
+| `assignVideoSurvey(advertiserId, nextQuestion, terminalPhase, now)` | `WatchingVideo` | `VideoSurveyAssigned`, or nothing | `User[AnsweringVideoSurvey]` or `NextStep`
+| `answerEmail` / `answerProfiling` / `answerLocation` / `answerAdvertiser` | `WithEmail` / `AnsweringQuestion` | delegated to `survey.ops` | `QuestionAnswer`
+| `answerAdvertiserSurvey(survey, value, now)` | `AnsweringVideoSurvey` | delegated to `survey.ops` | `QuestionAnswer`
+| `finish(now)` | `Ready` | `UserFinishedProcess` | `User[Authorized]`
+| `expire(now)` | `Authorized` | `AccessExpired` | the `AccessExpired` event itself
+|===
+
+`answerAdvertiserSurvey` narrows the receiver to `User[AnsweringQuestion]` internally, so the answering path is one function regardless of which phase reached it.
+
+`user/Event.scala` carries eight events; see the catalogue in xref:event-sourcing.adoc[Event sourcing]. `user/Error.scala`: `EmailAlreadyRegistered(userId)`, `InvalidEmailFormat(email)`, `SessionExpired(sessionId)`, `NoPendingQuestions(userId)`, `QuestionNotPending(userId, questionId)`.
+
+`user/Id.scala` holds four opaque types over `UUID`/`String`:
+
+* `Id`, `SessionId` — `apply`, `generate`, `fromString`, `unsafe`, with `value` / `asString` extensions;
+* `DeviceId` — same, plus `fromUserAgent(ua)`, which derives the id from a fixed namespace UUID string concatenated with the User-Agent;
+* `Email` — opaque over `String`, validated by `fromString` against the regex `^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+$`, with `unsafeFrom` for trusted values.
+
+NOTE: `DeviceId.fromUserAgent` uses `UUID.nameUUIDFromBytes`, which produces an MD5-based (version 3) name UUID, and prefixes the name with the namespace *string* rather than its bytes. It is stable for a given User-Agent, which is all the session code relies on.
+
+=== survey and survey/question
+
+`Survey[S <: State](id: Id, state: S)`, with one state per kind of question the repository can hand over:
+
+[cols="2,3"]
+|===
+| State | Fields
+
+| `WithEmailQuestion` | `question: QuestionToAnswer`
+| `WithProfilingQuestion` | `question`
+| `WithLocationQuestion` | `question`, `hierarchyLevel: HierarchyLevel`
+| `WithAdvertiserQuestion` | `advertiserId: Option[AdvertiserId]`, `question`
+|===
+
+Nothing persists `WithAdvertiserQuestion.advertiserId` — `answers` has no advertiser column — it is carried so the emitted event can attribute the answer.
+
+`survey/ops.scala` has one function per category (`answerEmail`, `answerProfiling`, `answerLocation`, `answerAdvertiser`), all the same three steps: `question.ops.validate`, build a `QuestionAnswer(questionId, value, now)`, then `Op.emit(SurveyEvent.QuestionAnswered(surveyId, questionEvent), answer)`. `survey/Event.scala` has a single case, `QuestionAnswered(surveyId, event: question.Event)`, so every survey event wraps a question event.
+
+Ids: `survey.Id` and `survey.AdvertiserId` (opaque over `UUID`), `question.Id` and `question.OptionId` likewise. `FullyQualifiedQuestionId(surveyId, questionId)` is the pair used everywhere a "next question" is named.
+
+==== Question model
+
+[source,scala]
+----
+final case class QuestionToAnswer(
+    id: Id,
+    text: LocalizedText,
+    description: Option[LocalizedText],
+    placeholder: Option[LocalizedText],
+    questionType: QuestionType,
+    commonRules: List[CommonRule],
+    pointsAwarded: Int)
+----
+
+`LocalizedText(value, locale)`; `QuestionOption(id, text, displayOrder, parentOptionId)`; `QuestionAnswer(questionId, value: AnswerValue, answeredAt)`.
+
+`AnswerValue`: `SingleChoice(optionId)`, `MultipleChoice(optionIds: Set[OptionId])`, `Text(value)`, `Rating(value: Float)`, `Numeric(value: BigDecimal)`, `DateValue(value: LocalDate)`.
+
+Rules (`question/rules.scala`): `CommonRule.Required`; `SelectionRule.MinSelections|MaxSelections`; `TextRule.MinLength|MaxLength|Pattern|Email|Url`; `RangeRule[A].Min|Max`.
+
+==== Validation
+
+`question/ops.scala` exposes one entry point:
+
+[source,scala]
+----
+def validate(
+    questionId: Id,
+    commonRules: List[CommonRule],
+    questionType: QuestionType,
+    value: AnswerValue): RuleOp[Unit]
+----
+
+It runs the common rules and the type-specific rules with `parTupled`, and each rule list with `parTraverse`, so every broken rule is reported, not just the first.
+
+[cols="2,2,3"]
+|===
+| `QuestionType` | Accepted `AnswerValue` | Checks
+
+| `Radio(options)` | `SingleChoice` | the option id exists → `InvalidOptionSelected`
+| `Select(options)` | `SingleChoice` | as above
+| `Checkbox(options, rules)` | `MultipleChoice` | every id exists → `InvalidOptionsSelected`; then `MinSelections` / `MaxSelections` → `TooFewSelections` / `TooManySelections`
+| `Input(rules)` | `Text` | `MinLength`, `MaxLength`, `Pattern`, `Email`, `Url`
+| `Rating(rules)` | `Rating` | `RangeRule[Int]` bounds compared against the `Float`
+| `Numeric(rules)` | `Numeric` | `RangeRule[BigDecimal]` bounds
+| `Date(rules)` | `DateValue` | `RangeRule[LocalDate]` bounds, via `isBefore` / `isAfter`
+|===
+
+Any other pairing fails with `IncompatibleAnswerType(questionId, expected)`. `CommonRule.Required` only rejects a blank `Text` (after `trim`) or an empty `MultipleChoice`; the other answer shapes can never be empty. `TextRule.Email` and `TextRule.Url` carry their own regexes, distinct from `user.Email`'s.
+
+IMPORTANT: the three range errors are constructed with the violated bound in *both* the `min` and `max` fields — `Error.RatingOutOfRange(questionId, min, min, value)` on a lower-bound breach, `(questionId, max, max, value)` on an upper one. Any client rendering both numbers will show the same value twice.
+
+`survey/Error.scala` is the full list the API maps from: `RequiredAnswerMissing`, `InvalidOptionSelected`, `InvalidOptionsSelected`, `TooFewSelections`, `TooManySelections`, `TextTooShort`, `TextTooLong`, `InvalidPattern`, `InvalidEmail`, `InvalidUrl`, `RatingOutOfRange`, `NumericOutOfRange`, `DateOutOfRange`, `IncompatibleAnswerType`, `QuestionAlreadyAnswered`, `QuestionNotFound`, `HierarchyViolation`. The last three are state errors; nothing in `core` emits them today.
+
+==== HierarchyLevel
+
+Location questions are ordered: `State(1)`, `City(2)`, `Municipality(3)`, `Urbanization(4)`. `ordered` lists them, `nextLevel` / `previousLevel` step by `order`, and `canAnswer(toAnswer, lastCompleted)` is true only for `State` when nothing is completed, and otherwise only for the immediate successor.
+
+==== IsoDate
+
+`YYYY-MM-DD` in and out, hand-parsed rather than through `DateTimeFormatter`:
+
+* `parse(text): LocalDate` — splits on the two dashes and throws `DateTimeException` for anything else, including a malformed number component;
+* `format(date): String` — `date.toString`.
+
+The only circe instances for `LocalDate` in the codebase are private to `question/codecs.scala` and decode through `IsoDate.parse`.
+
+==== Codecs
+
+`question/codecs.scala` is the browser-facing codec bundle: the four id types as strings, `SelectionRule` / `TextRule` / the three `RangeRule` instantiations (each `@targetName`-annotated, since they erase to one name), `CommonRule` and `HierarchyLevel` as lowercase strings, and derived pairs for `LocalizedText`, `QuestionOption`, `QuestionType`, `QuestionToAnswer` and `AnswerValue`. `AnswerValue` is the one type that travels browser → server, and the same bytes are persisted to `answers.answer_value`.
+
+NOTE: the rule codecs describe the same shape as `question_rules.rule_config`, whose authoritative zio-schema definition is `platform/src/whitelabel/captal/platform/surveySchemas.scala`. The two have to be changed together.
+
+=== video
+
+[cols="2,3"]
+|===
+| Type | Contents
+
+| `Id` | opaque over `UUID`
+| `VideoType` | `Ad` / `Promo`, stored as `ad` / `promo`; `fromDbString` returns `Option` — there is no default kind
+| `AdvertiserVideo` | `id`, `advertiserId: Option`, `videoType`, `videoUrl`, `durationSeconds`, `minWatchSeconds`, `showCountdown`, `noRepeatSeconds: Option`, `priority`
+| `VideoToWatch` | `id`, `advertiserId: Option`, `videoType`, `videoUrl`, `durationSeconds`, `title: Option[LocalizedText]`, `description: Option[LocalizedText]`
+| `Event` | one case, `VideoVisualized(sessionId, userId, videoId, advertiserId, videoType, durationWatched, completed, occurredAt)`
+| `Error` | `VideoNotFound(videoId)`, `NoVideoAvailable`
+|===
+
+== Repository traits
+
+`core/src/whitelabel/captal/core/infrastructure/` declares what the domain needs from storage, all in `F[_]` and all returning `Option` rather than failing. The implementations are Quill-based and live in xref:platform.adoc[Platform] (`UserRepositoryQuill`, `SurveyRepositoryQuill`, `VideoRepositoryQuill`); they read the current session from the ambient `SessionContext`, which is why the finder methods take no session argument.
+
+[cols="2,3"]
+|===
+| Trait / method | Returns
+
+| `UserRepository.findWithEmail()` | `User[State.WithEmail]`
+| `UserRepository.findAnswering()` | `User[State.AnsweringQuestion]`
+| `UserRepository.findWatchingVideo()` | `User[State.WatchingVideo]`
+| `UserRepository.findAnsweringVideoSurvey()` | `User[State.AnsweringVideoSurvey]`
+| `UserRepository.findReadyUser()` | `User[State.Ready]`
+| `UserRepository.findAuthorizedUser()` | `User[State.Authorized]` — `None` once the session is no longer `Authorized`
+| `SurveyRepository.findAssignedEmailSurvey()` | `Survey[State.WithEmailQuestion]`
+| `SurveyRepository.findWithProfilingQuestion(surveyId, questionId)` | `Survey[State.WithProfilingQuestion]`
+| `SurveyRepository.findWithLocationQuestion(surveyId, questionId)` | `Survey[State.WithLocationQuestion]`
+| `SurveyRepository.findWithAdvertiserQuestion(surveyId, questionId)` | `Survey[State.WithAdvertiserQuestion]`
+| `SurveyRepository.findNextIdentificationSurvey()` | `NextIdentificationSurvey`
+| `SurveyRepository.findNextAdvertiserSurvey(videoId)` | `NextAdvertiserSurvey`
+| `VideoRepository.findById(id)` | `video.AdvertiserVideo`
+| `VideoRepository.findNextForUser(userId)` | `video.VideoToWatch` — an advertiser video when one qualifies, otherwise a promo; the promo rotation cursor lives on the session row and is read by the implementation, not passed in
+|===
+
+`infrastructure/Session.scala` holds `SessionData`, the session projection the handlers and `MarkVideoWatchedHandler.withSession` read: `sessionId`, `userId: Option`, `locale`, `phase`, `currentQuestion: Option[FullyQualifiedQuestionId]`, `currentVideoId`, `lastPromoVideoId`, `currentAdvertiserId`, `locationId`, `clientMac`, `apMac`, `redirectUrl`, `ssid`, `clickId`, `accessExpiresAt: Option[Instant]`.
+
+== i18n
+
+`core/src/whitelabel/captal/core/i18n/` is the source of truth for the portal's translation keys.
+
+`I18n.scala` declares the bundle as nested case classes of `String` — `welcome` (with `steps`, `button`, `authorized`), `ready`, `loading`, `error`, `question`, `video` — 39 leaf keys today. Each nested type carries babel `Decoder`/`Encoder` instances; the circe pair for the whole tree is in xref:messages.adoc[Messages].
+
+`I18n.descriptions` is an `I18n` value whose leaves hold a description of each key instead of a translation. It is total by construction: adding a field to `I18n` fails to compile until it is described there.
+
+`I18nSchema.scala` derives the flat key set from the type:
+
+[cols="2,3"]
+|===
+| Member | Meaning
+
+| `keys[A]` | every key `A` requires, as dotted paths in declaration order (`welcome.steps.step1`, …)
+| `missing[A](messages)` | which of those keys a given map does not cover
+| `decode[A](messages)` | rebuild the value from a flat `Map[String, String]`
+| `flatten[A](value)` | the inverse — key → leaf
+|===
+
+Derivation walks `Mirror.ProductOf` labels and element types in lockstep with `inline` recursion, through a named `Derived[A]` carrier; `I18n.schema` is the one binding that materialises it, so callers summon the instance instead of re-expanding the fold. The `String` instance is the leaf: a key absent from the map decodes to the literal `[key]`, which renders visibly in the portal rather than failing.
+
+At runtime `platform.services.LocaleServiceQuill.getI18n(locale)` reads `localized_texts` rows with `category = 'frontend'` for the request's `location_id`, maps `entity_id → value`, and hands the map to `I18nSchema.decode[I18n]`. So the i18n key set is the contract between this type and that table; see xref:database.adoc[Database].
+
+== Tests
+
+`core/test/` holds the module's own suites (utest + ScalaCheck): `application/HandlerTests.scala`, `survey/ValidationSuccessTests.scala`, `survey/ValidationFailureTests.scala`, `i18n/I18nSchemaTests.scala`, and shared generators in `generators.scala`. See xref:testing.adoc[Test strategy].

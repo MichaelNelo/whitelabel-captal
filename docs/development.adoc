@@ -1,0 +1,241 @@
+= Local development
+:toc:
+:toclevels: 2
+
+== Prerequisites
+
+Nix, https://devenv.sh[devenv] and direnv on the host — none of the three is managed by this
+repository, and everything else is. Docker is also required directly: `rqlite` and, for the MCP
+backoffice's deploy-related work, LocalStack both run as containers the build starts for you, not
+as something devenv provisions.
+
+`devenv.nix` provides the rest of the toolchain the moment the shell is entered:
+
+[source,nix]
+----
+packages = [ pkgs.git pkgs.terraform pkgs.opentofu pkgs.scalafmt pkgs.scalafix pkgs.cloudflared ];
+languages.scala.enable = true;
+languages.scala.mill.enable = true;
+----
+
+Both `terraform` and `opentofu` are present — not a redundancy. `terraform/` is an OpenTofu
+configuration, but the two tools cannot share a working directory: a state file one writes the other
+refuses to open, and `.terraform.lock.hcl` records provider hashes from whichever registry wrote it.
+See xref:infrastructure.adoc[Infrastructure]. `cloudflared` is provisioned too, and nothing in this
+build or in any doc currently calls it. `languages.scala.mill.enable` is what puts a working `./mill`
+launcher in the repository root at shell-entry time — it is not a script checked into the repository,
+which is also why `Dockerfile.api`'s old two-stage build (described in
+xref:infrastructure.adoc[Infrastructure]) broke: it assumed a `mill` wrapper that only exists inside
+a devenv shell.
+
+`.envrc` is not committed, and loads two things beyond the standard devenv hookup:
+
+[source,bash]
+----
+export NIXPKGS_ALLOW_UNFREE=1
+export LOCALSTACK_TOKEN="…"
+eval "$(devenv direnvrc)"
+use devenv
+----
+
+`LOCALSTACK_TOKEN` (equivalently `LOCALSTACK_AUTH_TOKEN`) is a LocalStack Pro licence. Without one,
+the free tier covers only S3 — enough for most of `mcp.test` — and everything that needs ECS, ELBv2,
+CloudFront, EC2, IAM, STS, EFS, Secrets Manager, Cloud Map or ECR skips itself rather than failing;
+see xref:testing.adoc[Test strategy]. Treat the value itself as a credential: it is read by the build
+(`Task.env`, not `System.getenv` — see <<Sharp edges>>) and must never be pasted into a log, a commit
+message, or a document.
+
+== Mill
+
+Pinned at `1.1.2` (`.mill-version`). `.mill-jvm-opts` raises the compiler's stack to `-Xss8m`,
+because one test in `mcp.test` — `DeployE2ESpec`'s `lifecycle` method, six `assertTrue` chains of
+roughly forty conditions each — overflows the 1-minute default's implied stack depth with "Stack
+overflow in the compiler" and nothing about the actual code; see xref:testing.adoc[Test strategy].
+
+Every module mixes in the same two capabilities through `BaseModule` (JVM) and `BaseJSModule`
+(Scala.js): `ScalafmtModule` and `ScalafixModule`. `.scalafmt.conf` pins `scalafmt` `3.10.4` against
+the `scala3` dialect and aggressively removes redundant braces and parens in favour of Scala 3's
+colon syntax; `.scalafix.conf` runs `OrganizeImports` and `RemoveUnused`. Three tasks matter across
+every module at once, using Mill's `__` wildcard selector:
+
+[cols="1,3"]
+|===
+|Command |Effect
+
+|`./mill __.compile`
+|Compiles every module.
+
+|`./mill __.reformat`
+|Applies `scalafmt` to every module (`__.checkFormat` checks without writing).
+
+|`./mill __.fix`
+|Applies the scalafix rules to every module (`__.checkFix` checks without writing).
+|===
+
+`mcp` is the one module that diverges: it compiles against Scala `3.10.0` rather than the rest of
+the tree's `3.8.0` (forced upward by `zio-http-mcp`'s published TASTy version — see
+xref:mcp.adoc[MCP backoffice]) and declares its own `scalafixConfig`, because scalafix's
+`RemoveUnused` refuses to run at all under 3.10. `__.fix` still reaches it correctly; it is simply
+running a different, per-module configuration there.
+
+== Running rqlite
+
+`ensureRqlite(containerName, hostPort)` is the one function every `*.dev` and `*.test` task calls
+to get a database. It checks Docker is reachable, looks for a container already running under the
+given name, and compares its image against the one this build currently asks for
+(`rqlite/rqlite:10.6.1`) — a name match alone is not reuse, because that is exactly how a stale
+image survived three version drifts unnoticed in the past (see
+xref:context/incidents.adoc[Incidents]). A container on the wrong image, or none at all, is removed
+and recreated; a container already on the right image is left alone.
+
+Four containers exist across the whole build, never shared between purposes: `rqlite-dev` on port
+4001 (used by both `api.dev` and `mcp.dev` — see <<Running the stack locally>>), and three
+test-only containers (`rqlite-test`, `rqlite-mcp-test`, `rqlite-mcp-e2e`) covered in
+xref:testing.adoc[Test strategy].
+
+== Running the stack locally
+
+=== `./mill api.dev`
+
+[source]
+----
+[dev] Step 1/3: Ensuring rqlite container...
+[dev] Step 2/3: Running migrations...
+[dev] Step 3/3: Starting server (location=cafe-centro)...
+----
+
+In order: `ensureRqlite` on `rqlite-dev`; `whitelabel.captal.platform.Migrate` against it;
+`copyIndex` renders `client/index.html` from the template (pointing at `fastLinkJS`'s output by
+default, or at `client.bundle`'s Vite-processed output when `CLIENT_LINKER=full` — the shape
+production actually serves); then the server is forked with `LOCATION_SLUG` set to the `--slug`
+argument, defaulting to `cafe-centro`.
+
+IMPORTANT: **A location row must already exist before this will boot.** `ServerSettings`/`AppLayers`
+resolve `LOCATION_SLUG` against the `locations` table during layer construction and fail the whole
+process with `LocationNotFound` if it is absent — see xref:api.adoc[Guest API]. Nothing in this task
+writes that row; a comment on `mcp.dev` claims `api.dev` "seeds `cafe-centro` into this same
+container on boot," but the task's own body only ensures rqlite, migrates, and starts the JVM — no
+insert. Create the location first (through the MCP backoffice's `create_location` tool — run
+`mcp.dev` and drive it from a client, or any other content tool) before running `api.dev` against a
+fresh database.
+
+=== `./mill mcp.dev`
+
+[source]
+----
+[dev] Step 1/4: Ensuring rqlite...
+[dev] Step 2/4: Running migrations...
+[dev] Step 3/4: Ensuring LocalStack...
+[dev] Step 4/4: Starting MCP backoffice on :8081
+----
+
+Shares the *same* `rqlite-dev` container `api.dev` uses — deliberately, since the backoffice writes
+the content a location's API later reads, and running them against two different databases would
+defeat the point of running both. Migrations run `McpMigrate` (its own history table,
+`db/migration-mcp`) in a forked process. `ensureLocalStack` then starts (or reuses) a `localstack-dev`
+container, creates the `captal-assets-dev` bucket with permissive CORS for the upload flow, and
+creates a real CloudFront distribution over it once (`ensureDistribution`) — a made-up distribution
+id used to be substituted here while invalidation calls against a local endpoint were skipped
+entirely; once that skip was removed, a fictional id started failing the last step of every asset
+write with the object already stored but nothing to invalidate.
+
+The backoffice starts on port 8081 with a **fixed** admin token, `dev-token` — not generated, because
+it is meant to be copied once into an MCP host's configuration by hand, and a token that changed
+every run would be miscopied more often than it would ever be stolen. The task prints a ready-to-paste
+block:
+
+[source,json]
+----
+"captal": {
+  "command": "npx",
+  "args": ["mcp-remote", "http://localhost:8081/mcp",
+           "--header", "Authorization: Bearer dev-token"]
+}
+----
+
+and, if a quick probe of the `locations` table over raw HTTP finds it empty, a reminder to run
+`./mill api.dev` once — which, per the note above, does not itself write the row either; a location
+still has to be created through a content tool before either side of the loop has anything to serve.
+`./mill mcp.stopLocalStack` and `./mill api.stopRqlite` tear the dev containers down; `./mill
+mcp.localStackSetup` ensures LocalStack is up without starting the server, for working against it
+with another client.
+
+=== A full local loop, in order
+
+. `./mill mcp.dev` — starts rqlite-dev, LocalStack, and the backoffice.
+. Point an MCP client at it (the printed config block) and create a location, its identification
+surveys, a video, an advertiser and its question, and a locale bundle — see
+xref:mcp.adoc[MCP backoffice] for the tool catalogue.
+. `./mill api.dev --slug <that location's slug>` — serves the portal against the same database.
+
+== Images
+
+`api.image`/`mcp.image` build the deployed images from an already-assembled jar (fast, and nothing
+re-resolves the dependency tree per build); `api.dockerBuildDev` builds the same image with
+`SERVER_DEV_ENDPOINTS=true` for exercising `/api/dev/reset-phase` without a full deploy; `imagePush`
+(on `mcp`) and `dockerPush` (on `api`) push a built image to a registry — against LocalStack, the one
+`tofu apply` created for the `local` environment. See xref:infrastructure.adoc[Infrastructure] for
+why these images are single-stage and why no tag defaults to `latest`.
+
+== Client bundle and publishing
+
+`client.fastLinkJS`/`client.fullLinkJS`, `client.bundle`, `client.publishS3` and `client.publish`
+are documented in full, with what each one does and uploads, in xref:client.adoc[Client] — this
+document only needs to name them: `api.dev` consumes the first pair directly, and the MCP backoffice's
+`deploy_location` consumes what `client.publishS3`/`client.publish` have put in the assets bucket.
+
+== Test tasks
+
+`./mill core.test`, `./mill api.test` and `./mill mcp.test` are the three module-level suites;
+`platform` and `messages` have none of their own and are exercised through the other two. Each test
+module that depends on a Docker container checks and restarts it on every invocation rather than
+trusting a cached URL, for the same reason `ensureRqlite` compares images above — an operator
+removing a container between runs must be caught, not silently misread as a schema problem. The full
+breakdown of what each suite covers, what needs LocalStack, and the three separate `rqlite`
+containers the test tasks use is xref:testing.adoc[Test strategy]'s subject; `./mill
+api.test.stopRqlite` and `./mill mcp.test.resetLocalStack` are the matching cleanup commands for the
+test-side containers.
+
+== Sharp edges
+
+* **direnv has to be told to trust `.envrc` at least once.** direnv refuses to auto-load an `.envrc`
+it has not been explicitly allowed to run, as a security measure — a freshly cloned checkout, or any
+edit to `.envrc` itself, needs `direnv allow` run by hand in that directory before `devenv shell`'s
+packages and environment variables take effect. Without it, commands that assume the devenv shell
+(`mill`, `tofu`, `scalafmt`) are simply not on `PATH`, with no message pointing at `.envrc`.
+* **`mill clean` breaks the LocalStack state pairing `mcp.test` depends on.** The Tofu state
+directory for the `local` environment is kept alive across ordinary Mill re-evaluations specifically
+so it survives alongside the LocalStack container it describes; `mill clean` discards it anyway,
+leaving the container holding every resource a freshly-emptied state no longer knows about. Run
+`./mill mcp.test.resetLocalStack` immediately after any `mill clean`. Full mechanics in
+xref:infrastructure.adoc[Infrastructure] and xref:testing.adoc[Test strategy].
+* **`api.dev` needs a location row before it will start.** Covered above — worth repeating here
+because the failure mode (`LocationNotFound` during layer construction, nothing binds the port) gives
+no hint that the fix is "create a location first," and the task's own log output does not mention it
+unless `mcp.dev` happens to be run afterward against the same database.
+* **Changing `ENVIRONMENT` needs a clean rebuild of one generated file.** `client.generatedSources`
+writes `BuildInfo.scala` (which drives `isDevMode`, and therefore the dev reset button in
+`ReadyView`) from the `ENVIRONMENT` variable, but the task is cached against its own normal inputs,
+and the environment variable is not one of them. `./mill clean client.generatedSources` before
+changing `ENVIRONMENT`, or the previous `BuildInfo` stays in place with the flag silently wrong. See
+xref:client.adoc[Client].
+* **`LOCALSTACK_TOKEN` gates more than licensing errors — it gates whether certain specs run at all.**
+Its absence is not a build failure: `mcp.test`'s deploy-related specs detect the missing licence (or
+the missing `ECS_CLUSTER` configuration that follows from it) and skip themselves. A change that
+should have been caught by `DeployE2ESpec` can pass a full green `mcp.test` run on a machine with no
+licence configured; see xref:testing.adoc[Test strategy].
+
+== See also
+
+* xref:api.adoc[Guest API] and xref:mcp.adoc[MCP backoffice] — what the two `*.dev` servers actually
+run.
+* xref:client.adoc[Client] — the build tasks `client.bundle`/`client.publish*` in full, and
+`BuildInfo`/`ENVIRONMENT`.
+* xref:testing.adoc[Test strategy] — the three test-only rqlite containers, the LocalStack fixture,
+and what each suite needs running.
+* xref:infrastructure.adoc[Infrastructure] — what `tofu`/`opentofu` is for here, the images these
+tasks build, and the LocalStack state-pairing mechanics `resetLocalStack` exists to fix.
+* xref:database.adoc[Database] — `platform.migrate`, and the two migration histories `Migrate` and
+`McpMigrate` own.
+* xref:context/incidents.adoc[Incidents] — the rqlite version drift `ensureRqlite`'s image check
+exists to stop from happening again.

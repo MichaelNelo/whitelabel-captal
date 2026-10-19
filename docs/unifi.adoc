@@ -1,0 +1,570 @@
+= UniFi integration
+:toc:
+:toclevels: 2
+
+The venue's UniFi controller hands a guest device to this system through its captive portal, and
+when the guest finishes the portal flow the system authorizes that device on the controller for a
+bounded time and revokes it when the time is up. This document covers the whole path: the query
+parameters the controller sends, the event that triggers the authorize call, the Integration v1 API
+contract, the per-location configuration, and the network route from a Fargate task to a controller
+on a customer LAN.
+
+== Where it lives
+
+The integration is not a module. Its moving parts are spread across four of them:
+
+[cols="2,3"]
+|===
+| File | What it is
+
+| `platform/src/whitelabel/captal/platform/UnifiClient.scala`
+| The HTTP client. One trait, two operations (`authorizeGuest`, `revokeGuestAccess`), both built
+  from the same two-step Integration v1 flow. Also the trust-all/proxy `Client` layer.
+
+| `platform/src/whitelabel/captal/platform/UnifiAccess.scala`
+| The per-location configuration value, derived from a `LocationRow`. `fromRow` answers `None`
+  unless host, API token and site id are all three present.
+
+| `platform/src/whitelabel/captal/platform/eventhandlers/UnifiAccessHandler.scala`
+| The post-commit event adapter. Maps `UserFinishedProcess` to authorize and `AccessExpired` to
+  revoke, and on a successful authorize writes `Phase.Authorized` plus `accessExpiresAt` and
+  enqueues the expiry job.
+
+| `platform/src/whitelabel/captal/platform/session/JobScheduler.scala`
+| `JobQueue` and `JobRunner`: where the expiry deadline is parked and the fibers that fire it. See
+  xref:platform.adoc[Platform].
+
+| `mcp/src/whitelabel/captal/mcp/tools/UnifiTools.scala`
+| The backoffice tools `configure_unifi` and `get_unifi_config`.
+
+| `mcp/src/whitelabel/captal/mcp/apps/UnifiUi.scala`
+| The server-rendered MCP App that collects the credentials, with
+  `mcp/src/whitelabel/captal/mcp/apps/UiRoutes.scala` as the endpoint it posts to and
+  `client/src/whitelabel/captal/mcpui/unifi/UnifiApp.scala` as its Scala.js behaviour.
+
+| `api/test/src/whitelabel/captal/api/TestUnifiClient.scala`
+| The test double that stands in for the transport.
+
+| `platform/resources/db/migration/V16…V19`
+| The `unifi_*` columns on `locations` and `sessions.access_expires_at`.
+
+| `terraform/modules/{tailscale-proxy,global-accelerator,portal-dispatcher}`
+| The network path: the proxy out to the customer LAN, the static IPv4 the controller points at,
+  and the Lambda that turns an AP MAC into a portal slug.
+|===
+
+== End-to-end flow
+
+[source]
+----
+ 1. Guest associates to the venue's guest SSID; the controller blocks its traffic.
+ 2. Controller redirects the device to the external portal server, carrying the session's
+    parameters as a query string.
+ 3. (Deployed only) the Global Accelerator IP → ALB → portal-dispatcher Lambda resolves the
+    location slug from the `ap` parameter and 302s to the portal, preserving the query string.
+ 4. The SPA loads, reads the query parameters and forwards them as `X-*` headers on
+    `GET /api/status`, which creates the session row.
+ 5. The guest completes the flow (email → profiling → video → advertiser survey).
+ 6. The last answer leaves the session in `Phase.Ready`; the client routes to `/ready`.
+ 7. `ReadyView` mounts and issues `POST /api/finish`, which runs `FinishCommand` and emits
+    `UserEvent.UserFinishedProcess`.
+ 8. The transaction commits. Post-commit, `UnifiAccessHandler` calls
+    `UnifiClient.authorizeGuest` with the session's `clientMac`.
+      ├─ 2xx → `SessionService.setAuthorized(sessionId, expiresAt)` (phase `Authorized`,
+      │        `accessExpiresAt = occurredAt + defaultDurationMinutes`) and
+      │        `JobQueue.schedule(ScheduledAt(expiresAt, ExpireAccess(sessionId)))`.
+      └─ failure, or no UniFi configuration → log and return; the session stays `Ready`.
+ 9. `/api/finish` re-reads the session and answers `phase` + `secondsRemaining`.
+10. At the deadline the `JobRunner` worker runs `ExpireAccessCommand`, which emits
+    `UserEvent.AccessExpired`.
+11. In the same chain: `SessionExpirationHandler` resets the session row to `Welcome`
+    (transactional), `EventLogHandler` writes a `user.access_expired` row, and post-commit
+    `UnifiAccessHandler` calls `UnifiClient.revokeGuestAccess` — which unauthorizes *and*
+    disconnects the client.
+----
+
+=== The controller's query parameters
+
+The controller's external-portal redirect carries the device's pre-authorization state in the URL.
+`client/src/whitelabel/captal/client/Main.scala` reads five of them and forwards each as a header,
+decoding the value once with `decodeURIComponent` (values arrive partially percent-encoded, and a
+malformed sequence falls back to the raw string):
+
+[cols="1,2,3"]
+|===
+| Query parameter | Header | Meaning
+
+| `id` | `X-Client-Mac` | MAC of the guest device. The MAC every authorize call is made for.
+| `ap` | `X-Ap-Mac` | MAC of the access point the device associated to.
+| `url` | `X-Redirect-Url` | The URL the guest originally asked for.
+| `ssid` | `X-Ssid` | The guest SSID's name.
+| `click_id` | `X-Click-Id` | Per-redirect token, stored on the session.
+|===
+
+`client/src/whitelabel/captal/client/views/ErrorView.scala` repeats the same mapping so a retry from
+the error page carries the parameters too. `GET /api/status` declares all five as optional headers
+(`api/src/whitelabel/captal/api/routes/SurveyRoutes.scala`) and builds a
+`CaptivePortalParams(clientMac, apMac, redirectUrl, ssid, clickId)` only when `X-Client-Mac` **and**
+a non-empty `X-Click-Id` are both present. Creating a session without them fails with
+`ApiError.SessionMissing`; a request that already carries a session cookie ignores the parameters
+entirely. The values land on `sessions.client_mac`, `ap_mac`, `redirect_url`, `ssid` (migration V11)
+and `click_id` (V14).
+
+`X-Ap-Mac` is soft-validated against the location's own `unifi_ap_mac`: a mismatch logs a warning
+and the request proceeds. Comparison normalises both sides to lowercase with colons.
+
+== Phase semantics
+
+Two session phases carry the whole contract, and the boundary between them is the UniFi call.
+
+[cols="1,4"]
+|===
+| Phase | Meaning
+
+| `Ready`
+| The guest finished the survey flow and the system is waiting on UniFi. Normally a few
+  milliseconds; indefinite if the controller is unreachable or the location has no configuration.
+
+| `Authorized`
+| The controller accepted the authorize action and `accessExpiresAt` is populated. The transition
+  is written **only** by `UnifiAccessHandler`, post-commit.
+|===
+
+The matching `User` aggregate type-states are `State.Ready` and `State.Authorized`, projected from
+the session row by `UserRepository.findReadyUser` and `findAuthorizedUser`. `State.Authorized` is
+both the result type of the `finish` op and the input of the `expire` op; `expire` has no
+destination state. See xref:core.adoc[Core].
+
+=== Retry by design
+
+Because the phase stays `Ready` until the controller answers 2xx, `findReadyUser` keeps returning
+the user and a second `POST /api/finish` re-runs `finish`, re-emits `UserFinishedProcess` and
+retries the authorize call. The client exploits this directly: `ReadyView` calls `/api/finish` from
+its `onMountCallback`, so a reload of `/ready` is a retry.
+
+The retry is safe because the authorize action is idempotent per MAC — the controller cancels any
+existing active authorization for that client, creates a new one with the new limits and resets the
+guest's traffic counters.
+
+=== What the guest sees
+
+[cols="1,4"]
+|===
+| Branch | Guest experience
+
+| Authorize succeeds
+| `/api/finish` answers `phase = authorized` with `secondsRemaining`. The router switches to
+  `WelcomeView`, which counts down from that number and schedules one `setTimeout` for the
+  deadline. The device has internet.
+
+| Authorize fails, times out, or the location has no UniFi configuration
+| `/api/finish` answers `phase = ready` and `secondsRemaining = null`. The guest stays on `/ready`
+  with the spinner; no network access is granted. A reload retries.
+
+| No `Ready` session
+| `/api/finish` is rejected before the flow runs: the route authorises only `Phase.Ready` and
+  answers 400 with an `ApiError`.
+|===
+
+A location that is fully translated, has videos and deploys cleanly but has no UniFi credentials
+therefore runs its entire portal flow and then strands every guest at `Ready`. This is what
+`get_unifi_config` and the `unifiConfigured` field of the readiness resource exist to surface — see
+xref:mcp.adoc[MCP backoffice].
+
+== Scheduled revocation
+
+On a successful authorize the handler enqueues `ScheduledAt(expiresAt, ScheduledJob.ExpireAccess(sessionId))`
+on the `JobQueue`. That is the scheduler's only producer. What is enqueued is data rather than an
+effect, which is what lets startup rehydration rebuild the same job by reading the `sessions` table.
+
+`JobRunner.start` (called from `api/src/whitelabel/captal/api/Main.scala`, never by building the
+layer) forks two fibers and then rehydrates:
+
+* a scheduler fiber holding pending deadlines in a `SortedMap[Instant, List[ScheduledJob]]` and
+  waiting with `inbox.take.timeout(wait)`, so a newly scheduled job with an earlier deadline
+  recomputes the wait without interrupting anything;
+* a worker fiber — a single one, so there is at most one in-flight request against the controller —
+  that takes due jobs and runs `ExpireAccessCommand` with the session installed in the ambient
+  `SessionContext`, exactly as a request would;
+* rehydration from `SessionService.findPendingExpirations()`, which selects this location's sessions
+  that are `Authorized` with a non-null `access_expires_at`. Deadlines already past fire
+  immediately, because the computed wait is zero.
+
+The worker swallows and logs its errors, so neither an unreachable controller nor an rqlite failure
+can kill the fiber. The staleness guard is in the command handler, not the runner: if the user was
+re-authorized in the meantime, `findAuthorizedUser` returns `None` and the command is a silent
+no-op. Details of the scheduler are in xref:platform.adoc[Platform]; the event chain is in
+xref:event-sourcing.adoc[Event sourcing].
+
+The cut therefore happens whether or not the guest still has the portal open — nothing in the
+expiry path depends on a client request.
+
+`GET /api/status` keeps an independent expiry check as a safety net. When the session is
+`Authorized` and `accessExpiresAt` is already in the past, the route calls
+`SessionService.resetForExpiration` and answers `Phase.Welcome` with no `secondsRemaining`:
+
+[source,scala]
+----
+isExpired = session.phase == Phase.Authorized && session.accessExpiresAt.exists(_.isBefore(now))
+----
+
+This covers the cases the in-memory scheduler cannot: a task that restarted and has not rehydrated
+yet, a scheduler that is not running, and a location with no UniFi configuration at all. Note that
+this branch resets *our* session row; it issues no revoke, because no authorization was ever
+recorded for it to revoke.
+
+== The Integration v1 API
+
+The client speaks the UniFi Network **Integration v1** API, served by the controller itself (a UCG,
+UDM or other UniFi OS console). The cloud Site Manager API at `api.ui.com` is a different thing and
+is not used.
+
+=== Base URL and authentication
+
+[source]
+----
+https://<host>:<port>/proxy/network/integration/v1
+----
+
+`UnifiClient.baseUrl` builds this from the location's `host` and `port`, bracketing the host per
+RFC 3986 when it contains a colon (an IPv6 or Tailscale ULA address). Every request carries a static
+API key — no login, no session cookie, no CSRF token:
+
+[source,http]
+----
+X-API-KEY: <token>
+----
+
+The key is created on the controller under Settings → Control Plane → Integrations → Create API Key.
+A single operation (lookup plus action) is bounded by a 10-second timeout; exceeding it fails with
+`UniFi <ACTION> timed out after 10s`.
+
+=== Site discovery
+
+The site is addressed by UUID. `GET /sites` is how that UUID is found:
+
+[source,http]
+----
+GET https://<host>:443/proxy/network/integration/v1/sites
+X-API-KEY: <token>
+----
+
+[source,json]
+----
+{"data": [{"id": "<uuid>", "internalReference": "default"}]}
+----
+
+The `id` is what goes into the location's `unifi_site_id`. A `curl` to this endpoint needs `-k`,
+because the controller's certificate is self-signed.
+
+=== Authorize a guest
+
+Two requests. First the client id is looked up by MAC, because the action endpoint is addressed by
+client id and the system only knows the MAC:
+
+[source,http]
+----
+GET https://<host>:443/proxy/network/integration/v1/sites/<siteId>/clients
+      ?filter=macAddress.eq('aa:bb:cc:dd:ee:ff')
+X-API-KEY: <token>
+----
+
+The filter expression is URL-encoded by the client, and the MAC is normalised first
+(`UnifiClient.normalizeMac`: lowercase, `-` replaced by `:`). The response is the usual envelope and
+the client takes the first `id` from `data`:
+
+[source,json]
+----
+{"data": [{"id": "<clientId>", "macAddress": "aa:bb:cc:dd:ee:ff"}]}
+----
+
+A non-2xx status fails with `UniFi GET /clients returned <code>: <body>`; an empty `data` array
+fails with `no client found for MAC <mac>`.
+
+Then the action is posted:
+
+[source,http]
+----
+POST https://<host>:443/proxy/network/integration/v1/sites/<siteId>/clients/<clientId>/actions
+X-API-KEY: <token>
+Content-Type: application/json
+----
+
+[source,json]
+----
+{
+  "action": "AUTHORIZE_GUEST_ACCESS",
+  "timeLimitMinutes": 1440
+}
+----
+
+`timeLimitMinutes` is the location's `defaultDurationMinutes`. The schema also accepts
+`dataUsageLimitMBytes`, `rxRateLimitKbps` and `txRateLimitKbps`; this client sends none of them, so
+the body it emits is the discriminator plus the time limit and nothing else.
+
+=== Revoke guest access
+
+Same lookup, same path, same headers. The body is the discriminator alone:
+
+[source,json]
+----
+{"action": "UNAUTHORIZE_GUEST_ACCESS"}
+----
+
+IMPORTANT: `AUTHORIZE_GUEST_ACCESS` and `UNAUTHORIZE_GUEST_ACCESS` are the *only* two client actions
+the controller's schema admits. There is no `DISCONNECT`, `KICK` or `FORCE_RECONNECT`, and none is
+needed: unauthorizing a guest client also disconnects it. The two literals are spelled once each, as
+`UnifiClient.AuthorizeAction` and `UnifiClient.RevokeAction`.
+
+A 200 response carries a required `revokedAuthorization` object (`authorizationMethod`,
+`authorizedAt`, `expiresAt`, `usage`, rate limits). The client ignores the body and only checks the
+status code.
+
+=== Official documentation
+
+* UniFi Network Integration API — https://help.ui.com/hc/en-us/articles/30076656117655
+* External Hotspot API (the captive-portal redirect side) —
+  https://help.ui.com/hc/en-us/articles/31228198640023
+
+== Per-location configuration
+
+Configuration is rows in the database, one per location, written by the MCP backoffice. There is no
+configuration file: the `locations` table is the configuration surface.
+
+=== Columns
+
+[cols="2,2,1,1,1,4"]
+|===
+| Column (`locations`) | `LocationRow` field | Type | Optional | Default | What it controls
+
+| `unifi_host` | `unifiHost` | TEXT | required | — | Controller address on the customer LAN, without
+  scheme or port. An IPv6/ULA literal is bracketed automatically.
+| `unifi_api_token` | `unifiApiToken` | TEXT | required | — | The `X-API-KEY` value.
+| `unifi_site_id` | `unifiSiteId` | TEXT | required | — | Site UUID in every request path. Must be
+  the UUID from `GET /sites`, not a site name.
+| `unifi_port` | `unifiPort` | INTEGER | optional | `443` | Controller port.
+| `unifi_duration_minutes` | `unifiDurationMinutes` | INTEGER | optional | `1440` (24 h) | The
+  authorize call's `timeLimitMinutes` and the `accessExpiresAt` the session is stamped with.
+| `unifi_ap_mac` | `unifiApMac` | TEXT | optional | — | The AP the portal-dispatcher Lambda matches
+  on to resolve this location's slug; also the expected value in the `X-Ap-Mac` soft validation.
+| `unifi_redirect_url` | `unifiRedirectUrl` | TEXT | optional | dispatcher default
+  `https://<cloudfront-host>/<slug>/` | Overrides where the dispatcher sends the device, preserving
+  the controller's query parameters. For a location running its own portal SPA behind this system's
+  static IP.
+|===
+
+"Required" means required for the integration to do anything. `UnifiAccess.fromRow` is a
+for-comprehension over host, token and site id and yields `None` if any one of them is absent:
+
+[source,scala]
+----
+def fromRow(row: LocationRow): Option[UnifiAccess] =
+  for
+    host   <- row.unifiHost
+    token  <- row.unifiApiToken
+    siteId <- row.unifiSiteId
+  yield UnifiAccess(host, token, row.unifiPort.getOrElse(443), siteId,
+                    row.unifiDurationMinutes.getOrElse(1440))
+----
+
+With `None` the handler logs `UniFi <action>: no config for current location — skipping` and
+returns, so the session stays `Ready`. `api/src/whitelabel/captal/api/session/CurrentLocation.scala`
+resolves this once at startup from the `LOCATION_SLUG` row and holds it in memory; there is no
+per-request lookup, so a configuration change takes effect on the next task start.
+
+The migrations that shaped these columns: **V16** added `unifi_host`, `unifi_port`, `unifi_site`,
+`unifi_use_os`, `unifi_api_token` and `unifi_duration_minutes`. **V17** added
+`sessions.access_expires_at` (TEXT, an ISO-8601 instant). **V18** moved to Integration v1 — renamed
+`unifi_site` to `unifi_site_id` for the shift from name to UUID, and dropped `unifi_use_os`, which
+the uniform `/proxy/network/integration/v1` path made irrelevant. **V19** renamed the standalone
+`ap_mac` (V11) to `unifi_ap_mac` and added `unifi_redirect_url`. See xref:database.adoc[Database].
+
+=== Which tool writes them
+
+`configure_unifi` (`UnifiTools.configure`, scope `content:write`) is the only writer. It takes a
+slug and nothing else: no token travels through the conversation. The tool returns a short-lived
+ticket, an absolute `postUrl`, and the location's current values with `tokenSet: Boolean` in place of
+the token, and points the host at the MCP App `ui://configure-unifi`. The operator types the
+credentials into that page and the browser posts them directly to `POST /ui/unifi`
+(`mcp/src/whitelabel/captal/mcp/apps/UiRoutes.scala`), outside the MCP protocol.
+
+Behaviour of that write:
+
+* The ticket is the authorization. It is signed with the calling operator token's own stored SHA-256
+  hash, names one location, and expires in minutes — so revoking the token invalidates the pages it
+  opened without touching anyone else's. `Access-Control-Allow-Origin: *` is safe on the route
+  precisely because no cookie or ambient header grants anything there.
+* `host` and `siteId` are required on every submission. `apiToken` is required only when the
+  location has none stored.
+* A blank field means "leave it alone", not "unset". This is how the form avoids ever rendering a
+  stored token back.
+* `port` and `durationMinutes` must parse as positive integers or the page shows an error.
+* The response body names the host it configured and never the token.
+
+`get_unifi_config` (`UnifiTools.status`, read-only) reports the same fields and
+`configured = host.isDefined && siteId.isDefined && tokenSet`. The token value is never returned by
+any tool.
+
+=== The proxy URL
+
+One setting is not per-location: the HTTP proxy the API dials the controller through.
+`api/resources/application.conf` reads it from the environment —
+
+[source]
+----
+unifi {
+  proxy-url = ""
+  proxy-url = ${?UNIFI_PROXY_URL}
+}
+----
+
+— and `ServerSettings.unifiProxyUrl` feeds `UnifiClient.trustAllClientLayer`. Empty means a direct
+connection, which only works when the API runs on the controller's own LAN (local development). An
+unparseable value fails the layer at startup with `Invalid UNIFI_PROXY_URL '<raw>'`.
+
+== Network path in deployment
+
+A Fargate task has no route to a customer's LAN, so the deployed chain is:
+
+[source]
+----
+API task (ECS Fargate)
+  → HTTP CONNECT proxy  tailscale-proxy.<namespace>:1055  (Fargate, Tailscale userspace)
+  → tailnet
+  → Tailscale subnet router (VM on the customer's premises)
+  → customer LAN
+  → UniFi controller :443
+----
+
+=== The Tailscale proxy
+
+`terraform/modules/tailscale-proxy/` runs the `tailscale/tailscale:stable` image as its own Fargate
+service, registered in service discovery as `tailscale-proxy.<namespace>` (A record, TTL 10). Its
+container environment is the contract:
+
+[cols="2,3"]
+|===
+| Variable | Value and purpose
+
+| `TS_USERSPACE` | `true` — Fargate does not allow `tun`/`tap` devices.
+| `TS_OUTBOUND_HTTP_PROXY_LISTEN` | `0.0.0.0:1055` — the HTTP CONNECT listener the API dials.
+| `TS_EXTRA_ARGS` | `--accept-routes` to pick up the on-prem router's subnet advertisements, plus
+  `--advertise-routes=<vpc_cidr>` so tailnet devices can reach VPC resources. The advertised route
+  must be approved once in the Tailscale admin console.
+| `TS_STATE_DIR` | `/tmp/tailscale` — the Fargate filesystem is read-only outside `/tmp`.
+| `TS_AUTHKEY` | From Secrets Manager. The key is minted by Terraform (reusable, ephemeral,
+  preauthorized, tagged `tag:captal-proxy`), and the secret's version id is passed in as a plain
+  environment variable so a rotation changes the task definition and rolls the service.
+|===
+
+Its security group accepts ingress on 1055 only from the application task security group, and allows
+all egress (the Tailscale control plane, STUN and DERP relays all need it). The module's `proxy_url`
+output is the value `UNIFI_PROXY_URL` expects: `http://tailscale-proxy.<namespace>:1055`.
+
+WARNING: Nothing in this repository currently sets `UNIFI_PROXY_URL` on the API task.
+`Deploy.registerTaskDefinition` (`mcp/src/whitelabel/captal/mcp/aws/Deploy.scala`) puts only
+`LOCATION_SLUG` and `DB_URL` in the container environment, so a task deployed through the backoffice
+dials the controller directly and cannot reach an on-prem LAN. See
+xref:context/pending.adoc[Pending work].
+
+=== TLS
+
+UniFi consoles serve a self-signed certificate, so the client layer trusts all certificates:
+
+[source,scala]
+----
+ZClient.Config.default.copy(ssl = Some(ClientSSLConfig.Default), proxy = proxy)
+----
+
+In zio-http 3.x `ClientSSLConfig.Default` is trust-all. Transport security on this path is provided
+by the Tailscale overlay, not by the TLS session: the tunnel is what authenticates the peer and
+encrypts the carriage. In local development, where there is no tunnel, the call is plain trust-all
+HTTPS on the LAN.
+
+=== Static IPv4 and the portal dispatcher
+
+The controller's External Portal Server field validates as IPv4 only — it takes no hostname — so the
+portal needs a stable address rather than a CloudFront domain.
+
+`terraform/modules/global-accelerator/` provisions a standard accelerator (`ip_address_type =
+IPV4`), which yields two static anycast IPv4 addresses that survive ALB recreation. Either one goes
+in the controller's External Portal Server field. The listener is TCP/80 with
+`client_affinity = NONE`, and the endpoint group sends 100% of traffic to the ALB, health-checked on
+`GET /` port 80 (the ALB's 301 counts as healthy).
+
+`terraform/modules/portal-dispatcher/` is the next hop. An ALB HTTP listener rule on `/guest/s/*`
+(priority 100, created by `terraform/modules/alb/` when `enable_portal_dispatcher_rule` is set)
+forwards to a Lambda target group running `dispatcher.py`:
+
+. Read the `ap` query parameter and lowercase it; a missing one is a 400.
+. `SELECT slug, unifi_redirect_url FROM locations WHERE LOWER(unifi_ap_mac) = '<ap>'` against rqlite
+  over its HTTP API (`http://rqlite.<namespace>:4001`, `level=none`, 5-second timeout). An
+  unreachable database is a 503; no matching row is a 404 naming the AP.
+. 302 to `<unifi_redirect_url><?|&><params>` when the override is set, otherwise to
+  `https://<CLOUDFRONT_HOST>/<slug>/?<params>`, with `Cache-Control: no-store`. Every query
+  parameter the controller sent is forwarded verbatim.
+
+So the AP MAC is what selects the portal: one static IP serves every location, and a new location
+needs only its `unifi_ap_mac` row filled in. The whole accelerator-plus-dispatcher pair is behind
+`enable_global_accelerator`, which environments that do not integrate with UniFi leave off. See
+xref:infrastructure.adoc[Infrastructure].
+
+== Known caveats
+
+* **The site identifier is a UUID, not a name.** The API documentation writes `{siteId}`
+  ambiguously, but the endpoint accepts only the UUID returned by `GET /sites`. Putting `default`
+  there yields 404 on every call.
+* **Self-signed TLS.** The client trusts all certificates by configuration. Outside the Tailscale
+  tunnel there is no peer authentication on this connection at all.
+* **A client lookup is empty until the device has associated.** `GET /clients?filter=…` only knows
+  devices that are on the guest network, even pre-authorization. If the device has not associated,
+  or associated to a different SSID, `data` is `[]`, the client fails with
+  `no client found for MAC …`, and the handler logs an error and leaves the session in `Ready` for
+  the next `POST /api/finish` to retry.
+* **MAC normalisation is the caller's job.** The filter is an exact string match and the controller
+  stores lowercase-with-colons, so `UnifiClient.normalizeMac` lowercases and rewrites `-` to `:`
+  before building the filter. A MAC in any other spelling finds nothing.
+* **API-key scope follows the admin who created it.** The token belongs to that administrator
+  account; if the account is removed the token stops working. Rotation is manual — re-run
+  `configure_unifi` with the new value.
+* **The legacy `/api/s/<site>/cmd/stamgr` endpoint is deprecated and unused.** Nothing in this
+  system calls it, and nothing calls the legacy `stat/sta` polling endpoint either: the expiry
+  deadline is this system's own, computed from `defaultDurationMinutes`, and the controller is never
+  asked what it thinks a session's remaining time is.
+* **Revoke failures are absorbed, not retried.** The session reset is already committed when the
+  revoke runs, so the guest is back at `Welcome` either way, and the controller drops the
+  authorization on its own `timeLimitMinutes`. There is no second attempt.
+* **An empty `clientMac` skips the revoke** with a warning. Sessions created before V11, or without
+  portal parameters, carry `''`.
+* **Both events in one batch resolve to authorize.** The handler matches `UserFinishedProcess`
+  first, so a batch carrying both it and `AccessExpired` takes the authorize branch only.
+* **Three definitions of "configured" coexist.** `UnifiAccess.fromRow` and the readiness resource
+  require host, token and site id; `get_unifi_config` reports `host && siteId && tokenSet`;
+  `list_locations` reports only whether `unifi_host` is non-blank. A location can therefore show as
+  configured in a listing and still authorize nobody.
+* **The AP MAC mismatch warning still names `location.yaml`.** The log line in `SurveyRoutes` refers
+  to a provisioning file that no longer exists; the value it compares against is the
+  `locations.unifi_ap_mac` column.
+
+== Testing
+
+`api/test/src/whitelabel/captal/api/TestUnifiClient.scala` is the only stand-in for the controller.
+It implements `UnifiClient` and records `Call.Authorize(mac)` / `Call.Revoke(mac)` instead of
+reaching the network, so the suites exercise the production `UnifiAccessHandler` with only the
+transport swapped. It starts **inactive**, and while inactive every call fails — which is the
+"UniFi is not answering" path, asserted directly.
+
+`TestLayers` wires it in place of `UnifiClient.layer` and supplies a `CurrentLocation` carrying a
+fabricated `UnifiAccess` (`host = "unifi.test"`, `defaultDurationMinutes = 0`) so the handler walks
+the real code path and every authorization is due the instant it is granted.
+`suites/AuthorizedSuite.scala` covers the four outcomes that matter: `/api/status` reporting
+`Authorized` with `secondsRemaining`, the `/api/status` reset when the expiry is already past,
+`/api/finish` leaving the session in `Ready` when the authorize call fails, and the full scheduler
+path — authorize, then a `JobRunner`-driven expiry that resets the session, records
+`user.access_expired` and issues the revoke, all without the client asking for anything.
+`UnifiClient.noop` is the no-op implementation for any wiring that must never reach a controller.
+
+`UnifiClient` itself has no unit test. Its pure parts — `baseUrl`, `normalizeMac`, `extractClientId`
+— are public and testable, but `platform` has no test module in `build.mill` (`core`, `api` and
+`mcp` do), so there is nowhere in the build for such a suite to live. See
+xref:context/pending.adoc[Pending work] and xref:testing.adoc[Test strategy].

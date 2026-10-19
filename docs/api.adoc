@@ -1,0 +1,758 @@
+= Guest API
+:toc:
+:toclevels: 2
+
+The `api` module is the guest-facing HTTP server of the captive portal: one process per location,
+serving fifteen zio-http routes over the content the MCP backoffice writes. It reads the database
+and never provisions it.
+
+== What the module is
+
+One JVM process serves one location. `LOCATION_SLUG` names which row of the `locations` table the
+process is bound to, and everything derived from it — the API path prefix, the session cookie name,
+the UniFi controller credentials, the `location_id` stamped on every session — is resolved once at
+startup and held in memory.
+
+Content is read-only here. Surveys, questions, videos, advertisers, localized texts and the
+location row itself are written by xref:mcp.adoc[MCP backoffice] tools; starting a container is
+never a write. The module's dependencies are `core` (domain, commands, handlers), `messages` (the
+request/response vocabulary shared with xref:client.adoc[Client]) and `platform` (Quill schema,
+repositories, session services, event handlers, UniFi client).
+
+[source,scala]
+----
+// build.mill
+object api extends BaseModule:
+  def moduleDeps = Seq(core, messages, platform)
+----
+
+Routes are described with zio-http `Endpoint` values and serialised with zio-schema. There is no
+tapir and no shared `endpoints` module: each endpoint description lives beside the handler that
+implements it, the wire types live in `messages/`, and their server-side `Schema` instances live in
+`api/src/whitelabel/captal/api/wire.scala`.
+
+== Boot and wiring
+
+`api/src/whitelabel/captal/api/Main.scala` is a `ZIOAppDefault` and does five things in order:
+resolve settings, start the scheduler fibers, log what is mounted, assemble the routes, serve.
+
+[source,scala]
+----
+program.provide(ServerSettings.layer, Server.live, AppLayers.appLayers)
+----
+
+=== Environment
+
+`api/src/whitelabel/captal/api/ServerSettings.scala` loads Typesafe Config once
+(`ConfigFactory.load()`), which resolves `api/resources/application.conf`. Every setting has an
+environment-variable override; empty strings are normalised to `None`.
+
+[cols="2,2,2,4"]
+|===
+|Variable |Config key |Default |Effect
+
+|`LOCATION_SLUG`
+|`location.slug`
+|`""` (unset)
+|The location this process serves. Drives `ApiBase`, `SessionCookieConfig`, `CurrentLocation` and
+the `location_id` used by `SessionService` and `LocaleService`.
+
+|`DB_URL`
+|`database.jdbcUrl`
+|`jdbc:rqlite:http://localhost:4001`
+|Read by `platform/src/whitelabel/captal/platform/RqliteDataSource.scala`, not by `ServerSettings`.
+See xref:database.adoc[Database].
+
+|`SERVER_HOST`
+|`server.host`
+|`0.0.0.0`
+|Bind address of `Server.Config`.
+
+|`SERVER_PORT`
+|`server.port`
+|`8080`
+|Bind port.
+
+|`SERVER_DEV_MODE`
+|`server.dev-mode`
+|`true` in `application.conf`, `false` in `Dockerfile.api`
+|Mounts the SPA catch-all, the dev static assets and the Scala.js linker output directories.
+
+|`SERVER_DEV_ENDPOINTS`
+|`server.dev-endpoints`
+|`true` in `application.conf`; a `Dockerfile.api` build arg defaulting to `false`
+|Mounts `LocaleRoutes.devRoutes` (`POST /api/dev/reset-phase`).
+
+|`UNIFI_PROXY_URL`
+|`unifi.proxy-url`
+|`""` (unset)
+|Passed to `UnifiClient.trustAllClientLayer`, which builds a `ZClient.Config` with
+`ClientSSLConfig.Default` and, when set, `Proxy(url)`. An unparseable URL fails layer construction.
+See xref:unifi.adoc[UniFi integration].
+
+|`PROVISION_DIR`
+|`provision.dir`
+|`""`
+|Read into `ServerSettings.provisionDir` and never used.
+
+|`SHARED_DIR`
+|`shared.dir`
+|`""`
+|Read into `ServerSettings.sharedDir` and never used.
+|===
+
+NOTE: `TEST_DB_URL` overrides the JDBC URL in `api/test/resources/test.conf` only; `CLIENT_LINKER`
+is read by Mill tasks, not by the server. See xref:testing.adoc[Test strategy] and
+xref:development.adoc[Local development].
+
+=== Layer composition
+
+`api/src/whitelabel/captal/api/AppLayers.scala` holds one `ZLayer.makeSome` producing
+`FullEnv & Server.Config & JobRunner` from `ServerSettings`. `FullEnv` is the type alias for
+everything a request handler may ask for: `SessionContext`, `SessionService`, `LocaleService`,
+`QuillSqlite`, `SessionCookieConfig`, `ApiBase`, `CurrentLocation`, `UserCookieConfig`,
+`UserLookup`, the five route classes, and the nine `Flow.Aux` refinements the routes resolve by
+type.
+
+`JobRunner` is produced by the composition but deliberately absent from `FullEnv`: `Main.run`
+consumes it to fork the scheduler and no endpoint needs it. The scheduler's `Scope` is created with
+`Scope.make` and provided only to `jobRunner.start`; it is never closed, so the fibers live as long
+as the process.
+
+Three groups of layers:
+
+Infrastructure:: `RqliteDataSource.layer`, `Quill.Sqlite.fromNamingStrategy(SnakeCase)`,
+`SurveyRepositoryQuill.layer`, `UserRepositoryQuill.layer`, `VideoRepositoryQuill.layer`,
+`SessionContext.make`, `JobQueue.layer`, `JobRunner.layer`.
+
+Location-aware:: `locationServiceLayer`, `sessionServiceLayer`, `localeServiceLayer`,
+`sessionCookieConfigLayer`, `currentLocationLayer`, `ApiBase.layer`, `unifiHttpClientLayer`,
+`UnifiClient.layer`. Each of these reads `ServerSettings.locationSlug`; the session and locale
+services take an `Option[String]` location id and scope their queries by it.
+
+Routes and flows:: the five `*Routes.layer` values plus `Flows.eventHandlerLayer` and the ten
+`Flows.*FlowLayer` values (nine reachable from an endpoint, plus `expireAccessFlowLayer`).
+
+`Flows.scala` builds one layer per command. `eventHandlerLayer` is the chain every flow writes
+through — see <<request-lifecycle>>. `expireAccessFlowLayer` is the one flow no endpoint calls: the
+`JobRunner` executes it when a granted access expires. `markVideoWatchedFlowLayer` is built by hand
+rather than by `Flow(...)`, because `MarkVideoWatchedHandler.withSession` needs the session and so
+can only be constructed per request.
+
+`Phases.scala` is the pipeline expressed as values, and is the only place the order of the guest
+journey is written down:
+
+[cols="3,2,5"]
+|===
+|Value |Kind |Meaning
+
+|`nextAfterIdentification`
+|`NextStep(AdvertiserVideo)`
+|Emitted on success by the three `Answer*` identification handlers.
+
+|`nextAfterVideo`
+|`NextStep(AdvertiserVideoSurvey)`
+|Emitted by `MarkVideoWatchedHandler`.
+
+|`nextAfterAdvertiserSurvey`
+|`NextStep(Ready)`
+|Emitted by `AnswerAdvertiserHandler`.
+
+|`fallbackFromIdentification`
+|`FallbackPhase(AdvertiserVideo)`
+|Where `ProvideNextIdentificationSurveyHandler` sends a visitor with no survey left.
+
+|`unidentifiableFallback`
+|`FallbackPhase(Ready)`
+|No user and no identification survey: the deployment cannot identify anyone, so the journey ends.
+
+|`fallbackFromVideo`
+|`FallbackPhase(Ready)`
+|No video seeded for the location.
+
+|`fallbackFromAdvertiserSurvey`
+|`FallbackPhase(Ready)`
+|No advertiser question for the video shown.
+|===
+
+`nextAfterIdentification.phase` and `nextAfterVideo.phase` are also handed to `SessionPhaseHandler`
+inside `eventHandlerLayer`, so the handler and the response agree by construction.
+
+=== Location resolution and boot failure
+
+Two layers resolve `LOCATION_SLUG` against the database, and both fail the whole composition when
+the slug is absent from the `locations` table:
+
+* `resolveLocationId` (used by `sessionServiceLayer` and `localeServiceLayer`) calls
+  `LocationService.resolveSlug`, which fails with `LocationService.LocationNotFound(slug)` after
+  logging `Configuration error: …`.
+* `currentLocationLayer` calls `LocationService.findBySlug(...).someOrFail(LocationNotFound(slug))`.
+
+`LocationNotFound` is a `RuntimeException` whose message is
+`Location '<slug>' not found. Verify LOCATION_SLUG is correct and the location has been
+provisioned.` Because `appLayers` is `ZLayer[ServerSettings, Throwable, …]`, the failure happens
+during layer construction: nothing binds the port, `Server.serve` is never reached, and the process
+exits non-zero. A location must exist in the database before its task starts.
+
+IMPORTANT: With no `LOCATION_SLUG` the server still boots. `ApiBase` adds no prefix, the session
+cookie falls back to `captal_session` at `Path=/`, `CurrentLocation` is `CurrentLocation.empty` (no
+UniFi, no AP MAC to validate against) and the session and locale services are built with
+`locationId = None`, so their queries are not scoped to a location. This is a development shape, not
+a deployment shape.
+
+`CurrentLocation.make` in `session/CurrentLocation.scala` builds the same snapshot and has no call
+site in `api/src`; the server uses the inline `currentLocationLayer` in `AppLayers`.
+
+=== Route mounting
+
+`ApiBase.scala` is the one place the slug prefix is applied, and it is applied to each
+`RoutePattern` while the `Endpoint` is still being built:
+
+[source,scala]
+----
+final case class ApiBase(slug: Option[String]):
+  def apply[A](pattern: RoutePattern[A]): RoutePattern[A] =
+    slug.fold(pattern)(s => pattern.nest(PathCodec.literal(s)))
+----
+
+Every route therefore reads `Endpoint(base(Method.GET / "api" / …))`. Nesting the assembled `Routes`
+instead rewrites the route pattern but not the endpoint's codec, which makes a prefixed request
+match a route and then fail to decode.
+
+`HttpApp.scala` assembles what the port answers:
+
+* `apiRoutes` concatenates `HealthRoutes.routes(base)`, `finishRoutes.routes`,
+  `localeRoutes.routes`, `videoRoutes.routes`, `surveyRoutes.routes`,
+  `advertiserSurveyRoutes.routes`, appends `localeRoutes.devRoutes` when `devEndpoints`, and applies
+  `CodecConfig.withConfig(HttpApp.codecConfig)`.
+* `routes` wraps that; when `devMode` is on it also mounts `devStaticRoutes`
+  (`assets/styles.css`, `brand-icon.svg`, at the root and under the slug), `spaCatchAllRoutes`
+  (`GET` on `""`, `question`, `video`, `survey`, `ready`, at the root and under the slug, all
+  serving `client/index.html`) and `devLinkerOutput` (`Middleware.serveDirectory` over
+  `out/client/fastLinkJS.dest` and `out/client/bundle.dest`).
+* `loggingMiddleware` wraps everything and logs `METHOD path -> status (Nms)` per response, or
+  `-> ERROR (Nms): …` on a failed handler.
+
+`HttpApp.codecConfig` is `CodecConfig(ignoreEmptyCollections = false)`, which keeps empty
+collections in responses. It is part of the wire format: the browser's derived circe decoders read
+an absent field as a decode failure, not as an empty list.
+
+`Main` logs the bind address, the dev flags, the session cookie name and path, and the rendered
+pattern of every mounted API route at startup.
+
+== Wire format
+
+`api/src/whitelabel/captal/api/wire.scala` holds the server's half of the wire format: one
+zio-schema `Schema` per type a route sends or receives. It is JVM-only and lives here rather than
+beside the types, because the browser decodes the same types with circe instances defined in
+`messages/`.
+
+The instances: `Phase`, `ApiError`, `StatusResponse`, `SetLocaleRequest`, `I18n`, `NextStep`,
+`NextVideo`, `VideoResponse`, `MarkVideoWatchedRequest`, `VideoWatchedResponse`, `SurveyResponse`,
+`AnswerRequest`, `NextAdvertiserSurvey`, `AdvertiserSurveyResponse`. The survey question tree itself
+is not here — it is `platform.surveySchemas`, shared with the columns (`question_rules.rule_config`,
+`answers.answer_value`) that the backoffice writes.
+
+All but one are `DeriveSchema.gen`. `Phase` is hand-written and goes over the wire as a plain string:
+
+[source,scala]
+----
+given Schema[Phase] = Schema[String].transform(Phase.fromDbString, Phase.toDbString)
+----
+
+So `StatusResponse.phase` serialises as `"ready"`, `"advertiser_video_survey"`, `"authorized"` and
+so on, while `ApiError` and the `*Response` enums use the derived shape with the payload nested
+under the variant name (`{"Video":{"data":{…}}}`). Two sides of one contract are pinned against each
+other by suites under `api/test/` — see xref:testing.adoc[Test strategy].
+
+== Endpoints
+
+Fifteen routes. Paths below are literal; when `LOCATION_SLUG` is set every one of them is prefixed
+with `/<slug>` (so `/cafe-centro/api/status`). All session-bearing routes take the whole `Cookie`
+header as an optional input and pick their cookie out of it. Every route except `/api/health`
+declares `outError[ApiError](Status.BadRequest)`.
+
+[cols="1,3,2,3,3"]
+|===
+|Method |Path |Request body |Response |Phases allowed
+
+|GET
+|`/api/health`
+|–
+|`HealthResponse` (`{"status":"ok"}`)
+|no session read
+
+|POST
+|`/api/finish`
+|–
+|`StatusResponse`
+|`Ready`
+
+|GET
+|`/api/locales`
+|–
+|`List[String]`
+|no session read
+
+|GET
+|`/api/i18n/{locale}`
+|–
+|`I18n`
+|no session read
+
+|PUT
+|`/api/session/locale`
+|`SetLocaleRequest`
+|`StatusResponse` + `Set-Cookie` (session)
+|any; session required
+
+|GET
+|`/api/video/next`
+|–
+|`VideoResponse` (`Video` or `Step`)
+|`AdvertiserVideo`
+
+|POST
+|`/api/video/watched`
+|`MarkVideoWatchedRequest`
+|`VideoWatchedResponse`
+|`AdvertiserVideo`
+
+|GET
+|`/api/status`
+|–
+|`StatusResponse` + optional `Set-Cookie` (session)
+|any; creates a session when missing
+
+|GET
+|`/api/survey/next`
+|–
+|`SurveyResponse` (`Survey` or `Step`)
+|`Welcome`, `IdentificationQuestion`
+
+|POST
+|`/api/survey/email`
+|`AnswerRequest`
+|`SurveyResponse` + optional `Set-Cookie` (`captal_user`)
+|`IdentificationQuestion`
+
+|POST
+|`/api/survey/profiling`
+|`AnswerRequest`
+|`SurveyResponse`
+|`IdentificationQuestion`
+
+|POST
+|`/api/survey/location`
+|`AnswerRequest`
+|`SurveyResponse`
+|`IdentificationQuestion`
+
+|GET
+|`/api/survey/advertiser/next`
+|–
+|`AdvertiserSurveyResponse` (`Survey` or `Step`)
+|`AdvertiserVideoSurvey`
+
+|POST
+|`/api/survey/advertiser`
+|`AnswerRequest`
+|`AdvertiserSurveyResponse`
+|`AdvertiserVideoSurvey`
+
+|POST
+|`/api/dev/reset-phase`
+|–
+|`StatusResponse`
+|any; session required. Mounted only when `server.dev-endpoints` is true
+|===
+
+Where each is defined:
+
+[cols="3,4"]
+|===
+|Source |Routes
+
+|`api/src/whitelabel/captal/api/routes/HealthRoutes.scala`
+|`/api/health`
+
+|`api/src/whitelabel/captal/api/routes/SurveyRoutes.scala`
+|`/api/status`, `/api/survey/next`, `/api/survey/{email,profiling,location}`
+
+|`api/src/whitelabel/captal/api/routes/VideoRoutes.scala`
+|`/api/video/next`, `/api/video/watched`
+
+|`api/src/whitelabel/captal/api/routes/AdvertiserSurveyRoutes.scala`
+|`/api/survey/advertiser/next`, `/api/survey/advertiser`
+
+|`api/src/whitelabel/captal/api/routes/FinishRoutes.scala`
+|`/api/finish`
+
+|`api/src/whitelabel/captal/api/routes/LocaleRoutes.scala`
+|`/api/locales`, `/api/i18n/{locale}`, `/api/session/locale`, and `/api/dev/reset-phase` in
+`devRoutes`
+|===
+
+=== Health
+
+`/api/health` is the only route with no error output (`Routes[Any, Nothing]`) and no session: it
+answers a constant. It is prefixed with the slug like everything else, so a load balancer targeting
+a location checks `/<slug>/api/health`.
+
+=== Dev-only endpoints
+
+`POST /api/dev/reset-phase` resolves the session, sets its phase back to `Phase.Welcome` and
+answers `StatusResponse(Welcome, locale)`. It is the sole member of `LocaleRoutes.devRoutes`, and
+`HttpApp.apiRoutes` appends `devRoutes` only when `ServerSettings.devEndpoints` is true
+(`server.dev-endpoints`, `SERVER_DEV_ENDPOINTS`). `Dockerfile.api` sets that build arg to `false`
+by default; the dev image sets it to `true`.
+
+The other dev surface — the SPA catch-all, `client/assets`, the linker output directories — is
+gated by the separate `server.dev-mode` / `SERVER_DEV_MODE` flag and serves no API.
+
+=== Phase transitions owned by routes
+
+Three routes write a phase themselves rather than relying on the event handlers:
+
+* `GET /api/survey/next` moves `Welcome → IdentificationQuestion` before executing the flow, and
+  when the flow answers `SurveyResponse.Step(step)` it writes `step.phase` onto the session. The
+  event-driven `SessionPhaseHandler` only reacts to events that imply progress, and a fallback
+  `NextStep` emits none.
+* `GET /api/video/next` does the same for `VideoResponse.Step(step)`.
+* `GET /api/survey/advertiser/next` does the same for `AdvertiserSurveyResponse.Step(step)`, and
+  `POST /api/survey/advertiser` sets `Phase.Ready` unconditionally after the answer — one advertiser
+  question per video.
+
+Both advertiser routes read `currentVideoId` off the session, never from the request; a session with
+no `currentVideoId` is answered `ApiError.InternalError("No video ID in session")`.
+
+== Session and identity
+
+=== Session cookie
+
+`api/src/whitelabel/captal/api/session/SessionCookieConfig.scala` derives name and path from the
+slug:
+
+[source,scala]
+----
+def fromSlug(slug: Option[String]): SessionCookieConfig =
+  slug match
+    case Some(s) => SessionCookieConfig(s"captal_session_$s", s"/$s")
+    case None    => SessionCookieConfig("captal_session", "/")
+----
+
+Both halves are load-bearing. Several locations are served from one domain under different path
+prefixes, and the browser keys a cookie entry on name *and* path: a single global cookie name would
+make one location's session the other's, and the second portal would resolve a session belonging to
+the first. Name and path must therefore agree across every route that writes this cookie —
+`/api/status` and `/api/session/locale` both do.
+
+Two members:
+
+`valueFrom(header: Option[Header.Cookie])`:: picks this deployment's cookie out of the request's
+whole `Cookie` header by name. The header input is declared `HeaderCodec.cookie.optional` on every
+route, so a request carrying no cookies reaches the handler instead of being rejected by the codec;
+what a missing session means is each route's decision.
+
+`asSetCookie(value: String)`:: a `Set-Cookie` carrying name, value and `Path` — nothing else.
+
+=== User cookie
+
+`api/src/whitelabel/captal/api/session/UserCookieConfig.scala` is the cross-location counterpart:
+`captal_user`, `Path=/`, `Max-Age` 2 592 000 seconds (30 days), `Secure`, `HttpOnly`,
+`SameSite=Lax`. It is a fixed value (`UserCookieConfig.default`, provided by `UserCookieConfig.layer`),
+not derived from the slug — `Path=/` is what makes the browser send it to every location on the
+domain, and the `Max-Age` is what makes it outlive the tab.
+
+It is written by `POST /api/survey/email` (from the `userId` that `UserPersistenceHandler` put into
+`SessionContext` during the flow) and read by `GET /api/status`, where a returning visitor's
+`user.Id` turns session creation into `OnMissing.CreateForUser` so the email question is skipped.
+
+`api/src/whitelabel/captal/api/session/UserLookup.scala` is the validation behind that: a single
+`trait UserLookup { def existsById(userId: user.Id): UIO[Boolean] }` over `QuillSqlite`, kept
+separate from `UserRepository` because `UserRepository` is state-based and reads the ambient
+`SessionContext`, which does not exist yet while a session is being created. A `captal_user` cookie
+whose id is malformed or absent from the `users` table falls back to a plain `OnMissing.Create`.
+
+=== Current location
+
+`api/src/whitelabel/captal/api/session/CurrentLocation.scala` is the startup snapshot
+`(id, slug, apMac, unifi)` of the row `LOCATION_SLUG` names, so neither AP-MAC validation nor the
+UniFi call needs a per-request query. `CurrentLocation.empty` is what a slugless server gets.
+
+=== Captive-portal headers
+
+`GET /api/status` is the only route reading them, and the only route that can create a session:
+
+[source,http]
+----
+GET /cafe-centro/api/status
+Cookie: captal_session_cafe-centro=…; captal_user=…
+User-Agent: …
+X-Client-Mac: aa:bb:cc:dd:ee:ff
+X-Click-Id: …
+X-Ap-Mac: 11:22:33:44:55:66
+X-Redirect-Url: http://example.com/
+X-Ssid: Guest
+----
+
+All seven inputs are optional at the codec level; the rules are in the handler.
+
+[cols="2,2,4"]
+|===
+|Header |On session CREATE |Notes
+
+|`X-Client-Mac`
+|Mandatory
+|One half of the pair that builds `CaptivePortalParams`.
+
+|`X-Click-Id`
+|Mandatory, and must be non-empty
+|The other half.
+
+|`X-Ap-Mac`
+|Optional
+|Defaults to `""` in `CaptivePortalParams`; soft-validated, see below.
+
+|`X-Redirect-Url`
+|Optional
+|Defaults to `""`. Stored on the session and echoed back as `StatusResponse.redirectUrl` when
+non-empty.
+
+|`X-Ssid`
+|Optional
+|Defaults to `""`.
+
+|`User-Agent`
+|Optional
+|Defaults to `"unknown"`.
+|===
+
+`CaptivePortalParams` is built only when `X-Client-Mac` and a non-empty `X-Click-Id` are both
+present. If either is missing and the request has no resolvable session, `OnMissing.Create` has no
+params to create from and the route answers `ApiError.SessionMissing`.
+
+Once the session cookie resolves an existing session, all of these headers are ignored: the route
+returns that session's stored phase, locale and redirect URL, and the `CaptivePortalParams` it was
+created with. Only `X-Ap-Mac` is still inspected, by `softValidateApMac`, which runs before session
+resolution on every call.
+
+AP-MAC validation is soft by design. When an incoming `X-Ap-Mac`, a snapshotted
+`CurrentLocation.apMac` and a slug are all present and the two MACs differ after normalisation
+(lowercased, `-` replaced by `:`, trimmed), the route logs a warning naming both values and the
+client MAC, then proceeds. A mismatch never produces an error response.
+
+New sessions are created at `Phase.Welcome` with locale `"es"` (`SurveyRoutes.defaultLocale`). The
+locale is not negotiated: `session/LocaleDetector.scala` parses `Accept-Language` with quality
+values and falls back to `"es"`, but it has no call site — no route reads `Accept-Language`. A
+client changes language with `PUT /api/session/locale`.
+
+=== Expired access on status
+
+When a resolved session is at `Phase.Authorized` with an `accessExpiresAt` already in the past,
+`/api/status` calls `SessionService.resetForExpiration` (phase back to `Welcome`, transient fields
+and `userId` cleared, row and cookie kept) and answers `StatusResponse(Welcome, locale, None)`. The
+user record and the `captal_user` cookie survive, so the next visit still skips the email question.
+Otherwise it answers the live phase plus
+`StatusResponse.secondsRemainingFrom(session.accessExpiresAt, now)` — a server-computed countdown,
+because a device behind a captive portal may have an unsynced clock.
+
+== Phase validation
+
+`api/src/whitelabel/captal/api/SessionEndpoint.scala` is an `object`, and is the single
+implementation of "resolve the session, check the phase, publish it":
+
+[source,scala]
+----
+def authorise(
+    cookie: Option[String],
+    onMissing: OnMissing,
+    allowedPhases: Seq[Phase]): ZIO[SessionService & SessionContext, ApiError, SessionData] =
+  for
+    session <- resolveSession(cookie, onMissing)
+    _       <-
+      if allowedPhases.isEmpty || allowedPhases.contains(session.phase) then ZIO.unit
+      else ZIO.fail(ApiError.WrongPhase(session.phase.toString, allowedPhases.map(_.toString).toList))
+    _ <- SessionContext.set(session)
+  yield session
+----
+
+An empty `allowedPhases` means any phase. Each route calls it with the phases from the table above,
+usually through a small private helper (`identifying`, `watching`, `session`).
+
+`resolveSession` decides what a cookie-less or unknown-session request means, driven by the
+`OnMissing` enum:
+
+[cols="2,5"]
+|===
+|`OnMissing` |Behaviour
+
+|`Fail`
+|No cookie → `ApiError.SessionMissing`. Cookie naming an unknown session → `ApiError.SessionExpired`.
+Used by every route but `/api/status`.
+
+|`Create(userAgent, locale, portalParams)`
+|Creates a `Phase.Welcome` session from `portalParams`; `None` params → `ApiError.SessionMissing`.
+
+|`CreateForUser(userAgent, locale, portalParams, userId)`
+|As `Create`, with `userId` pre-populated from the `captal_user` cookie.
+|===
+
+A cookie present but not parseable as a `user.SessionId` is `ApiError.SessionInvalid("Malformed
+session ID")` regardless of `OnMissing`.
+
+What the client receives on a phase violation is an HTTP 400 whose body is the derived `ApiError`
+encoding of `WrongPhase`, with phases rendered by Scala's `toString` (not the snake-case database
+spelling used elsewhere):
+
+[source,http]
+----
+HTTP/1.1 400 Bad Request
+
+{"WrongPhase":{"current":"Welcome","expected":["Ready"]}}
+----
+
+The session is published to `SessionContext` only after the phase check passes, so a rejected
+request never reaches a repository.
+
+== Error model
+
+Every error output is declared `outError[ApiError](Status.BadRequest)`, so every failure a route
+reports is an HTTP 400 carrying one variant of the closed `ApiError` ADT from
+`messages/src/whitelabel/captal/messages/ApiError.scala`. There are no other status codes in the
+module: no 401, no 403, no 404 from a route handler.
+
+`api/src/whitelabel/captal/api/ApiErrors.scala` is the translation:
+
+[source,scala]
+----
+def toApiError(error: Throwable): UIO[ApiError] =
+  error match
+    case Flow.HandlerError(errors) => ZIO.succeed(ApiError.fromAppErrors(errors))
+    case SessionContext.NotSet     => ZIO.succeed(ApiError.SessionMissing)
+    case other => ZIO.logErrorCause("Internal error", Cause.fail(other)).as(ApiError.fromThrowable(other))
+----
+
+* `Flow.HandlerError` carries a `NonEmptyChain[core.application.Error]`; `ApiError.fromAppErrors`
+  takes its head and maps the domain error — survey validation, user, video — onto the matching
+  `ApiError` variant (`RequiredAnswerMissing`, `TooManySelections`, `EmailAlreadyRegistered`,
+  `NoVideoAvailable`, and so on). The mapping is total and exhaustive over the domain enums.
+* `SessionContext.NotSet` means a handler reached a repository without a published session, and is
+  reported as `SessionMissing`.
+* Anything else is logged with its `Cause` (stack trace preserved) and answered as
+  `ApiError.InternalError(message)` — the message only, never the trace.
+
+The route-level wrapper `asApiError`, duplicated in `SurveyRoutes`, `VideoRoutes`,
+`AdvertiserSurveyRoutes` and inline in `FinishRoutes`, catches the whole `Cause`: a typed failure
+goes through `ApiErrors`, and a defect is wrapped as `Exception(s"Defect: ${cause.prettyPrint}")`
+so it reaches the log instead of becoming a response with no record of why.
+
+Failures `SessionEndpoint` and `LocaleService` raise are already `ApiError` values and bypass this
+translation; `ApiError.fromThrowable` is what converts an infrastructure `Throwable` on those paths.
+
+== Finish and authorization
+
+`api/src/whitelabel/captal/api/routes/FinishRoutes.scala` holds one route, and it is where the
+guest journey turns into network access.
+
+[source,scala]
+----
+private val finish = Endpoint(base(Method.POST / "api" / "finish"))
+  .header(HeaderCodec.cookie.optional)
+  .out[StatusResponse]
+  .outError[ApiError](Status.BadRequest)
+----
+
+The handler, in order:
+
+. `SessionEndpoint.authorise(cookie, OnMissing.Fail, Seq(Phase.Ready))` — a session not at `Ready`
+  is a `WrongPhase` 400.
+. `FinishFlowType.execute(FinishCommand(now))`. `FinishHandler` reads the authorized-ready user
+  from `UserRepository` and emits `UserEvent.UserFinishedProcess`; see
+  xref:event-sourcing.adoc[Event sourcing].
+. The event handler chain runs. The transactional half commits; `UnifiAccessHandler` runs *after*
+  the commit and calls the location's controller with `AUTHORIZE_GUEST_ACCESS`. On success it sets
+  `Phase.Authorized` with `accessExpiresAt = occurredAt + defaultDurationMinutes` and schedules an
+  `ExpireAccess` job; on failure, or when the location has no UniFi configuration, it logs and
+  leaves the session at `Ready`. See xref:unifi.adoc[UniFi integration].
+. The route re-reads the session with `SessionService.findById` and builds the response from that
+  fresh snapshot.
+
+The re-read is what makes the response truthful. The `SessionData` the route authorised with was
+loaded before the flow ran, so it still says `Ready` with no expiry; the phase and `accessExpiresAt`
+the guest needs are written by a post-commit handler the route does not wait on through its own
+value. Reading the row back is how the route learns whether UniFi succeeded, and it saves the client
+a follow-up `/api/status`:
+
+[source,scala]
+----
+yield StatusResponse(
+  fresh.phase,
+  fresh.locale,
+  Option(fresh.redirectUrl).filter(_.nonEmpty),
+  StatusResponse.secondsRemainingFrom(fresh.accessExpiresAt, now))
+----
+
+So a successful finish answers `phase = "authorized"` with a `secondsRemaining`, and a finish whose
+UniFi call failed answers `phase = "ready"` with `secondsRemaining = null` — still a 200, because
+nothing in the domain failed. A session missing from the database between the authorise and the
+re-read is `ApiError.SessionMissing`.
+
+[[request-lifecycle]]
+== Request lifecycle
+
+One request, `POST /cafe-centro/api/survey/email`, end to end:
+
+. **Logging middleware** records the start time and delegates.
+. **Route matching.** The pattern is `/<slug>/api/survey/email`, because `ApiBase` nested the slug
+  into the `RoutePattern` when the `Endpoint` was built.
+. **Codec decode.** `HeaderCodec.cookie.optional` yields the whole `Cookie` header;
+  `.in[AnswerRequest]` decodes the body with the zio-schema instance from `wire.scala` under
+  `HttpApp.codecConfig`. A malformed body fails here, before the handler.
+. **Cookie extraction.** `cookieConfig.valueFrom(header)` picks `captal_session_cafe-centro` out of
+  the header by name.
+. **Authorisation.** `SessionEndpoint.authorise(value, OnMissing.Fail, Seq(IdentificationQuestion))`
+  loads the row through `SessionService` (scoped to this location's `location_id`), checks the phase,
+  and calls `SessionContext.set`. The context is a `FiberRef`, so everything downstream in the
+  request fiber sees the session without taking it as a parameter.
+. **Flow resolution.** `ZIO.service[AnswerEmailFlowType]` resolves the `Flow.Aux` refinement from
+  `FullEnv`; the layer was built in `Flows.scala` pairing `AnswerEmailHandler(surveyRepo,
+  nextAfterIdentification)` with the shared event handler.
+. **Command handling.** The handler reads through `SurveyRepository`, which reads the ambient
+  session, and returns an `Op` carrying domain events plus the value — here `NextStep`.
+. **Event handling.** `eventHandlerLayer`'s chain runs inside one transaction
+  (`TransactionalEventHandler` over `QuillSqlite`):
++
+`EventLogHandler` → `AnswerPersistenceHandler` → `UserPersistenceHandler` → `SessionPhaseHandler` →
+`SessionSurveyHandler` → `SessionVideoHandler` → `SessionExpirationHandler` → `SurveyProgressHandler`
++
+then, post-commit and outside the transaction, `UnifiAccessHandler` — so an HTTP failure reaching
+the controller cannot roll back persisted domain state.
+. **Response assembly.** The route maps the flow's value into `SurveyResponse`, re-reads
+  `SessionContext.get` for the `userId` that `UserPersistenceHandler` resolved, and attaches a
+  `captal_user` `Set-Cookie` when there is one.
+. **Encode and log.** zio-schema writes the body; the middleware logs
+  `POST /cafe-centro/api/survey/email -> 200 (23ms)`.
+
+A failure anywhere from step 5 on is turned into an `ApiError` by `asApiError`/`ApiErrors` and
+written as a 400 by the endpoint's error output; the middleware logs the status either way.
+
+Background work follows the same path without a request: `JobRunner` takes a due `ExpireAccess` job,
+wraps the flow in `SessionContext.locally(session)` so repositories and handlers read the session as
+they would in a request, and executes `ExpireAccessCommand` through the same chain.
+
+== See also
+
+* xref:core.adoc[Core] — commands, handlers, `Phase`, `NextStep`, the domain errors `ApiError` maps.
+* xref:messages.adoc[Messages] — the request and response types and their circe instances.
+* xref:platform.adoc[Platform] — `SessionService`, repositories, event handlers, `JobRunner`.
+* xref:client.adoc[Client] — the SPA that consumes these endpoints.
+* xref:mcp.adoc[MCP backoffice] — the writer of everything this module reads.
+* xref:database.adoc[Database] — schema, migrations, rqlite.
+* xref:unifi.adoc[UniFi integration] — the authorize/unauthorize calls behind `/api/finish`.
+* xref:event-sourcing.adoc[Event sourcing] — the handler chain and the event log.
+* xref:testing.adoc[Test strategy] — the suites under `api/test/`.
+* xref:infrastructure.adoc[Infrastructure] — `Dockerfile.api`, task definitions, the ALB and CDN.
+* xref:development.adoc[Local development] — `mill api.dev`, the rqlite container, dev flags.
+* xref:context/decisions.adoc[Decisions], xref:context/incidents.adoc[Incidents],
+  xref:context/pending.adoc[Pending work] — why the module looks like this.

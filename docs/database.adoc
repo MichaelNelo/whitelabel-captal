@@ -1,0 +1,409 @@
+= Database
+:toc:
+:toclevels: 2
+
+The database is rqlite: SQLite semantics behind a Raft-replicated HTTP API, reached from Scala
+through a JDBC driver. This document covers the schema, the two Flyway histories, the write-verification
+rule the driver forces on every caller, and the operational shape of the cluster.
+
+== What rqlite is in this system
+
+rqlite is a single process that owns a SQLite database and exposes it over HTTP (`/db/query`,
+`/db/execute`), replicating every write through Raft to its peers. From the application's point of
+view that means:
+
+* **SQLite semantics.** Dynamic typing, `TEXT` timestamps, `INTEGER` booleans, `CHECK` constraints,
+  `PRAGMA`-free operation, and the `ALTER TABLE` limitations SQLite has — a `CHECK` cannot be altered
+  in place, so changing one means rebuilding the table. Quill is configured as
+  `Quill.Sqlite[SnakeCase]` for exactly this reason.
+* **HTTP, not a socket.** Every statement is an HTTP request. There is no connection pool and no
+  persistent session; `RqliteDataSource` (`platform/src/whitelabel/captal/platform/RqliteDataSource.scala`)
+  is a bare `javax.sql.DataSource` whose `getConnection()` is `DriverManager.getConnection(url)`. The
+  JDBC URL is `jdbc:rqlite:http://<host>:<port>`, supplied as `DB_URL` and read from
+  `database.jdbcUrl`.
+* **Raft, not failover.** The driver points at one node and does not fail over. A node that
+  disappears produces `SQLException: No result set returned` on a connection that was pointed at it,
+  which is a distinct failure from the data being gone.
+* **Real transactions.** The driver honours `setAutoCommit(false)`, so `quill.transaction` and a
+  Flyway migration are genuinely atomic.
+
+=== Pinned versions
+
+|===
+| Component | Version | Where it is pinned
+
+| rqlite server (test + local containers, and the ECS image the deploy references)
+| `10.6.1`
+| `build.mill`, `private val rqliteVersion = "10.6.1"`
+
+| rqlite server (the custom production image)
+| `10.6.1`
+| `terraform/docker/rqlite/Dockerfile`, `FROM rqlite/rqlite:10.6.1`
+
+| JDBC driver
+| `io.rqlite:rqlite-jdbc:10.5.2.1`
+| `build.mill`, `object platform` `mvnDeps`
+
+| Quill
+| `io.getquill::quill-jdbc-zio:4.8.6`
+| `build.mill`, `object platform` `mvnDeps`
+
+| Flyway wrapper
+| `com.github.geirolz::fly4s:1.0.8`
+| `build.mill`, `object platform` `mvnDeps`
+
+| Custom rqlite image tag (ECR)
+| `1.0.4` in `dev` and `local`; unset in `prod`, which falls back to the `1.0.0` default
+| `terraform/environments/*/terraform.tfvars`, `terraform/variables.tf`
+|===
+
+IMPORTANT: The driver version tracks the server version. Moving one means moving the other —
+`terraform/docker/rqlite/Dockerfile`, `rqliteVersion` in `build.mill`, and the `rqlite-jdbc`
+dependency are three pins on the same decision. Since rqlite 10.6.0 a failed statement carries
+SQLite result codes that only the 10.x driver decodes, which is what makes an error identifiable by
+code rather than by matching its text.
+
+== The schema
+
+Two independent schemas live in one database. The portal schema is created and owned by the API
+(`platform/resources/db/migration`, `V1` … `V23`); the backoffice's own table is created and owned by
+the MCP server (`mcp/resources/db/migration-mcp`, `V1`).
+
+=== Portal tables
+
+|===
+| Table | Holds | Location scope
+
+| `users`
+| One row per identified guest: id, optional email, locale, timestamps. `idx_users_email` is a plain index, not unique — one-row-per-email is enforced in Scala by `UserPersistenceHandler`, which looks the email up before inserting.
+| **Global** — no `location_id`
+
+| `sessions`
+| One row per captive-portal visit: phase, device id, locale, the current survey/question/video/advertiser cursors, the `last_promo_video_id` rotation cursor, the captive-portal parameters (`client_mac`, `ap_mac`, `redirect_url`, `ssid`, `click_id`) and `access_expires_at`.
+| `location_id`
+
+| `devices`
+| One row per device, keyed by a UUIDv5 derived from the User-Agent.
+| Global
+
+| `device_users`
+| Many-to-many between devices and users, with first/last seen timestamps. Composite primary key.
+| Global
+
+| `surveys`
+| A survey: `category` (`email`, `profiling`, `location`, `advertiser`, enforced by a `CHECK`), optional `advertiser_id`, optional `video_id` for the survey that follows a video, optional `name`, `is_active`.
+| `location_id`
+
+| `questions`
+| A question of a survey: `question_type` (`radio`, `checkbox`, `dropdown`, `input`, `rating`, `numeric`, `date`), `points_awarded`, `display_order`, optional `hierarchy_level` (`state`, `city`, `municipality`, `urbanization`), `is_required`, `is_active`.
+| via its survey
+
+| `question_options`
+| Selectable options, optionally nested through `parent_option_id`. `display_order`, `is_active`.
+| via its question
+
+| `question_rules`
+| Validation rules: `rule_type` plus `rule_config`, a `TEXT` column holding the JSON that `surveySchemas` encodes and decodes. `is_active`.
+| via its question
+
+| `answers`
+| One row per answered question: user, session, question, `answer_value` as JSON, `answered_at`. `idx_answers_user_question` is UNIQUE on `(user_id, question_id)`, so a user answers each question once.
+| via its session
+
+| `user_survey_progress`
+| Per-(user, survey) progress, UNIQUE on that pair: `current_question_id`, `completed_at`, timestamps.
+| via its survey
+
+| `localized_texts`
+| Every translatable string: `entity_id`, `locale`, `value`, `category` (`frontend`, `backend`, …), `is_active`. UNIQUE on `(entity_id, locale, COALESCE(location_id, ''))`, so the same key can differ per location.
+| `location_id` (nullable = shared)
+
+| `advertisers`
+| An advertiser: name, `priority` (the weight in the random ad draw), `is_active`.
+| Global
+
+| `advertiser_videos`
+| A video: `video_type` (`ad` or `promo`, `CHECK`-constrained), `video_url` (NOT NULL — it carries the S3 key), `duration_seconds`, `min_watch_seconds`, `show_countdown`, `no_repeat_seconds`, `priority`, optional `product_campaign_id`, and `status` (`pending`, `active`, `retired`, `CHECK`-constrained).
+| `location_id`
+
+| `video_views`
+| One row per view: session, user, video, `duration_watched_seconds`, `completed`, `viewed_at`.
+| via its session
+
+| `locations`
+| A venue: `slug` (UNIQUE), `name`, `is_active`, and the UniFi block — `unifi_ap_mac`, `unifi_host`, `unifi_port`, `unifi_site_id`, `unifi_api_token`, `unifi_duration_minutes`, `unifi_redirect_url`.
+| is the scope
+
+| `event_log`
+| Append-only audit trail: `event_type`, `event_data` as JSON, session, user, `occurred_at`, `created_at`. Written by `EventLogHandler`; nothing reads it in the request path.
+| via its session
+
+| `migration_lock`
+| One row, `(id INTEGER PRIMARY KEY, holder TEXT NOT NULL)`. Created on demand by `Migrate.Lock`, not by a migration.
+| Global
+
+| `flyway_schema_history`
+| Flyway's own history for the portal schema.
+| Global
+|===
+
+=== Backoffice table
+
+|===
+| Table | Holds
+
+| `mcp_tokens`
+| One row per operator token: `token_sha256` (UNIQUE — the hash, never the token), `name`, `scopes` as a comma-separated list, `created_by` referencing the token that minted it (NULL for the seeded admin), `created_at`, and `revoked_at` for soft revocation. Indexed on the hash, which is the only lookup path, and on `created_by`.
+
+| `flyway_schema_history_mcp`
+| Flyway's own history for the backoffice schema.
+|===
+
+=== Scoping
+
+`users` is **global**: a guest identified at one venue is the same `users` row at the next, which is
+what lets a returning visitor skip the questions they have already answered. There is no
+`location_id` on it and none is implied by a join.
+
+Everything a venue configures or produces is scoped by location: `sessions`, `surveys`,
+`advertiser_videos`, `localized_texts` and `locations` carry `location_id` directly, and
+`questions`, `question_options`, `question_rules`, `answers`, `user_survey_progress`, `video_views`
+and `event_log` inherit it through their parent. `advertisers` and `devices` are global, like
+`users`.
+
+A nullable `location_id` means *shared*. `surveys.location_id IS NULL` is a deployment-wide survey
+(the email, profiling and location surveys are shared this way); `localized_texts.location_id IS
+NULL` is a default translation a location can override, which is why the unique index uses
+`COALESCE(location_id, '')`.
+
+NOTE: Each deployed task serves exactly one location, read from `LOCATION_SLUG` and resolved through
+`LocationService`. Scoping is therefore enforced in the query by a value the instance holds, not by a
+request parameter.
+
+=== Soft delete
+
+These tables carry `is_active INTEGER NOT NULL DEFAULT 1`:
+
+* `surveys` (`V1`)
+* `advertisers` (`V4`)
+* `locations` (`V9`)
+* `questions`, `question_options`, `question_rules`, `localized_texts` (`V20`)
+
+`advertiser_videos` does not. `V21` replaced its `is_active` with the three-state `status` column,
+because `pending` (created, no file in S3 yet) and `retired` (taken out of rotation deliberately)
+were both `is_active = 0` and are not the same thing. `active` is the only status the portal serves.
+
+`mcp_tokens` is soft-deleted through `revoked_at` rather than a flag, because a revoked token has to
+stay for the `created_by` chain to resolve.
+
+IMPORTANT: A soft delete is only real if **every** read path filters on it. The flag is not a
+constraint and the database will happily serve a deactivated row to a query that forgot the
+predicate. Adding `is_active` to a table is therefore half the change; the other half is auditing
+every reader. `V20` added indexes shaped for exactly that — `(survey_id, is_active)`,
+`(question_id, is_active)`, `(entity_id, is_active)` — so the predicate is cheap and there is no
+excuse to omit it.
+
+Two deliberate exceptions, both documented at the query:
+
+* `UserRepositoryQuill.findAnsweredQuestionsByUserQuery` does not filter, because it builds an audit
+  payload. Retiring a question must not rewrite the record of what a guest actually answered.
+* The backoffice's translation writes do not filter, because a write has to find a previously retired
+  row in order to bring it back.
+
+`SurveyService.isSurveyCompleteQuery` is the case where the predicate is needed on *both* sides of a
+comparison: it counts active questions against answers to active questions, and filtering only one
+side would let deactivating an answered question close a survey that still has unanswered ones.
+
+== Migrations
+
+=== Two independent histories
+
+|===
+| Owner | Location | History table | Contents
+
+| API (`platform`)
+| `platform/resources/db/migration`
+| `flyway_schema_history` (Flyway's default, exposed as `Migrate.ApiHistoryTable`)
+| `V1__initial_schema.sql` … `V23__drop_provision_manifest.sql` — every table the portal reads
+
+| MCP server (`mcp`)
+| `mcp/resources/db/migration-mcp`
+| `flyway_schema_history_mcp`
+| `V1__mcp_tokens.sql` — operator tokens, which nothing in the portal reads
+|===
+
+Both run through `Migrate.migrateTo(url, location, historyTable)` (see
+xref:platform.adoc[Platform]), differing only in those two arguments.
+
+The dependency between them is one-way and checked, not assumed. `mcp/src/whitelabel/captal/mcp/McpMigrate.scala`
+reads the API's highest applied version with `Migrate.highestApplied` and refuses to start unless it
+is at or past `RequiredApiVersion` (**21** today — `V20` added the `is_active` columns the backoffice
+writes, `V21` the video `status` that several tools branch on). The two failure messages are explicit:
+a version behind means "deploy the API first", and no history at all means "the API creates every
+table the backoffice reads, and this server deliberately does not".
+
+`McpMigrate` is also a `ZIOAppDefault`, so the backoffice schema can be laid down without starting a
+server.
+
+=== Migrations are append-only
+
+A migration that has been applied anywhere is frozen. A bug in `V<n>` is fixed by adding `V<n+1>`,
+never by editing `V<n>`:
+
+* Flyway records a checksum per applied migration and refuses to run against a history whose
+  checksums no longer match the files.
+* Every database that already applied the old `V<n>` would keep its result, so editing the file makes
+  fresh and existing databases diverge silently.
+
+The history under `platform/resources/db/migration` is what this looks like in practice: `V5` renames
+a column `V4` created, `V18` renames one `V16` created, `V21` replaces a flag `V4` added, `V22`
+rebuilds the table `V4` created in order to change a `CHECK` that cannot be altered in place, and
+`V23` drops a table `V10` added. None of the earlier files were touched.
+
+Two SQLite consequences worth knowing before writing one:
+
+* A `CHECK` cannot be altered. Changing the legal values of a column means creating a new table,
+  `INSERT ... SELECT`-ing into it, dropping the old one, renaming, and **recreating every index by
+  hand** — `V22` is the worked example.
+* An index that references a column blocks `DROP COLUMN`. Drop the index first (`V21` does, with `IF
+  EXISTS` so it stays replayable).
+
+=== Concurrency is not Flyway's problem to solve here
+
+WARNING: Flyway does **not** support concurrent migration on SQLite. Its `doLock()` for SQLite is a
+no-op, and it logs that it is not even trying: `Unable to lock flyway_schema_history as SQLite does
+not support locking. No concurrent migration supported.` Two processes migrating the same history at
+the same time is therefore an unguarded race.
+
+`Migrate.Lock` is what provides the exclusion — a one-row `migration_lock` table whose primary key is
+the mutex, taken inside `migrateTo` so no caller can forget it. A single statement goes through Raft,
+so of N concurrent inserts of the same key exactly one takes effect and every node agrees which. The
+mechanics, the 2-second poll, the 10-minute timeout and the manual-cleanup caveat for an abandoned
+lock are in xref:platform.adoc[Platform].
+
+The two histories need no lock between them: they are different tables, and the ordering is enforced
+by `McpMigrate`'s version check rather than by mutual exclusion.
+
+== Write verification
+
+This is the single most consequential property of the stack to know.
+
+rqlite reports a statement it refused as an `error` field **inside an HTTP 200 response**, and the
+JDBC driver turns that into zero affected rows rather than an exception. A constraint violation, a
+missing table, a rejected `CHECK` — none of them surface as a thrown error. Without checking the
+affected-row count, a write the database refused is indistinguishable from one it accepted.
+
+The guard is `mcp/src/whitelabel/captal/mcp/Writes.scala`:
+
+[source,scala]
+----
+object Writes:
+  def expectOne(affected: Long, what: String): ZIO[Any, String, Unit]
+  def expectAtLeastOne(affected: Long, what: String): ZIO[Any, String, Unit]
+----
+
+`expectOne` fails with `"<what> affected <n> rows, expected 1. The database rejected it silently."`
+when the count is anything but 1; `expectAtLeastOne` fails when nothing matched.
+
+**The invariant: every write checks its affected-row count.** A `run(...)` whose result is discarded
+is a write that may not have happened.
+
+The consequence is broader than the helper:
+
+* **Constraints are not a safety net.** Uniqueness and referential integrity have to be enforced in
+  Scala *before* writing, and the count checked *after*. A `UNIQUE` index will stop the row from
+  landing, but nothing will tell the caller.
+* **DDL is subject to the same rule.** A migration statement the database refuses does nothing while
+  Flyway records it as applied — which is why schema setup goes through `Migrate`/`McpMigrate` and
+  their `DataSource` wrapper rather than a Flyway instance assembled ad hoc.
+* `Migrate.Lock` is written around it: the lock insert is treated as a bid whose own result decides
+  nothing, and a follow-up `SELECT` is the answer.
+
+NOTE: Driver `10.5.2.1` does throw for the cases it can identify — its release note is "failed
+statements, batches and commits now throw instead of being silently ignored" — which is why the
+version is pinned to the server's. It narrows the silent class; it does not remove it. The rule still
+holds. `I18nToolsSpec` in `mcp.test` pins the driver's behaviour with executable evidence; see
+xref:testing.adoc[Test strategy].
+
+== Operational shape
+
+Two configurations, selected by `rqlite_desired_count`.
+
+**Dev — one node, durable volume.** `rqlite_desired_count = 1`. The single task mounts an
+EFS-backed volume at `/rqlite/file`, through an access point rooted at `/rqlite`, so the data
+directory survives task replacement and Fargate restarts. Because SQLite must never be opened by two
+writers at once, this branch deploys stop-then-start: `min_healthy_percent` is 0.
+
+**Prod — three nodes, Raft, ephemeral storage.** `rqlite_desired_count = 3`. No EFS; each task keeps
+its data on Fargate ephemeral storage and relies on Raft for durability, with S3 auto-backup as the
+second line. Deployment percentages are derived from the quorum (`floor(n/2) + 1`) so ECS never drops
+the cluster below it. The backup bucket is versioned, encrypted and private, and the interval is the
+`backup_interval` variable (default `1m`). Auto-restore is best-effort — a missing backup bootstraps
+an empty database instead of refusing to start.
+
+**Local** sets `rqlite_desired_count = 0`: the LocalStack configuration creates the things a
+deployment attaches to without running the services.
+
+Consequences of the prod shape:
+
+* A single node redeployed alone is replayed from its peers. Losing quorum — two of three at once —
+  can lose recent writes permanently.
+* The database is the only copy of the content. There is no file-based replay: the declarative
+  provisioning system and the YAML tree it pushed are gone, so a lost write is lost and has to be
+  re-entered through xref:mcp.adoc[MCP backoffice].
+* Operator tokens are the one exception: `MCP_ADMIN_TOKEN` re-seeds the admin row on every startup,
+  so losing `mcp_tokens` costs the issued tokens, not access.
+
+The terraform for all of this — the cluster, the EFS file system and access point, the backup bucket,
+the security groups, the service-discovery namespace rqlite is reached through, and the debug ingress
+from the Tailscale subnet router — is `terraform/modules/rqlite/` and is described in
+xref:infrastructure.adoc[Infrastructure].
+
+Recovering from data loss, including how to tell a stale connection from an actual loss, is the
+`recover-data` operational skill (`mcp/resources/skills/recover-data/SKILL.md`). Known weaknesses and
+outstanding work are in xref:context/pending.adoc[Pending work]; past failures are in
+xref:context/incidents.adoc[Incidents].
+
+== Local development
+
+There is no local rqlite to install. The Mill build starts and manages Docker containers:
+`ensureRqlite(name, port)` checks Docker, reuses a running container when its image matches
+`rqlite/rqlite:<rqliteVersion>`, recreates it when it does not, waits for readiness, and returns the
+JDBC URL.
+
+|===
+| Container | Port | Used by
+
+| `rqlite-dev` | 4001 | `api.dev` and `mcp.dev` — shared on purpose, since the backoffice writes what the portal reads
+| `rqlite-test` | 4011 | `api.test`
+| `rqlite-mcp-test` | 4012 | `mcp.test`
+| `rqlite-mcp-e2e` | — | the end-to-end suite
+|===
+
+Test tasks migrate once, up front, through `Migrate` and `McpMigrate` as two sequential processes
+before any spec runs, rather than letting each forked JVM bring its own Flyway. The URL task is
+keyed on the container id, so a recreated container invalidates it.
+
+Because rqlite speaks HTTP, the database can be inspected without a client:
+
+[source]
+----
+curl -s -G http://localhost:4001/db/query --data-urlencode "q=SELECT * FROM locations"
+curl -s -X POST http://localhost:4001/db/execute \
+  -H "Content-Type: application/json" \
+  -d '[["UPDATE sessions SET phase = '"'"'welcome'"'"' WHERE id = '"'"'...'"'"'"]]'
+----
+
+The full workflow, including `./mill api.dev` and `./mill mcp.dev`, is in
+xref:development.adoc[Local development].
+
+== See also
+
+* xref:platform.adoc[Platform] — the Quill setup, the repositories, `Migrate` and `Migrate.Lock`
+* xref:mcp.adoc[MCP backoffice] — the only writer of content, and the home of `Writes`
+* xref:api.adoc[API] — the reader, and the process that owns the portal migrations
+* xref:infrastructure.adoc[Infrastructure] — the terraform behind the operational shape
+* xref:development.adoc[Local development] — the Docker containers and the dev tasks
+* xref:testing.adoc[Test strategy] — how the schema is laid down for tests and what pins the driver
+* xref:context/decisions.adoc[Decisions], xref:context/incidents.adoc[Incidents],
+  xref:context/pending.adoc[Pending work] — why the above is as it is

@@ -1,0 +1,124 @@
+= Agents
+
+Captal is a white-label captive portal. A guest connects to a customer's WiFi, the UniFi
+controller redirects them here, this portal walks them through an identification survey, an
+advertiser video and a survey about it, and on completion the system authorizes that device on the
+controller for a bounded time. Each customer location gets its own portal from one codebase.
+
+Scala 3 / Mill / ZIO / zio-http / Quill / rqlite on the server, Scala.js with Laminar and Waypoint
+in the browser, deployed to AWS ECS Fargate behind an ALB and CloudFront.
+
+This file is an index. Everything that used to be written out here now lives in `docs/`.
+
+== Read first, in this order
+
+1. *`docs/context/readme.adoc`* — the decisions and their reasons, the project's history, what
+   has already gone wrong and what was learned, and what is still pending. Written for you, not
+   for a human reader. Read it before changing anything: it exists so you do not repeat a mistake
+   that has already been made and paid for.
+2. *`docs/overview.adoc`* — the system on one page: the modules, the guest journey, how a
+   request flows.
+3. *The architecture doc for the area you are touching.* Index: `docs/readme.adoc`.
+4. *The relevant skill.* Operational skills (add a location, a video, a survey; troubleshoot;
+   recover data) live in `mcp/resources/skills/<name>/SKILL.md` and are served to a model by the
+   MCP server rather than distributed as files. Development skills (add an endpoint, a phase, a
+   migration; run locally) live in `.agents/skills/<name>/SKILL.md` and only exist in this repo.
+
+== Modules
+
+[cols="1,3,1"]
+|===
+| Module | What it is | Doc
+
+| `core` / `core-js`
+| Pure domain: `Op`, the `Phase` machine, the aggregates, validation, repository traits, the i18n schema. Cross-compiled.
+| `docs/core.adoc`
+
+| `messages` / `messages-js`
+| The wire contract between API and browser. Cross-compiled.
+| `docs/messages.adoc`
+
+| `platform`
+| Quill over rqlite, migrations, session service, job scheduler, event handlers, the UniFi client.
+| `docs/platform.adoc`
+
+| `api`
+| The guest-facing HTTP server. One process per location. Reads content, never writes it.
+| `docs/api.adoc`
+
+| `client`
+| Scala.js front end: the portal, the MCP-UI apps, the maintenance page. One linker run.
+| `docs/client.adoc`
+
+| `mcp`
+| The backoffice as an MCP server. Writes all content; deploys portals.
+| `docs/mcp.adoc`
+
+| `terraform`
+| The infrastructure base: the OpenTofu modules, the environments and the operator runbook.
+| `docs/infrastructure.adoc`
+|===
+
+There is no `maintenance` module — it is an entry point inside `client`. There is no `platform` or
+`client` test module; tests live under `core`, `api` and `mcp`. Anything under `out/` or `.bsp/out/`
+is a build artifact, not source.
+
+== Invariants
+
+Breaking one of these breaks something silently. Full list and rationale in
+`docs/context/conventions.adoc` and `docs/context/decisions.adoc`.
+
+* *Every write verifies affected rows.* rqlite reports a rejected statement inside an HTTP 200
+  and the driver turns it into zero rows, so a violated constraint does not raise. `Writes.expectOne`
+  is the guard.
+* *Migrations are append-only.* A bug in an applied `V<n>__*.sql` is fixed by a new
+  `V<n+1>__fix_*.sql`, never by editing the old file. Flyway does not support concurrent migration
+  on SQLite; `Migrate.Lock` is what provides exclusion.
+* *`users` is global*, with no `location_id`. Everything else — `sessions`, `surveys`,
+  `advertiser_videos`, `localized_texts` — is scoped by location.
+* *The session cookie is `captal_session_<slug>` with `Path=/<slug>`.* A global cookie name mixes
+  sessions between locations. The cross-location user cookie is `captal_user` with `Path=/`.
+* *A soft delete is only real if every read path filters it.* A column no query consults is a
+  delete that does not delete, and the symptom is a tool reporting success while the portal keeps
+  serving the row.
+* *A new `Phase` needs three things*: an entry in `Router.phaseToPage`, a case in
+  `SessionPhaseHandler` if it transitions, and `secured(allowedPhases = …)` on the endpoints that
+  require it.
+* *Changing a tool includes changing its skill*, in the same change. A skill that names a tool
+  that no longer exists is worse than no skill, because the model obeys it.
+* *Comments in the code are technical only* — what it takes, what it returns, what it does, and
+  the constraint a caller must respect. Rationale, history, measurements and rejected alternatives
+  go in `docs/context/`, not in a comment.
+
+== Commands
+
+Verified against `build.mill`; see `docs/development.adoc` for the full reference.
+
+[source,bash]
+----
+./mill __.compile
+./mill __.test                                  # starts the rqlite container itself
+./mill core.test  /  api.test  /  mcp.test
+./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources
+./mill __.fix
+./mill client.bundle                            # ENVIRONMENT=dev for dev features
+./mill clean client.generatedSources            # required before changing ENVIRONMENT
+----
+
+== Trust the system over this file
+
+The fastest way to learn the deployed state is to ask AWS, not to read a document:
+
+[source,bash]
+----
+aws ecr describe-images --repository-name captal-api-dev --region us-east-1 \
+  --query 'sort_by(imageDetails[?imageTags!=null],&imagePushedAt)[-1].imageTags[0]'
+
+aws elbv2 describe-target-groups --region us-east-1 \
+  --query 'TargetGroups[?starts_with(TargetGroupName,`captal-`)].TargetGroupName'
+----
+
+The `captal` CLI, the YAML provisioning system and the `endpoints/` module were deleted. If a
+document or a skill tells you to run `captal <anything>`, edit a `location.yaml`, or import from
+`whitelabel.captal.endpoints`, that is a leftover and a bug — not an instruction.
+`docs/context/history.adoc` records what was removed and when.

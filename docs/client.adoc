@@ -1,0 +1,854 @@
+= Client
+:toc:
+:toclevels: 2
+
+The `client` Mill module is a single Scala.js linker run that emits three applications: the guest
+captive portal (Laminar + Waypoint), the two MCP-UI apps the backoffice opens in a host iframe, and
+the maintenance page the edge serves while a location is paused.
+
+== One module, several applications
+
+=== Build shape
+
+`object client` in `build.mill` is one `ScalaJSModule`. It depends on `core-js` and `messages-js`
+(see xref:core.adoc[Core] and xref:messages.adoc[Messages]) and declares Laminar 17.2.0, Waypoint
+9.0.0, `scalajs-dom` 2.8.0 and `scala-java-time` 2.6.0.
+
+Three linker settings decide the output shape:
+
+[source,scala]
+----
+def esFeatures = ESFeatures.Defaults
+  .withESVersion(ESVersion.ES2021)
+  .withAllowBigIntsForLongs(true)
+def moduleKind = ModuleKind.ESModule
+def moduleSplitStyle = ModuleSplitStyle.SmallModulesFor("whitelabel.captal")
+----
+
+`ESModule` is what allows `js.dynamicImport`, which the portal's per-route split uses.
+`SmallModulesFor` emits one module per class under `whitelabel.captal`, so the linker's output
+directory holds many small `.js` files that import each other by relative path.
+
+A linker run has exactly one module initializer, and the portal's `@main` holds it. Every other
+application therefore exposes a named export instead:
+
+[source,scala]
+----
+@JSExportTopLevel(name = "start", moduleID = "upload-app")
+def start(): Unit = ...
+----
+
+`moduleID` makes the linker emit that object's module as a *public* module under that name. Nothing
+calls the export, so each one gets a hand-written stub under `client/entries/` whose only content is
+an import and a call:
+
+[source,javascript]
+----
+import { start } from './maintenance-app.js'
+
+start()
+----
+
+`client/vite.config.mjs` then names four Rollup inputs — `src/main.js` plus the three stubs — with
+`entryFileNames: '[name].js'` pinned so every entry keeps a stable, hash-free name. Chunks keep
+their content hash (`chunkFileNames: '[name]-[hash].js'`).
+
+=== Module map
+
+[cols="2,1,1,1,1,2",options="header"]
+|===
+| Scala entry point | Module id | Linker output | Entry stub | Bundled entry | Page
+
+| `client/src/whitelabel/captal/client/Main.scala` (`@main def main`)
+| the run's main module
+| `main.js`
+| none — the module initializer starts it
+| `main.js`
+| `index.html`, rendered from `client/index.html.template`
+
+| `client/src/whitelabel/captal/maintenance/Maintenance.scala`
+| `maintenance-app`
+| `maintenance-app.js`
+| `client/entries/maintenance.js`
+| `maintenance.js`
+| `maintenance.html`, rendered from `client/maintenance.html.template`
+
+| `client/src/whitelabel/captal/mcpui/UploadApp.scala`
+| `upload-app`
+| `upload-app.js`
+| `client/entries/upload.js`
+| `upload.js`
+| server-rendered, addressed as `ui://upload-video`
+
+| `client/src/whitelabel/captal/mcpui/unifi/UnifiApp.scala`
+| `unifi-app`
+| `unifi-app.js`
+| `client/entries/unifi.js`
+| `unifi.js`
+| server-rendered, addressed as `ui://configure-unifi`
+|===
+
+IMPORTANT: An entry stub must never be named like a module the linker emits. `client.bundle` stages
+the linker's output into `src/` first and then the stubs, and fails with an explicit collision error
+rather than overwriting a linker module.
+
+=== Source trees
+
+[cols="1,2",options="header"]
+|===
+| Tree | Contents
+
+| `client/src/whitelabel/captal/client/`
+| The guest portal: entry, router, state, transport, i18n and `views/`.
+
+| `client/src/whitelabel/captal/mcpui/`
+| The MCP-UI apps: `Bridge.scala`, `UploadApp.scala`, `unifi/UnifiApp.scala`.
+
+| `client/src/whitelabel/captal/maintenance/`
+| `Maintenance.scala`, the paused page.
+|===
+
+Non-Scala files in the module:
+
+* `client/entries/{maintenance,unifi,upload}.js` — the stubs that call the exported `start`.
+* `client/index.html.template`, `client/maintenance.html.template` — rendered by the build with
+  `{{JS_PATH}}`, `{{CSS_PATH}}` and `{{PRELOADS}}` substituted.
+* `client/vite.config.mjs` — the Rollup/terser configuration.
+* `client/assets/styles.css` — the whole stylesheet; see xref:client-styling.adoc[Client styling].
+* `client/assets/brand-icon.svg` — the default brand icon, replaceable per location.
+
+`client/index.html` is a generated dev artifact (`api.copyIndex` renders it from the template) and is
+git-ignored.
+
+=== Build tasks
+
+[cols="1,3",options="header"]
+|===
+| Task | What it does
+
+| `client.fastLinkJS` / `client.fullLinkJS`
+| The raw linker outputs. `api.dev` serves whichever one `CLIENT_LINKER` selects.
+
+| `client.bundle`
+| Stages the linker output plus the stubs and the Vite config into a temporary project, runs
+  `vite build`, copies `dist/*.js` out, copies `styles.css` and `brand-icon.svg`, and renders both
+  HTML files.
+
+| `client.publishS3 --bucket … --prefix bundle`
+| Uploads the portal half of the bundle. Files reachable *only* from the MCP-UI entries are
+  subtracted by import graph, not by name.
+
+| `client.publish --bucket …`
+| Uploads `upload.js`, `unifi.js` and the chunks they reach to `<bucket>/ui/`: chunks first and
+  immutable, entries afterwards and revalidating.
+|===
+
+See xref:infrastructure.adoc[Infrastructure] for what the edge does with those objects.
+
+== Guest portal
+
+=== Entry point — `client/src/whitelabel/captal/client/Main.scala`
+
+`@main def main()` renders `App.app` into `#app` and then calls `App.syncPhaseOnLoad()`.
+
+`App.app` is the root tree:
+
+[source,scala]
+----
+val app: HtmlElement = div(cls := "app-root", child <-- Router.splitter.signal, navigationLoader)
+----
+
+The current view and the navigation loader are *siblings*. The loader is never swapped out, so no
+paint frame is left with neither view nor loader on screen.
+
+`parseCaptivePortalHeaders()` reads the UniFi redirect's query string and turns it into request
+headers:
+
+[cols="1,1",options="header"]
+|===
+| Query parameter | Header
+
+| `id` | `X-Client-Mac`
+| `ap` | `X-Ap-Mac`
+| `url` | `X-Redirect-Url`
+| `ssid` | `X-Ssid`
+| `click_id` | `X-Click-Id`
+|===
+
+Empty values are dropped. Each surviving value is passed through `safeDecodeURIComponent`, a
+`decodeURIComponent` wrapped in `Try` that keeps the raw string when the sequence is malformed —
+values can arrive partially percent-encoded (`http://host%2Fpath`).
+
+`syncPhaseOnLoad()` sends those headers with `GET /api/status` and, on success, sets the locale
+(`I18nClient.setLocale`), `AppState.setSecondsRemaining`, `AppState.setPhase` and
+`Router.syncWithPhase`. That last call is what makes entering by a direct URL such as
+`/<slug>/question` land on the phase the server actually reports. A failure goes to
+`ErrorHandler.escalate`.
+
+=== Routing — `client/src/whitelabel/captal/client/Router.scala`
+
+`enum Page` is the closed set of SPA routes: `Welcome`, `IdentificationQuestion`,
+`AdvertiserVideo`, `AdvertiserVideoSurvey`, `Ready`, `Error`.
+
+`basePath` is derived from `window.location.pathname`: the first non-empty segment becomes
+`/<segment>` unless it is `api`, otherwise the base path is empty (the dev server runs the SPA at
+`/`). Every route is a `Route.static` carrying that base path, so the same build works at `/` and
+under any slug.
+
+[cols="1,1,1",options="header"]
+|===
+| Page | Path | Serialized name
+
+| `Welcome` | `/` | `welcome`
+| `IdentificationQuestion` | `/question` | `question`
+| `AdvertiserVideo` | `/video` | `video`
+| `AdvertiserVideoSurvey` | `/survey` | `survey`
+| `Ready` | `/ready` | `ready`
+| `Error` | `/error` | `error`
+|===
+
+`deserializePage` falls back to `Page.Welcome` for anything unrecognised.
+
+`phaseToPage` maps the server's `Phase` (from `core`) onto a page:
+
+[cols="1,1",options="header"]
+|===
+| `Phase` | `Page`
+
+| `Welcome` | `Welcome`
+| `IdentificationQuestion` | `IdentificationQuestion`
+| `AdvertiserVideo` | `AdvertiserVideo`
+| `AdvertiserVideoSurvey` | `AdvertiserVideoSurvey`
+| `AdvertiserQuestion` | `AdvertiserVideoSurvey`
+| `Ready` | `Ready`
+| `Authorized` | `Welcome`
+|===
+
+`Phase.Authorized` has no page of its own: `WelcomeView` detects it and renders the countdown
+instead of the welcome copy. `Page.Error` sits outside the phase machine entirely and is reached
+only through `navigateToError()`.
+
+`syncWithPhase` is the only way a view changes route:
+
+[source,scala]
+----
+def syncWithPhase(phase: Phase): Unit =
+  val targetPage = phaseToPage(phase)
+  if router.currentPageSignal.now() != targetPage then
+    router.pushState(targetPage)
+----
+
+The guard is load-bearing — see <<Navigation integrity>>.
+
+Each route's view arrives in its own chunk:
+
+[source,scala]
+----
+private def lazily(view: => js.Promise[HtmlElement]): HtmlElement = div(
+  cls := "route-slot",
+  child <-- EventStream.fromJsPromise(view, emitOnce = true))
+
+val splitter: SplitRender[Page, HtmlElement] =
+  SplitRender[Page, HtmlElement](router.currentPageSignal)
+    .collectStatic(Page.Welcome)(lazily(js.dynamicImport(WelcomeView.render)))
+    // … one per page
+----
+
+Two invariants hold here. `js.dynamicImport` must be written at the `collectStatic` call site,
+because the split point is where the expression appears; a closure built inside `lazily` would leave
+the view reachable from the main module. And `collectStatic` takes its argument by name, so the
+import starts when the route is first rendered, not at startup.
+
+=== Global state — `client/src/whitelabel/captal/client/AppState.scala`
+
+`AppState` holds private `Var`s and exposes a `Signal` plus setters for each. These are the only
+pieces of state shared across views:
+
+[cols="1,1,2",options="header"]
+|===
+| Signal | Type | Meaning
+
+| `locale` | `Signal[String]` | Locale the server resolved (default `"es"`).
+| `phase` | `Signal[Option[Phase]]` | Last phase the server reported. `None` before the first `/status`.
+| `currentSurvey` | `Signal[Option[NextIdentificationSurvey]]` | The identification question in flight.
+| `currentAdvertiserSurvey` | `Signal[Option[NextAdvertiserSurvey]]` | The post-video question in flight.
+| `isNavigating` | `Signal[Boolean]` | Drives `.nav-loader.is-visible`.
+| `error` | `Signal[Option[ApiError]]` | Last escalated error. Read by `ErrorView`, cleared on retry.
+| `secondsRemaining` | `Signal[Option[Int]]` | Seconds of granted access left, as computed by the server.
+|===
+
+The rule: state enters `AppState` only when more than one view reads it. Everything else stays in
+the view — either as an object-private `Var` (`WelcomeView.isStarting`,
+`IdentificationQuestionView.validationError`) or as a `Var` created inside `render`
+(`AdvertiserVideoView`'s ten player flags). Validation state in particular never reaches `AppState`.
+
+`secondsRemaining` is a server-computed count, not a timestamp. Nothing in the client reads the
+device clock to decide when access ends.
+
+=== Transport — `ApiClient.scala` and `ViewApis.scala`
+
+`ApiClient` is `dom.fetch` and circe. There is no RPC description layer: the client builds the
+request, decodes the response, and lets the browser manage cookies — the session cookie is never
+read or written by Scala code.
+
+[source,scala]
+----
+private val apiBase: String = firstSegment.fold("/api")(slug => s"/$slug/api")
+inline def url(path: String): String = s"$apiBase$path"
+----
+
+`firstSegment` is the same slug derivation `Router` does, computed independently from
+`location.pathname` and ignoring `api`.
+
+`fetchApi[A](method, path, body, extraHeaders)` returns `js.Promise[Either[ApiError, A]]` and has
+three outcomes:
+
+. `response.ok` — decode `A`; a decode failure becomes `ApiError.InternalError`.
+. the body parses as JSON with `status == "paused"` — the load balancer is answering for a paused
+  location, so the page calls `window.location.replace(maintenanceUrl)` (a replace, not an assign,
+  so the paused page does not enter history) and returns a `Left`.
+. anything else — decode an `ApiError` from the body, or fall back to
+  `InternalError("HTTP <status>: <body>")`.
+
+The paused check matches on the parsed `status` field, never on raw text, and the expected value
+must stay in step with what `pause_location` installs (`InfraStore.PausedBody`; see
+xref:mcp.adoc[MCP backoffice]). `maintenanceUrl` is `/maintenance.html` or
+`/<slug>/maintenance.html`.
+
+`get`, `post`, `postJson` and `putJson` wrap `fetchApi`.
+
+The endpoints themselves live in `ViewApis.scala`, grouped by the view that calls them so the route
+split can defer each view's paths and response decoders:
+
+[cols="1,2",options="header"]
+|===
+| Object | Endpoints
+
+| `StatusApi` | `GET /status` (takes the captive-portal headers)
+| `WelcomeApi` | `GET /survey/next`, `PUT /session/locale`, `GET /locales`
+| `QuestionApi` | `POST /survey/email`, `POST /survey/profiling`, `POST /survey/location`
+| `VideoApi` | `GET /video/next`, `POST /video/watched`
+| `AdvertiserApi` | `GET /survey/advertiser/next`, `POST /survey/advertiser`
+| `ReadyApi` | `POST /finish`, `POST /dev/reset-phase`
+| `I18nApi` | `GET /i18n/{locale}`
+|===
+
+`ReadyApi.finish()` is the call that triggers UniFi authorization server-side. Its response reflects
+the session *after* UniFi ran: `phase = Authorized` with the countdown seeded on success, or
+`phase = Ready` when UniFi failed or is unconfigured, which leaves the caller free to retry. See
+xref:api.adoc[Guest API].
+
+=== Async plumbing — `Promises.scala` and `Runtime.scala`
+
+`Promises` adds `map`, `flatMap` and `onFailure` extensions to `js.Promise`, so call sites and
+for-comprehensions read the way they would with `Future`. `scala.concurrent.Future` is not used in
+the client. `onFailure` takes `Any => Unit`, because a JS promise can be rejected with anything.
+
+`Runtime.run` is how a view fires an effect it does not await:
+
+[source,scala]
+----
+def run[A](body: => js.Promise[A]): Unit =
+  val _ = body.onFailure: e =>
+    dom.console.error(s"Async failure: $e", e.toString)
+    ErrorHandler.escalateMessage(s"Unexpected: $e")
+----
+
+A rejected promise therefore always reaches the error page; it is never silently dropped.
+
+=== Brand icon — `BrandLoader.scala`
+
+`BrandLoader()` is `div(cls := "brand-ring", img(src := "brand-icon.svg", cls := "brand-icon"))` and
+nothing else. The relative `src` is what makes it resolve under the slug's `<base>`, and the
+animation lives entirely in the stylesheet.
+
+== Views
+
+Every view is an object under `client/src/whitelabel/captal/client/views/` exposing
+`def render: HtmlElement`, loaded through `js.dynamicImport`.
+
+[cols="1,1,3",options="header"]
+|===
+| View | Route | Responsibility
+
+| `Layout`
+| none
+| The shared shell. Takes `content`, `footer` and an `isLoading: Signal[Boolean]`, and owns the
+  loading transition plus the nav-loader handoff.
+
+| `WelcomeView`
+| `/`
+| Two modes on one route. Normally: title, subtitle, three steps, a locale `<select>` and the start
+  button, which sets the locale server-side, asks `GET /survey/next` and routes to the phase the
+  answer names. When `AppState.phase` is `Authorized` and `secondsRemaining` is defined: the
+  mm:ss countdown card, decremented locally and re-checked against `GET /status` by a single
+  clamped `setTimeout`.
+
+| `IdentificationQuestionView`
+| `/question`
+| One identification question at a time from `AppState.currentSurvey`, rendered per
+  `QuestionType` (`Input`, `Radio`, `Select`, `Checkbox`, `Numeric`, `Date`; `Rating` is a
+  placeholder). Validates with `core`'s own `questionOps.validate` on blur or change, posts to the
+  endpoint matching `survey.surveyType`, and either replaces the question in place or advances the
+  phase.
+
+| `AdvertiserVideoView`
+| `/video`
+| The advertiser video: a Laminar-managed inline `<video>` with an intro overlay above it, custom
+  controls, a progress ring, and `POST /video/watched` on completion.
+
+| `AdvertiserVideoSurveyView`
+| `/survey`
+| The post-video question, same card and validation machinery as the identification view but
+  reading `AppState.currentAdvertiserSurvey` and posting to `POST /survey/advertiser`.
+
+| `ReadyView`
+| `/ready`
+| Calls `POST /finish` on mount and waits. Shows the title, a large spinner and the subtitle while
+  the request is in flight; in dev mode its footer carries the reset button. Must not touch
+  `AppState.setNavigating` — see <<Navigation integrity>>.
+
+| `ErrorView`
+| `/error`
+| The centralized error page. Renders `i18n.error.{title, generic, retry}`, loads a locale by best
+  effort when boot failed before one was known, and retries by clearing the error and re-running
+  the boot status check.
+|===
+
+== Loading and navigation
+
+=== The three loaders
+
+[cols="1,3",options="header"]
+|===
+| Piece | Behaviour
+
+| `.initial-loader`
+| Static markup in `index.html.template` and `maintenance.html.template`, outside `#app`, carrying
+  the same `.brand-ring` + `.brand-icon` markup `BrandLoader` renders. It is the only thing on
+  screen while `main.js` and the first view's chunk come down. Removed by `Layout.adopt` when the
+  first `Layout` mounts — not by a timer.
+
+| `.nav-loader`
+| A permanent overlay in `App.app` with its own `BrandLoader`, never unmounted. Visibility flips on
+  `.is-visible`, bound to `AppState.isNavigating`. Its background repeats the body gradient, so once
+  visible it opaquely covers the outgoing view.
+
+| `Layout`'s `isLoading`
+| Per view. Drives `.layout-view loading-state|loaded-state`, `.view-content hidden|visible` and
+  `.layout-footer hidden|visible`.
+|===
+
+=== Navigation integrity
+
+Three mechanisms keep a navigation from showing a gap or looping.
+
+*The `setNavigating` handoff.* The view that triggers a navigation turns the nav loader *on* before
+calling `Router.syncWithPhase(...)`. The *destination* view turns it off, from `Layout`:
+
+[source,scala]
+----
+div(
+  cls := "app-layout",
+  onMountCallback(_ => AppState.setNavigating(false)),
+  …)
+----
+
+No view calls `AppState.setNavigating(false)` in its own submit path. The `.route-slot` may still be
+downloading the destination's chunk when `syncWithPhase` returns, and turning the overlay off there
+would leave a gap with no loader at all. Delegating it to `Layout`'s mount guarantees the overlay
+covers everything until the destination is actually on screen. `ErrorHandler.escalate` follows the
+same rule: it turns the loader on, and `ErrorView`'s `Layout` turns it off.
+
+WARNING: `ReadyView` must not toggle `AppState.setNavigating` at all. Doing so flips the App-level
+`child` between the loader and the view, unmounting and remounting it, which re-fires
+`onMountCallback` and calls `POST /finish` again — an unbounded loop whenever UniFi keeps answering
+`Ready`.
+
+*Router dedup.* Waypoint's `currentPageSignal` re-emits on every `pushState`, even for the page
+already current, which remounts the cached view. `syncWithPhase` therefore compares
+`router.currentPageSignal.now()` to the target and skips the `pushState` when they are equal. Views
+that poll — `ReadyView` above all — depend on this.
+
+*The route slot.* `Router.lazily` has to wrap each dynamic import in a real element, because
+`child <-- EventStream.fromJsPromise(…)` needs a stable parent. That wrapper carries
+`cls := "route-slot"`, and `styles.css` gives `.route-slot` `display: contents`, keeping it out of
+the layout tree so `.app-layout` stays the direct flex child of `.app-root` with its centring and
+`min-height` intact.
+
+=== `Layout`'s own transition
+
+`Layout` renders one `.view-icon` across the whole loading→loaded transition — the element is never
+swapped, only the parent's class changes — and it removes `.initial-loader` on mount through
+`adopt`. The CSS timing lives in `--loader-ring-out`, `--loader-settle` and `--loader-handoff`; see
+xref:client-styling.adoc[Client styling].
+
+`ErrorView` is the one view that forces a loading frame. It composes `isLoading` from a
+`justMounted` flag and `I18nClient.isLoaded`, and clears `justMounted` from a `setTimeout(0)` so the
+browser paints one frame of `loading-state` before the class change; a microtask or an animation
+frame would both run before the paint and the CSS transition would never start.
+
+== The video view
+
+`AdvertiserVideoView.render` returns a wrapper `div` carrying three bindings, all mounted at once:
+
+. an observer on `canPlay.signal.combineWith(minTimeReached.signal)` that fires when both are true;
+. `child <-- videoData.signal` — `renderVideoHero(...)` once the metadata has arrived, which is
+  where the `<video>` lives;
+. `child <-- showIntro.signal` — `renderIntroCard(...)` while the intro is up.
+
+All player state is created inside `render`, not in `AppState`: `videoData`, `showIntro`,
+`videoCompleted`, `isPlaying`, `videoRef`, `isFullscreen`, `containerRef`, `canPlay`,
+`minTimeReached`, `introLeaving`.
+
+=== The shared buffer
+
+The `<video>` is a Laminar-managed `videoTag`. It mounts exactly once, when `videoData` becomes
+`Some`, and its parent never changes, so there is one mount and one network request. Its
+`onMountCallback` stores the ref, sets `muted = true` and `preload = "auto"`, and attaches the
+listeners:
+
+[cols="1,2",options="header"]
+|===
+| Event | Effect
+
+| `play` / `pause` | `isPlaying`
+| `ended` | `videoCompleted := true`, `isPlaying := false`
+| `canplaythrough` | `canPlay := true`
+| `error` | `ErrorHandler.escalateMessage(s"Video load failed: …")`
+|===
+
+The element does *not* play on mount. `preload = "auto"` is what fills the buffer, and the element
+is deliberately mounted *behind* the intro overlay so it can do that while the intro is still on
+screen. `.video-intro` is `position: fixed; inset: 0` with an opaque gradient, and the `<video>` is
+its sibling rather than its child — which is what lets the buffer fill without the film being
+visible.
+
+The intro card itself is wrapped in `Layout`, so it inherits the same loading→loaded machinery as
+every other view, with `isLoading = videoData.isEmpty`. Its own content is a title, a warning line
+and `.video-intro-pulse`, an always-indeterminate bar.
+
+=== Intro timing
+
+[source,scala]
+----
+private val IntroTimeoutMs = 3000
+private val IntroFadeMs = 400
+----
+
+The intro leaves only when `canPlay` *and* `minTimeReached` are both true: `canPlay` comes from
+`canplaythrough`, `minTimeReached` from a `setTimeout(IntroTimeoutMs)` armed on mount. So the intro
+is visible for at least three seconds, and longer if the video is not ready — but never
+indefinitely, since the timeout caps the wait and playback starts regardless.
+
+When the observer fires it does three things in order: sets `introLeaving` (which adds `.leaving` and
+starts the CSS fade), calls `play()` on the stored ref, and schedules `showIntro := false` for
+`IntroFadeMs` later. Playback begins *as* the fade begins, so what shows through the dissolving
+overlay is moving film rather than a frozen first frame.
+
+IMPORTANT: `IntroFadeMs` and the `--video-intro-out` custom property must stay equal. The CSS runs
+the fade and the Scala value decides when the element is removed: a shorter value cuts the
+transition off mid-way, a longer one leaves an invisible overlay swallowing clicks.
+
+=== Controls and completion
+
+`.video-controls` holds play/pause, a fullscreen toggle (`requestFullscreen` on the container, with
+a `fullscreenchange` listener on `document` keeping `isFullscreen` in step and clearing
+`controls-visible` on exit), and the progress button. The progress button's SVG ring is driven by a
+`--offset` custom property written from a `requestAnimationFrame` loop reading
+`currentTime / duration`; the button stays disabled until `videoCompleted`, and clicking it calls
+`markAsWatched`, which turns the nav loader on, posts `POST /video/watched` and routes to
+`Phase.fromDbString(resp.nextPhase)`.
+
+== Error handling
+
+The distinction is a rule, not a convention:
+
+* *Escalated.* Any `Left(ApiError)` from an API call goes to `ErrorHandler.escalate`, which turns
+  the nav loader on, stores the error in `AppState`, and pushes `Page.Error`. A rejected promise
+  caught by `Runtime.run` and a failed `<video>` load both reach the same place through
+  `escalateMessage`, which wraps the message in `ApiError.InternalError`.
+* *Inline.* Validation errors never escalate and never touch `AppState`. They live in the view's own
+  `validationError: Var[Option[String]]`, render as a `.validation-error` child of the
+  `.question-card`, and drive that card's `card-error` / `card-valid` modifier. The submit button
+  stays disabled while one is present.
+
+`ErrorView` renders `i18n.error.generic` for every `ApiError` subtype today. Retry clears the error,
+turns the nav loader on and re-runs the boot status check, so a second failure simply lands back on
+the error page with the new error.
+
+== Internationalisation
+
+`I18nClient` holds three `Var`s and exposes `locale: Signal[String]`, `i18n: Signal[I18n]` and
+`isLoaded: Signal[Boolean]`, plus `current` / `currentLocale` / `isLoadedNow` for the imperative
+reads validation needs.
+
+Keys are fetched per location, not bundled: `setLocale(code)` records the code and calls `load`,
+which issues `GET /api/i18n/{locale}` and replaces the whole `I18n` tree. `isLoaded` is set to
+`true` on success *and* on failure, so a locale that cannot be fetched does not hold a view in its
+loading state forever. Before the first successful load, `i18n` is `emptyI18n` — the same tree shape
+with every string empty — so copy bindings render as blank rather than crashing.
+
+Views read copy as `child.text <-- I18nClient.i18n.map(_.welcome.title)`, so a locale change
+repaints every bound label with no view remount.
+
+NOTE: A label rendered as `[welcome.title]` — the dotted key in square brackets — is not a client
+bug. `I18nSchema`'s `String` instance in `core` decodes a key absent from the location's message map
+to that literal, deliberately, so a missing translation is visible rather than silent. The fix is to
+add the row, not to change the client. See xref:core.adoc[Core] and xref:platform.adoc[Platform].
+
+== Relative paths and the slug
+
+In production a location's portal is served at `https://<host>/<slug>/`, and the SPA's own routes
+sit beneath it (`/<slug>/video`). Both HTML templates therefore install a `<base>` before any
+`<link>` or `<script>`:
+
+[source,html]
+----
+<script>
+  (function () {
+    var slug = location.pathname.split('/').filter(Boolean)[0];
+    if (slug && slug !== 'api') {
+      var b = document.createElement('base');
+      b.href = '/' + slug + '/';
+      document.head.appendChild(b);
+    }
+  })();
+</script>
+----
+
+It is inline and first in the `<head>` because every relative URL below it depends on it, and the
+document URL is `/<slug>/<route>` rather than `/<slug>/` for every route but the first.
+
+IMPORTANT: Every asset reference must be relative. `./main.js`, `./styles.css`,
+`./custom-styles.css.gz`, `brand-icon.svg` in `BrandLoader` — an absolute path such as
+`/styles.css` resolves outside the slug and breaks. The same applies to anything referenced *from*
+the stylesheet, which resolves against the stylesheet's own URL rather than the `<base>`.
+
+`Router.basePath` and `ApiClient.apiBase` derive the slug independently from
+`window.location.pathname`, both ignoring a first segment of `api`. In dev the SPA is served at `/`,
+the base tag is never installed, and both derivations yield the empty prefix.
+
+== `BuildInfo` and dev mode
+
+`client.generatedSources` writes a `BuildInfo.scala` into the `whitelabel.captal.client` package at
+build time:
+
+[source,scala]
+----
+object BuildInfo:
+  val environment: String = "dev"
+  val isDevMode: Boolean = true
+----
+
+The value comes from the `ENVIRONMENT` environment variable, defaulting to `production`.
+`isDevMode` is `environment == "dev"`.
+
+Its only consumer today is `ReadyView`, whose footer renders the `.dev-reset-button` —
+`POST /api/dev/reset-phase`, which returns the session to `Phase.Welcome` — only when
+`BuildInfo.isDevMode` is true.
+
+WARNING: Mill caches `client.generatedSources` against the task's own inputs, and the environment is
+not one of them. Changing `ENVIRONMENT` without `./mill clean client.generatedSources` first leaves
+the previous `BuildInfo` in place and the flag silently wrong. See
+xref:development.adoc[Local development].
+
+== `modulepreload` hints
+
+A browser loading an ES module entry cannot know which chunks it imports until it has fetched and
+parsed the entry. Naming them in the document removes that round trip. Because chunk names carry a
+content hash, the list is always *derived from the built artifact* rather than written by hand — a
+hand-kept list would eventually name a hash nothing imports, and the browser would download a chunk
+it will never use.
+
+There are two implementations of the same idea.
+
+*Build-rendered HTML.* `preloadLinks(dir, entry)` in `build.mill` walks the bundle from the entry,
+matching local imports with:
+
+[source,scala]
+----
+private val localImport = """(?:from|import)\s*"\./([^"]+)"""".r
+----
+
+It recurses transitively, drops the entry itself, and emits one
+`<link rel="modulepreload" fetchpriority="low" href="./<name>">` per chunk into the template's
+`{{PRELOADS}}` slot. `client.bundle` calls it once for `main.js` and once for `maintenance.js`.
+
+*Server-rendered MCP-UI pages.* `AssetStore.scriptPreloads(entry)` in
+`mcp/src/whitelabel/captal/mcp/aws/Assets.scala` reads the *deployed* `ui/<entry>` object out of S3
+and applies the same regex, returning absolute CDN URLs. `mcp/src/whitelabel/captal/mcp/apps/UiHints.scala`
+renders them as `modulepreload` links with `crossorigin`, alongside a `preconnect` for the script
+origin. Both hints carry `crossorigin` because a module script is fetched in CORS mode, and a hint
+made without it fills a cache entry the real request cannot use.
+
+Two properties are shared by both:
+
+* The regex matches `from "./x"` and bare `import "./x"` but deliberately *not* `import("./x")`.
+  Dynamic imports are the portal's route chunks, and preloading those would download every view on
+  the first paint — the opposite of why the split exists.
+* Both degrade to nothing. `scriptPreloads` answers with an empty sequence on any failure, and
+  `Hints` omits a tag it has no value for. A page with no hints is correct, just slower.
+
+== The MCP-UI apps
+
+Two pages the backoffice opens inside an MCP host. In both cases the *markup is the server's* —
+rendered by scalatags in `mcp` — and the Scala.js module only supplies behaviour, reaching into the
+DOM by element id. The server half is in xref:mcp.adoc[MCP backoffice].
+
+=== `mcpui/Bridge.scala`
+
+JSON-RPC 2.0 over `postMessage`, built on `js.Promise` rather than `Future`.
+
+[cols="1,3",options="header"]
+|===
+| Member | Behaviour
+
+| `listen(onToolResult)`
+| A `message` listener on `window`. Accepts only envelopes with `jsonrpc == "2.0"`. An envelope with
+  an `id` resolves and removes the matching pending promise; one without an `id` and with
+  `method == "ui/notifications/tool-result"` is handed to the callback.
+
+| `call(method, params)`
+| Posts a request to `window.parent` with a fresh integer id and returns a promise that the listener
+  resolves.
+
+| `notify(method, params)`
+| Posts a bare notification — no id, no reply.
+
+| `handshake()`
+| Calls `ui/initialize` with `appCapabilities.availableDisplayModes = ["inline", "fullscreen"]`,
+  applies the host's styles from the reply, then notifies `ui/notifications/initialized`.
+
+| `trackSize()`
+| Reports `ui/notifications/size-changed` with the document element's `scrollWidth`/`scrollHeight`,
+  once immediately and again from a `ResizeObserver` on `body`. An inline app is sized by what it
+  reports, and these pages grow after load.
+
+| `readJson(uri)`
+| `resources/read` on the URI, then `JSON.parse` of the first content's text.
+
+| `callTool(name, arguments)`
+| `tools/call`.
+
+| `tellTheModel(text)`
+| `ui/message` with `role = "user"`. A tool call the page makes is invisible to the model, so this
+  is what puts the outcome into the conversation.
+|===
+
+IMPORTANT: Notifications must follow the handshake. Both apps call `trackSize()` *inside* the
+`handshake().then(...)` continuation, because a notification sent to a host that has not acknowledged
+the frame has nowhere to land.
+
+`applyHostStyles` reads the handshake reply's `hostContext` and writes it onto `:root`: `data-theme`
+plus a matching `color-scheme` property (the host's tokens are `light-dark()` values and resolve to
+the wrong half without it), every entry of `styles.variables` as an inline custom property, and
+`styles.css.fonts` appended as a `<style>` tag.
+
+=== `mcpui/UploadApp.scala`
+
+Behind `ui://upload-video`. Signs nothing itself: it reads a presigned ticket, PUTs the file
+straight to S3, and reports back.
+
+`start()` registers the tool-result listener first — a result carrying
+`structuredContent.videoId` starts the flow — then, after the handshake, calls `trackSize()` and
+reads `data-video` off `#row`. The page is reachable both ways: addressed per video the id is in the
+markup, addressed bare it arrives on the notification, which is the only channel a fixed
+`_meta.ui.resourceUri` leaves.
+
+The ticket comes from `Bridge.readJson("captal://videos/<id>/upload")` and is wrapped in a
+`final class Ticket(raw: js.Dynamic)` whose accessors mirror `EntityResources.UploadTicket`
+field-for-field — `title`, `slug`, `uploadUrl`, `expiresInSeconds`, `styles`. Field names are the
+contract between the two halves, and the typed wrapper is what makes a server-side rename a
+compile error here.
+
+From there the page fills `#title`, `#slug` and `#intro`, writes the location's CSS into
+`#location-css`, and wires the form: a refresh interval at `max(60, expiresInSeconds - 300)`
+seconds re-reads the ticket before the signature lapses; the chosen file is rejected only when
+`File.type` is empty; its duration is measured before the upload from an offscreen `<video>`
+(floored, `0` when the browser reports `NaN` or `Infinity`); the PUT is an `XMLHttpRequest` with
+progress driving `#bar`; a `403` triggers one re-read and one retry. On success the page calls the
+`confirm_video_upload` tool with the measured duration, or — when the duration could not be read —
+asks the model to collect it, and in both cases ends with a `tellTheModel` summary.
+
+=== `mcpui/unifi/UnifiApp.scala`
+
+Behind `ui://configure-unifi`. The page carries no data of its own: `_meta.ui.resourceUri` is fixed
+when the tool is defined, long before any slug is known, so the whole `Config` — ticket, slug, name,
+`postUrl`, `tokenSet` and the current field values — arrives on the tool-result notification. Until
+then `#form` stays hidden rather than empty.
+
+`Config` mirrors `UnifiTools.ConfigureResponse` the same way `Ticket` mirrors its server type. On
+arrival the page reveals the form, fills `host`, `siteId`, `apMac`, `redirectUrl`, `port` and
+`durationMinutes`, and marks `apiToken` required *only* when `tokenSet` is false — a location that
+already has a token keeps it when the field is left blank, which is why the form never renders the
+stored token back.
+
+Submission POSTs `application/x-www-form-urlencoded` to `config.postUrl` with the ticket plus the
+seven named fields. The ticket is what authorises the write: this request leaves the MCP protocol
+and talks to the server directly. On success the token field is cleared and `tellTheModel` reports
+the configured slug. The token goes to the server and nowhere else — never into a message to the
+host, never read back.
+
+=== Addressing and delivery
+
+`ui://upload-video` and `ui://configure-unifi` are MCP App resource URIs; a tool points at one
+through `_meta.ui`, the host reads that resource and renders the HTML in a sandboxed iframe.
+`captal://` is the separate entity-resource hierarchy the upload page reads its ticket from.
+
+The scripts themselves are not carried by the MCP server. `./mill client.publish` puts `upload.js`
+and `unifi.js` at `<bucket>/ui/<name>.js` under stable, revalidating names, with their hashed chunks
+beside them as immutable objects, and the server names them through `AssetStore.scriptUrl`.
+
+== The maintenance entry point
+
+`client/src/whitelabel/captal/maintenance/Maintenance.scala` is what the edge serves in place of
+the portal while a location is paused.
+
+[source,scala]
+----
+@JSExportTopLevel(name = "start", moduleID = "maintenance-app")
+def start(): Unit =
+  render(dom.document.getElementById("app"), view(copyFor(dom.window.navigator.language)))
+----
+
+It renders a `Layout` — the portal's own, so it inherits the brand treatment, the loading handoff
+and the stylesheet — with `.maintenance-view` holding a `.maintenance-title` and a
+`.maintenance-body`, and an empty footer. `isLoading` is left at its default of `false`, so the
+waiting ring resolves straight into the message. It does not remove `.initial-loader` itself;
+`Layout.adopt` does that on mount.
+
+It talks to nothing. It is shown precisely when the backend is not there, so the copy is two
+hardcoded strings rather than i18n rows, selected by language-tag prefix — English when
+`navigator.language` starts with `en`, Spanish otherwise.
+
+Wiring:
+
+* module id `maintenance-app`, so the linker emits `maintenance-app.js` as a public module of the
+  portal's run;
+* `client/entries/maintenance.js` imports `start` from it and calls it;
+* Vite emits that stub as `maintenance.js`;
+* `client/maintenance.html.template` is rendered to `maintenance.html` naming `./maintenance.js` and
+  `./styles.css`, with its own `<base>` script and build-derived preloads.
+
+Who serves it: `pause_location` in `mcp`. `AssetStore.pausePage(slug)` copies the location's live
+`<slug>/index.html` aside and then copies `bundle/maintenance.html` *over* that key, after which the
+CloudFront invalidation is waited out. Because the edge serves `<slug>/index.html` for the location
+and for every SPA route beneath it, replacing that one object is the whole of putting a location into
+maintenance. `maintenance.html` is deliberately *not* copied into a location's own prefix by
+`copyBundle`, which would otherwise leave every healthy location serving a maintenance page by
+name. `resume_location` restores the saved page. See xref:mcp.adoc[MCP backoffice] and
+xref:infrastructure.adoc[Infrastructure].
+
+Separately, a guest already inside the SPA finds out on their own: `ApiClient` recognises the paused
+JSON the load balancer answers and calls `window.location.replace` on the maintenance URL.
+
+== Related
+
+* xref:client-styling.adoc[Client styling] — the stylesheet this front end renders against.
+* xref:api.adoc[Guest API] — the endpoints in `ViewApis`.
+* xref:mcp.adoc[MCP backoffice] — the server half of the MCP-UI apps and of the pause flow.
+* xref:testing.adoc[Test strategy], xref:development.adoc[Local development].
+* xref:context/decisions.adoc[Decisions], xref:context/incidents.adoc[Incidents],
+  xref:context/pending.adoc[Pending work] — why the bundle, the loader and the video view are shaped
+  the way they are.

@@ -1,0 +1,155 @@
+= Pending work
+
+Work that is known, decided or diagnosed but not finished. Each entry says what is true now, what
+is wrong with it, and what settling it would involve. Nothing here is speculative — every claim was
+verified against the configuration or the code at the path given.
+
+== rqlite: production selects FARGATE_SPOT
+
+`terraform/modules/rqlite/main.tf`, in `aws_ecs_service.rqlite`:
+
+[source,hcl]
+----
+capacity_provider = local.single_node ? "FARGATE" : "FARGATE_SPOT"
+----
+
+`single_node` is `var.desired_count <= 1`. `environments/prod/terraform.tfvars` sets
+`rqlite_desired_count = 3`, so production resolves to Spot and dev — one node — resolves to
+on-demand. The branch with less redundancy has the more reliable compute.
+
+The comment justifies it as tolerating "individual node loss", which Raft and the S3 backup do
+cover. Spot reclamation is not individual: AWS reclaims on capacity pressure in a pool, so three
+Spot tasks share the signal. With quorum 2 of 3, losing two at once stops the cluster — no leader,
+no writes. Storage is ephemeral, so each lost node returns empty and rebuilds rather than catching
+up from its own log.
+
+Not yet applied to production: the deployed state predates this configuration. A `tofu apply` moves
+it onto Spot.
+
+To settle: decide the cost question. Three on-demand removes it; two on-demand and one Spot keeps
+quorum through a single reclamation.
+
+== rqlite: continue_on_failure turns data loss into a healthy boot
+
+`terraform/docker/rqlite/entrypoint.sh` writes one backup config used for both `-auto-backup` and
+`-auto-restore`, with `"continue_on_failure": true`. The comment justifies it for a missing backup
+on first boot, which is a development concern; the entrypoint does not distinguish environments.
+
+In production that means: if all three nodes are replaced together and the S3 backup cannot be
+downloaded — object deleted, permission broken, bucket misconfigured — the cluster does not fail.
+It boots empty, answers its health check, and the load balancer marks it good. A portal then serves
+with no surveys, no locations and no users.
+
+`false` is the correct value for production: the task should die rather than serve an empty
+database.
+
+`backup_interval` defaults to `1m` (`terraform/modules/rqlite/variables.tf`) and neither dev nor
+prod overrides it, so one minute of writes is the RPO on total cluster loss.
+
+== The VPC change is configured but not applied
+
+Commit `49eed79` deleted `terraform/modules/vpc` (164 lines across three files) and rewrote
+`main.tf` to consume the account's default VPC through a data source. The reasoning is sound — the
+module was building private subnets, route tables, an EIP and a NAT gateway that nothing used, at
+roughly USD 32/month per availability zone, because `enable_nat_gateway` defaulted to false and no
+environment set it.
+
+It was never applied. Deployed dev lives in the VPC the old module created; the configuration now
+resolves a different VPC id. A `tofu plan` against dev reports:
+
+----
+Plan: 33 to add, 8 to change, 48 to destroy.
+----
+
+Twenty of those are replacements cascading from one line:
+
+----
+~ vpc_id = "vpc-06aaccfb0c4d74832" -> "vpc-0f401994632773082"  # forces replacement
+----
+
+Six resources carry `vpc_id` in their identity (the security groups for ecs_tasks, alb, dispatcher,
+rqlite and tailscale_proxy, plus the service discovery namespace); the rest follow from a changed
+`security_group_id`, `namespace_id` or `zone_id`. The remaining 28 destroys are resources the
+configuration no longer declares — the `releases` bucket, the `captal-provision` and
+`captal-locations` ECR repositories, the `derived` lifecycle policies — which is the cleanup from
+commit `53a5e94`.
+
+Consequence to know: applying this to a live environment replaces its network-attached resources. A
+destroy-and-rebuild is fine; an in-place upgrade is not.
+
+What the change gave up, per the comment on the data source: the private-subnet option. Every ECS
+task now runs in a public subnet with its own address, isolated by security group alone. A rule with
+a CIDR source rather than a group source is exposed the moment it applies.
+
+== Destroying an environment does not come clean
+
+Verified in `terraform/`:
+
+* No `force_destroy` on any of the four buckets — `s3-backend/terraform_state`,
+  `rqlite/rqlite_backup`, `cli-releases/releases`, `cloudfront/assets`. A destroy fails on any that
+  holds objects.
+* Three have versioning enabled, so `aws s3 rm --recursive` is not enough: object *versions* and
+  delete markers have to go too, via `list-object-versions` and `delete-objects`.
+* `modules/s3-backend` carries `prevent_destroy = true` on the state bucket. Tofu refuses it, which
+  is correct while that bucket holds the state being used.
+* `modules/ecr` declares no `force_delete`, so a repository holding images fails.
+* Per-location target groups and listener rules are created by `DeployTargets.ensureTargetGroup`
+  with the AWS SDK, not by tofu. They are absent from state and survive a destroy, pointing at an
+  ALB that no longer exists.
+
+`aws_s3_bucket.releases` holds CLI releases — content, not replaceable infrastructure. Anything in
+it that exists nowhere else should be copied out before a destroy.
+
+== ensureTargetGroup never corrects an existing target group
+
+`mcp/src/whitelabel/captal/mcp/aws/Deploy.scala`. `healthCheckPath(slug)` is `/$slug/api/health`
+and is passed only to `createTargetGroup`:
+
+[source,scala]
+----
+find.flatMap:
+  case Some(arn) => ZIO.succeed(arn)   // exists: returned untouched
+  case None      => createTargetGroup(... .healthCheckPath(targets.healthCheckPath(slug)) ...)
+----
+
+Nothing in `mcp/` calls `modifyTargetGroup`. A target group created with a different path keeps it,
+silently. That matters because the portal no longer serves `/api/health` unprefixed — see the slug
+prefix entry in `decisions.adoc` — so a group still probing the unprefixed path marks every task
+unhealthy.
+
+The ALB module's own default target group uses `var.health_check_path`, default `/api/health`, and
+no environment overrides it. Two target groups with two different paths, only one of which the
+server answers.
+
+== The slug prefix has no test coverage
+
+`ApiBase` puts the location slug into each `Endpoint`'s `RoutePattern`. `TestLayers` provides
+`ApiBase.none`, so the suite only ever exercises the unprefixed form. The prefixed form was verified
+by starting the dev server and asking for both paths; nothing in CI would catch a regression.
+
+Covering it means either a suite that builds the routes with a slug-bearing `ApiBase`, or accepting
+that this stays a manual check and saying so where someone will read it.
+
+== Documentation still in flight
+
+* `docs/mcp-iam.adoc`'s policy does not cover the deploy tools, and xref:../mcp.adoc[] does.
+  Reconciling the two — one of them should own the IAM account — is open.
+* Everything `docs/features.adoc` could not confirm against the code is marked in the document
+  itself, under "Not built". Each of those is a product question, not a documentation gap.
+
+Only the `SKILL.md` files are still Markdown, and they stay that way by name: both the agent harness
+and `Skills.load` find them by that exact filename.
+
+== Commit history
+
+All 285 commits now carry a single `<scope>: <Message>` subject and nothing else. The tags
+`backup/pre-flatten-rewrite`, `backup/pre-message-rewrite` and `backup/pre-branch-repoint` mark
+earlier states; the nine commits of the `terraform/` subtree's original history are reachable only
+from the first of them, and the explanatory message bodies only from the second.
+
+A further rewrite is wanted, and has not been done. It should remove the points in the history where
+the documentation was in Spanish, was wrong, or contradicted the code, and squash the commits that
+only exist because a change took several attempts. The reason it is worth doing: anyone bisecting or
+reading back through this history will find states that describe a system that was never true, and a
+document that lies is worse than a missing one. Doing it means another full rewrite of every sha, so
+it waits until there is no branch outstanding.

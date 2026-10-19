@@ -1,0 +1,862 @@
+= MCP backoffice
+:toc:
+:toclevels: 2
+
+The `mcp` module is the backoffice: one ECS task, exposed as an MCP server at `/mcp`, that writes
+every location's content and — when configured — stands a location's portal up on AWS. Unlike
+xref:api.adoc[Guest API], it is not bound to a location: one process serves every slug at once, and
+every tool that needs one takes it as an argument. An operator drives it through a model rather than
+through files or a command line.
+
+== What the module is
+
+[source,scala]
+----
+// build.mill
+object mcp extends BaseModule:
+  def moduleDeps = Seq(core, platform)
+----
+
+`mcp` depends on `core` and `platform` and nothing else — no `api`, no `messages`. It reads and
+writes the same database `api` reads, through the same Quill setup, but has no HTTP endpoint table
+of its own in the usual sense: the entire surface is MCP tools, resources and one prompt.
+
+It is also the one module pinned to a newer Scala: `3.10.0` against the rest of the tree's `3.8.0`,
+forced upward by `zio-http-mcp` 0.10.0's published TASTy version (a 3.9 compiler refuses it outright
+with "expected stable TASTy from 28.0 to 28.9"). That one version bump breaks Quill: `->` became an
+inline extension method in 3.10, and Quill's macro parser matches the literal `ArrowAssoc.->` call
+that no longer appears in the expanded tree, so every `update(_.column -> lift(value))` in this
+module stops compiling. `QuillArrow.scala` is the fix — one `inline def` reproducing 3.10's own `->`
+shape exactly, imported per file wherever a Quill mutation names a column:
+
+[source,scala]
+----
+extension [A](inline self: A)
+  inline def ->[B](inline that: B): (A, B) = Predef.ArrowAssoc(self).->(that)
+----
+
+`mcp.scalafixConfig` is pinned separately for the same reason: scalafix's `RemoveUnused` refuses to
+run at all under 3.10.
+
+Its own dependency set brings in the AWS SDK's *synchronous* clients only (`s3`, `cloudfront`,
+`ecs`, `elasticloadbalancingv2`, `cloudwatchlogs`), each with `netty-nio-client` excluded — the
+async client pins a netty version that collides with zio-http's own and crashes every request with
+`NoSuchMethodError`; this module calls none of the APIs that need the async client anyway. `mcp
+.resources` copies `client/assets/styles.css` into the jar as `default-styles.css` (what
+`CssSchema` reads — see xref:client-styling.adoc[Client styling]) and generates `skills/index.txt`
+alongside the packaged `skills/*/SKILL.md` files — see <<Skills>>.
+
+== Boot
+
+`Main.scala`, a `ZIOAppDefault`, in order:
+
+. Resolves `MCP_PORT` (default `8081`), `MCP_ADMIN_TOKEN` (required, trimmed non-empty — startup
+fails without it rather than generating one; see <<Auth and scopes>>), and `MCP_RESOURCE_URI`
+(default `http://localhost:8081/mcp`). `uiOrigin`, the origin the MCP Apps' scripts and CSP rules
+use, is *derived* from `MCP_RESOURCE_URI` rather than configured separately — "because behind an
+ALB those differ" would otherwise be two settings that have to be kept in sync by hand.
+. Builds `CaptalMcp.extensions` and validates it *before* assembling the server — a registry that
+fails to build would otherwise silently become a server that starts and answers every call
+synchronously, with none of the three extensions actually registered.
+. Logs any skill that `SkillsExtension` could not publish (`logSkipped`).
+. Runs `McpMigrate.run` to completion before serving anything — see <<Migrations>>.
+. Reads `Option[InfraStore]` from the environment. Absent means `ECS_CLUSTER` was never set, and
+the deploy, pause, resume and destroy tools are simply not registered — not disabled, not erroring,
+absent from the tool list a client sees.
+. Calls `AssetStore.verifyScriptDelivery` as a startup **warning**, not a failure: a freshly stood
+up environment reaches this before `client.publish` has ever run, and the warning names what to run
+once it has.
+. `Tokens.seedAdmin(token, "admin")` — idempotent; logs whether the admin row was created, rotated
+in place, or already current.
+. Serves `UiRoutes.routes ++ OauthMetadata.routes(uiOrigin) ++ CaptalMcp.server(...).statelessRoutes`.
+
+The final startup log line counts skills, resources and tools by *summing* `.all.size` across every
+tool object rather than a hardcoded figure, "so the number tracks the lists," and appends `(no
+ECS_CLUSTER, so the deploy, pause and destroy tools are not registered)` when `InfraStore` is
+absent.
+
+[[Migrations]]
+== Migrations
+
+`McpMigrate` is its own `ZIOAppDefault` (also called directly from `Main.run`) and owns its own
+history, kept apart from the API's on purpose — see xref:database.adoc[Database] and
+xref:platform.adoc[Platform] for the two-history arrangement in general.
+
+[cols="1,3"]
+|===
+|`Location` |`"db/migration-mcp"`
+|`HistoryTable` |`"flyway_schema_history_mcp"`
+|===
+
+Before migrating, it checks the *other* schema's version:
+
+[source,scala]
+----
+val RequiredApiVersion = 21
+----
+
+`Migrate.highestApplied(url, Migrate.ApiHistoryTable)` returning `None` fails with "No API
+migrations have run against this database. Start the API first…"; a version below 21 fails naming
+both the version found and the one required. Only once the API schema is new enough does it run
+`Migrate.migrateTo(url, Location, HistoryTable)`. This is detection, not prevention — the comment on
+it says so plainly: "Deployment order between the two services cannot be enforced here." It is what
+makes a backoffice deployed ahead of the API fail loudly at boot rather than failing one tool call
+at a time on a column that is not there yet.
+
+== Writing to rqlite
+
+Two small files underpin every mutation in this module.
+
+`Writes.scala` is the write-verification helper, used after essentially every Quill `update` or
+`insert`:
+
+[source,scala]
+----
+def expectOne(affected: Long, what: String): ZIO[Any, String, Unit]
+def expectAtLeastOne(affected: Long, what: String): ZIO[Any, String, Unit]
+----
+
+It exists because rqlite reports a rejected statement as an `error` field inside an ordinary HTTP
+200, and the JDBC driver turns that into "0 rows affected" rather than an exception — a `CHECK` or
+`UNIQUE` constraint in this stack is not a safety net a mutation can rely on seeing. See
+xref:database.adoc[Database] for the general rule; this module leans on it constantly because so
+many of its writes are upserts against natural keys rather than surrogate-id lookups.
+
+`QuillArrow.scala` is the Scala 3.10 compatibility patch described above, under <<What the module
+is>>.
+
+== Auth and scopes
+
+Bearer tokens, static, never expiring, stored hashed. `Main` refuses to serve without `.auth(...)`
+configured, because the SDK silently ignores every `requireScopes` declaration on a server with no
+authenticator — an unauthenticated server would look identical to a scoped one from outside, with
+every tool actually open.
+
+=== The scopes
+
+[cols="1,3"]
+|===
+|Scope |Gates
+
+|`i18n:write` (`Auth.I18nWrite`)
+|Writing translations.
+
+|`content:write` (`Auth.ContentWrite`)
+|Writing a location's own content: the location row, advertisers, videos, their surveys.
+
+|`identity:write` (`Auth.IdentityWrite`)
+|Writing the deployment-wide identification surveys — email, profiling, location — which exist once
+across every portal, not once per location.
+
+|`tokens:write` (`Auth.TokensWrite`)
+|Issuing tokens. Delegable like every other scope: a token can only grant scopes it already holds.
+
+|`infra:deploy` (`Auth.InfraDeploy`)
+|Standing a location's portal up in AWS, and pausing or resuming it.
+
+|`infra:destroy` (`Auth.InfraDestroy`)
+|Tearing a location's infrastructure down, the assets under its slug prefix included — split from
+`infra:deploy` because destroying loses something deploying does not.
+|===
+
+`Auth.AllScopes` is all six, and is both what the seeded admin holds and the ceiling on any grant
+(see <<Tokens>>).
+
+=== Tokens
+
+`mcp_tokens` holds `id`, `tokenSha256`, `name`, `scopes` (comma-joined, sorted — there is no scopes
+table, because legal values are a closed Scala enum and a row per scope would let the database
+express combinations the code cannot), `createdBy`, `createdAt`, `revokedAt`.
+
+Hashing is unsalted SHA-256 with no work factor, justified entirely by where the entropy comes
+from: `mint` draws 32 bytes from `SecureRandom` and base64url-encodes them — 256 bits, with no
+dictionary to attack and nothing a slow hash would buy. The plaintext secret exists only transiently,
+in `mint`'s return value and the one response that carries it back.
+
+`AdminId = "admin"` is a fixed row id, so `seedAdmin` is always an update-in-place rather than an
+insert of a second admin: rotating `MCP_ADMIN_TOKEN` and restarting replaces the credential without
+moving the id every other token's `createdBy` points at. `authenticate(token)` looks the hash up and
+treats a revoked row exactly like an absent one — `Auth.verifier` answers an undifferentiated
+`"Unknown token."` either way, deliberately not distinguishing "never existed" from "revoked" from
+"malformed."
+
+[[Tokens]]
+=== `TokenTools` and the `Grant` enum
+
+Tokens are issued, listed and revoked through three tools, and a sixth wire-facing enum —
+`Grant` — stands in for `Auth`'s scopes because a colon is not a legal Scala identifier:
+
+[cols="1,1"]
+|===
+|`Grant` |`Auth` scope
+
+|`i18n_write` |`I18nWrite`
+|`content_write` |`ContentWrite`
+|`identity_write` |`IdentityWrite`
+|`tokens_write` |`TokensWrite`
+|`infra_deploy` |`InfraDeploy`
+|`infra_destroy` |`InfraDestroy`
+|===
+
+[cols="1,1,3"]
+|===
+|Tool |Scope |Behaviour
+
+|`create_token`
+|`tokens:write`
+|The entire authorization model in one rule: `excess = requested -- held`, and the call fails if
+`excess` is non-empty — "never more than the issuer holds." The secret is returned once in the
+response; a comment on the field warns an operator to hand it over "somewhere private — repeating
+it in this conversation puts it in the transcript."
+
+|`list_tokens`
+|read-only
+|Never exposes the token value or even whether a hash is present beyond existence; revoked tokens
+stay listed, because other tokens' `createdBy` still points at them.
+
+|`revoke_token`
+|`tokens:write`
+|Refuses three ways, each in the operator-facing Spanish the tool answers in: revoking your own
+token ("Pedile a otro operador que lo revoque"), revoking the admin token at all — ever — because it
+is the recovery path for a database known to lose data (rotate `MCP_ADMIN_TOKEN` and restart
+instead), and revoking a token you did not create unless you are the admin.
+|===
+
+`caller()` re-reads the token row from the database on every call rather than trusting a cached
+principal, "which is what makes revocation take effect on the next call rather than on the next
+connection."
+
+=== Audience binding and discovery
+
+`Auth.resourceUri` parses `MCP_RESOURCE_URI` into a `ResourceUri` and the auth middleware enforces
+RFC 8707 audience binding unconditionally: a principal whose audience does not match this value is
+rejected before scopes are even considered. With static tokens there is no issuer to bind anything
+against in the usual OAuth sense, but the check still rejects a token replayed against the wrong
+deployment.
+
+`OauthMetadata` serves RFC 8414 discovery at the bare `/.well-known/oauth-authorization-server` —
+no path suffix, because RFC 8414 only appends the issuer's own path component, and this issuer's is
+the bare origin. The document carries exactly four fields: `issuer`, `scopes_supported` (`Auth
+.AllScopes`, sorted), and `grant_types_supported`/`response_types_supported`, both **present and
+empty** rather than omitted — with no grants declared, RFC 8414 requires neither an authorization
+nor a token endpoint, so leaving both out is consistent rather than missing. It is served
+unauthenticated and cached for an hour (`Cache-Control: max-age=3600`), on the reasoning that it
+carries nothing not already public — the scope names and the server's own address — and is fetched
+before any token exists to present. See xref:context/decisions.adoc[Decisions] and
+xref:context/incidents.adoc[Incidents] for the sentinel-hostname DNS lookup this metadata's
+`issuer` field used to trigger.
+
+=== Default-deny visibility
+
+Every tool `CaptalMcp` assembles is wrapped in a hand-written `visibleTo(McpAppsVisibility.Model)`
+— visible to the model only, never to a rendered MCP App page — except `confirm_video_upload`,
+which is `visibleTo(Model, App)` deliberately: it is the one tool an App page is allowed to call for
+itself, because the upload page knows the real duration it read from the file while a model calling
+it for, say, a WebM has no duration available at all. Nothing stops a tool from being called by any
+page by default; the restriction is a decision this wrapper enforces rather than an incidental gap,
+and because `CaptalMcp` applies it to every tool in one place, a tool that forgot to forward the
+wrapper's own members would silently drop the restriction server-wide — so `visibleTo` forwards
+every trait member explicitly rather than relying on inheritance to do it.
+
+`readOnlyHint` is the companion signal, set by the `readOnly` extension on every lookup tool. The
+reasoning behind it, not just the mechanism: a host treats a resource as context it may hand to a
+model freely, but a tool call as an action it asks the operator to approve — and because the hosts
+these operators actually use do not reliably forward resources to the model at all (see
+<<Resources>>), most of what this server answers goes out as tools. Without `readOnlyHint`, asking
+what a location still needs would carry the same approval weight as revoking someone's credentials.
+It is deliberately left unset on every write: a tool with nothing declared defaults its
+`destructiveHint` to `true`, and that cautious default is the correct one for anything not stated
+otherwise.
+
+== The generated schema: `ToolSchema` and `McpSchema`
+
+The SDK derives both the schema a `tools/list` call publishes and the decoder a `tools/call`
+actually runs against from one `zio.schema.Schema[A]` — but its own `JsonSchemaGen` reads only the
+`@description` annotation and ignores `@discriminatorName`, `@caseName` and `@rejectExtraFields`,
+all three enforced at runtime and invisible in the published document. The concrete cost, recorded
+in xref:context/decisions.adoc[Decisions]: `create_advertiser_video` once published seven question
+variants of which only four were actually distinguishable in the schema a model reads — two
+operators' agents stopped there and guessed at a field name, both wrong.
+
+`McpSchema.scala` fixes this by shadowing the SDK's own `McpInput`/`McpOutput` givens with ones
+rendered through zio-http's own OpenAPI generator — already on the classpath, and one that honours
+all three annotations — so the published schema and the runtime decoder come from one reading of
+the type rather than two. `JsonSchema.SchemaStyle.Inline` is used rather than `Reference`, because
+"a `$ref` points into an OpenAPI document that does not exist here." `fromSchema[A]` round-trips
+`JsonSchema.fromZSchema` through its own JSON encoding and then applies
+`stripOpenApiDiscriminator`, which removes the `discriminator` key from any object that also
+carries a `oneOf` — the variants there already carry the tag as a one-element `enum`, so "removing
+a key cannot misdescribe the contract; inventing one can," which is precisely what the generator
+patching this replaced used to do.
+
+`derivedOutput[A]` wraps a non-object result under a `"result"` key (per the MCP spec's requirement
+that `outputSchema`/`structuredContent` be object-shaped) and builds a `CallToolResult` carrying
+both `content` (text mirroring the structured value, for hosts that predate structured output) and
+`structuredContent` itself.
+
+The discriminator field on the wire is always named `kind`, never `type` or `format` — both are
+JSON Schema keywords zio-http already emits elsewhere (`"format": "int32"` on an integer), and a
+property sharing a keyword's name is exactly the trap `create_question`'s `required` field already
+has to avoid.
+
+`ToolSchema.scala` supplies the extension methods built on top of `McpSchema`:
+
+[cols="1,3"]
+|===
+|Member |What it does
+
+|`.readOnly`
+|Sets `readOnlyHint = true`. See <<Default-deny visibility>>.
+
+|`.withUi(resourceUri)`
+|Wraps a tool so opening it hands back an MCP App page, visible to the model only — "tools a model
+calls to open a page, never tools a page calls."
+
+|`.visibleTo(values*)`
+|The hand-written wrapper described above, injecting `_meta.ui.visibility` without disturbing any
+other `_meta` field.
+
+|`uiUri(value)`
+|Parses a `ui://` string into `McpUiUri`, *throwing* on failure rather than returning an `Either` —
+"a failure is a programming error, and one that should stop the server at startup rather than
+surface as a page that will not open."
+|===
+
+== The tool catalogue
+
+Grouped three ways at once, each real: by business area (the table below, one group per source
+file); by what environment a tool needs (`LocationTools`, `I18nTools`, `AdvertiserTools`,
+`SurveyTools`, `UnifiTools`, `TokenTools` and `SkillTools` need only `QuillSqlite`; `AssetTools`,
+`VideoTools`, `Readiness` and the deploy tools also need `AssetStore`, which is why `CaptalMcp`
+assembles them as two separate groups); and by visibility, covered above.
+
+=== Locations
+
+[cols="2,1,4"]
+|===
+|Tool |Scope |
+
+|`list_locations`
+|read-only
+|`unifiConfigured = false` on a row means the portal there cannot authorize a guest no matter how
+complete its content is.
+
+|`create_location`
+|`content:write`
+|Slug validated kebab-case, capped at 25 characters (`32 - "captal-".length`, the AWS ALB
+target-group name limit) and checked for uniqueness by hand — rqlite's own `UNIQUE` constraint
+would reject a duplicate, but as a field inside an HTTP 200 the driver turns into "0 rows affected,"
+which is exactly what `Writes.expectOne` already treats as "the database rejected it silently"; the
+explicit check gives the real reason instead. The tool's own comment names the scope as wrong: "A
+location is structural rather than content… a translator holding `content:write` should not be able
+to stand up a portal." Tracked in xref:context/pending.adoc[Pending work].
+|===
+
+There is no update or delete tool for a location itself — only these two.
+
+=== Translations (`I18nTools`)
+
+[cols="2,1,4"]
+|===
+|Tool |Scope |
+
+|`get_i18n_schema`
+|read-only
+|Every required key and its purpose, derived from the `I18n` type through `I18nSchema` — "neither
+the list nor the explanations can drift from what the portal reads."
+
+|`get_i18n_status`
+|read-only
+|Per-locale coverage: `present`, `missing` (a guest literally sees `[welcome.title]` for each of
+these), `unknown` (stored but never read — usually a typo, harmless but worth removing).
+
+|`set_translations`
+|`i18n:write`
+|Rejects the whole call if *any* key is unknown, rather than writing the good ones — "a typo'd key
+would otherwise be written and silently never rendered." A new locale is created by writing to it.
+
+|`remove_translation`
+|`i18n:write`
+|Soft-deletes one key; the portal falls back to showing `[key]` until it is restored.
+|===
+
+Writes upsert on the natural key `(entity_id, locale, location_id)` rather than looking up a
+surrogate id first, because with a surrogate id "a blind insert collides with the unique index …
+and fails outright instead of updating."
+
+=== Advertisers
+
+[cols="2,1,4"]
+|===
+|Tool |Scope |
+
+|`list_advertisers`
+|read-only
+|Rotation priority and active video count per advertiser; retired ones hidden unless
+`includeInactive`.
+
+|`create_advertiser`
+|`content:write`
+|Name uniqueness checked by hand (no schema constraint).
+
+|`update_advertiser`
+|`content:write`
+|Name and priority; omitted fields are left untouched.
+
+|`set_advertiser_active`
+|`content:write`
+|Retiring an advertiser takes its videos out of rotation too — the video selection query joins on
+the advertiser being active — and the response reports the resulting `activeVideos` count "so the
+operator sees the blast radius rather than discovering it in the portal."
+|===
+
+`priority` of zero means a video is never drawn.
+
+=== Surveys (`SurveyTools`)
+
+Twelve tools, each paired across the same split `IdentificationCategory` has everywhere else —
+one half for the three deployment-wide identification surveys (email, profiling, location), one
+half for a video's own survey — with the scope following the pairing: `identity:write` for the
+former, `content:write` for the latter.
+
+[cols="2,1,4"]
+|===
+|Tool |Scope |
+
+|`list_surveys`
+|read-only
+|
+
+|`get_survey`
+|read-only
+|Returns the stored rule JSON *as stored*, undecoded — the only view that can show a rule which
+exists in the table but is dropped, unapplied, every time the portal reads it, because it no longer
+matches its question's type.
+
+|`update_question` / `update_identification_question`
+|`content:write` / `identity:write`
+|Wording, help text, placeholder, required-ness, points. Cannot change a question's type or its
+options — the type decides which rules and options are even representable; retire the question and
+create a new one instead.
+
+|`set_question_active` / `set_identification_question_active`
+|`content:write` / `identity:write`
+|Never deletes — `answers.question_id` references `questions`, so retiring through `is_active` is
+the only safe removal. Reports `remainingActive`, since retiring the last active question leaves a
+survey that can never be served.
+
+|`reorder_questions` / `reorder_identification_questions`
+|`content:write` / `identity:write`
+|Requires the *complete* active-question set named exactly once; a partial list would leave
+questions sharing an order with no tie-break.
+
+|`create_survey`
+|`content:write`
+|Attaches to a video and inherits that video's location and advertiser (a promo video has neither,
+and its survey is served and answered all the same).
+
+|`create_identification_survey`
+|`identity:write`
+|One of exactly three global categories; a second active survey in the same category is refused —
+"Identification surveys are global and picked by category, so two would be ambiguous."
+
+|`create_question` / `create_identification_question`
+|`content:write` / `identity:write`
+|Default `required = true`, `points = 10`.
+|===
+
+`surveys.category` and `questions.question_type` both carry a `CHECK` constraint in the schema, but
+a `CHECK` violation is rejected exactly as silently as any other statement under rqlite, so the
+legal values are checked in Scala too. `AnswerFormat` — shared with `VideoTools`' question creation
+— is the discriminated enum behind a question's wire shape: `Radio`, `Dropdown`, `Checkbox`,
+`Input`, `Numeric`, `Date`, discriminator `kind`, each case `@rejectExtraFields`. There is
+deliberately no `rating` case: `QuestionType.Rating` still exists in `core` (the wire contract, so a
+stored row of that type still decodes), but the portal renders no input for it — what is closed
+here is only the way to *create* a new one.
+
+=== Assets (`AssetTools`)
+
+`get_css_schema`, `get_location_styles`/`set_location_styles`, `get_location_icon`/
+`set_location_icon` — fully documented, including the CSS custom-property reference these tools
+expose, in xref:client-styling.adoc[Client styling].
+
+=== Video (`VideoTools`)
+
+[cols="2,1,4"]
+|===
+|Tool |Scope |
+
+|`create_advertiser_video`
+|`content:write`, `.withUi(UploadUi.AppUri)`
+|Requires at least one question on its survey — a video whose survey has nothing left to ask would
+never be drawn. Duration is never accepted as input; it is read from the uploaded file at
+`confirm_video_upload`. Creates the video row (`Pending`), its survey and its questions in one call.
+
+|`create_promo_video`
+|`content:write`
+|No advertiser. A survey is created only if questions are given — an empty survey would be worse
+than none, since the portal would then ask for a survey whose first question does not exist.
+Promos rotate by ascending priority and creation date, not weighted at random like advertiser
+videos.
+
+|`list_videos`
+|read-only
+|Active, then pending, then retired; descending priority within a status.
+
+|`list_pending_uploads`
+|read-only
+|Oldest first — "easiest to miss at the location nobody is looking at."
+
+|`resume_video_upload`
+|`content:write`, `.withUi`
+|Re-signs the upload URL for an existing `Pending` video; refuses anything not pending — a retired
+video keeps its file, and a new upload is `create_advertiser_video` instead.
+
+|`confirm_video_upload`
+|`content:write`
+|`visibleTo(Model, App)` — the one write an App page may call directly (see <<Default-deny
+visibility>>). HEAD-checks the S3 object exists before activating, and clamps `minWatchSeconds` to
+the file's own duration — "a survey that unlocks after the video ends never unlocks at all."
+
+|`update_video`
+|`content:write`
+|Cannot replace the file or move the location: either change means a new video, because the S3 key
+derives from the video id and the survey hangs off it.
+
+|`set_video_active`
+|`content:write`
+|Refuses while a video is still `Pending` — it has to go through `confirm_video_upload` first.
+|===
+
+The storage key, shared with the deploy/asset machinery in xref:infrastructure.adoc[Infrastructure],
+is `<slug>/videos/<videoId>` with no extension — the content type is read from the uploaded file.
+`productCampaignId` is opaque end to end: "nothing here parses, validates or joins on it — it
+exists so a client can match our reporting against their campaign." An empty string clears it;
+omitting the field leaves it untouched. `UploadValidFor = 30.minutes` is the presigned PUT's
+lifetime.
+
+=== UniFi (`UnifiTools`)
+
+[cols="2,1,4"]
+|===
+|Tool |Scope |
+
+|`configure_unifi`
+|`content:write`, `.withUi(UnifiUi.AppUri)`, `.handleWithContext`
+|Opens the credentials form rather than taking the controller token as a tool argument — see
+<<The MCP Apps>>. Until a location is configured this way, its portal completes its entire guest
+flow and then leaves every guest stranded at `Ready` with no network access.
+
+|`get_unifi_config`
+|read-only
+|Reports *whether* host, site id and a token are all present, never the token's value. Port
+defaults to 443 and duration to 1440 minutes when unset, matching `UnifiAccess`'s own defaults — see
+xref:platform.adoc[Platform] and xref:unifi.adoc[UniFi integration].
+|===
+
+=== Skills (`SkillTools`)
+
+One tool, `read_skill`, read-only, no scope: the whole catalogue in a single parameterised call
+rather than one tool per skill. See <<Skills>>.
+
+=== Readiness
+
+`get_location_readiness`, read-only. See <<Onboarding>> and <<Resources>>.
+
+=== Deploy, pause, resume, destroy
+
+Registered only when `ECS_CLUSTER` is configured. The AWS-side mechanics — what each one actually
+calls, in what order, and why — are covered in full by the "What the deploy tool creates that tofu
+does not" section of xref:infrastructure.adoc[Infrastructure]; this is the tool-level contract
+alone.
+
+[cols="2,1,2,4"]
+|===
+|Tool |Scope |Task policy |
+
+|`deploy_location`
+|`infra:deploy`
+|`TaskExecution.Required`, ttl 15 min
+|Idempotent — an already-deployed location gets its service updated to a fresh task definition
+rather than a second one created. Does not wait for the container to pass health checks; success
+means the resources exist, not that the portal answers yet.
+
+|`pause_location`
+|`infra:deploy`
+|`TaskExecution.Required`, ttl 15 min
+|Swaps the edge to the maintenance page and waits out the CloudFront invalidation *before* touching
+the API. Writes nothing to the database.
+
+|`resume_location`
+|`infra:deploy`
+|`TaskExecution.Required`, ttl 15 min
+|The reverse order of pause. Does not re-copy the bundle — run `deploy_location` for that.
+
+|`destroy_location`
+|`infra:destroy`, `destructive = true`, `idempotent = true`
+|none declared — runs synchronously
+|Requires the slug typed back as confirmation. Elicits whether to also delete the location's S3
+objects (declining is the default for any client that cannot ask, or does not answer); keeps the log
+group and the database rows regardless.
+|===
+
+`TaskExecution.Required` is what lets a client that supports the `tasks` extension poll a handle
+instead of holding a connection open across a multi-minute deploy; `DeployTools.taskNote` is the
+fallback text appended to a response when the calling client did *not* declare that extension — it
+tells a synchronous caller plainly that a transport timeout is not evidence the deploy failed, and
+that every step is safe to repeat.
+
+[[Onboarding]]
+== The onboarding prompt
+
+`onboard-location` is registered as an MCP **prompt**, not a tool — user-initiated rather than
+model-initiated, and deliberately not a transaction. `get` only returns messages; it executes
+nothing, requests no consent, and commits nothing. Because it reads the database fresh on every
+invocation, what it renders is the step the location is actually on, not a description of the
+sequence in the abstract.
+
+With no `slug` argument it lists existing location slugs (from `LocationTools.slugs`) or, if there
+are none yet, tells the model to call `create_location` first. With a slug, it calls `Readiness.of`
+and renders a full status block — active state, per-locale translation coverage, whether the
+location has its own stylesheet or icon, video counts by status, advertiser-survey coverage, how
+many advertisers are registered deployment-wide, and whether UniFi is configured — followed by the
+numbered `nextSteps` list `Readiness.steps` derives from that same state, or "Nothing here blocks a
+deploy" when there is nothing left. The rendered text instructs the model explicitly: work through
+the steps in order, ask the operator for anything only they can supply (question wording, an
+option's label, the file for a video — never invent copy), and re-run the prompt to re-read state
+rather than tracking it independently, since every tool writes immediately and there is neither a
+commit step nor a rollback.
+
+Its last line says the prompt itself deploys nothing, and names `deploy_location` as what does
+(<<Deploy, pause, resume, destroy>>). `OnboardingSpec` asserts that text, and asserts that no
+`captal` command appears in it: a prompt is read by a model, which will try whatever command it is
+handed.
+
+[[Resources]]
+== Resources
+
+Resources exist as a second channel beside tools, not the primary one — MCP permits a host to hand
+a resource to the model, but does not require it, and the sessions these operators actually use
+forward tools far more reliably than resources. Every resource below is also answerable by a tool;
+see xref:context/decisions.adoc[Decisions].
+
+`EntityResources` is the server's one `McpResourceSource`, rooted at `captal://`:
+
+[cols="2,3"]
+|===
+|URI |Serves
+
+|`captal://locations`, `captal://advertisers`, `captal://surveys`
+|Each a directory listing (`DirectoryListing`), filtered to active rows and sorted.
+
+|`captal://locations/{slug}`, `captal://advertisers/{advertiserId}`, `captal://surveys/{surveyId}`
+|Resource templates, each with completion.
+
+|`captal://videos/pending`
+|Mirrors `list_pending_uploads`.
+
+|`captal://videos/<id>/upload`
+|A freshly presigned PUT URL plus the location's own stylesheet, if any — signed anew on every
+read, "since a presigned URL is arithmetic over the key and the clock, not an allocation."
+|===
+
+`readDirectory` backs both the listing and the template reads from the same code, "so a host that
+only knows `resources/read` sees what one that walks the hierarchy sees." One `captal://` hierarchy
+was chosen over a scheme per entity specifically because SEP-2640's `readDirectory` makes a
+hierarchy navigable, where flat per-entity schemes would lose the containment a tool would otherwise
+have to rebuild by hand.
+
+Two more resources exist outside that hierarchy: `i18n://required-keys` (one document, the full
+required-key list with purposes, derived wholly from the `I18n` schema — the resource-shaped twin
+of `get_i18n_schema`) and one `skill://<slug>/SKILL.md` per bundled skill, registered individually
+in addition to being served through the Skills extension described next.
+
+[[Skills]]
+== Skills
+
+Fourteen `.md` files ship under `mcp/resources/skills/<slug>/SKILL.md`; the build generates
+`skills/index.txt` listing their directory names, and `Skills.all` reads that index once at startup
+(a `lazy val` — "the files ship inside the jar, so they cannot change under us and there is nothing
+to invalidate") and loads each `SKILL.md` as a classpath resource.
+
+`Skills.splitFrontmatter` recognises only a `---`-delimited block at the very top, parsing each
+`key: value` line (split on the *first* colon) into a map — deliberately not a YAML parser, since
+the only keys ever read are `name` and `description`, both plain scalars, and "pulling in a parser
+to read two strings is not worth the dependency." An unterminated frontmatter block (no closing
+`---`) is treated as body in full rather than truncated, and a missing `name` falls back to the
+slug — "a malformed frontmatter should cost the nice label, not the document."
+
+Every skill is reachable three ways, all reading the same `Skills` object:
+
+* **`read_skill`** (`SkillTools`) — the tool a model actually calls. Takes a `name` tolerant of a
+leading `skill://` or trailing `/SKILL.md`. Its own *description string*, not its input schema,
+carries the whole catalogue — one line per skill — because the skills are read from the jar at
+startup and "there is nothing for a compile-time schema to enumerate."
+* **`skill://<slug>/SKILL.md` resources**, registered individually by `CaptalMcp`.
+* **`skills/list`/`skills/get`**, an MCP extension operation (`SkillsExtension`) — `list` is
+deliberately unpaginated; twelve entries of metadata fit one response with room to spare, and a
+cursor nobody issued is refused outright rather than silently answered from the top, which "would
+look like progress and loop forever." `get` answers metadata plus a `sha256:` digest over the
+skill's body (frontmatter stripped before hashing, matching exactly what `resources/read` returns
+for that URI); the body itself still comes back through the ordinary `resources/read` call on the
+entry's own resource. No directory-read support is declared for this source — every skill is one
+document, and claiming a capability with nothing behind it was rejected on exactly that reasoning.
+
+== Extensions: Apps, Skills, Tasks
+
+Three extensions are registered through zio-http-mcp's `McpExtensions` registry, validated at
+startup for unique ids and no shadowing of a core JSON-RPC method:
+
+[cols="2,3"]
+|===
+|Id |What it adds
+
+|`io.modelcontextprotocol/ui`
+|MCP Apps — the inline pages described next.
+
+|`io.modelcontextprotocol/skills`
+|`skills/list`/`skills/get`, described above. (`skills/directory/read` is not declared.)
+
+|`io.modelcontextprotocol/tasks`
+|`TaskExecution`/task polling. Contributes no operations of its own — `tasks/get` and its siblings
+are core methods the extension only enables.
+|===
+
+The task store is `McpTasks.inMemory`: tasks live inside this one process, so a poll only answers on
+the replica that started the work. The backoffice runs as exactly one task today
+(`mcp_desired_count = 1`; see xref:infrastructure.adoc[Infrastructure]), which is what makes that an
+acceptable constraint rather than a live gap.
+
+== The MCP Apps
+
+Two server-rendered pages exist for the two things the JSON-RPC protocol itself cannot carry:
+"JSON-RPC cannot carry an mp4 and a tool call cannot carry a secret." Every `tools/call` a host
+makes is recorded and replayed into the model's context on later turns — not where a UniFi
+controller token belongs — and an upload needs to `PUT` a file somewhere no tool argument can
+reach.
+
+[cols="1,3"]
+|===
+|Page |Opened by
+
+|`ui://configure-unifi` (`UnifiUi`)
+|`configure_unifi`
+
+|`ui://upload-video` (`UploadUi`/`UploadUiSource`)
+|`create_advertiser_video`, `resume_video_upload`
+|===
+
+Both pages are scalatags HTML, rendered server-side, and **static at definition time**: the
+`_meta.ui.resourceUri` a tool declares is fixed when the tool is registered, before any slug or
+video exists, and a `CallToolResult` carries no `_meta` a host could use to correct that afterward
+— "a template here is read literally and resolves to nothing." Each page instead learns its subject
+after opening, either from the `ui/notifications/tool-result` notification it listens for (both
+pages), or, for the upload page specifically, from a `data-video` attribute already in its own
+markup when it is addressed by a specific pending video rather than opened bare.
+
+`UiHints` emits the `<link rel="preconnect">` and one `<link rel="modulepreload" crossorigin>` per
+script both pages need — `crossorigin` because a module script fetches in CORS mode, and a
+preconnect or preload hint made without it "fills a cache entry the real request cannot use." Both
+degrade to nothing when there is no origin or no preload to name.
+
+CSP is declared as resource metadata (`McpAppsResourceMeta`), constructed once per page so the
+listing and the read of the same resource cannot disagree about what it may reach: `connectDomains`
+(where the browser may fetch or `POST` — the upload origin for `UploadUi`, this server's own origin
+for `UnifiUi`, since its form posts back here) and `resourceDomains` (where the page's module script
+loads from, plus `https://assets.claude.ai` in both cases, for the host's own font).
+
+`UploadUiSource` is a distinct `McpResourceSource`, not the same thing as the `UploadUi` template
+function: a plain `McpResourceTemplate.read` runs with no environment to reach the database or S3
+with, so this source exists specifically to serve one page per pending video
+(`ui://upload-video/<videoId>`), looking the video up, resolving its title and location, and
+rendering `UploadUi.app(...)` with no signed URL embedded — the page fetches that itself, once
+mounted, through `Bridge.readJson` (below) against `captal://videos/<id>/upload`, which is what lets
+the URL be re-signed on every read rather than baked in once and left to expire.
+
+=== The Bridge handshake
+
+`client/src/whitelabel/captal/mcpui/Bridge.scala` is the Scala.js half mounted inside each page's
+iframe, fully described in xref:client.adoc[Client]; its wire shape is JSON-RPC 2.0 over
+`postMessage`, built on `js.Promise`:
+
+[cols="1,3"]
+|===
+|Call |Shape
+
+|`handshake()`
+|`ui/initialize` with `appCapabilities.availableDisplayModes = ["inline", "fullscreen"]`. The reply's
+`hostContext` is applied to `:root` — `data-theme` plus a matching `color-scheme` (Claude's own
+tokens are `light-dark()` values and resolve to the wrong half without it), every entry of
+`styles.variables` as an inline custom property, and `styles.css.fonts` appended as a `<style>` tag
+— then notifies `ui/notifications/initialized`.
+
+|`trackSize()`
+|`ui/notifications/size-changed` with `scrollWidth`/`scrollHeight`, once immediately and again on
+every `ResizeObserver` tick on `body`. Must run only inside `handshake().then(...)`, never before —
+a notification sent to a host that has not acknowledged the frame has nowhere to land.
+
+|`readJson(uri)`
+|`resources/read`, then `JSON.parse` of the first content's text — how the upload page re-fetches
+its own signed URL.
+
+|`callTool(name, args)`
+|`tools/call`.
+
+|`tellTheModel(text)`
+|`ui/message` with `role = "user"` — the only channel that puts a page's own outcome into the
+model's context; a tool call the page makes is otherwise invisible to it.
+|===
+
+=== `UiTicket`: authenticated writes without the bearer token
+
+`UnifiUi`'s form posts to a plain HTTP route, `POST /ui/unifi`, outside the MCP endpoint and outside
+its auth plane entirely — the browser never holds the operator's bearer token, so a ticket
+substitutes.
+
+A ticket is `<tokenId>.<slug>.<expiry>.<signature>`, HMAC-SHA256 over the first three fields,
+base64url-encoded, valid for 15 minutes. It is signed with **the calling operator's own stored token
+hash**, not a server-wide secret — so "revoking that token kills the pages it opened and leaves
+everybody else's alone." `configure_unifi` mints one (it already requires `content:write`, and the
+ticket "can do strictly less than that token could") and renders it into the form.
+
+Verification order is fixed and load-bearing — shape, then signature (`MessageDigest.isEqual`,
+constant time), then expiry — because checking expiry first would answer whether a forged ticket's
+timestamp merely looked plausible. `UiRoutes.routes` resolves the ticket's token id, loads that
+token row, requires it is not revoked, verifies the signature against its hash, and only then
+upserts the location's UniFi columns (`Writes.expectOne`-guarded). Of the four rejection reasons —
+`Malformed`, `BadSignature`, `Expired`, `UnknownToken` — only `Expired` gets its own message
+("Pedí otra con `configure_unifi`"); the other three collapse into one generic message on purpose,
+since "distinguishing 'forged' from 'revoked' would tell whoever is probing which half to work on."
+The response always carries `Access-Control-Allow-Origin: *`, "which the sandboxed iframe's opaque
+origin needs, and the ticket — not the origin — is what authorizes" the write.
+
+== Deploy tools: driving AWS through the SDK
+
+Covered at the tool level in <<Deploy, pause, resume, destroy>> above. The AWS side — what
+`DeployTargets` and `InfraStore` actually call, in what fixed order, what a target group's health
+check path contract leaves uncorrected, and how a deployed location's resources relate to what
+`terraform/` builds — belongs entirely to xref:infrastructure.adoc[Infrastructure]'s "What the
+deploy tool creates that tofu does not."
+
+== See also
+
+* xref:infrastructure.adoc[Infrastructure] — the AWS mechanics of the deploy tools, and the task
+role and IAM policy this server runs under.
+* xref:client-styling.adoc[Client styling] — the CSS custom properties `get_css_schema` and
+`set_location_styles` expose and write.
+* xref:client.adoc[Client] — `Bridge.scala`'s full behaviour, and the two Scala.js apps
+(`UploadApp`, `UnifiApp`) these pages mount.
+* xref:database.adoc[Database] and xref:platform.adoc[Platform] — the write-verification rule, the
+two migration histories, and the survey-tree codec this module shares with `api`.
+* xref:unifi.adoc[UniFi integration] — the controller protocol `configure_unifi` and
+`get_unifi_config` expose configuration for.
+* xref:testing.adoc[Test strategy] — `mcp.test`'s tool-level specs, the deploy end-to-end spec, and
+the IAM soft-mode assertion run against this server's own policy.
+* xref:development.adoc[Local development] — `mill mcp.dev`.
+* xref:context/decisions.adoc[Decisions] — why tools, not resources, carry most of this server's
+surface; why tokens are static bearer tokens rather than OAuth; why the schema generator was
+replaced.
+* xref:context/pending.adoc[Pending work] — `create_location`'s scope, and the slug-prefix gap this
+server's deploy tools interact with.
+* xref:context/history.adoc[History] — the removed CLI the onboarding prompt still, stalely, refers
+to.

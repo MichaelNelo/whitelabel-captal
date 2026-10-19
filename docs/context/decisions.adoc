@@ -1,0 +1,491 @@
+= Decisions
+:toc:
+:toclevels: 2
+
+Each entry: the constraint that forced the choice, the alternative that was rejected and what
+rejected it, and — where it exists — the measurement that settled it. When a decision is still
+live, the entry says when it is worth revisiting. Cross-referenced commit subjects are searchable
+with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backoffice` unless noted.
+
+== Auth and the MCP surface
+
+* **Static bearer tokens, not OAuth.** The SDK supports JWKS and introspection, but neither was
+  worth standing up an identity provider for a handful of operators. Cost accepted: these tokens
+  do not expire, so a leaked one is good until revoked. Moving to OAuth later replaces
+  `Auth.verifier` alone; scopes and tools do not change. (`mcp/src/.../access/Auth.scala`)
+* **`Main` refuses to start without `MCP_TOKENS`/tokens configured.** The SDK silently ignores
+  `requireScopes` declarations when no `.auth(...)` is configured, so an unauthenticated server
+  looks exactly like a scoped one from outside while every tool sits open. "Guessing 'open' on a
+  missing environment variable is not a failure mode worth having."
+* **Tokens moved out of `MCP_TOKENS` (an env var) into the `mcp_tokens` table**, hashed
+  (SHA-256, unsalted, no work factor — right here because `mint` generates 256 bits of entropy, so
+  there is no dictionary to attack and nothing a slow hash would buy), issued from each other with
+  `create_token`. `MCP_ADMIN_TOKEN` seeds the first row and nothing else reads it, so rotating it
+  is a restart. Reason: the env var made adding an operator a redeploy and reading the list an
+  `ecs describe-task-definition`; a credential that takes a redeploy to issue is one people share
+  instead. Rejected alternative: keeping both — two answers to "who may write" that would drift.
+* **The admin token is seeded from an env var rather than generated**, because a generated token
+  would have to be shown somewhere, and the only channel at startup is CloudWatch — "the last
+  place a credential holding every scope belongs." It also doubles as the recovery path: this
+  database is known to lose data (see `incidents.adoc`), and a seeded admin means recovery is a
+  restart; a generated one would lock every operator out on each loss.
+* **No scopes table.** Legal values are a Scala enum; a row per scope would let the database hold
+  combinations the code cannot express. Comma-separated on the token row to match the format
+  `MCP_TOKENS` used, so the set is readable in a dump without a join.
+* **`Grant` is a Scala enum with `snake_case` identifiers** (`i18n_write`, not `i18n:write`)
+  because a colon is not a legal identifier — the same trade already made for `QuestionType`'s
+  wire tags: "a schema that lies about what it accepts is worse than an ugly name."
+* **`tokens:write` is delegable** like any other scope rather than being the one indelegable one.
+  Delegation attenuates — passing it along never widens what a chain can reach, only who may
+  extend it — so making it indelegable would route every new operator through whoever holds the
+  admin token, the bottleneck the database move was meant to remove.
+* **Scopes split finer than "read vs. write."** `identity:write` is separate from `content:write`
+  because the email, profiling and location surveys are deployment-wide — one of each exists for
+  every portal at once, picked by category with no location filter — so a single write scope would
+  make adding an option to one's own advertiser survey and rewriting the identification flow the
+  same permission. Rejected alternative: one tool per survey operation, declaring `content:write`
+  and quietly demanding `identity:write` once it saw the category — "that reads better at the call
+  site and makes `tools/list` lie: a tool would publish one requirement and enforce another."
+  `infra:deploy`/`infra:destroy` split the same way because destroying loses something (the slug's
+  assets) that deploying does not.
+* **RFC 8707 audience binding is enforced unconditionally.** With static tokens there is no issuer
+  to bind anything, but the server states which resource it is (`MCP_RESOURCE_URI`) and mints a
+  matching audience anyway; the check still rejects a token replayed against a different
+  deployment, "which is the part worth keeping."
+* **The OAuth metadata issuer points at the server's own origin, not a sentinel hostname.**
+  `https://captal.invalid/static-tokens` was meant to say "there is no authorization server to
+  send anyone to." It instead cost a real DNS lookup that never resolves (measured at 10,011 ms
+  before the resolver gives up); see `incidents.adoc` for the full chain this broke.
+  `OauthMetadata` publishes `grant_types_supported: []` deliberately — with no grants declared,
+  RFC 8414 does not require authorization/token endpoints, so omitting both is consistent rather
+  than missing, and "it beats the 404 it replaces: a 404 says 'nothing here, perhaps try again',
+  this says 'there is no flow, stop looking.'"
+* **Skills are served through MCP Resources, then re-exposed as tools.** First choice: Resources,
+  because `McpDispatchMethod` was a closed enum in the SDK and `skills/list`/`skills/get` (then
+  experimental JSON-RPC methods) could not be registered without patching it. Superseded by
+  zio-http-mcp 0.10.0's `McpExtensions` registry, but the deeper reason `read_skill` exists as a
+  *tool* (not only a `skill://` resource) persists: resources are application-driven — the spec
+  permits but does not require a host to hand them to the model — and the sessions these operators
+  actually use (Claude Desktop, bridged sessions) forward tools and not resources, and possibly not
+  `instructions` either. "Nineteen hundred lines of procedure sat behind a door with no handle on
+  its side." The same reasoning produced `get_location_readiness`, `list_videos`,
+  `list_pending_uploads`, `get_i18n_schema` and `get_css_schema` as tools replacing `captal://`
+  resource listings. Resources stay for hosts that do read them; nothing server-side depends on
+  them.
+* **Reads carry `readOnlyHint`; visibility is default-deny.** A host should not present a lookup
+  as an action needing approval. Every tool is `Model`-visible unless named otherwise, and
+  `confirm_video_upload` is the only tool a rendered MCP App page may call — the rationale being
+  that a tool with nothing declared is callable by both the model and any App the host renders, so
+  without `visibleTo(Model)` the UniFi credentials form (whose whole purpose is keeping an API
+  token out of the conversation) could call `create_token`. "The restriction becomes a decision
+  rather than an omission."
+* **`captal://` is one resource hierarchy, not a scheme per entity**, because `readDirectory`
+  (SEP-2640) makes a hierarchy navigable; flat per-entity schemes would lose the containment
+  `list_surveys` had to rebuild by hand. (Superseded in practice by the tools-not-resources move
+  above, but the hierarchy shape is still how the remaining resources are addressed.)
+* **Onboarding is a *prompt*, not a tool chain, and is explicitly not a transaction.** Nothing in
+  MCP models a sequence — tools are individual capabilities, the agent is the orchestrator — and a
+  prompt's `get` returns messages, so it executes nothing and asks for no consent; it is also
+  user-initiated (unlike a `skill://` an agent may never fetch) and stateful, naming the step
+  you're on. Every tool writes on the spot and a half-finished location is "not invalid, only
+  unfinished," so `Readiness` is shared by the resource and the prompt deliberately — a second
+  implementation of "what is missing" would drift and disagree in front of the operator.
+* **MCP Apps (server-rendered pages in a sandboxed iframe)** exist for two things the protocol
+  cannot carry: "JSON-RPC cannot carry an mp4 and a tool call cannot carry a secret." Every
+  `tools/call` is recorded by the host and replayed into the model's context on later turns, which
+  is not where a UniFi API token belongs, and an upload page needs to PUT a video file nowhere a
+  tool argument can go.
+* **The upload/UniFi App pages are Scala.js modules, not server-built string literals.** The two
+  bugs that cost the first MCP-UI migration a full session were a `postMessage` envelope no host
+  reads and a missing `ui/message` — "a string literal cannot be wrong about those loudly." The
+  Bridge protocol is on `js.Promise`, not `scala.concurrent.Future`: Future, its ExecutionContext
+  and the collections around them were the bulk of what a probe bundle carried (6.4 KB for a
+  barely-touching-stdlib probe vs. 152 KB for the real app), while the host already has promises.
+* **Tool naming is `verb_noun` throughout** ("consistency in the tool list is what lets a caller
+  pick without guessing") — `i18n_status` was renamed to `get_i18n_status` for this alone.
+* **Edit tools deliberately exclude some fields.** `update_question` cannot change a question's
+  type or options (the type decides which rules and options are representable at all);
+  `update_video` cannot change the file or location (the S3 key derives from the video id and the
+  survey hangs off it, so either change means a new video, not an edit).
+* **`create_location` still sits under `content:write`, and the code says that's wrong**: "a
+  translator holding `content:write` should not be able to stand up a portal." Tracked in
+  `pending.adoc`.
+
+== Wire format and schema rendering
+
+* **Publish the schema the decoder actually enforces.** The SDK derives both the published
+  document and the decoder from one `Schema[A]`, but its `JsonSchemaGen` reads only `@description`
+  and ignores `@discriminatorName`, `@caseName` and `@rejectExtraFields` — so those were enforced
+  at runtime and invisible in the document a caller reads. `create_advertiser_video` published
+  seven question variants of which only four were distinguishable; "two operators' agents stopped
+  there, both guessing at the field name, both wrong." Fixed by shadowing the SDK's `McpInput`
+  given with `McpSchema`, which renders through zio-http's own OpenAPI generator — already on the
+  classpath — honouring all three annotations. Rejected alternative: continuing to patch the
+  generated JSON per tool (`tagEnums`, `patchOneOf`, `addConst`, a positional zip of case ids
+  against the `oneOf`) — this had already drifted once (case order vs. `oneOf` order silently
+  disagreeing) and was "twice forgotten at a call site." Measured non-regression across all 21
+  tools when the generator swapped: 7 question variants went from 4 to 7 distinguishable, wrongly
+  `required` fields with defaults became optional, 11 hand-written descriptions survived, 11
+  generated "a list of TextIn"-style descriptions (which leaked Scala identifiers to operators)
+  were dropped, 9 tools were byte-identical.
+* **Discriminator field on the wire is `kind`, never `type` or `format`.** Both of the latter are
+  JSON Schema keywords, and zio-http already emits `"format": "int32"` on integers — a property by
+  either name would sit beside a keyword spelled the same, "the trap `create_question` already has
+  with `required`."
+* **Illegal question shapes are unrepresentable in the schema**, not merely rejected by a
+  validator: what varies by question type lives in a discriminated `question`/`answer` field, so
+  an input question's schema has no `options` property to even pass. `@rejectExtraFields` closes
+  the remaining gap — without it, a field a variant doesn't have was silently dropped by the
+  decoder and the entity created without it.
+* **Descriptions are annotations on our own types, derived into the schema, never
+  post-processed.** A test pins 137/137 output and 123/137 input property coverage, with the
+  schema-synthesised `questionType` discriminator as the sole exemption (there's no Scala field to
+  annotate). Before this, coverage was 31/137 inputs and 3/98 outputs — "which left the agent to
+  guess what came back from its own call."
+* **One codec owns the survey tree: `platform.surveySchemas`.** Previously the rule-config JSON in
+  `question_rules.rule_config` and `answers.answer_value` was written three uncoordinated ways —
+  the API served it through circe, `SurveyRepositoryQuill` read it back through circe decoders,
+  and the MCP backoffice wrote the same column with string interpolation
+  (`s"""{"type":"$kind","value":$v}"""`) agreeing with the other two by nobody's enforcement — plus
+  a fourth rendering in test fixtures. `decodeRules` discards anything it cannot parse via
+  `.toOption`, so a disagreement never raised; it just stopped enforcing the rule, silently, which
+  looks identical to the rule having passed. **The survey tree format is a database format, not
+  only a wire format** — this is why the single-definition fix had to live in `platform`, reached
+  by both `api` and `mcp`, rather than in the wire layer alone.
+* **zio-http's `Endpoint` replaced tapir, module by module.** What tapir gave was an endpoint
+  described as a value; zio-http's `Endpoint` gives the same thing, and the server was already
+  running on zio-http underneath, interpreted into it by `ZioHttpInterpreter`. The deeper reason
+  this was more than a rename: a tapir `Schema` *documents* a shape circe has already decided —
+  an undocumented type could take `Schema.anyObject` for free, and eight of them did — while a
+  zio-http/zio-schema `Schema` *is* the codec. Moving a type to the derived shape is a format
+  decision, not paperwork.
+* **`endpoints/` was replaced by `messages/`, cross-compiled, with route descriptions staying in
+  `api`.** Nothing in `client` ever imported an endpoint, only the request/response types — the
+  module was making the browser pay bundle budget for a description it never read (0 of 188
+  output modules mentioned tapir at the time it was measured).
+* **`Schema[Phase]` is hand-written; `ApiError` and `VideoResponse` are derived.** A derived enum
+  schema would write the variant name as an object key (`{"Welcome":{}}`), but the browser decodes
+  `Phase` as a plain string via `Decoder.decodeString.map(fromDbString)` — so `Phase` needs the
+  hand-written exception. `ApiError` could move to the fully-derived shape because *both* of its
+  sides moved together (see the `ApiError` entry in `incidents.adoc`). `VideoResponse`'s old circe
+  pair flattened the payload under a `type` key beside the payload's own fields
+  (`{...NextVideo fields...,"type":"video"}`); zio-schema cannot describe that "merge a nested
+  object's fields into the parent's, plus a discriminator" shape, so this was the one response that
+  had to *change* shape (`{"Video":{"data":{...}}}`), safe only because nothing read the old bytes
+  directly — both sides decode to the enum and match on it.
+* **The `CodecConfig` used to build the server routes, `HttpApp.codecConfig`
+  (`ignoreEmptyCollections = false`), is read by the test suite too (`TestHelpers`,
+  `WireContractSuite`) rather than the test asserting against a separately-constructed config.**
+  See the `ignoreEmptyCollections` incident below for why this one setting needed its own rule.
+
+== Data model
+
+* **Soft delete everywhere, never a hard delete, and the filter on read is the half that counts.**
+  `answers.question_id` references `questions`, so retiring must not break history;
+  `set_question_active` retires and reports how many answers a retired question still resolves
+  for. V20 added `is_active` to `questions`, `question_options`, `question_rules` and
+  `localized_texts` — "the filter is the half that matters: a column no query consults is a soft
+  delete that deletes nothing." `findAnsweredQuestionsByUserQuery` deliberately does *not* filter
+  on `is_active`, because it feeds the event log and "retiring a question must not rewrite the
+  record of what a user answered." `isSurveyCompleteQuery` has to filter `is_active` on *both*
+  sides of its comparison — filtering only the question count let deactivating an already-answered
+  question close the survey by itself.
+* **Video status is one column with a CHECK (`pending`/`active`/`retired`), not two booleans.**
+  V21 replaced an `is_active` flag that could only express two of the three real states (created
+  but never uploaded, and retired, were both `is_active = 0`). Two flags would leave a fourth
+  combination that cannot happen and nothing to stop it; one CHECK-constrained column makes the
+  impossible state unrepresentable. `video_url` stays `NOT NULL` because it's where the S3 key
+  lives (`AssetStore.keyOf` parses the URL and nothing else stores the key) — the server picks the
+  key (`<slug>/videos/<videoId>.<ext>`) at creation, before any file exists, so the column can stay
+  non-null from the start.
+* **Validation lives in Scala; the affected-row check (`Writes.expectOne`) is the only other line
+  of defence.** `advertisers` has no unique constraint of any kind, and a CHECK violation is
+  dropped by rqlite as silently as any other rejected statement (see `incidents.adoc`'s rqlite/JDBC
+  section) — so "validating in Scala and checking the count afterwards is the whole safety model."
+  Where rqlite *does* enforce uniqueness (`locations.slug`), the Scala pre-check still "earns its
+  place on diagnosis, not integrity": disable it, and the duplicate row still stays out, only the
+  error message degrades to "the database rejected it silently" instead of naming the clashing
+  location.
+* **Stylesheets and icons stay on S3, not the database.** Keeps the portal's render path untouched
+  and the asset edge-cached; the accepted cost is that a write must also invalidate CloudFront,
+  something the old CLI never did for `captal video add`. `s3:ListBucket` was *originally*
+  deliberately withheld from the IAM policy — every key is derived from a slug the database
+  already confirmed, so a bug in key construction should fail loudly on a missing object rather
+  than quietly finding a neighbour's — but this has since lapsed: `copyBundle` and
+  `destroy_location` both need to list a prefix, so the live policy grants it. `docs/mcp-iam.adoc`
+  still states the old absence; see the legacy-docs judgement in this tree's `readme.adoc`
+  companion report.
+* **The video storage key is derived from the video id, never the uploaded file name — and later
+  the key drops the extension entirely.** The old CLI used the raw file name, so two advertisers
+  uploading `promo.mp4` silently overwrote each other. Later: S3 addresses objects by key and
+  browsers play them by *stored content type*, not by path, and measurement showed the presigned
+  signature does not need to bind the content type (`SignedHeaders=host` without one vs.
+  `SignedHeaders=content-type;host` with). So the extension left the tool entirely; what S3 records
+  is whatever the browser sends, checked once, honestly, at `confirm_video_upload` by reading the
+  object's *actual* stored type back — the first moment the type is a fact rather than a claim.
+* **A scriptable SVG icon is refused outright, not sanitised.** "Stripping tags from markup nobody
+  asked for invites the question of what else was quietly changed." The object is served from the
+  portal's own origin, so an SVG with a `<script>` or an `on*` handler, opened directly rather than
+  through the `<img>` tag the SPA uses, renders as a document where the script runs.
+* **Wire vocabulary and the stored column are deliberately decoupled.** `question_type` keeps its
+  lowercase, underscore-separated tag in SQLite (`CHECK (question_type IN ('radio', …))`) while the
+  MCP-facing schema capitalises case names (`Radio`, `Select`) — `flatten` maps explicitly between
+  them, so one side's cosmetic convention never forces a migration on the other. V22 then aligned
+  the *video type* values for a different reason: `publicidad`/`propaganda` (the DB's literal
+  values) had disagreed with the column's own name (`last_promo_video_id`) since V5, and that one
+  genuinely needed fixing, not decoupling.
+* **IDs are random UUIDs, not deterministic `uuid5`-from-a-seed.** The deterministic scheme existed
+  so re-applying the same YAML was an upsert rather than a duplicate; with explicit CRUD through
+  the MCP tools that purpose is gone, so `IdGenerator`'s old role (implicit guardian of every
+  entity's natural key) had to move into explicit Scala checks before each write — which is what
+  `create_advertiser`'s name check and `create_location`'s slug check are for.
+* **`users` has no `location_id`; everything else does.** A user is identified once and recognised
+  across every location's portal via the cross-location `captal_user` cookie; sessions, surveys,
+  advertiser videos and localized texts are all scoped.
+
+== Client and bundle
+
+* **`secondsRemaining` (an `Int`), not an absolute `accessExpiresAt` instant, drives the client
+  countdown.** "A captive-portal client has had no internet yet and may not have synced NTP," so no
+  absolute time is trusted client-side. `accessExpiresAt` was removed from `StatusResponse`
+  entirely once this held — the session still stores the instant server-side; only the redundant
+  wire copy went, and with it `Instant`'s decoder, the last thing holding `java.time` in the
+  bundle.
+* **`IsoDate` replaces `LocalDate.parse` on the three date codecs.** Gives up tolerance for date
+  formats the wire never sends — the wire is ours at both ends, and `<input type="date">` is
+  specified to produce exactly one format.
+* **`js.Promise` with a hand-written 15-line `Promises` (`map`/`flatMap`), not
+  `scala.concurrent.Future`, for client HTTP.** `dom.fetch` already returns a `js.Promise`; wrapping
+  it in `Future` pulled in an executor, a `CopyOnWriteArrayList` and an `AtomicReference` — thread
+  -coordination machinery for a runtime with exactly one thread.
+* **Route splitting (one JS chunk per view) was adopted knowing the full-funnel cost.** A guest who
+  walks the entire funnel downloads *more* total bytes (228,785 vs. 202,952, about 13%) than
+  before, because every view now carries its own decoder chunk instead of one shared one. Accepted
+  because "the first paint is spent staring at a blank screen deciding whether the WiFi works,
+  while the rest arrive while reading a question or watching a video" — and the *API client* had
+  to be grouped by the view that calls it first (one `ApiClient` reachable from every view made
+  every route and every response decoder eager, moving only 13%→23% of the bundle behind the route
+  boundary once decoders were split by view too).
+* **Nothing in the published bundle is pre-gzipped any more.** A browser loading an ES module
+  imports chunks by the exact path the linker wrote, so a file cannot be renamed to `.gz`.
+  CloudFront compresses on the fly (brotli, `compress = true` already the CloudFront default)
+  instead, and `publishS3` enumerates whatever the build produced rather than naming four fixed
+  files.
+* **Vite/Rollup replaced esbuild+terser for the client bundle**, measured slightly better
+  (1,854 bytes better on first paint, 7,621 on the full session) and folding the eager half into
+  one chunk instead of two; needed at all because per-route code splitting makes Scala.js emit
+  more than one module, and Google's Closure Compiler — the thing that actually mangles names for
+  size — refuses to run on more than one module. `@scala-js/vite-plugin-scalajs` is deliberately
+  *not* used: it wires `sbt` into Vite's dev server, and Mill has already produced the linked
+  output by the time this runs.
+* **`allowBigIntsForLongs` instead of Scala.js's default 64-bit emulation**, trading arithmetic
+  speed (BigInt is slower in a hot loop) for 3,578 bytes — accepted because nothing left in the
+  client has a hot loop once the countdown moved to `Int`.
+* **One Scala.js linker run for every page `client` serves** (the portal, both MCP App pages, the
+  paused page) rather than one run per public module. The cost is known and was measured before
+  deciding: a linker run's runtime is sized by the *entire* program and every public module
+  imports it statically (not deferrable — the entry instantiates something deriving from
+  `Object`), so the two MCP App pages' shared runtime grew from 16,810 bytes gzip standalone to
+  91,045 inside the merged run; first download of the upload page went from 10,839 to 94,899 bytes
+  gzip. Translated to load time: **+70 ms at 10 Mbps, +408 ms at 1.6 Mbps.** What's bought: the
+  paused page reuses the portal's `Layout` without copying it, and there's one Vite configuration
+  instead of three. If this is revisited, the thing to re-measure is not chunk boundaries — Rollup
+  re-chunks by reachability regardless of linker-level module granularity — it's whether the
+  shared-runtime cost (driven by one shared base class, `java.lang.Object`) can shrink at all.
+* **`modulepreload` hints are always derived from the built artifact, never from a hand-written or
+  server-compiled list.** Chunk names carry a content hash, so a list goes stale on the very next
+  publish — "a preload with a hash nobody imports is worse than none, because the browser
+  downloads a chunk it will not use." Two implementations exist because two different things
+  render the HTML: the portal and paused page are rendered by the *build*, so `preloadLinks` reads
+  the entry's real imports at build time; the MCP App pages are rendered by the *server* per
+  request, so `AssetStore.scriptPreloads` reads the published entry from S3 and parses its imports
+  at request time — and answers empty, not an error, if it can't read it. Both exclude dynamic
+  `import()` deliberately, or the portal would eagerly preload every view on first paint, undoing
+  the whole point of route splitting. Measured: removes one round trip from the critical path
+  (the app mounts 143 ms sooner at 100 ms RTT).
+* **The CDN always exists; there is no flag to run without CloudFront.** `AssetStore` invalidates
+  unconditionally in every environment, and the distribution is a startup requirement like the
+  assets bucket. The previous `cdnEnabled` flag — born because LocalStack Community answered
+  CloudFront with a 501 — survived the move to LocalStack Pro (which does serve CloudFront)
+  unnoticed and, by construction, guaranteed `createInvalidation`, the poll to `Completed`, and the
+  ordering in `pause_location` that depends on the wait actually waiting were *never exercised by
+  anything* until they reached production AWS. General lesson recorded for reuse: **a flag
+  justified by a missing capability has to be revisited the moment the capability arrives** — this
+  one didn't get revisited for an entire LocalStack tier bump.
+* **MCP App page scripts are served from the CDN via `<script type="module" src>`, not inlined
+  into the HTML.** Both pages used to carry their script inline on the belief that the sandboxed
+  iframe's CSP blocks every external host; it doesn't — `resourceDomains` maps to `script-src`,
+  and the directive was already in use for the host's fonts. Inlining cost ~9 KB gzip on *every*
+  `resources/read`; the CDN version costs that once as a shared, content-hashed chunk (plus a
+  stable, revalidating entry per page) rather than a full copy per read.
+* **Laminar was adopted for the upload page, then dropped two commits later.** Right call while
+  the page rendered a list of pending videos with per-row JavaScript; wrong call once the page
+  became strictly single-video and had nothing left to render dynamically — "worth revisiting if
+  the question editor arrives," since repeated, per-locale-validated option rows are exactly what
+  a framework like Laminar is for.
+* **The paused/maintenance page is a Scala.js entry point, not static HTML.** Reuses `Layout`, the
+  brand icon and the location's own stylesheet so it looks like the portal it stands in for. It
+  talks to nothing — by design, since it's shown exactly when the backend is deliberately absent —
+  and its copy lives in source rather than in the i18n database for the same reason. It ships
+  inside the release bundle (not written by the pause operation itself) because it has to already
+  be in place *before* a pause happens.
+
+== Build, deploy and infrastructure
+
+* **Single-stage Dockerfiles.** Mill builds the jar where Mill already lives; the image just
+  packages it, with a dedicated `*.image` task staging the Dockerfile beside the jar so the build
+  context is two files, not the whole repository. Rejected: the old multi-stage `Dockerfile.api`
+  that re-resolved the entire dependency tree inside the image build on every run (and had rotted
+  unnoticed — see `incidents.adoc`).
+* **Migration and server start share one `CMD`.** A failed migration stops the container instead
+  of starting a server against a schema it wasn't written for.
+* **The MCP server migrates its own history table (`db/migration-mcp`), not the API's.** Two
+  processes migrating one shared history table race on startup; `Migrate.migrateTo` takes the
+  table name as a parameter specifically so the two schemas can stay apart.
+* **Migration serialisation uses a lock built on rqlite itself (`Migrate.Lock`), not Flyway's own
+  locking, not S3, not EFS, not etcd — for now.** Flyway's lock needs a transaction to hold it and
+  rqlite had none usable for most of this project's life (see `incidents.adoc`); even with
+  transactions restored, Flyway's SQLite dialect logs "does not support locking" and does nothing.
+  The lock is a single `INSERT` of a fixed primary key, decided by *reading back* who landed, not
+  by whether the insert threw (both "it threw" and "it affected zero rows" are indistinguishable
+  from a lost race under rqlite's silent-rejection behaviour — see `incidents.adoc`). Deliberately
+  no heartbeat and no takeover of an abandoned lock: a migrator that dies mid-migration leaves a
+  half-applied schema *and* a failed Flyway history row that Flyway refuses to pass until a human
+  repairs it, so handing the lock to a new process would not help — it would just be blocked for a
+  different reason. **Rejected, explicitly, with the reasoning kept:**
+** *S3 with `If-None-Match: *`, or DynamoDB conditional `PutItem`* — both legitimate CAS
+   primitives (this is what OpenTofu's own S3 backend lock does), but rejected because "the
+   primitive is not the weak part": rqlite's own `INSERT` already goes through Raft, giving the
+   same CAS guarantee for free, and swapping stores buys no correctness while adding a dependency
+   and its own IAM surface. Crucially, neither one fixes the one real weakness (the abandoned
+   lock) either — a TTL-based lease just resolves the wrong problem, since a migrator that is
+   merely slow and one that is dead look the same without a server-side session.
+** *EFS* — its NFSv4 locks *do* release automatically on client death, which is the one property
+   the current design lacks — but EFS only exists in the single-node `dev` topology; prod's Raft
+   cluster runs on ephemeral storage. `FileChannel.tryLock` over NFS is also not reliable in the
+   JVM.
+** *etcd* — the only option on the list offering a true server-side session (a lease with
+   keepalive via `jetcd`), and the one to reach for "if this bites": costs an always-on task, a
+   Terraform module, and `jetcd` pulling grpc-netty into `platform/`; introduces a new single point
+   of failure that blocks every deploy; and still does not solve fencing (a holder frozen by GC
+   could wake after losing its lease and keep migrating, since Flyway accepts no token).
+** *Removing the container entirely* — running migrations as a one-shot task per deploy instead of
+   inside the serving container, with the API only checking a version — needs no lock at all
+   (one migrator by construction, and ECS already detects a dead task). Left on the table,
+   undone; it is the pattern `mcp.dev`/`api.dev` already use locally (migrate, then serve, as
+   separate steps), and the deployed path is the one that diverged from it.
+** When to revisit the S3/DynamoDB option specifically: if the lock is ever needed *before* the
+   database exists, or when the database itself is unreachable — today, if the database can't be
+   reached, migrating is moot anyway.
+* **The real OpenTofu configuration is applied against LocalStack for `mcp.test`, replacing a
+  219-line hand-built `awslocal` fixture.** The fixture agreed with the deployed topology only for
+  as long as someone kept it agreeing, and had already drifted (`modules/alb` had grown rules the
+  fixture didn't know about). `environment = "local"` is accordingly a real environment in the
+  configuration, not a test-only shim.
+* **The LocalStack state directory and the LocalStack container must be born together, and this
+  is enforced, not just documented.** `mcp.test.localStackInfra` is a `Task(persistent = true)`
+  keyed on the running container's id — a normal Mill task's `dest` is wiped on every
+  re-evaluation, which would discard the Tofu state while the container still held every resource
+  it describes. `resetLocalStack` recreates the container (which also discards the keyed state
+  directory) when the two have come apart; `mill clean` discards the state but leaves the
+  container, which is precisely the divergence the keying exists to prevent — hence why `mill
+  clean` must be followed by `mill mcp.test.resetLocalStack`.
+* **`backend.tf` is deliberately not staged into the LocalStack-targeted copy of the
+  configuration.** It declares an S3 backend whose bucket the same configuration creates — a
+  chicken-and-egg locally — so the local run falls back to Tofu's default local state file.
+* **IAM is enforced locally in *soft* mode** (`ENFORCE_IAM=1`, `IAM_SOFT_MODE=1`): every AWS call
+  from the test suite is evaluated against the real policy and logged, never denied. Hard mode is
+  measured, not guessed, to be unreachable: LocalStack's own IAM-coverage page lists which services
+  have enforcement coverage for service-specific condition keys, and ECS is not one of them, while
+  this policy gates ECS service calls on `ecs:cluster` and `iam:PassRole` on
+  `iam:PassedToService` — confirmed with LocalStack's own `simulate-principal-policy`, which flips
+  each from `implicitDeny` to `allowed` purely by supplying the condition key, with an unconditioned
+  action in the same policy (`ecs:RegisterTaskDefinition`) allowed either way as a control.
+  Dropping the conditions to make hard mode pass was rejected as "weakening a production policy to
+  suit a local tool." `CAPTAL_IAM_SOFT=0` exists to retry hard mode once LocalStack's coverage
+  catches up. Soft mode alone is not the check — `DeployE2ESpec` reads the denial log back and
+  fails on anything outside a named `KnownEmulationGaps` set, and asserts that a deliberately
+  withheld permission (`s3:ListBuckets`, or similar) *is* denied, so the check cannot pass
+  vacuously by evaluating nothing (see `incidents.adoc`).
+* **Infrastructure provisioning was first declared explicitly out of scope for an MCP tool**,
+  because the MCP server runs *inside* the VPC the base infrastructure creates — a tool that
+  created the VPC would have to run before there was anywhere to run it — and because Terraform's
+  value is the state and the plan, which imperative SDK calls have neither of. Per-location deploy
+  (register task definition, create/update service, target group, listener rule) was identified at
+  the same time as the part that *should* become a tool, since it is incremental on top of a base
+  that already exists — and it did, as `deploy_location`/`pause_location`/`resume_location`/
+  `destroy_location`.
+* **`terraform/` was brought in as a git subtree of the formerly-separate
+  `whitelabel-captal-infrastructure` repository**, because `mcp.test` applies this configuration
+  against LocalStack, so a checkout of the portal alone was not enough to test the portal. The
+  override `terraformDir` still exists for pointing at a working copy elsewhere while editing it.
+  Its own nine commits are **not** part of `main`'s linear ancestry — the commit message for the
+  move states plainly that preserving them was the cost a subtree *merge* would have added, and
+  that cost was not paid — but they remain reachable from the tag `backup/pre-flatten-rewrite`
+  (verify with `git log backup/pre-flatten-rewrite`). See `history.adoc`.
+* **`modules/vpc` (private subnets, NAT gateway, EIP) was deleted in favour of the account's
+  default VPC.** `enable_nat_gateway` defaulted to false and no environment ever overrode it, so
+  every task already ran in a public subnet with its own address, isolated by security group
+  alone — the private half existed and was paid for (~USD 32/month per availability zone) by
+  nobody. What's given up: the private subnet as a second isolation layer behind the security
+  groups; a rule written with a CIDR source rather than a group source is now exposed the moment
+  it applies. **This decision has not yet been applied to the deployed `dev` environment** — see
+  `pending.adoc` for the resulting plan drift.
+* **`mcp/` is grouped by MCP's own protocol vocabulary** (`tools/`, `apps/`, `protocol/`,
+  `access/`, `resources/`, `aws/`), not by product domain (`video/`, `survey/`, `location/`),
+  because cross-entity reads (`EntityResources`, `Readiness`) would otherwise have to live in five
+  domain packages at once. `aws/` stays inside `mcp/` rather than moving to `platform/`: the SDK
+  adapters are concrete case classes taking clients by constructor, not ports, so relocating them
+  would decouple nothing while dragging the ECS/ELBv2/CloudFront SDKs into a module everything else
+  depends on. One package-cycle constraint decided a placement: `Prompts` was slated for
+  `protocol/` but calls `LocationTools`/`Readiness`/`AssetStore`, while `Readiness` (in
+  `resources/`) imports from `protocol/` — a `protocol → resources → protocol` cycle that Scala
+  compiles happily and that would make the package boundary meaningless, so `Prompts` sits in
+  `tools/` with what it calls instead.
+* **`infra/` was renamed to `platform/`.** It held `services/`, `session/`, the Quill schema and
+  the repositories — "the application's own machinery, not infrastructure" — while sitting next to
+  an actual infrastructure repository, which made the word mean two different things depending on
+  which directory you were in.
+
+== Comments vs. documentation
+
+* **A comment answers "what does this do and what breaks if you touch it"; `docs/context/`
+  answers "why this way and not the other."** The test for which one a paragraph belongs in: if it
+  survives someone changing the decision, it's a comment; if it stops making sense, it was
+  documentation. Stated reason this split exists at all: "this repo comments heavily for a good
+  reason, almost everything here fails silently, but comments that argue a decision with
+  measurements grow until they bury the code." `platform/Migrate.scala` went from 130 comment
+  lines to 51 against the same 143 lines of code once its argument moved here.
+
+== Client loading UI — rejected alternatives
+
+Written up here because the architecture doc (xref:../client.adoc[]) describes only what shipped,
+not what was tried first. The
+current mechanism: a permanent `.nav-loader` overlay (never unmounted) plus per-view `Layout`
+loading state, with a `breathe` opacity pulse (`0.65↔1`, 1.4 s, no scale change — specifically
+requested) while loading and a one-shot `brandGlowFlash` `drop-shadow` on completion.
+
+* **A spinning ring (`ring-arc` + `ringSpin`) was the original approach, and was dropped.** Its
+  arc has a visible *direction* at any instant, so two ring elements in different DOM nodes
+  (initial page loader → nav overlay → view) showed different phases on handoff, producing a
+  visible jump. A `syncSpin` fix — copying `currentTime` between nodes via the Web Animations API —
+  was tried and found fragile (needed a "donor" arc always present; failed differently on mobile
+  Firefox) before the team switched to a non-directional animation (`breathe`) instead of patching
+  synchronisation further.
+* **SVG `<mask>`-based ripples, animated per-circle, were tried and dropped** because doing it
+  properly meant duplicating the brand icon's own SVG paths in Scala — but the icon is
+  per-tenant-configurable (each location uploads its own SVG via `set_location_icon`), so nothing
+  about its paths can be hardcoded.
+* **A generic CSS `mask-image: url("brand-icon.svg")` ripple approach was tried next and also
+  dropped**, for two reasons: the `mask-image` URL in an external stylesheet resolves against the
+  stylesheet's own path, not against the page's `<base href="/<slug>/">`, so it had to move into
+  an inline `<style>`; and Firefox did not render the layered, masked composite consistently.
+* **A "jar with waves" / rain visual was mocked up as a richer alternative and never built** — the
+  team judged `breathe` sufficient and prioritised fixing the real `<video>` double-fetch bug
+  instead (see `incidents.adoc`). The mockups were ephemeral scratch files and no longer exist.
+* **Among glow implementations, CSS `filter: drop-shadow(...)` via `@keyframes` won on
+  cross-browser grounds**, not aesthetics: an SVG `<filter>` (`feGaussianBlur` + `feColorMatrix` +
+  `feMerge`) rendered correctly in Chromium but not consistently in Firefox when combined with SMIL
+  animation; stacking 3–4 copies of the icon with increasing stroke-width and decreasing opacity
+  produced visible concentric rings rather than a soft glow. The plain CSS `drop-shadow` keyframe
+  is what Firefox renders correctly, and it is what shipped.

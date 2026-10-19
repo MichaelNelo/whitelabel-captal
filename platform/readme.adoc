@@ -1,0 +1,13 @@
+= platform
+
+Everything the guest-facing server and the backoffice both need to touch lives here: where a
+location's content, its guests, their answers and their sessions are stored, and the connection
+to a venue's WiFi controller that puts a device online and takes it off again when its time runs
+out.
+
+It is shared rather than duplicated because both sides are describing the same guest and the
+same location; if each kept its own copy of that connection, the two could end up disagreeing
+about who is actually online.
+
+Architecture: xref:../docs/platform.adoc[docs/platform.adoc]. Database semantics:
+xref:../docs/database.adoc[docs/database.adoc].

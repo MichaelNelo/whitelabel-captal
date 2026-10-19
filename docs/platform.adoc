@@ -1,0 +1,519 @@
+= Platform
+:toc:
+:toclevels: 2
+
+The `platform` module is the JVM-only persistence and services layer: the Quill setup, the row
+types, the repository implementations of the `core` traits, the session and scheduled-job
+machinery, the event-handler chain that writes to the database, and the Flyway migration runner.
+It is the only module that knows SQL.
+
+== Module shape
+
+`platform` depends on `core` alone and is depended on by `api` and `mcp`:
+
+[source]
+----
+core ──> platform ──> api
+                 └──> mcp
+----
+
+`core` is cross-compiled (`core`/`core-js`); `platform` is not. It carries a JDBC driver, a
+connection pool-less `DataSource`, Flyway and Logback, none of which exist on Scala.js, so nothing
+in `client` can reach it. `messages` sits beside it rather than under it: the wire types are shared
+with the browser and have no database in them. See xref:core.adoc[Core] for the domain and
+xref:messages.adoc[Messages] for the wire contract.
+
+The dependency set, from `build.mill`:
+
+|===
+| Dependency | Version | What it is here for
+
+| `dev.zio::zio` | 2.1.14 | effect type for every signature in the module
+| `dev.zio::zio-http` | 3.0.1 | the HTTP client `UnifiClient` uses
+| `io.getquill::quill-jdbc-zio` | 4.8.6 | compile-time SQL generation and the `ZIO`-native runner
+| `com.github.geirolz::fly4s` | 1.0.8 | cats-effect wrapper over Flyway, used by `Migrate`
+| `dev.zio::zio-interop-cats` | 23.1.0.3 | lets `Fly4s` run on `Task`
+| `io.rqlite:rqlite-jdbc` | 10.5.2.1 | the JDBC driver that speaks rqlite's HTTP API
+| `ch.qos.logback:logback-classic` | 1.5.6 | logging backend, configured by `platform/resources/logback*.xml`
+| `io.circe::circe-yaml` | 0.16.0 | YAML/JSON decoding used by the surrounding tooling
+|===
+
+The module has no test sources of its own. Everything in it is exercised through `api.test` and
+`mcp.test`, which is also where the migration lock and the driver's write semantics are pinned —
+see xref:testing.adoc[Test strategy].
+
+Configuration is one key, read from `platform/resources/application.conf`:
+
+[source]
+----
+database {
+  jdbcUrl = "jdbc:rqlite:http://localhost:4001"
+  jdbcUrl = ${?DB_URL}
+}
+----
+
+`DB_URL` is what every deployed task sets.
+
+== Quill setup
+
+=== The context type
+
+`platform/src/whitelabel/captal/platform/schema/package.scala` defines the single Quill context
+alias every signature in the codebase names:
+
+[source,scala]
+----
+type QuillSqlite = Quill.Sqlite[SnakeCase]
+----
+
+`SnakeCase` is the naming strategy, so `currentSurveyId` maps to `current_survey_id` without any
+per-field declaration. `Quill.Sqlite` is correct against rqlite because rqlite *is* SQLite — see
+xref:database.adoc[Database].
+
+The same file holds the SQLite function escapes the generated SQL needs, as `inline def`s returning
+`Quoted`: `sqliteRandom`, `sqliteAbs`, `sqliteLog`, `nullif`, `castAsReal`, `castAsRealOpt`,
+`datetimeMinusSeconds` and `strGt`. They exist because Quill's parser cannot see through the Scala
+equivalents; `strGt` in particular stands in for `>` on `String`, which Quill rejects because of the
+implicit `augmentString`.
+
+=== Table mapping
+
+Every row type that is actually queried gets an `inline given SchemaMeta[...]` naming its table, in
+the same package object:
+
+[source,scala]
+----
+inline given SchemaMeta[UserRow] = schemaMeta[UserRow]("users")
+inline given SchemaMeta[SessionRow] = schemaMeta[SessionRow]("sessions")
+inline given SchemaMeta[DeviceRow] = schemaMeta[DeviceRow]("devices")
+// ... surveys, questions, question_options, question_rules, answers,
+//     user_survey_progress, localized_texts, advertisers, advertiser_videos,
+//     video_views, locations, event_log
+----
+
+WARNING: A row type without a `SchemaMeta` does not fail to compile. Quill derives the table name
+from the class instead, so `DeviceRow` becomes `device_row` and every statement against it targets a
+table that does not exist. Two row types are unmapped deliberately — `DeviceUserRow` and
+`NextIdentificationSurveyRow` — because neither appears in a `query[...]`; the second is a
+projection, not a table.
+
+`schema/users.scala` goes further and maps the `core` state-indexed `User` type directly:
+`SchemaMeta[User[State.WithEmail]]` projects `_.id -> "id"` and `_.state.email -> "email"` onto
+`users`, and a `QueryMeta[User[State.AnsweringQuestion], UserAnsweringDto]` describes the join
+against `sessions` that reconstructs that state, with the `UserAnsweringDto` intermediate carrying
+`Option` fields because the SQL columns are nullable. It re-declares `SchemaMeta[SessionRow]` so the
+`QueryMeta` can resolve it at inline expansion.
+
+=== Domain types in columns
+
+`schema/core.scala` holds the `MappedEncoding` pairs that let the opaque `core` id types and the
+domain enums be used directly in quoted queries, so a query reads
+`v.videoType == lift(VideoType.Promo)` and the compiler refuses anything that is not a `VideoType`.
+
+Each direction is declared for: `user.Id`, `user.SessionId`, `user.DeviceId`, `user.Email`,
+`survey.Id`, `survey.question.Id`, `survey.question.OptionId`, `video.Id`, `Phase`,
+`IdentificationSurveyType` and `video.VideoType` (encode only in one direction plus a strict
+decoder).
+
+IMPORTANT: Every one of these carries a `@targetName`. An opaque type erases to its underlying
+type, so `MappedEncoding[user.Id, String]` and `MappedEncoding[survey.Id, String]` would both erase
+to `MappedEncoding[String, String]` and collide on the synthetic name the compiler generates. Adding
+a new mapped encoding without a unique `@targetName` is a double-definition error.
+
+The `String -> video.VideoType` decoder throws on an unrecognised stored value rather than
+defaulting, naming the column and the V22 rename in the message.
+
+=== Row types
+
+`rows.scala` is the flat, one-case-class-per-table description of the schema: `UserRow`,
+`SessionRow`, `SurveyRow`, `QuestionRow`, `QuestionOptionRow`, `QuestionRuleRow`, `AnswerRow`,
+`UserSurveyProgressRow`, `NextIdentificationSurveyRow`, `LocalizedTextRow`, `AdvertiserRow`,
+`AdvertiserVideoRow`, `VideoViewRow`, `DeviceRow`, `DeviceUserRow`, `LocationRow`, `EventLogRow`.
+
+Conventions that hold across all of them:
+
+* Timestamps are `String` (ISO-8601), matching the `TEXT` columns. Conversion to `Instant` happens
+  at the boundary — `SessionService.toSessionData` parses `access_expires_at`, for instance.
+* Booleans are `Int` (`0`/`1`), matching SQLite.
+* Columns added by a later migration are declared last with a default, so existing construction
+  sites keep compiling.
+* Ids are the opaque `core` types wherever a `MappedEncoding` exists; the rest are `String`.
+
+The same file holds two closed sets of stored string values, both as `inline val`s so a quoted query
+can name them (a plain `val` is opaque to Quill's parser, and `lift` is unavailable inside the
+object-level quotes the read path uses):
+
+|===
+| Object | Values | Column
+
+| `SurveyCategory` | `email`, `profiling`, `location`, `advertiser` | `surveys.category`
+| `VideoStatus` | `pending`, `active`, `retired` | `advertiser_videos.status`
+|===
+
+Both are constrained by a `CHECK` in the migration that created them.
+
+=== The survey question tree as a schema
+
+`surveySchemas.scala` is the one zio-schema description of the survey question tree. Both
+`question_rules.rule_config` — a `TEXT` column holding JSON — and the survey response that reaches
+the browser are written from it, which is what keeps the writer (`mcp`) and the reader
+(`SurveyRepositoryQuill`) from drifting.
+
+It supplies:
+
+* Named `given Schema[...]` instances for the opaque ids (`survey.Id`, `survey.question.Id`,
+  `OptionId`, `survey.AdvertiserId`), each a `transformOrFail` over `Schema[String]`, so a malformed
+  id in a request body decodes to an error. `DeriveSchema.gen` cannot see through an opaque type, and
+  the instances must be named because the erased type would collide on a synthetic name.
+* `Schema[CommonRule]` and `Schema[IdentificationSurveyType]` as plain strings, matching the columns
+  that already hold them that way.
+* Three named `Schema[RangeRule[A]]` instances — `Int`, `BigDecimal`, `LocalDate` — one per
+  `QuestionType` case, because `RangeRule` is generic and a `Schema` is not.
+* Derived schemas for the tree itself: `QuestionType`, `QuestionToAnswer`, `AnswerValue`,
+  `NextIdentificationSurvey`, plus the `LocalizedText` and `QuestionOption` leaves.
+* `encode[A: Schema](value: A): String` and `decode[A: Schema](json: String): Either[String, A]`,
+  the two functions that turn a value into what the column stores and back. `decode` returns the
+  reason on failure.
+
+== Repositories
+
+`repositories/` holds the Quill implementations of the three `core` repository traits. Each is an
+`object` whose `apply(quill, ctx)` returns the trait at `F = Task`; the queries are `inline def`s on
+the companion so they can be referenced from elsewhere (the event handlers reuse several) and so
+Quill expands them at compile time.
+
+Every implementation takes a `SessionContext` rather than a session parameter: the current session
+is ambient, which is what lets the same repository serve a request and a scheduled job unchanged.
+
+|===
+| `core` trait | Implementation | What it queries
+
+| `UserRepository[Task]`
+| `repositories/UserRepositoryQuill.scala`
+| `users` joined against `sessions` to reconstruct each state-indexed `User`: `findWithEmail`,
+  `findAnswering`, `findWatchingVideo`, `findAnsweringVideoSurvey`, `findReadyUser`,
+  `findAuthorizedUser`. Also `answers` joined to `questions` for the answered-question audit
+  payload.
+
+| `SurveyRepository[Task]`
+| `repositories/SurveyRepositoryQuill.scala`
+| `surveys` joined to `questions`, `question_options`, `question_rules` and `localized_texts` (left
+  joins for the texts, with locale preference and an English fallback). Serves
+  `findAssignedEmailSurvey`, `findWithProfilingQuestion`, `findWithLocationQuestion`,
+  `findWithAdvertiserQuestion`, `findNextIdentificationSurvey` and `findNextAdvertiserSurvey`;
+  subqueries over `answers` exclude questions the user has already answered.
+
+| `VideoRepository[Task]`
+| `repositories/VideoRepositoryQuill.scala`
+| `advertiser_videos` for `findById`, and for `findNextForUser` a weighted-random ad selection
+  joining `advertisers` and filtering on `surveys`/`questions`/`answers` for an unanswered
+  follow-up survey, falling back to the promo rotation ordered by `(priority, created_at)` from the
+  session's `last_promo_video_id` cursor. Localized title and description come from
+  `localized_texts`.
+|===
+
+`SurveyRepositoryQuill` also owns the parsing of a `QuestionRow` plus its rule rows into a
+`QuestionToAnswer`, including `parseQuestionType`, `parseHierarchyLevel` and
+`unreadableRules`/`warnUnreadableRules`, which log the rules whose stored JSON no longer decodes
+rather than dropping them silently.
+
+== Services
+
+`services/` holds the three database-backed services that are not repositories — they answer
+questions the domain does not model as aggregate reads.
+
+`LocationService` (`services/LocationService.scala`) resolves a slug to a `LocationRow`. One query,
+`findBySlugQuery`, over `locations`. `LocationService.resolveSlug` narrows that to the id and fails
+with `LocationNotFound` when the configured `LOCATION_SLUG` matches no row — a configuration error,
+not a request error. The `LocationRow` it returns is also where the per-location UniFi credentials
+come from.
+
+`LocaleService` (`services/LocaleService.scala`, implemented by `LocaleServiceQuill`) reads
+`localized_texts`:
+
+* `listAvailable()` — the distinct, sorted set of active locales.
+* `getMessages(locale, category)` — a flat `Map[entityId, value]` for one locale and category.
+* `getI18n(locale)` — the `frontend` category for the service's own `locationId`, decoded into the
+  `core` `I18n` structure through `I18nSchema`.
+
+All three filter `is_active == 1`.
+
+`SurveyService` (`services/SurveyService.scala`) is queries only — no trait, no instance. It holds
+the `user_survey_progress` statements (`findByUserAndSurveyQuery`, `insertProgressQuery`,
+`updateTimestampQuery`, `markCompleteQuery`) and `isSurveyCompleteQuery`, which compares the count of
+active questions in a survey against the count of this user's answers to active questions of that
+survey. Both sides filter `is_active`. `SurveyProgressHandler` is the only caller.
+
+== Session layer
+
+=== `SessionContext`
+
+`session/SessionContext.scala` is the ambient current session, backed by a `FiberRef[Option[SessionData]]`:
+
+[source,scala]
+----
+trait SessionContext:
+  def get: UIO[Option[SessionData]]
+  def getOrFail: Task[SessionData]
+  def set(data: SessionData): UIO[Unit]
+  def locally[R, E, A](data: SessionData)(zio: ZIO[R, E, A]): ZIO[R, E, A]
+----
+
+`getOrFail` fails with `SessionContext.NotSet`. Because it is a `FiberRef`, a value set at the top of
+a request is visible to every effect in that fiber's tree without threading it through a signature —
+which is why no repository method and no event handler takes a session parameter.
+
+The two write operations differ in scope. `set` installs a value for the rest of the fiber, which is
+what xref:api.adoc[API] does once per secured request; the fiber dies with the response. `locally`
+installs it for one effect and restores the previous value on exit, including on failure and
+interruption, which is what the scheduler worker needs — it lives indefinitely and processes one job
+after another, so the previous job's session must not be left in the slot.
+
+=== `SessionService`
+
+`session/SessionService.scala` owns the `sessions` table. The trait is the write surface plus two
+reads; the companion holds every statement as an `inline def` quote, which the event handlers reuse
+directly rather than going through the service.
+
+|===
+| Operation | Effect on `sessions`
+
+| `findById` | one row, mapped to `core`'s `SessionData`
+| `create` | upserts a `devices` row (`onConflictUpdate` on the id) then inserts the session with the captive-portal parameters
+| `createForUser` | the same, with `user_id` pre-populated for a recognised returning user
+| `setPhase`, `setLocale` | one column
+| `setCurrentQuestion` / `clearCurrentQuestion` | `current_survey_id` + `current_question_id`
+| `setAuthorized` | `phase = authorized` and `access_expires_at`
+| `resetForExpiration` | `phase = welcome` and clears `user_id`, `current_survey_id`, `current_question_id`, `current_video_id`, `current_advertiser_id`, `access_expires_at` in one statement; the row itself is kept so the cookie still resolves
+| `findPendingExpirations()` | the `(session_id, access_expires_at)` pairs for this location's authorized sessions that still have a deadline
+|===
+
+The captive-portal parameters travel as one `CaptivePortalParams(clientMac, apMac, redirectUrl, ssid, clickId)`.
+
+The service is location-scoped: `SessionService.layerWithLocation(locationId)` fixes the
+`location_id` written on every new session and filters `findPendingExpirations` by it. Each deployed
+task serves a single location, so there is no cross-location lookup. `SessionService.layer` is the
+unscoped variant (`locationId = None`).
+
+=== Scheduled jobs
+
+`session/JobScheduler.scala` is the whole scheduled-work mechanism. Today it carries exactly one job
+type, declared as an enum so another one does not need a new fiber:
+
+[source,scala]
+----
+enum ScheduledJob:
+  case ExpireAccess(sessionId: user.SessionId)
+
+final case class ScheduledAt(deadline: Instant, job: ScheduledJob)
+----
+
+Three pieces:
+
+`JobQueue` is the producer side and nothing else — an unbounded `Queue[ScheduledAt]` with one
+method, `schedule(at)`. It has no dependencies, which is what lets it be injected into the event
+handler layer. Unbounded is safe because there is at most one entry per authorized session of one
+location.
+
+`JobRunner` is the consumer side. `JobRunner.layer` builds it from `JobQueue`, `SessionService`,
+`SessionContext` and the `ExpireAccess` flow; `JobRunner.make(...)` is the direct constructor, so a
+test can build its own per case. The single method is `start: ZIO[Scope, Nothing, Unit]`, called
+explicitly from `api`'s `Main.run` rather than running as a layer side effect. It takes `Scope` so
+the fibers die with the application.
+
+`start` does three things:
+
+. Forks the **scheduler fiber**. Its state is a `SortedMap[Instant, List[ScheduledJob]]` of pending
+  deadlines, and its loop is one `inbox.take.timeout(wait)` where `wait` is the time to the earliest
+  deadline (`Duration.Infinity` when empty, `Duration.Zero` when already past). That single call
+  covers both signals: a new job returns from the `take` and the map is updated, a timeout means
+  deadlines came due and the ones at or before now are moved to the due queue. A job with an earlier
+  deadline recomputes the wait by itself — no fiber is interrupted or recreated.
+. Forks the **worker fiber**: `due.take.flatMap(execute).forever`. One fiber, so concurrency against
+  the UniFi controller is 1. `execute` looks the session up, and if it still exists runs the
+  `ExpireAccessCommand` flow inside `ctx.locally(session)` — which is what makes the flow behave
+  exactly as it does in a request, because the repositories and every `DbEventHandler` read the
+  session from the ambient context. Errors are logged and swallowed; the return type is `UIO`, so
+  neither an unreachable controller nor an rqlite failure can kill the worker.
+. **Rehydrates** from the database. The scheduler's state is in memory and does not survive a task
+  replacement, so `start` calls `sessions.findPendingExpirations()` and re-schedules one
+  `ScheduledAt` per row. Deadlines already in the past fire immediately, because the computed wait is
+  zero. It logs how many it rehydrated.
+
+IMPORTANT: A `ScheduledJob` payload must be **data**, not an effect. Rehydration rebuilds jobs by
+reading `sessions` rows, so anything the job needs has to be reconstructible from the database. An
+enum case carrying a `SessionId` satisfies that; a closure, a prepared effect or a captured service
+would not survive the restart, and the job would silently stop existing after a redeploy.
+
+The staleness guard is not in the scheduler. A job whose session was re-authorized in the meantime
+runs, but `UserRepository.findAuthorizedUser()` returns `None` and the command is a silent no-op.
+
+== Event handlers
+
+`eventhandlers/` is where the domain events produced by `core` become rows. The event model itself
+— what the events are and who emits them — is xref:event-sourcing.adoc[Event sourcing]; this section
+is the write side.
+
+=== The transactional chain
+
+`DbEventHandler[-E]` is the unit of database work:
+
+[source,scala]
+----
+trait DbEventHandler[-E]:
+  def handle(events: List[E], quill: QuillSqlite): Task[Unit]
+----
+
+It has a `cats.kernel.Monoid` instance whose `combine` sequences two handlers, exposed as an
+`andThen` extension. A chain is therefore just a fold, and the empty handler is a no-op.
+
+`TransactionalEventHandler(dbHandler, quill)` adapts one `DbEventHandler[Event]` into the `core`
+`EventHandler[Task, Event]` by wrapping it in `quill.transaction`, logging and re-raising on failure
+so a partial write rolls back as a unit. Transactions are real here because the rqlite JDBC driver
+honours `setAutoCommit(false)`.
+
+xref:api.adoc[API] assembles the chain in `api/src/whitelabel/captal/api/Flows.scala`:
+
+[source,scala]
+----
+val dbHandler = EventLogHandler(ctx)
+  .andThen(AnswerPersistenceHandler(ctx))
+  .andThen(UserPersistenceHandler(ctx))
+  .andThen(SessionPhaseHandler(ctx, nextAfterIdentification.phase, nextAfterVideo.phase))
+  .andThen(SessionSurveyHandler(ctx))
+  .andThen(SessionVideoHandler(ctx))
+  .andThen(SessionExpirationHandler(ctx))
+  .andThen(SurveyProgressHandler())
+TransactionalEventHandler(dbHandler, quill).andThen(unifiAccess)
+----
+
+Order matters within the chain: `UserPersistenceHandler` resolves the user id and updates the
+ambient `SessionContext`, and `SurveyProgressHandler` runs last because its completeness check
+counts the answers the earlier handlers just inserted.
+
+Each handler filters the batch for the event shapes it cares about and does nothing otherwise, so
+every handler sees every event.
+
+|===
+| Handler | Writes
+
+| `EventLogHandler` | one `event_log` row per event: a stable `event_type` string (`user.created`, `user.survey_assigned`, `user.video_assigned`, …) and the event's fields as JSON in `event_data`, plus session id, user id and both timestamps
+| `AnswerPersistenceHandler` | one `answers` row per answered question, with `answer_value` encoded through `surveySchemas.encode`
+| `UserPersistenceHandler` | looks `users` up by email; inserts the row only when the email is new, then sets `sessions.user_id` to the resolved id and writes the resolved id back into `SessionContext`
+| `SessionPhaseHandler` | `sessions.phase`, chosen from which event shape is present: identification answer or identification completed → the configured next phase; video survey assigned → `AdvertiserVideoSurvey`; video visualized → the configured post-video phase
+| `SessionSurveyHandler` | `sessions.current_survey_id` + `current_question_id` from `SurveyAssigned`, `NewUserArrived` and `VideoSurveyAssigned`
+| `SessionVideoHandler` | `sessions.current_video_id` and `current_advertiser_id` on assignment; one `video_views` row per `VideoVisualized`; advances `sessions.last_promo_video_id` only for promos — ads are drawn at weighted random and keep no cursor
+| `SessionExpirationHandler` | on `AccessExpired`, the single `resetForExpirationQuery` UPDATE. `users` and the cross-location cookie survive, so a returning guest skips the questions they already answered
+| `SurveyProgressHandler` | upserts `user_survey_progress` (insert or bump `updated_at`), then runs `SurveyService.isSurveyCompleteQuery` and sets `completed_at` when every active question has an answer
+|===
+
+=== Post-commit handlers
+
+`UnifiAccessHandler` is not a `DbEventHandler`. It implements the `core` `EventHandler[Task, Event]`
+directly and is composed *after* `TransactionalEventHandler`, so it runs once the transaction has
+committed and an HTTP failure cannot roll back a database write.
+
+It mirrors the guest-access lifecycle onto the controller, symmetrically:
+
+* `UserFinishedProcess` → authorize. On success it calls `SessionService.setAuthorized(sessionId,
+  occurredAt + defaultDurationMinutes)` and enqueues `ScheduledJob.ExpireAccess` on the `JobQueue`.
+  This is the only place an authorization is born, and therefore the scheduler's only producer.
+* `AccessExpired` → revoke. No session write: `SessionExpirationHandler` already reset the row inside
+  the transaction.
+
+Both branches log and continue on failure. A failed authorize leaves the session in its pre-authorized
+phase so the finish endpoint can be retried; a failed revoke is already absorbed, because the reset is
+committed either way.
+
+== Migrations
+
+`Migrate.scala` is both a library and a `ZIOAppDefault`. Its `run` reads `database.jdbcUrl` and
+migrates `db/migration` into Flyway's default history table; `./mill platform.migrate` is the same
+thing from the build.
+
+The reusable entry point is:
+
+[source,scala]
+----
+def migrateTo(url: String, location: String, historyTable: String): Task[Int]
+----
+
+It builds an `Fly4s` over `RqliteDataSource.create(url)` with `group = false`, `mixed = true`,
+`baselineOnMigrate = true` and `baselineVersion = 0`, and returns the number of migrations executed.
+`Migrate.ApiHistoryTable` exposes Flyway's default table name so other callers can refer to the
+portal's history without hardcoding it. `mcp` calls `migrateTo` with its own location and history
+table — see xref:database.adoc[Database] for the two-history arrangement.
+
+`Migrate.highestApplied(url, historyTable)` reads the greatest numeric `version` with `success = 1`
+out of a history table over plain JDBC, returning `None` when the table does not exist. Plain JDBC
+rather than Flyway, because constructing a Flyway instance can create or baseline the very history
+it is being asked about.
+
+=== `Migrate.Lock`
+
+Flyway provides no locking on SQLite — it says so and carries on — so exclusion between concurrent
+migrators is `Migrate.Lock`'s job. It is private and reachable only through `migrateTo`, so a caller
+cannot hold it around anything but a migration.
+
+The mutex is the primary key of a one-row table:
+
+[source,sql]
+----
+CREATE TABLE IF NOT EXISTS migration_lock (id INTEGER PRIMARY KEY, holder TEXT NOT NULL)
+----
+
+A single statement goes through Raft, so of N concurrent `INSERT`s of `id = 1` exactly one takes
+effect and every node agrees which. The holder id is the local hostname (narrowed to letters, digits,
+`-` and `.`, because the statements are built by interpolation) plus a random UUID.
+
+Acquisition is insert-then-read-back, and the read-back is the answer:
+
+. `INSERT INTO migration_lock (id, holder) VALUES (1, '<holder>')` — a bid, whose own result decides
+  nothing, because rqlite can report a refused statement as zero affected rows inside an HTTP 200.
+. `SELECT holder FROM migration_lock WHERE id = 1`. If it is this holder, the lock is taken. If it is
+  somebody else, wait and retry. If the row is absent *and* the bid did not land, waiting would never
+  end, so it fails immediately with a message pointing at the shape of the table — an older column
+  still present would reject every insert.
+
+Timing: the poll interval is **2 seconds** and the overall timeout is **10 minutes**. Release is
+`DELETE FROM migration_lock WHERE id = 1 AND holder = '<holder>'`, attached with `ensuring`, so it
+runs on failure and interruption too.
+
+WARNING: There is no heartbeat and no takeover. A holder that dies without releasing blocks every
+other migrator until its row in `migration_lock` is deleted by hand. If it died mid-migration its
+schema is half applied and Flyway has a failed row for it: repair that first, then delete the lock
+row.
+
+== The data source
+
+`RqliteDataSource.scala` is a minimal hand-written `javax.sql.DataSource` whose `getConnection()` is
+`DriverManager.getConnection(url)` and whose remaining methods are the inert implementations the
+interface demands. There is no pool. `RqliteDataSource.layer` reads `database.jdbcUrl` from the
+config and provides the `DataSource` the Quill layer is built on; `Migrate` constructs one directly
+per connection, since migration is short-lived and single-threaded.
+
+Connections are plain and the driver honours `setAutoCommit(false)`, which is what makes
+`quill.transaction` and a migration genuinely atomic. The driver's reporting of refused statements,
+and the write-verification rule that follows from it, are in xref:database.adoc[Database].
+
+== UniFi integration
+
+Two files in this module talk to the venue's UniFi controller: `UnifiAccess.scala`, which derives
+`host`, `apiToken`, `port` (default 443), `siteId` and `defaultDurationMinutes` (default 1440) from a
+`LocationRow` and yields `None` unless host, token and site id are all present; and
+`UnifiClient.scala`, the zio-http client for the Integration v1 endpoints that authorize and revoke a
+guest client. `eventhandlers/UnifiAccessHandler.scala` is the event adapter described above. Because
+the credentials live on the `locations` row, each deployed task picks up its own venue's controller
+with no extra configuration. The protocol, the request shapes, the TLS handling and the failure modes
+are in xref:unifi.adoc[UniFi integration].
+
+== See also
+
+* xref:database.adoc[Database] — rqlite, the schema, the migration histories, write verification
+* xref:core.adoc[Core] — the domain types and repository traits this module implements
+* xref:event-sourcing.adoc[Event sourcing] — the event model the handlers consume
+* xref:api.adoc[API] — how the layers above are assembled and where the chain is wired
+* xref:mcp.adoc[MCP backoffice] — the other consumer of this module
+* xref:unifi.adoc[UniFi integration] — the controller protocol
+* xref:infrastructure.adoc[Infrastructure] — where the database and the tasks actually run
+* xref:development.adoc[Local development] — running the local rqlite and the migrations

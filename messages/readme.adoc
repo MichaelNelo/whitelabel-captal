@@ -1,0 +1,16 @@
+= messages
+
+The portal and the guest-facing server need to agree, word for word, on how they talk to each
+other: what a request looks like, what a response looks like, and what a guest is shown when
+something goes wrong instead of a raw failure. That shared vocabulary is defined here, once.
+
+It also carries the translated text the portal renders — the questions, the labels, the error
+messages — in whatever language a location's guests need. Because the definition lives in one
+place rather than two, a change to it cannot leave the portal expecting one shape while the
+server sends another.
+
+Without a shared definition, the two sides could each change on their own schedule, and a guest
+would be the one who pays for the mismatch: a blank screen, or an error with no words in it at
+all, instead of a message they can read and act on.
+
+Architecture: xref:../docs/messages.adoc[docs/messages.adoc].

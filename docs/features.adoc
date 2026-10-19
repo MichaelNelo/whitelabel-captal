@@ -1,0 +1,322 @@
+= Features
+:toc:
+:toclevels: 2
+
+The guest-facing capabilities of the portal, and the rules that govern them: which question is
+asked when, what a repeat visit skips, how a video is chosen, when access is granted, and when it
+expires. xref:overview.adoc[System overview] has the journey in one page; this document has the
+specifics behind each step. For the mechanism that carries a guest from one step to the next —
+events, the two handler chains, the full endpoint-by-endpoint table — see
+xref:event-sourcing.adoc[Event sourcing]. For the wire shapes, xref:api.adoc[Guest API]; for the
+controller integration, xref:unifi.adoc[UniFi integration]; for how an operator populates any of
+this, xref:mcp.adoc[MCP backoffice].
+
+== Identification
+
+One question at a time. `GET /api/survey/next` hands back a single question, and answering it
+(`POST /api/survey/email`, `/profiling` or `/location`) advances the phase to `AdvertiserVideo`
+immediately — there is no batch of several questions shown in one visit. A returning guest's next
+visit resumes with whatever is still unanswered, which is what spreads profiling and location data
+collection across repeat visits rather than front-loading it.
+
+=== Order of the pool
+
+The pool is three categories, asked strictly in this order, each exhausted before the next starts:
+
+[cols="1,3,1"]
+|===
+| Category | Asked | Scope
+
+| Email
+| Before anything else, to every guest with no email yet. The only category that can identify a
+  visitor with no `users` row.
+| Deployment-wide
+
+| Profiling
+| Once the guest has an email, until every active profiling question is answered.
+| Deployment-wide
+
+| Location
+| Once profiling is exhausted, until every active location question is answered.
+| Deployment-wide
+|===
+
+"Deployment-wide" is `surveys.location_id IS NULL` — see xref:database.adoc[Database]'s scoping
+section. A survey in one of these three categories can be given a `location_id` instead, but
+nothing in this codebase does that today; every location sees the same email, profiling and
+location pool. `SurveyRepositoryQuill.nextIdentificationSurveyQuery` is the single query that
+encodes the three-category precedence and excludes questions this user has already answered;
+within a category, questions are served in ascending `display_order`, not at random.
+
+NOTE: A deployment with no active email survey cannot identify a new visitor at all — the flow
+ends at `Ready` with no access granted. See the `NOTE` in xref:event-sourcing.adoc[Event sourcing]'s
+guest journey table.
+
+Each identification event (`EmailQuestionAnswered`, `ProfilingQuestionAnswered`,
+`LocationQuestionAnswered`) carries `userId`, `surveyId`, `questionId` and the answer — not a
+locale and not a device id. Locale lives on `sessions.locale`; device identity is a separate
+mechanism, covered below.
+
+=== The email question
+
+`Email.fromString` (`core/src/whitelabel/captal/core/user/Id.scala`) checks the answer against
+`^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+$` before anything is persisted; a failing answer rejects with
+`InvalidEmailFormat` and emits nothing. This is the only identification question with a
+format check applied before validation even reaches the question's own rules.
+
+There is no confirmation link, no verification email, and no concept of a "trusted" or "loyal"
+guest anywhere in the codebase — not a visit counter, not a flag, nothing. An email is accepted
+and a `users` row created the moment it passes the regex.
+
+=== Question types
+
+Seven types, shared with the advertiser survey and defined once in
+`core/src/whitelabel/captal/core/survey/question/QuestionType.scala`. Validation detail —
+which `AnswerValue` each accepts, which rule violates into which `survey.Error` — is
+xref:core.adoc[Core]'s; this is the catalogue:
+
+[cols="1,2,3"]
+|===
+| Type | Stored as | Rules available
+
+| Radio
+| `radio`
+| single choice from a fixed option list; no rules beyond `Required`
+
+| Checkbox
+| `checkbox`
+| multiple choice; `MinSelections`, `MaxSelections`
+
+| Select
+| `dropdown`
+| single choice, rendered as a dropdown; no rules beyond `Required`
+
+| Input
+| `input`
+| free text; `MinLength`, `MaxLength`, `Pattern`, `Email`, `Url`
+
+| Rating
+| `rating`
+| numeric; `Min`/`Max` on an `Int` — nothing defaults it to a five-star scale, an operator sets the
+  bounds explicitly or leaves it unbounded
+
+| Numeric
+| `numeric`
+| a `BigDecimal` value; `Min`/`Max`
+
+| Date
+| `date`
+| a `LocalDate` value; `Min`/`Max`
+|===
+
+A rule row that will not decode against its question's type is silently dropped and logged by
+`SurveyRepositoryQuill.unreadableRules` — see xref:platform.adoc[Platform].
+
+Each question also carries `pointsAwarded: Int`, written by the MCP tool that creates or edits it
+and sent to the client inside the question payload. Nothing reads it past that: no accumulation,
+no display, no redemption exists anywhere in `core`, `platform`, `api` or `client`. It is metadata
+that travels with the question and nothing more.
+
+=== Location questions and the hierarchy tag
+
+A location question additionally carries a `hierarchyLevel` (`State`, `City`, `Municipality`,
+`Urbanization`, in that order — xref:core.adoc[Core]'s `HierarchyLevel`). The model defines
+`canAnswer(toAnswer, lastCompleted)`, true only for `State` first and then only for the immediate
+successor, and a dedicated error, `HierarchyViolation`. As xref:core.adoc[Core] notes, nothing in
+`core` emits that error today — no handler calls `canAnswer`. In practice the order a guest is
+asked in is whatever `display_order` the operator gave the location questions; the hierarchy tag
+travels with each answer (into `LocationQuestionAnswered.hierarchyLevel` and the `questions` table)
+but does not by itself constrain selection or gate an out-of-order answer.
+
+There is no built-in geographic catalogue — no states/cities/municipalities table, no external API
+call. A location question's options are entered through the same MCP tools as any Radio, Checkbox
+or Select question's options; nothing restricts a location question to a particular UI type either.
+Populating one with real administrative geography, and keeping states, cities and municipalities
+consistent with each other, is entirely on whoever authors the survey.
+
+== The advertiser video and the venue promo
+
+`VideoType.Ad` and `VideoType.Promo` (`core/src/whitelabel/captal/core/video/VideoType.scala`,
+stored as `ad`/`promo`) are the two kinds of video `GET /api/video/next` can hand back. An ad
+belongs to an advertiser; a promo belongs to the venue itself and to no advertiser.
+
+=== Selecting what plays
+
+`VideoRepositoryQuill.findNextForUser` tries an ad first and falls back to a promo. The two use
+unrelated algorithms:
+
+[cols="1,3"]
+|===
+| Kind | Selection
+
+| Ad
+| Weighted random over every active ad video at this location whose advertiser is active *and*
+  that still has a survey with at least one question this guest has not answered. `priority` on
+  both the advertiser and the video is the weight (`(advertiser priority / sum of active
+  advertiser priorities) × (video priority / sum of that advertiser's active video priorities)`,
+  drawn with a log-uniform transform of SQLite's `RANDOM()`). An ad video that was never given a
+  survey, or whose survey this guest has exhausted, drops out of the draw entirely — it is not
+  that the survey is skipped, the video itself stops being selectable.
+
+| Promo
+| Not random: ascending `(priority, created_at)`, resumed from `sessions.last_promo_video_id` (a
+  cursor the session carries, advanced only when a promo is watched — ads are drawn fresh every
+  time and keep no cursor) and wrapping back to the first promo once the rotation runs out. A promo
+  is served whether or not it has a survey, and whether or not that survey is exhausted — unlike an
+  ad, having nothing left to ask is not a reason to skip a promo.
+|===
+
+Both are filtered to the session's own location (`sessions.location_id`, via
+`advertiser_videos.location_id`); only `Pending` and `Retired` videos are excluded, so an `Active`
+video with a locally-exhausted survey is still visually "active" in `list_videos` while being
+unreachable in the draw.
+
+=== Watching it
+
+`AdvertiserVideo` carries `minWatchSeconds`, `showCountdown` and `noRepeatSeconds`, all settable
+per video through the MCP tools and all stored in `advertiser_videos`. None of the three reaches
+the guest: `VideoToWatch` — what `NextVideo` and the `/api/video/next` response are built from —
+carries only `videoUrl`, `durationSeconds`, `title` and `description`. The portal's own gate is
+simpler than any of them: `AdvertiserVideoView` disables the "mark as watched" control until the
+browser's native `ended` event fires on the `<video>` element, i.e. the guest has played the file
+to completion. There is no partial-watch unlock, no visible countdown, and nothing that prevents
+the same guest from being shown the same ad again on a later visit — `noRepeatSeconds` is accepted
+and persisted by the MCP tools but read by no query in `VideoRepositoryQuill`.
+
+`POST /api/video/watched` records whatever `durationWatched` and `completed` the client reports,
+with no server-side check against `minWatchSeconds` or the video's own `durationSeconds`.
+
+=== The survey after it
+
+`GET /api/survey/advertiser/next` reads the video from `sessions.current_video_id` — never from
+the request — and asks for a survey tied to *that specific video id*
+(`SurveyRepositoryQuill.nextAdvertiserSurveyQuery`), regardless of whether it was an ad or a promo.
+One question per video: answering it (`POST /api/survey/advertiser`) always sets the phase straight
+to `Ready`. If the video has no survey, or this guest has already answered every question in it,
+the route goes directly to `Ready` instead — which is the mechanism behind the old
+advertising/propaganda distinction: it was never the video's *type* that decided whether a survey
+followed, it is whether a survey exists for that video and still has something to ask this guest.
+The answer event, `AdvertiserQuestionAnswered`, carries the advertiser id when there is one and
+`None` for a promo's survey — see xref:event-sourcing.adoc[Event sourcing].
+
+NOTE: `Phase.AdvertiserQuestion` exists as an enum value, and the client router maps it to the same
+page as `AdvertiserVideoSurvey`, but nothing in `api/routes` or `Phases.scala` ever assigns a
+session that phase — every advertiser-survey question reachable today is tied to a specific video.
+
+== Claiming WiFi access
+
+Finishing the survey flow and being granted network access are two different events, deliberately:
+`Ready` means the guest answered everything the portal asked; `Authorized` means the UniFi
+controller confirmed the grant. The full mechanism — the Integration v1 calls, the retry story, the
+scheduler — is xref:unifi.adoc[UniFi integration]'s; the guest-relevant facts:
+
+[cols="1,3"]
+|===
+| Fact | Detail
+
+| Default grant length
+| `unifi_duration_minutes` on the location, defaulting to **1440 minutes (24 hours)**, not a fixed
+  short window. It is per-location and operator-set, via `configure_unifi`.
+
+| What ends it
+| One thing only — `accessExpiresAt`, this system's own deadline, enforced by its own scheduled
+  job (xref:platform.adoc[Platform]'s `JobScheduler`) and by a safety-net check on
+  `GET /api/status`. There is no notification from the controller about the guest disconnecting,
+  and no "voluntary disconnect" distinct from "timeout": one event, `AccessExpired`, covers both,
+  because this system does not observe the guest's association state at all — only elapsed time.
+
+| What happens at expiry
+| The session resets to `Welcome`; the `users` row and the cross-location `captal_user` cookie
+  survive, so the next visit skips every question this guest already answered. See
+  xref:event-sourcing.adoc[Event sourcing]'s "Ready and Authorized" section.
+
+| What is **not** recorded
+| No page-visit history, no byte count, no stored session-duration figure. `AccessExpired` carries
+  only `userId` and `occurredAt`.
+|===
+
+Content filtering and download limits — a blocked-site list, a data cap — are not configured by
+anything in this codebase. If a venue wants either, it is set directly on the UniFi controller,
+outside this system's reach; `UnifiClient` sends only the authorize/revoke action and the time
+limit, never `dataUsageLimitMBytes`, `rxRateLimitKbps` or `txRateLimitKbps`, even though the
+controller's own schema accepts them.
+
+== Returning guests and device tracking
+
+`users` is global, not scoped to one location (xref:database.adoc[Database]). The cross-location
+`captal_user` cookie is how `GET /api/status` recognises a guest who has been elsewhere in the
+deployment and pre-attaches them to the new session, which is what lets the identification pool
+pick up where it left off rather than asking for an email again.
+
+Separately, every session creation upserts a `devices` row keyed by a UUID derived purely from the
+`User-Agent` header (`DeviceId.fromUserAgent`, xref:core.adoc[Core]). Two different phones running
+the same browser and OS version collide on this id; it is not a device fingerprint in any strong
+sense. The `device_users` table that would associate a device with the users seen on it exists in
+the schema (`DeviceUserRow`) but nothing in the application ever writes to it — no query in
+`platform` inserts, updates or reads a `device_users` row. There is no behaviour today that
+personalises anything by device.
+
+== Ideas that were never built
+
+Carried over from the document this one replaces, checked against the current code rather than
+dropped. Nothing here changes guest-facing behaviour; it is what the earlier plan proposed, and
+what became of each proposal.
+
+[cols="2,1,3"]
+|===
+| Idea | Status | Note
+
+| Regex check on the email before accepting it
+| Built
+| `Email.fromString` — see "The email question" above.
+
+| Send a verification link only after a guest is "loyal" (n visits)
+| Not built
+| No visit counter, no loyalty flag, no verification link anywhere in the codebase.
+
+| Configurable profiling pool per venue
+| Partially
+| The schema supports a per-location survey (`location_id` on `surveys`); nothing populates one —
+  every location currently shares the one deployment-wide pool.
+
+| Restrict location questions to Select-style inputs only
+| Not built
+| A location question can be given any `QuestionType`; nothing in the schema or the MCP tools
+  restricts it.
+
+| Populate a real Venezuelan geography catalogue
+| Not built
+| No seed data, no external API call; options are authored like any other question's.
+
+| Validate that consecutive location answers are geographically coherent
+| Not built
+| Modelled (`HierarchyLevel.canAnswer`, `Error.HierarchyViolation`) but never invoked by a handler.
+
+| Visible countdown while an ad plays, and a configurable minimum watch time
+| Stored, not delivered
+| `minWatchSeconds` / `showCountdown` exist per video but never reach the guest; the actual gate is
+  "played to the end."
+
+| Do not repeat the same ad to a guest within a time window
+| Stored, not enforced
+| `noRepeatSeconds` is accepted and persisted by the video tools; no selection query reads it.
+
+| Weighted rotation and per-advertiser priority
+| Built
+| The weighted-random draw in `VideoRepositoryQuill.nextAdQueryAuthenticated` — see "Selecting what
+  plays" above. (The older plan listed this as a future idea; it already exists.)
+
+| Temporal campaign objectives for advertisers (weekly/monthly caps), and a CPM/CPC monetisation
+  model
+| Not built
+| No campaign-period field, no billing or impression-cost field anywhere.
+
+| A redeemable points system, and showing accumulated points to the guest
+| Not built
+| `pointsAwarded` exists per question and nothing more — see "Question types" above.
+
+| Track devices to personalise the experience across reconnections
+| Partially
+| A `devices` row exists per User-Agent-derived id, but `device_users` is unused and nothing reads
+  either for personalisation.
+|===

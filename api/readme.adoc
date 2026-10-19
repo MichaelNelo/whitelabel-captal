@@ -1,0 +1,20 @@
+= api
+
+A location is one physical venue — a café, a hotel, a shop — that offers WiFi through the
+portal. Each location has its own public address, its own branding, its own languages, its own
+questions, its own advertiser videos and its own venue controller, and this server is the one
+process that serves exactly one of them.
+
+It is where the guest journey actually happens. When a guest's device is held by the venue's
+controller and redirected here, this server opens their session, asks the identification and
+advertiser questions in order, and skips whatever this guest already answered — even if they
+answered it at a different location, because a guest is recognized across the business, not
+just within one venue. It serves the video and its survey, and when the journey completes it is
+the one that tells the venue's controller to let the device online. When that access's bounded
+time runs out, it is revoked here too, and the guest repeats the cycle with only the questions
+still outstanding.
+
+This server only reads a location's content — its questions, its video rotation, its branding.
+Publishing or changing any of that is the backoffice's job, not this one's.
+
+Architecture: xref:../docs/api.adoc[docs/api.adoc].
