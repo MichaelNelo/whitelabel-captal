@@ -149,7 +149,11 @@ resource "aws_security_group" "efs" {
 }
 
 resource "aws_efs_mount_target" "rqlite" {
-  for_each = local.single_node ? toset(var.subnet_ids) : toset([])
+  # Keyed by position, not by subnet id. A `for_each` key becomes part of the resource address, so it
+  # has to be known at plan time; a subnet id is not when the subnets are managed resources rather
+  # than a data source, and then a single-node environment cannot be planned at all -- not on
+  # destroy and not on its first apply. The ids stay in the value, which may be unknown freely.
+  for_each = local.single_node ? { for index, id in var.subnet_ids : tostring(index) => id } : {}
 
   file_system_id  = aws_efs_file_system.rqlite[0].id
   subnet_id       = each.value
@@ -383,6 +387,13 @@ resource "aws_ecs_task_definition" "rqlite" {
       ] : []
 
       environment = [
+        {
+          # Its only effect: the entrypoint takes this node's Raft identity from the container's own
+          # address instead of the ECS task metadata endpoint, which LocalStack does not serve. On a
+          # real deployment that endpoint is the only correct source, so this stays false there.
+          name  = "RQLITE_LOCAL"
+          value = var.environment == "local" ? "true" : "false"
+        },
         {
           name  = "RQLITE_HTTP_PORT"
           value = tostring(local.http_port)
