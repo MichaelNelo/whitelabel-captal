@@ -1652,6 +1652,48 @@ object mcp extends BaseModule:
     os.proc("docker", "rm", "-f", localStackContainer).call(check = false)
     println("localstack dev container stopped")
 
+  /** Removes every container, volume and image this build creates locally. Usage:
+    * `mill mcp.destroyLocal`
+    *
+    * `stopLocalStack` leaves the anonymous volume and the ECS task containers LocalStack spawned;
+    * those outlive it, and a task still holding a published port is what makes the next run fail on
+    * a port that looks free.
+    *
+    * Nothing to clean afterwards: the tofu state is keyed by container id, so the next run reaches a
+    * directory that has never existed and builds the container and its state together.
+    */
+  def destroyLocal() = Task.Command:
+    def docker(args: String*): String = os
+      .proc("docker" +: args)
+      .call(check = false, stderr = os.Pipe)
+      .out
+      .trim()
+
+    val containers = Seq(
+      localStackContainer,
+      rqliteDevContainerName,
+      "rqlite-test",
+      "rqlite-mcp-test",
+      "rqlite-mcp-e2e")
+      .flatMap(name => docker("ps", "-aq", "-f", s"name=$name").linesIterator) ++
+      // The task containers LocalStack starts for an ECS service. Named by the cluster, so they are
+      // not reachable through the names above.
+      docker("ps", "-aq", "-f", "name=ls-ecs-").linesIterator
+
+    val images = docker("images", "-q", "-f", "reference=captal-*").linesIterator.toSeq ++
+      docker("images", "-q", "-f", "reference=*/captal-*").linesIterator
+
+    val removedContainers = containers.distinct.filter(_.nonEmpty)
+    val removedImages = images.distinct.filter(_.nonEmpty)
+    if removedContainers.nonEmpty then
+      docker("rm" +: "-fv" +: removedContainers*)
+    if removedImages.nonEmpty then
+      docker("rmi" +: "-f" +: removedImages*)
+    // Image *ids*, not tags: `captal-rqlite:latest` and the registry-tagged copy of it are one id,
+    // and `docker rmi` takes both away at once.
+    println(
+      s"[destroy] removed ${removedContainers.size} container(s) and ${removedImages.size} image id(s); the next run rebuilds what it needs")
+
   /** Runs the backoffice against local rqlite and LocalStack.
     *
     * Everything the server refuses to start without is supplied here, so the failure modes it is
@@ -1667,17 +1709,17 @@ object mcp extends BaseModule:
     val migrationCp = platform.runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
     val cp = runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
 
-    println("[dev] Step 1/5: Ensuring rqlite...")
+    println("[dev] Step 1/6: Ensuring rqlite...")
     val dbUrl = ensureRqlite(rqliteDevContainerName, rqliteDevPort)
 
-    println("[dev] Step 2/5: Running migrations...")
+    println("[dev] Step 2/6: Running migrations...")
     val migration = os
       .proc("java", "-cp", migrationCp, "whitelabel.captal.platform.Migrate")
       .call(env = Map("DB_URL" -> dbUrl), check = false, stdout = os.Inherit, stderr = os.Inherit)
     if migration.exitCode != 0 then
       sys.error("[dev] Migrations failed; the server would start against a schema-less database.")
 
-    println("[dev] Step 3/5: Ensuring LocalStack...")
+    println("[dev] Step 3/6: Ensuring LocalStack...")
     val endpoint = ensureLocalStack(localStackContainer, localStackPort, devBucket, Task.env)
 
     // The same configuration the AWS environments use, applied against the same LocalStack
@@ -1685,12 +1727,36 @@ object mcp extends BaseModule:
     // the next apply fails on `AlreadyExists`. What it buys here is the deploy tools: in production
     // the backoffice is given a cluster, subnets, a listener and two roles, and without them those
     // tools are not registered at all. Empty without a licence, and then this is a no-op.
-    println("[dev] Step 4/5: Applying the local infrastructure...")
+    println("[dev] Step 4/6: Applying the local infrastructure...")
     val infra = test.localStackInfra()
     if infra.isEmpty then
       println("[dev]   no LocalStack licence, so no cluster; the deploy tools stay unregistered")
 
-    println(s"[dev] Step 5/5: Starting MCP backoffice on :$port")
+    // The same token `cloudflared service install` takes, used with `tunnel run` instead: a service
+    // install would outlive the session and change the machine, and this ends when the server does.
+    //
+    // Both values travel in the environment rather than on the command line, so the token stays out
+    // of the process table. `TUNNEL_URL` is the origin only for a tunnel with no ingress rules of
+    // its own; one with a public hostname configured in Cloudflare takes the origin from there.
+    println(s"[dev] Step 5/6: Opening the Cloudflare tunnel...")
+    val tunnel = Task
+      .env
+      .get("CLOUDFLARE_TUNNEL_TOKEN")
+      .map(_.trim)
+      .filter(_.nonEmpty)
+      .map: tunnelToken =>
+        os.proc("cloudflared", "tunnel", "run")
+          .spawn(
+            env = Map(
+              "TUNNEL_TOKEN" -> tunnelToken,
+              "TUNNEL_URL"   -> s"http://localhost:$port"),
+            stdout = os.Inherit,
+            stderr = os.Inherit)
+    if tunnel.isEmpty then
+      println(
+        "[dev]   no CLOUDFLARE_TUNNEL_TOKEN, so no tunnel; the server answers on localhost only")
+
+    println(s"[dev] Step 6/6: Starting MCP backoffice on :$port")
 
     val env =
       forkEnv() ++
@@ -1756,8 +1822,13 @@ object mcp extends BaseModule:
       |
       |$seeded""".stripMargin)
 
-    os.proc("java", forkArgs(), "-cp", cp, "whitelabel.captal.mcp.Main")
-      .call(env = env, stdin = os.Inherit, stdout = os.Inherit, stderr = os.Inherit)
+    try
+      os.proc("java", forkArgs(), "-cp", cp, "whitelabel.captal.mcp.Main")
+        .call(env = env, stdin = os.Inherit, stdout = os.Inherit, stderr = os.Inherit)
+    finally
+      // Or the tunnel outlives the server it points at, and keeps answering for a port that is
+      // closed.
+      tunnel.foreach(_.destroy())
 
   def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "docker" / "mcp.Dockerfile")
 

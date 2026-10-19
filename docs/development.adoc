@@ -122,10 +122,12 @@ fresh database.
 
 [source]
 ----
-[dev] Step 1/4: Ensuring rqlite...
-[dev] Step 2/4: Running migrations...
-[dev] Step 3/4: Ensuring LocalStack...
-[dev] Step 4/4: Starting MCP backoffice on :8081
+[dev] Step 1/6: Ensuring rqlite...
+[dev] Step 2/6: Running migrations...
+[dev] Step 3/6: Ensuring LocalStack...
+[dev] Step 4/6: Applying the local infrastructure...
+[dev] Step 5/6: Opening the Cloudflare tunnel...
+[dev] Step 6/6: Starting MCP backoffice on :8081
 ----
 
 Shares the *same* `rqlite-dev` container `api.dev` uses — deliberately, since the backoffice writes
@@ -137,6 +139,19 @@ creates a real CloudFront distribution over it once (`ensureDistribution`) — a
 id used to be substituted here while invalidation calls against a local endpoint were skipped
 entirely; once that skip was removed, a fictional id started failing the last step of every asset
 write with the object already stored but nothing to invalidate.
+
+Step 4 applies `environments/local` — the same configuration the AWS environments use, against the
+same LocalStack container, sharing `mcp.test.localStackInfra`'s state so the two cannot come apart.
+It is what gives the backoffice a cluster, subnets, a listener and two task roles, and without those
+the deploy tools are not registered at all. It also builds and pushes the rqlite image. On a fresh
+container this is minutes, not seconds. Empty without a LocalStack licence, and then a no-op.
+
+Step 5 runs `cloudflared tunnel run` for as long as the server is up, pointed at
+`http://localhost:<port>`, and kills it on exit. It needs `CLOUDFLARE_TUNNEL_TOKEN` — the same token
+`cloudflared service install` takes; `tunnel run` is used instead so nothing is installed on the
+machine. Unset, the step says so and is skipped. `TUNNEL_URL` is the origin only for a tunnel with no
+ingress rules of its own; one with a public hostname configured in Cloudflare takes its origin from
+there instead.
 
 The backoffice starts on port 8081 with a **fixed** admin token, `dev-token` — not generated, because
 it is meant to be copied once into an MCP host's configuration by hand, and a token that changed
@@ -155,9 +170,16 @@ block:
 and, if a quick probe of the `locations` table over raw HTTP finds it empty, a reminder to run
 `mill api.dev` once — which, per the note above, does not itself write the row either; a location
 still has to be created through a content tool before either side of the loop has anything to serve.
-`mill mcp.stopLocalStack` and `mill api.stopRqlite` tear the dev containers down; `mill
+`mill mcp.stopLocalStack` and `mill api.stopRqlite` stop one dev container each; `mill
 mcp.localStackSetup` ensures LocalStack is up without starting the server, for working against it
 with another client.
+
+`mill mcp.destroyLocal` is the whole teardown: every container this build starts, LocalStack's
+anonymous volume, the ECS task containers LocalStack spawned for a service, and the images built
+here. Reach for it over `stopLocalStack` when something is wedged — a stopped LocalStack leaves its
+volume and its task containers behind, and a task still holding a published port is what makes the
+next run fail on a port that looks free. Nothing needs cleaning afterwards: the tofu state is keyed
+by container id, so the next run gets a fresh directory and builds both together.
 
 === A full local loop, in order
 
