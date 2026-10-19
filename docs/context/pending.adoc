@@ -130,12 +130,66 @@ by starting the dev server and asking for both paths; nothing in CI would catch 
 Covering it means either a suite that builds the routes with a slug-bearing `ApiBase`, or accepting
 that this stays a manual check and saying so where someone will read it.
 
+== Nothing pins the images prod would run
+
+`prod/terraform.tfvars` does not set `rqlite_image_tag`, so it falls to the variable's default
+`1.0.0` — two entrypoint revisions behind `local`, chosen by omission rather than by anyone. And
+`image_tag` is the literal `latest`, which the variable's own validation rejects; that one is a
+deliberate stop, so prod cannot be applied until someone names a version.
+
+`mill rqlite.imagePush` and `mill api.imagePush` are what put a real tag in a registry. Neither has
+ever run against AWS: every tag in a deployed environment was pushed by hand.
+
+== The per-module readmes are too thin, and there is no product readme
+
+Not started. The subproject readmes were rewritten once in business terms and that was the right
+framing, but they stop at a few sentences where the reader needs the actual inventory. What is
+wanted, per module:
+
+[cols="1,3"]
+|===
+| File | What it should carry
+
+| `readme.adoc` (repository root)
+| *Does not exist yet.* The product itself: the guest journey phase by phase, how the venue's WiFi
+  controller is driven, and what Tailscale is for. A table of the subprojects at the very top. This
+  is meant to be the full product document, which means xref:../overview.adoc[] overlaps it almost
+  entirely and should probably be deleted rather than kept alongside.
+
+| `client/readme.adoc`
+| Each view, what it shows, and the flow between them. It has subsections already, which is the
+  right shape — there are just too few of them.
+
+| `api/readme.adoc`
+| The same depth as `client`: what it serves, in what order.
+
+| `core/readme.adoc`
+| The commands and use cases; the validations, including the preconditions each one requires — that
+  a user exists, that the current one is identified, that a question is actually pending; and the
+  redirections, meaning which phase a command sends the guest to next.
+
+| `messages/readme.adoc`
+| A list of the contract types. Less narrative than the others.
+
+| `platform/readme.adoc`
+| Which implementations it provides for the traits `core` declares, and the UniFi side: what it
+  connects to. Less narrative than the others.
+|===
+
+One fact to settle while writing the root readme: what Tailscale is actually for here. The proxy is
+a VPC subnet router so a tailnet device can reach rqlite's HTTP API directly, and
+xref:../unifi.adoc[] also describes a network path to an on-premise controller — whether those are
+the same mechanism was not confirmed.
+
 == Documentation still in flight
 
 * `docs/mcp-iam.adoc`'s policy does not cover the deploy tools, and xref:../mcp.adoc[] does.
   Reconciling the two — one of them should own the IAM account — is open.
 * Everything `docs/features.adoc` could not confirm against the code is marked in the document
   itself, under "Not built". Each of those is a product question, not a documentation gap.
+* `build.mill` was never part of the comment sweep, which covered `*.scala` only. Two Spanish
+  historical comments were removed while editing it for other reasons; nobody has read the rest of
+  it with that in mind.
 
 Only the `SKILL.md` files are still Markdown, and they stay that way by name: both the agent harness
 and `Skills.load` find them by that exact filename.
