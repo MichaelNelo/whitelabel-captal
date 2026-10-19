@@ -1,11 +1,8 @@
-aws_region       = "us-east-1"
-project_name     = "captal"
-environment      = "prod"
-container_port   = 8080
-container_cpu    = 512
-container_memory = 1024
-desired_count    = 2
-domain_name      = "captal.centauroads.com"
+aws_region     = "us-east-1"
+project_name   = "captal"
+environment    = "prod"
+container_port = 8080
+domain_name    = "captal.centauroads.com"
 # `latest` was here, and `image_tag` now refuses it: a floating tag changes the deployed version on
 # the next build with nobody deciding it. Name the tag you mean. This environment has nothing
 # running, so being stopped here costs nothing and is the point.

@@ -73,23 +73,9 @@ variable "container_port" {
   default     = 8080
 }
 
-variable "container_cpu" {
-  description = "CPU units for the container (1024 = 1 vCPU)"
-  type        = number
-  default     = 256
-}
-
-variable "container_memory" {
-  description = "Memory for the container in MB"
-  type        = number
-  default     = 512
-}
-
-variable "desired_count" {
-  description = "Desired number of ECS tasks"
-  type        = number
-  default     = 1
-}
+# `container_cpu`, `container_memory` and `desired_count` were here. Nothing read them: a location's
+# portal has no ECS service in this configuration, because the backoffice registers one per location
+# at deploy time and sizes it there. The `rqlite_*` and `mcp_*` equivalents below are real.
 
 variable "image_tag" {
   description = "Tag of the captal-api image every location's task definition runs. No default, and `latest` is rejected: a floating tag means the deployed version changes on the next image build with nobody deciding it. That is not hypothetical here -- `docker/rqlite/Dockerfile` said `:latest` and the database engine drifted two major versions, which nothing would have reported."
