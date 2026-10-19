@@ -1,4 +1,4 @@
-package whitelabel.captal.api
+package whitelabel.captal.api.session
 
 import zio.http.{Cookie, Header, Path}
 

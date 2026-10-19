@@ -1,6 +1,13 @@
-package whitelabel.captal.api
+package whitelabel.captal.api.routes
 
+import whitelabel.captal.api.session.{
+  CurrentLocation,
+  SessionCookieConfig,
+  UserCookieConfig,
+  UserLookup
+}
 import whitelabel.captal.api.wire.given
+import whitelabel.captal.api.{ApiBase, ApiErrors, SessionEndpoint}
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Flow, NextStep, Phase}
 import whitelabel.captal.core.user
@@ -26,9 +33,9 @@ object SurveyRoutes:
       AnswerLocationFlowType & NextSurveyFlowType
 
   val layer: ZLayer[
-    SessionCookieConfig & CurrentLocation & UserCookieConfig & UserLookup,
+    SessionCookieConfig & ApiBase & CurrentLocation & UserCookieConfig & UserLookup,
     Nothing,
-    SurveyRoutes] = ZLayer.fromFunction(SurveyRoutes(_, _, _, _))
+    SurveyRoutes] = ZLayer.fromFunction(SurveyRoutes(_, _, _, _, _))
 
 end SurveyRoutes
 
@@ -41,6 +48,7 @@ end SurveyRoutes
   */
 final class SurveyRoutes(
     cookieConfig: SessionCookieConfig,
+    base: ApiBase,
     currentLocation: CurrentLocation,
     userCookieConfig: UserCookieConfig,
     userLookup: UserLookup):
@@ -62,7 +70,7 @@ final class SurveyRoutes(
 
   // ─── AnswerEmail ──────────────────────────────────────────────────────────
 
-  private val answerEmail = Endpoint(Method.POST / "api" / "survey" / "email")
+  private val answerEmail = Endpoint(base(Method.POST / "api" / "survey" / "email"))
     .header(HeaderCodec.cookie.optional)
     .in[AnswerRequest]
     .out[SurveyResponse]
@@ -71,7 +79,7 @@ final class SurveyRoutes(
 
   // ─── AnswerProfiling ──────────────────────────────────────────────────────
 
-  private val answerProfiling = Endpoint(Method.POST / "api" / "survey" / "profiling")
+  private val answerProfiling = Endpoint(base(Method.POST / "api" / "survey" / "profiling"))
     .header(HeaderCodec.cookie.optional)
     .in[AnswerRequest]
     .out[SurveyResponse]
@@ -79,7 +87,7 @@ final class SurveyRoutes(
 
   // ─── AnswerLocation ───────────────────────────────────────────────────────
 
-  private val answerLocation = Endpoint(Method.POST / "api" / "survey" / "location")
+  private val answerLocation = Endpoint(base(Method.POST / "api" / "survey" / "location"))
     .header(HeaderCodec.cookie.optional)
     .in[AnswerRequest]
     .out[SurveyResponse]
@@ -87,7 +95,7 @@ final class SurveyRoutes(
 
   // ─── NextSurvey ───────────────────────────────────────────────────────────
 
-  private val nextSurvey = Endpoint(Method.GET / "api" / "survey" / "next")
+  private val nextSurvey = Endpoint(base(Method.GET / "api" / "survey" / "next"))
     .header(HeaderCodec.cookie.optional)
     .out[SurveyResponse]
     .outError[ApiError](Status.BadRequest)
@@ -97,7 +105,7 @@ final class SurveyRoutes(
   private val defaultLocale = "es"
   private val defaultUserAgent = "unknown"
 
-  private val status = Endpoint(Method.GET / "api" / "status")
+  private val status = Endpoint(base(Method.GET / "api" / "status"))
     .header(HeaderCodec.cookie.optional)
     .header(HeaderCodec.name[String]("User-Agent").optional)
     .header(HeaderCodec.name[String]("X-Client-Mac").optional)
