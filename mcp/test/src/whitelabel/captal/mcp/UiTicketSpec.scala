@@ -6,9 +6,8 @@ import whitelabel.captal.mcp.access.Tokens
 import whitelabel.captal.mcp.apps.UiTicket
 import zio.test.*
 
-/** The ticket is what stands in for the protocol's authentication on [[UiRoutes]], which is outside
-  * MCP by design — so its failure modes are the ones worth pinning. Every assertion here is about
-  * something that would otherwise fail open.
+/** The ticket stands in for the protocol's authentication on [[UiRoutes]], which is outside MCP;
+  * every assertion here is about something that would otherwise fail open.
   */
 object UiTicketSpec extends ZIOSpecDefault:
 
@@ -28,8 +27,6 @@ object UiTicketSpec extends ZIOSpecDefault:
         val ticket = UiTicket.mint(key, tokenId, "cafe-centro", now)
         assertTrue(UiTicket.tokenIdOf(ticket).contains(tokenId))
       ,
-      // The whole point of signing it. Without this a caller who guessed the format could write
-      // any location's credentials by editing the slug.
       test("a ticket edited to name another location is refused"):
         val ticket = UiTicket.mint(key, tokenId, "cafe-centro", now)
         val forged = ticket.replace("cafe-centro", "bar-norte")
@@ -48,14 +45,11 @@ object UiTicketSpec extends ZIOSpecDefault:
           UiTicket.verify(key, ticket, now.plusSeconds(16 * 60)) == Left(UiTicket.Rejected.Expired)
         )
       ,
-      // Keying on the caller's own token is what buys this: one operator's pages are unaffected by
-      // anything that happens to another's, which a server-wide key could not manage.
       test("a ticket does not verify against another operator's key"):
         val ticket = UiTicket.mint(key, tokenId, "cafe-centro", now)
         assertTrue(UiTicket.verify(other, ticket, now) == Left(UiTicket.Rejected.BadSignature))
       ,
-      // And the converse, which is what makes revocation reach open pages: the key is derived from
-      // the token, so a token that no longer verifies cannot have its tickets verify either.
+      // The key is derived from the token, so revocation reaches tickets already in the wild.
       test("rewriting the ticket to name another token does not make it verify"):
         val ticket = UiTicket.mint(key, tokenId, "cafe-centro", now)
         val swapped = ticket.replace(tokenId, "22222222-2222-2222-2222-222222222222")
@@ -72,8 +66,6 @@ object UiTicketSpec extends ZIOSpecDefault:
           UiTicket.tokenIdOf("nonsense").isEmpty
         )
       ,
-      // Not cosmetic: a transcript that captured a ticket leaks which location was being
-      // configured and for how long, and nothing that could be replayed as a credential.
       test("the ticket carries no secret"):
         val ticket = UiTicket.mint(key, tokenId, "cafe-centro", now)
         assertTrue(

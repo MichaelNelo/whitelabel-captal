@@ -40,10 +40,8 @@ object SurveyRepositoryQuill:
     .headOption
     .map(t => LocalizedText(t.value, t.locale))
 
-  // The query, joining in the localized texts.
-  //
-  // Every child of the question filters on is_active too. Deactivating an option, a rule or a
-  // translation has to remove it from the portal, not just from a backoffice listing.
+  // The query, joining in the localized texts. Every child of the question filters on is_active
+  // too, so a deactivated option, rule or translation leaves the portal.
   inline def questionByIdQuery = quote:
     (
         surveyIdParam: survey.Id,
@@ -139,13 +137,8 @@ object SurveyRepositoryQuill:
       .map((surveyRow, questionRow) =>
         NextIdentificationSurveyRow(surveyRow.id, questionRow.id, surveyRow.category))
 
-  /** The next unanswered question of the survey that follows one video.
-    *
-    * Scoped by `video_id` alone. It used to also require `category = 'advertiser'`, which is
-    * redundant — only a video survey carries a `video_id`, and the three identification categories
-    * are created with none — and wrong, because it reads as though the video's *type* decided
-    * whether its survey is reachable. A promo's survey is a survey like any other; what makes this
-    * query the right one is the video, not who the video belongs to.
+  /** The next unanswered question of the survey that follows one video. Scoped by `video_id` alone:
+    * only a video survey carries one, whoever the video belongs to.
     */
   inline def nextAdvertiserSurveyQuery = quote: (videoIdParam: String, userIdParam: user.Id) =>
     val answeredByUser = query[AnswerRow].filter(_.userId == userIdParam).map(_.questionId)
@@ -234,9 +227,7 @@ object SurveyRepositoryQuill:
               for
                 first <- rows.headOption
                 // Carrying a video is what makes this a video survey — the same condition
-                // `nextAdvertiserSurveyQuery` selects on. Checking the category instead would let
-                // the two disagree: a survey offered by that query and refused here answers
-                // nothing and reports no reason.
+                // `nextAdvertiserSurveyQuery` selects on, so the two cannot disagree.
                 if first.survey.videoId.isDefined
                 question <- buildQuestionToAnswer(first.question, rows, sessionData.locale)
               yield Survey(
@@ -294,11 +285,9 @@ object SurveyRepositoryQuill:
           case None =>
             firstEmailSurvey
 
-      /** The visitor has no user yet, so this is the only thing that can identify them.
-        *
-        * Finding nothing means the deployment has no active email survey, and the flow ends at
-        * Ready rather than handing out access for nothing. That is a misconfiguration, not a
-        * visitor state: log it, because from the outside it looks like the portal working.
+      /** The email survey, the only thing that can identify a visitor with no user yet. Finding
+        * nothing means the deployment has no active email survey: warn, and end the flow at Ready
+        * without granting access.
         */
       private def firstEmailSurvey: Task[Option[NextIdentificationSurvey]] = run(
         firstEmailSurveyQuery.take(1))
@@ -433,31 +422,16 @@ object SurveyRepositoryQuill:
       case _ =>
         QuestionType.Input(Nil)
 
-  /** The rules of a question, read from the column the MCP backoffice writes.
-    *
-    * Through `surveySchemas`, which is what writes that column too. Before, this was a circe
-    * decoder here and string interpolation there, agreeing by nobody's enforcement.
-    *
-    * A row that will not decode is still dropped — a question with one unreadable rule is better
-    * asked than withheld — but it is no longer dropped in silence: `unreadableRules` names every
-    * one of them and the five callers log it. That matters because a rule that fails to decode is a
-    * validation that stops being applied, and a validation that is not applied looks exactly like
-    * one that passed.
+  /** The rules of a question, read through `surveySchemas` from the column the MCP backoffice
+    * writes with it. A row that will not decode is dropped; [[unreadableRules]] names it.
     */
   private def decodeRules[R: Schema](rules: List[QuestionRuleRow]): List[R] = rules.flatMap(row =>
     surveySchemas.decode[R](row.ruleConfig).toOption)
 
-  /** Every rule row here that will not reach the guest, and why.
-    *
-    * Three ways a rule disappears, and `parseQuestionType` is silent about all three: the config
-    * does not decode against its question's rule type; the question's type takes no rules at all,
-    * so a row attached to it is ignored whatever it says; or the type string itself is unknown, in
-    * which case the question becomes a plain input and every rule goes with it.
-    *
-    * Decoding a second time rather than threading the reasons out of `decodeRules`. That function
-    * is pure and sits under two more pure functions whose five callers destructure the result
-    * inside `Option` comprehensions — carrying a `List[String]` through that shape costs more than
-    * reading at most a handful of rule rows twice, on a path that already ran a six-way join.
+  /** Every rule row here that will not reach the guest, and why. Three ways a rule disappears, all
+    * silent in `parseQuestionType`: the config does not decode against its question's rule type;
+    * the question's type takes no rules at all; or the type string is unknown, which makes the
+    * question a plain input and drops every rule with it.
     */
   private def unreadableRules(rows: List[QuestionWithDetails]): List[String] =
     def reasons[R: Schema](rules: List[QuestionRuleRow]): List[String] = rules.flatMap: row =>
@@ -500,14 +474,8 @@ object SurveyRepositoryQuill:
   private def warnUnreadableRules(rows: List[QuestionWithDetails]): UIO[Unit] =
     ZIO.foreachDiscard(unreadableRules(rows))(ZIO.logWarning(_))
 
-  /** Who the video belonged to, when it belonged to anyone.
-    *
-    * Absent for a promo, and absent for every survey written through the MCP backoffice before it
-    * started copying the video's advertiser onto the survey. Both read the same way here, which is
-    * the point: the question is still asked, and the answer is simply attributed to nobody.
-    *
-    * This used to be bound inside the `Option` comprehensions above, so an absent advertiser threw
-    * away the question along with it.
+  /** Who the video belonged to, when it belonged to anyone — absent for a promo. The question is
+    * still asked; the answer is attributed to nobody.
     */
   private def advertiserIdOf(row: SurveyRow): Option[survey.AdvertiserId] = row
     .advertiserId
@@ -527,8 +495,7 @@ object SurveyRepositoryQuill:
           IdentificationSurveyType.Profiling
         case SurveyCategory.Location =>
           IdentificationSurveyType.Location
-        // Only the two identification queries feed this, and both filter by category, so nothing
-        // else can arrive. Named rather than left to a MatchError so the reason is in the message.
+        // Only the two identification queries feed this, and both filter by category.
         case other =>
           throw new IllegalStateException(
             s"'$other' is not an identification category. Only the email, profiling and location surveys reach this conversion.")

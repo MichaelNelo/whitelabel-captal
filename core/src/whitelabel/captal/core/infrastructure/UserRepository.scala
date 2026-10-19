@@ -9,10 +9,8 @@ trait UserRepository[F[_]]:
   def findAnsweringVideoSurvey(): F[Option[User[State.AnsweringVideoSurvey]]]
   def findReadyUser(): F[Option[User[State.Ready]]]
 
-  /** The current session's user, once that session is `Phase.Authorized`.
-    *
-    * Counterpart of [[findReadyUser]] that closes the cycle. Returns `None` when the session is no
-    * longer authorized — which is what makes stale expiration jobs harmless: if the user redid the
-    * flow and got re-authorized, the old job finds nothing and emits nothing.
+  /** The current session's user, once that session is `Phase.Authorized`; counterpart of
+    * [[findReadyUser]]. `None` once the session is no longer authorized, which is what makes a
+    * stale expiration job harmless.
     */
   def findAuthorizedUser(): F[Option[User[State.Authorized]]]

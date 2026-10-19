@@ -12,13 +12,8 @@ import whitelabel.captal.platform.session.JobRunner
 import zio.*
 import zio.http.Server
 
-/** Starts the portal's API.
-  *
-  * Only startup, which is what the name promises. The server used to be one 596-line object: the
-  * configuration, the phase pipeline, eleven flow layers, the layer composition and the route
-  * assembly, all under `object Main`. Each of those is now the file it was already a commented
-  * section of — `ServerSettings`, `Phases`, `Flows`, `AppLayers`, `HttpApp` — so this reads as the
-  * sequence it is: resolve the settings, start the scheduler, log what is mounted, serve.
+/** Starts the portal's API, and nothing else: resolve the settings, start the scheduler, log what
+  * is mounted, serve.
   */
 object Main extends ZIOAppDefault:
 
@@ -27,12 +22,10 @@ object Main extends ZIOAppDefault:
       for
         settings  <- ZIO.service[ServerSettings]
         jobRunner <- ZIO.service[JobRunner]
-        // A dedicated Scope for the scheduler fibers, provided narrowly instead of wrapping all
-        // of `program` in `ZIO.scoped`. Wrapping it forces the compiler to re-infer `R`, and in
-        // that reconstruction the `Flow.Aux` types (structural refinements) collapse into an
-        // unsatisfiable intersection: the ZLayer macro then fails asking for services that are
-        // already provided. The scope is deliberately never closed — the fibers live as long as
-        // the application does.
+        // A dedicated Scope for the scheduler fibers, provided narrowly: wrapping `program` in
+        // `ZIO.scoped` makes the compiler re-infer `R`, collapsing the `Flow.Aux` refinement
+        // types into an intersection the ZLayer macro rejects. Never closed — the fibers live as
+        // long as the application does.
         schedulerScope <- Scope.make
         _              <- jobRunner.start.provideEnvironment(ZEnvironment[Scope](schedulerScope))
         surveyRoutes   <- ZIO.service[SurveyRoutes]
@@ -51,9 +44,7 @@ object Main extends ZIOAppDefault:
           videoRoutes,
           advertiserSurveyRoutes,
           finishRoutes)
-        // The API half of `served`, enumerated for the log. One list, now that there is one
-        // library — it was two halves joined for the duration of the tapir migration, so that a
-        // route leaving tapir did not quietly drop out of this.
+        // The API half of `served`, enumerated for the log.
         routeInfos =
           HttpApp
             .apiRoutes(

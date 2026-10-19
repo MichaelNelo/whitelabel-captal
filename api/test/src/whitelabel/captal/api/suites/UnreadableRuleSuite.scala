@@ -5,17 +5,12 @@ import whitelabel.captal.api.TestHelpers.*
 import whitelabel.captal.core.user
 import zio.test.*
 
-/** A rule the portal cannot read is dropped, and says so.
+/** A rule the portal cannot read is dropped, and says so. Dropping it is deliberate — a question
+  * with one unreadable rule is better asked than withheld.
   *
-  * Dropping it is deliberate — a question with one unreadable rule is better asked than withheld —
-  * but it used to happen in silence, through a `.toOption` that threw the reason away. A validation
-  * that stops being applied looks exactly like one that passed: same 200, same question, no error
-  * anywhere. The only way to notice was to compare the `question_rules` table against the observed
-  * behaviour by hand.
-  *
-  * So these tests are about the log line, which is the whole fix. They read it from `ZTestLogger`,
-  * which the zio-test runtime installs by default, rather than asserting on a response — the
-  * response is identical either way, and that is precisely the problem.
+  * So these tests are about the log line. They read it from `ZTestLogger`, which the zio-test
+  * runtime installs by default, rather than asserting on a response: the response is identical
+  * whether or not the rule was applied.
   *
   * Each case has to get the guest as far as the question carrying the bad rule, which is why the
   * setups differ: an anonymous visitor is offered the email survey and nothing else, so a rule on a
@@ -25,10 +20,9 @@ object UnreadableRuleSuite:
 
   /** Valid JSON, valid as *some* rule, and not as a rule of an `input` question.
     *
-    * `{"MinSelections":{"min":2}}` is what `surveySchemas.encode` writes for a `SelectionRule`, so
-    * this is not a corrupt row — it is the shape a checkbox question's rule has, attached to a
-    * question that takes text rules. The realistic way to get one: a question's type edited after
-    * its rules were written.
+    * `{"MinSelections":{"min":2}}` is what `surveySchemas.encode` writes for a `SelectionRule`: not
+    * a corrupt row, but a checkbox question's rule attached to a question that takes text rules.
+    * The realistic way to get one: a question's type edited after its rules were written.
     */
   private val SelectionRuleOnAnInputQuestion = """{"MinSelections":{"min":2}}"""
 
@@ -70,9 +64,8 @@ object UnreadableRuleSuite:
             ) ?? s"warnings=$logged"
         ,
         test("a readable rule produces no warning at all"):
-          // The other half: a suite that only asserted the presence of a warning would pass with a
-          // handler that warned about every rule it read. `seedEmailSurvey` attaches a valid
-          // `TextRule.Email` to an `input` question.
+          // The other half: a handler that warned about every rule it read would pass the test
+          // above. `seedEmailSurvey` attaches a valid `TextRule.Email` to an `input` question.
           for
             _        <- TestFixtures.seedEmailSurvey
             backend  <- testBackend
@@ -85,8 +78,7 @@ object UnreadableRuleSuite:
         ,
         test("a rule attached to a type that takes none is reported as ignored"):
           // `parseQuestionType` builds a `Radio` from its options alone, so a rule row on a radio
-          // question is dropped whatever it contains — a third way for a validation to vanish, and
-          // the one least likely to be noticed, since the config itself is perfectly valid.
+          // question is dropped whatever it contains, valid config and all.
           for
             surveys  <- TestFixtures.seedAllIdentificationSurveys
             testUser <- TestFixtures.createUser("unreadable@example.com")

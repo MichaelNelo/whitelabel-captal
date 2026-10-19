@@ -12,21 +12,16 @@ import zio.test.*
 
 import QuillArrow.->
 
-/** `locations.slug` is UNIQUE and rqlite does enforce it — but it reports the rejection as a field
-  * inside an HTTP 200, which the driver turns into zero rows affected rather than an exception.
-  * Disabling the Scala pre-check leaves the row correctly unwritten and degrades the message to
-  * "the database rejected it silently", so what these tests pin is the diagnosis, not the
-  * integrity.
+/** LocationTools against rqlite. `locations.slug` is UNIQUE and enforced, so what these pin is the
+  * diagnosis the Scala pre-check adds, not the integrity.
   *
-  * Rows are scoped to a slug prefix rather than cleared wholesale, because suites run in parallel
-  * against one rqlite instance and other specs keep locations of their own.
+  * Rows are scoped to a slug prefix rather than cleared wholesale: suites run in parallel against
+  * one rqlite instance and other specs keep locations of their own.
   */
 object LocationToolsSpec extends ZIOSpecDefault:
   private val Prefix = "loc-spec"
 
-  /** Filtered in Scala rather than SQL: Quill's SQLite dialect has no `startsWith`, and the handful
-    * of rows a test writes makes the round trip irrelevant.
-    */
+  /** Filtered in Scala rather than SQL: Quill's SQLite dialect has no `startsWith`. */
   private def rows
       : ZIO[QuillSqlite, Throwable, List[LocationRow]] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*
@@ -72,7 +67,6 @@ object LocationToolsSpec extends ZIOSpecDefault:
           !first.isError.contains(true),
           second.isError.contains(true),
           textOf(second).contains("already exists"),
-          // The row count is what the column guarantees; the message is what the Scala check adds.
           stored.size == 1,
           stored.head.name == "Café Centro"
         )
@@ -94,7 +88,7 @@ object LocationToolsSpec extends ZIOSpecDefault:
       test("hyphens at the edges or doubled are refused — stricter than the old provisioning rule"):
         for
           _ <- clear
-          // All three match the `[a-z0-9-]+` that file provisioning accepted.
+          // All three match a plain `[a-z0-9-]+`.
           leading  <- create(s"-$Prefix", "Leading")
           trailing <- create(s"$Prefix-", "Trailing")
           doubled  <- create(s"$Prefix--cafe", "Doubled")
@@ -136,21 +130,17 @@ object LocationToolsSpec extends ZIOSpecDefault:
         yield assertTrue(result.isError.contains(true), stored.isEmpty)
       ,
       test("a created location is immediately usable by the tools that take a slug"):
-        // The point of the tool: every other tool refuses a slug it cannot resolve, so this is what
-        // turns a fresh database into one the rest of the server can act on.
         val slug = s"$Prefix-usable"
         for
           _      <- clear
           _      <- create(slug, "Usable")
           status <- I18nTools.status.call(json("slug" -> str(slug)))
         yield assertTrue(
-          // The location resolves, which is the difference between this and "No location with
-          // slug" — the error every other tool gives for a slug that does not exist.
+          // The location resolves; every other tool answers "No location with slug" otherwise.
           !status.isError.contains(true),
           !textOf(status).contains("No location"),
           textOf(status).contains(s"\"slug\":\"$slug\""),
-          // No locale has a single key yet, which is why create_location tells the operator to add
-          // translations before deploying: the portal would render raw key names.
+          // No locale has a single key yet.
           textOf(status).contains("\"locales\":[]")
         )
       ,
@@ -168,12 +158,11 @@ object LocationToolsSpec extends ZIOSpecDefault:
           textOf(listed).contains(live),
           !textOf(listed).contains(gone),
           textOf(all).contains(gone),
-          // Nothing configures UniFi at creation, and the listing has to say so rather than let an
-          // operator assume the portal can authorize guests there.
+          // Nothing configures UniFi at creation, and the listing has to say so.
           textOf(listed).contains("\"unifiConfigured\":false")
         )
       // The schema is laid down once by `mcp.test` before forking — see `migratedRqliteUrl` in
-      // build.mill. A Flyway run per spec raced.
+      // build.mill.
     ).provideShared(
       RqliteDataSource.layer >>> Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)) @@
       TestAspect.sequential

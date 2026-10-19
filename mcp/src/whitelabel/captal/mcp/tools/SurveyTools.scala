@@ -34,9 +34,8 @@ import QuillArrow.->
 import ToolSchema.readOnly
 
 // The case names are the wire values, lowercase and underscored, which is why they break Scala
-// naming convention. `@caseName` is not an option: the JSON codec honours it but JsonSchemaGen
-// builds the enum from the case id, so the schema would advertise "Profiling" while the decoder
-// rejected anything but "profiling". A schema that lies is worse than an ugly identifier.
+// naming convention. `@caseName` cannot be used instead: JsonSchemaGen builds the enum from the
+// case id, so the schema would advertise a name the decoder rejects.
 
 enum SurveyCategory:
   case email
@@ -48,12 +47,8 @@ object SurveyCategory:
   given Schema[SurveyCategory] = DeriveSchema.gen
 
   extension (c: SurveyCategory)
-    /** The stored word, by way of [[StoredCategory]] rather than `toString`.
-      *
-      * `toString` would give the same four strings today, which is precisely why this exists: the
-      * wire value and the stored value agreeing is a fact nobody checked. An exhaustive match
-      * against the constants `surveys.category` is actually written with makes a divergence a
-      * compile error instead of a survey the portal never finds.
+    /** The value `surveys.category` holds, by way of [[StoredCategory]] rather than `toString`, so
+      * a divergence between the wire word and the stored one is a compile error.
       */
     def stored: String =
       c match
@@ -67,11 +62,8 @@ object SurveyCategory:
           StoredCategory.Advertiser
 end SurveyCategory
 
-/** The three surveys that exist once for the whole deployment rather than once per location.
-  *
-  * A type of its own so `create_identification_survey` cannot be handed `advertiser`. The two are
-  * not variants of one operation: one belongs to a location through its video, the other belongs to
-  * nobody, and they are guarded by different scopes for that reason.
+/** The three surveys that exist once for the whole deployment rather than once per location. A type
+  * of its own so `create_identification_survey` cannot be handed `advertiser`.
   */
 enum IdentificationCategory:
   case email
@@ -82,7 +74,7 @@ object IdentificationCategory:
   given Schema[IdentificationCategory] = DeriveSchema.gen
 
   extension (c: IdentificationCategory)
-    /** The stored word, for the reason [[SurveyCategory.stored]] gives. */
+    /** The value `surveys.category` holds, as in [[SurveyCategory.stored]]. */
     def stored: String =
       c match
         case IdentificationCategory.email =>
@@ -92,8 +84,8 @@ object IdentificationCategory:
         case IdentificationCategory.location =>
           StoredCategory.Location
 
-  /** The stored words of the three, which is what `surveys.category` holds. Read by
-    * `isIdentification`, which is handed a stored value and not a wire one.
+  /** The three stored words. Read by `isIdentification`, which is handed a stored value and not a
+    * wire one.
     */
   val storedValues: Set[String] = values.map(_.stored).toSet
 
@@ -157,15 +149,12 @@ final case class RangeRule(
     @description("Any number for numeric, an ISO date (yyyy-mm-dd) for date.")
     value: String)
 
-/** What varies by question type, and only that.
+/** What varies by question type, and only that. Discriminated so the schema carries the constraint:
+  * an `input` variant has no `options` field to pass, and its rules are text rules by type. The
+  * fields every question shares stay flat in [[SurveyTools.CreateQuestionRequest]].
   *
-  * Discriminated so the schema carries the constraint instead of the prose: an `input` variant has
-  * no `options` field to pass, and its rules are text rules by type. The fields every question
-  * shares stay flat in [[SurveyTools.CreateQuestionRequest]] rather than being repeated across
-  * seven variants.
-  *
-  * The discriminator is put back into the generated schema by `ToolSchema.withDiscriminator` —
-  * JsonSchemaGen drops it, which would leave the schema describing a payload the decoder rejects.
+  * `ToolSchema.withDiscriminator` has to put the discriminator back into the generated schema,
+  * since JsonSchemaGen drops it and the result would describe a payload the decoder rejects.
   */
 @discriminatorName("kind")
 enum AnswerFormat:
@@ -189,13 +178,9 @@ enum AnswerFormat:
       @description(
         "What the text must satisfy: min_length, max_length, pattern, email, url. Omit for none.")
       rules: Option[List[TextRule]])
-  // No `rating`. `QuestionType.Rating` exists in core and the portal does not render it: the view
-  // matches the case and emits the literal string "Rating input - TODO", which is what a guest
-  // would read. Everything around it is built — codecs, range validation, `RatingOutOfRange`, the
-  // `ratingOutOfRange` message — and the one missing piece is the input itself.
-  //
-  // Removed from this schema rather than from core, which is the wire contract with the portal: a
-  // stored row of that type still has to decode. What is closed here is the way to make a new one.
+  // No `rating`: `QuestionType.Rating` exists in core but the portal renders no input for it. It
+  // stays in core, which is the wire contract, so a stored row of that type still decodes; what is
+  // closed here is the way to make a new one.
   @rejectExtraFields
   case Numeric(
       @description("The accepted range: min, max. Any number. Omit for unbounded.")
@@ -209,9 +194,8 @@ end AnswerFormat
 object AnswerFormat:
   given schema: Schema[AnswerFormat] = DeriveSchema.gen
 
-  /** Read off the derived schema rather than transcribed, so adding or reordering a case above
-    * cannot leave this list disagreeing with it. `withDiscriminator` zips these positionally
-    * against the emitted `oneOf`, and both orders come from the same derivation.
+  /** Read off the derived schema rather than transcribed. `withDiscriminator` zips these
+    * positionally against the emitted `oneOf`, so both orders have to come from one derivation.
     */
   val caseIds: List[String] =
     schema match
@@ -223,13 +207,12 @@ object AnswerFormat:
 
 /** Survey and question tools.
   *
-  * The first entity with nested children, and the first where the answer to "can I delete this?" is
-  * no. `answers.question_id` references `questions`, so retiring is the only safe removal — which
-  * is what V20 added the `is_active` columns for.
+  * Nothing here deletes: `answers.question_id` references `questions`, so retiring through the
+  * `is_active` columns is the only safe removal.
   *
   * `surveys.category` and `questions.question_type` carry CHECK constraints, but a CHECK violation
-  * is dropped as silently as any other rejected statement here, so the legal values are also
-  * checked in Scala to produce a message the operator can act on.
+  * is dropped as silently as any other rejected statement, so the legal values are also checked in
+  * Scala.
   */
 object SurveyTools:
   final case class OptionView(
@@ -282,8 +265,8 @@ object SurveyTools:
         "Show only the surveys of one location. Omit for all of them. Email, profiling and location surveys belong to no location and are always shown, since the portal picks them by category across the whole deployment.")
       slug: Option[String] = None)
 
-  /** Enough to find a question and act on it, and no more. `get_survey` is where the options, the
-    * rules and the answer count live — duplicating those here would make it the same call twice.
+  /** Enough to find a question and act on it. `get_survey` is where the options, the rules and the
+    * answer count live.
     */
   final case class QuestionSummary(
       @description("What set_question_active and reorder_questions take.")
@@ -358,15 +341,10 @@ object SurveyTools:
   given Schema[ListResponse] = DeriveSchema.gen
   given Schema[GetRequest] = DeriveSchema.gen
 
-  /** What a question can be corrected to after it exists.
+  /** What a question can be corrected to after it exists. Not its type and not its options: retire
+    * and create instead.
     *
-    * Not the question's type, and not its options. The type decides which rules and options are
-    * even representable, so changing it would invalidate rows hanging off it and the answers
-    * already recorded against it — retire and create instead. Options are a list with their own
-    * ids, texts and answers, which is a different operation from fixing a sentence.
-    *
-    * Every field is optional and an omitted one is left alone, so correcting a typo cannot reset
-    * the points to a default nobody asked for.
+    * Every field is optional and an omitted one is left alone.
     */
   final case class UpdateQuestionRequest(
       @description("Which question. Call get_survey for the ids in a survey.")
@@ -428,9 +406,7 @@ object SurveyTools:
     import quill.*
     run(answerCountQuery(lift(questionId))).orDie.map(_.toInt)
 
-  /** Zero is allowed and negative is not, matching `AdvertiserTools.validatePriority`. A question
-    * worth no points is a reasonable thing to want; one worth less than nothing is a typo.
-    */
+  /** Zero is allowed and negative is not, matching `AdvertiserTools.validatePriority`. */
   private def validatePoints(points: Option[Int]): ZIO[Any, String, Unit] =
     ZIO
       .fail(s"Points must be zero or greater, got ${points.getOrElse(0)}.")
@@ -457,8 +433,8 @@ object SurveyTools:
           questions <- run(query[QuestionRow]).orDie
           locations <- run(query[LocationRow]).orDie
           slugOf = locations.map(l => l.id -> l.slug).toMap
-          // A slug that resolves to nothing would otherwise filter everything out and read as "this
-          // location has no surveys" rather than "there is no such location".
+          // An unknown slug is refused rather than filtering everything out, which would read as
+          // "this location has no surveys".
           _ <-
             ZIO.foreachDiscard(in.slug): wanted =>
               ZIO
@@ -466,8 +442,8 @@ object SurveyTools:
                 .unless(locations.exists(_.slug == wanted))
           visible = surveys
             .filter(s => in.includeInactive || s.isActive == 1)
-            // The unscoped categories are kept whatever the filter says: they are served at every
-            // location, so hiding them would misreport what a guest there actually sees.
+            // Surveys with no location are kept whatever the slug filter says: they are served at
+            // every location.
             .filter(s =>
               in.slug.forall(wanted => s.locationId.forall(id => slugOf.get(id).contains(wanted))))
           summaries <-
@@ -488,9 +464,7 @@ object SurveyTools:
         yield ListResponse(summaries)
         end for
 
-  /** The read behind `get_survey`, lifted out so the `captal://surveys/{id}` resource answers with
-    * the same record rather than a second implementation that could drift from it.
-    */
+  /** The read behind `get_survey`, shared with the `captal://surveys/{id}` resource. */
   private[mcp] def viewOf(surveyId: String): ZIO[QuillSqlite, String, SurveyView] = ZIO
     .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
@@ -522,8 +496,8 @@ object SurveyTools:
               text = questionText,
               options = options,
               // Raw config rather than a decoded rule: `decodeRules` silently drops anything that
-              // does not match the question type's ADT, so showing what is stored is the only way
-              // to see a rule that exists in the table but never applies at runtime.
+              // does not match the question type's ADT, so only the stored text shows a rule that
+              // exists in the table and never applies.
               rules = ruleRows
                 .filter(r => r.questionId == q.id && r.isActive == 1)
                 .map(_.ruleConfig)
@@ -543,25 +517,17 @@ object SurveyTools:
     .readOnly
     .handle((in: GetRequest) => viewOf(in.surveyId))
 
-  /** Which half of the server a survey belongs to.
-    *
-    * The three identification categories are deployment-wide: `SurveyRepositoryQuill` picks them by
-    * category with no location filter, so there is one of each for every portal at once. Everything
-    * else hangs off a video and therefore off a location.
-    *
-    * That difference is the whole reason the question tools come in pairs. An operator who looks
-    * after one cafe may write their own advertiser questions all day; the question every guest of
-    * every location is asked before being identified is not theirs to touch.
+  /** Whether a survey is deployment-wide. `SurveyRepositoryQuill` picks the three identification
+    * categories by category with no location filter, so there is one of each for every portal at
+    * once; everything else hangs off a video and therefore off a location. This is what the paired
+    * question tools and their scopes split on.
     */
   private def isIdentification(category: String): Boolean = IdentificationCategory
     .storedValues
     .contains(category)
 
-  /** Refuses a question that belongs to the other half, naming the tool that does take it.
-    *
-    * `set_question_active` and `reorder_questions` are addressed by question and survey id, and
-    * neither says which kind it is — so a caller that guesses wrong gets a sentence telling it
-    * where to go, rather than a scope error that reads like a permissions problem.
+  /** Refuses a question that belongs to the other half, naming the tool that does take it. These
+    * tools are addressed by question and survey id, neither of which says which kind it is.
     */
   private def requireCategory(
       category: String,
@@ -576,17 +542,12 @@ object SurveyTools:
             s"That question belongs to the deployment-wide '$category' survey, asked of every guest of every location. Use $otherTool, which requires identity:write."))
       .unit
 
-  /** Correcting a question that is already being asked.
+  /** Corrects a question that is already being asked, in place, so `answers.question_id` keeps
+    * pointing at it. Answers recorded before the edit were given to the old wording, which the
+    * response reports.
     *
-    * Paired by scope like the rest, for the reason `requireCategory` records: the three
-    * identification surveys are asked of every guest of every location, so rewording one is not a
-    * per-location change and must not be reachable with a location's token.
-    *
-    * Until this existed the only way to fix a typo was to retire the question and create a new one.
-    * That is not equivalent: `answers.question_id` keeps pointing at the retired question, so the
-    * history splits in two and nothing says the halves are the same question. Rewording in place
-    * keeps them together — at the cost that answers recorded before the edit were given to the old
-    * wording, which the response says out loud rather than leaving to be inferred.
+    * Paired by scope like the rest: `identity:write` for the deployment-wide surveys,
+    * `content:write` for a video's.
     */
   private def update(wantIdentification: Boolean, otherTool: String): McpToolHandlerR[QuillSqlite] =
     McpTool(
@@ -617,9 +578,8 @@ object SurveyTools:
             _   <- requireCategory(category, wantIdentification, otherTool)
             _   <- validatePoints(in.points)
             now <- Clock.instant.map(_.toString)
-            // The texts first and the row second, so a rejected `points` cannot leave the wording
-            // rewritten against the old value. Both are idempotent, so a failure part way is
-            // recoverable by calling again — there is no transaction to lean on here.
+            // No transaction here, so both halves are idempotent and a failure part way is
+            // recovered by calling again.
             _ <- ZIO.foreachDiscard(in.text)(replaceTexts(in.questionId, _, now))
             _ <- ZIO.foreachDiscard(in.description)(replaceTexts(s"${in.questionId}_desc", _, now))
             _ <-
@@ -712,8 +672,8 @@ object SurveyTools:
             s"Setting question '${in.questionId}' active=${in.active}")
           answers  <- answerCount(in.questionId)
           siblings <- run(questionsOfQuery(lift(question.surveyId.asString))).orDie
-          // Retiring the last active question leaves a survey that can never be served; worth
-          // seeing in the response rather than discovering through an empty flow.
+          // Retiring the last active question leaves a survey that can never be served, so the
+          // count goes in the response.
           remaining =
             siblings.count(q => q.isActive == 1 || q.id.asString == in.questionId) - (
               if in.active then
@@ -767,8 +727,8 @@ object SurveyTools:
           given_  = in.orderedQuestionIds.toSet
           missing = (active -- given_).toList.sorted
           extra   = (given_ -- active).toList.sorted
-          // Demanding the complete set is what keeps display_order total and unambiguous; a partial
-          // list would leave some questions sharing an order with no defined tie-break.
+          // The complete set is required to keep display_order total: a partial list would leave
+          // questions sharing an order with no tie-break.
           _ <-
             ZIO.when(missing.nonEmpty || extra.nonEmpty)(
               ZIO.fail(
@@ -796,10 +756,9 @@ object SurveyTools:
   // ───────────────────────────────────────────────────────────────────────────
   // Creation
   //
-  // The input types exist to keep the operator out of decisions the agent can make on its own.
-  // Anything with a sensible default is an Option — zio-schema marks only non-Option fields as
-  // required, and a Scala default does not reach the schema — and every constrained field is an
-  // enum, so the legal values are in the schema rather than in prose the caller may not read.
+  // Anything with a default is an `Option`: zio-schema marks only non-Option fields as required,
+  // and a Scala default does not reach the schema. Every constrained field is an enum, so the legal
+  // values are in the schema rather than in prose.
   // ───────────────────────────────────────────────────────────────────────────
 
   final case class CreateSurveyRequest(
@@ -810,7 +769,7 @@ object SurveyTools:
       name: Option[String])
 
   /** Its own request type rather than a category on the one above, so the schema refuses
-    * `advertiser` outright instead of the handler explaining afterwards that it needed a video.
+    * `advertiser` outright.
     */
   final case class CreateIdentificationSurveyRequest(
       @description(
@@ -862,18 +821,9 @@ object SurveyTools:
   given Schema[CreateQuestionRequest] = DeriveSchema.gen
   given Schema[CreateQuestionResponse] = DeriveSchema.gen
 
-  /** Flattens the discriminated spec into what the row needs, rules already rendered.
-    *
-    * The kind-versus-type pairing that used to be checked here is gone: `AnswerFormat` makes it
-    * unrepresentable, so an `input` question cannot carry a selection rule to be rejected. What is
-    * left is parsing each value, which the types cannot do.
-    *
-    * The third element used to be `(kind, value)` pairs — `r.kind.toString` — which a separate
-    * `ruleConfig` turned into JSON by interpolation. The kinds were already typed enums and the
-    * stringifying was only there to feed that renderer, so each rule is built as the rule it is and
-    * `surveySchemas.encode` writes it. The win is in the match: mapping a `TextRuleKind` to a
-    * `question.TextRule` is checked for exhaustiveness, where `s"""{"type":"$kind"…"""` accepted
-    * whatever it was handed.
+  /** Flattens the discriminated spec into the question type, its options, and each rule already
+    * encoded as JSON or an error message. `AnswerFormat` makes a mismatched rule unrepresentable,
+    * so all that is left here is parsing each value.
     */
   private def flatten(
       spec: AnswerFormat): (String, List[AnswerOption], List[Either[String, String]]) =
@@ -897,27 +847,16 @@ object SurveyTools:
         ("date", Nil, range(rules, RangeElement.Date))
   end flatten
 
-  /** Which element type a range rule's bound is read as — the one thing `RangeRule` does not say.
-    *
-    * `RangeRule` is one tool type serving both the numeric and the date question, so its `value` is
-    * a `String` and the question decides what that string means. This replaces matching on the
-    * question type's name, where `("date", _)` and `("numeric", _)` were two branches of a match
-    * that also had a catch-all.
+  /** Which element type a range rule's bound is read as. `RangeRule` serves both the numeric and
+    * the date question, so its `value` is a `String` and the question decides what it means.
     */
   private enum RangeElement:
     case Numeric
     case Date
 
-  /** The three renderers that replaced `ruleConfig`, one per rule family.
-    *
-    * Each builds the rule as a `question.*` value and lets `surveySchemas.encode` write it, so the
-    * column is written by the same description that reads it. What they keep is the validation: the
-    * tool takes every bound as a `String` — an LLM is filling these in — and the messages below are
-    * what the backoffice tells it when a bound is not the kind of number its rule needs.
-    *
-    * Total matches over the kind enums, which is the point. `ruleConfig` interpolated the kind it
-    * was handed into `{"type":"…"}` and so had no unmatched case to report; here a kind with no
-    * mapping is a compile error.
+  /** One renderer per rule family. Each builds the rule as a `question.*` value and lets
+    * `surveySchemas.encode` write it, so `rule_config` is written by the same description that
+    * reads it. Every bound arrives as a `String`, so each parses and reports what it needed.
     */
   private def textRule(rule: TextRule): Either[String, String] =
     def needs[A](parse: String => Option[A], what: String): Either[String, A] = rule
@@ -1021,14 +960,11 @@ object SurveyTools:
 
   /** The editing counterpart of [[writeTexts]], upserting on `(entity_id, locale)`.
     *
-    * `writeTexts` inserts blind, which is right exactly once — when the entity is being created and
-    * cannot have texts yet. Every later write has to find the existing row: V12's unique index
-    * covers `(entity_id, locale, location_id)`, so a second blind insert for the same locale is
-    * rejected, and rqlite reports that rejection inside an HTTP 200 as zero rows. An editing tool
-    * built on `writeTexts` would therefore report success and change nothing.
+    * Every write after creation has to find the existing row: the unique index covers
+    * `(entity_id, locale, location_id)`, and rqlite reports the rejected insert inside an HTTP 200
+    * as zero rows, so a blind insert would report success and change nothing.
     *
-    * Only the locales given are touched. Omitting one leaves it alone rather than deleting it, so
-    * correcting the Spanish wording of a question cannot silently drop its English.
+    * Only the locales given are touched; an omitted one is left alone rather than deleted.
     */
   private[mcp] def replaceTexts(
       entityId: String,
@@ -1044,8 +980,8 @@ object SurveyTools:
               run(
                 query[LocalizedTextRow]
                   .filter(_.id == lift(row.id))
-                  // isActive -> 1 for the reason `I18nTools.upsert` gives: rewriting a text undoes
-                  // an earlier retirement rather than leaving a row nobody can see.
+                  // isActive -> 1 as in `I18nTools.upsert`: rewriting a text undoes an earlier
+                  // retirement rather than leaving a row nobody can see.
                   .update(_.value -> lift(t.value), _.updatedAt -> lift(now), _.isActive -> 1))
                 .orDie
             case None =>
@@ -1066,20 +1002,16 @@ object SurveyTools:
         _ <- Writes.expectOne(affected, s"Text for '$entityId' (${t.locale})")
       yield ()
 
-  /** The one place a survey row is written by these tools.
-    *
-    * Both tools land here so the uniqueness guard cannot be bypassed by whichever of them grows a
-    * second code path later. `create_advertiser_video` writes its own row, which is deliberate: it
-    * builds the video and its survey in one call and the survey is unambiguous by construction — it
-    * belongs to the video it just created.
+  /** The one place a survey row is written by these tools, so the uniqueness guard on `global`
+    * cannot be bypassed. `create_advertiser_video` writes its own row, whose survey belongs to the
+    * video it just created.
     */
   private def insertSurvey(
       category: String,
       videoId: Option[String],
       locationId: Option[String],
       /** Copied from the video, like `locationId`, so answers to an advertiser's questions are
-        * attributed to that advertiser in the event log. It was being written as `None` for every
-        * survey, which is correct for a promo and loses the attribution for an ad.
+        * attributed to that advertiser in the event log. `None` for a promo.
         */
       advertiserId: Option[String],
       name: Option[String],
@@ -1089,8 +1021,7 @@ object SurveyTools:
     for
       existing <- run(query[SurveyRow]).orDie
       // Identification surveys are chosen by category alone, with no location filter anywhere in
-      // SurveyRepositoryQuill, so a second active one of the same category makes which gets
-      // served depend on display_order across unrelated surveys.
+      // SurveyRepositoryQuill, so at most one of each category may be active.
       clashes = existing.filter(s => global && s.isActive == 1 && s.category == category)
       _ <-
         ZIO.when(clashes.nonEmpty)(
@@ -1109,10 +1040,11 @@ object SurveyTools:
     yield CreateSurveyResponse(id.asString, category)
     end for
 
-  /** Identification surveys live in [[createIdentificationSurvey]], behind a different scope. This
-    * one is a location's, through the video it follows — whether that video is an advertiser's or a
-    * promo. The selection only requires an *advertiser's* video to still have a question left; a
-    * promo plays regardless, and its survey, if it has one, is asked afterwards the same way.
+  /** A survey belonging to a location through the video it follows, an advertiser's or a promo's.
+    * Identification surveys go through [[createIdentificationSurvey]], behind a different scope.
+    *
+    * Only an *advertiser's* video has to still have a question left to be selected; a promo plays
+    * regardless, and its survey, if it has one, is asked afterwards the same way.
     */
   val createSurvey: McpToolHandlerR[QuillSqlite] = McpTool("create_survey")
     .description(
@@ -1122,17 +1054,15 @@ object SurveyTools:
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         for
-          // Verified rather than trusted: a survey pointing at a video that does not exist is
-          // reachable by nothing, and the foreign key will not say so.
+          // Checked here: a survey pointing at a video that does not exist is reachable by
+          // nothing, and the foreign key will not say so.
           video <- run(videoByIdQuery(lift(in.videoId)))
             .orDie
             .map(_.headOption)
             .someOrFail(s"No video with id '${in.videoId}'.")
-          // Both taken from the video rather than asked for. A video survey is scoped to a location
-          // through its video — the selection filters videos by location and the survey follows —
-          // so a location_id of its own could only ever disagree with it, and the same holds for
-          // the advertiser. A promo's video carries neither; the survey then carries neither, and
-          // is served and answered all the same.
+          // Location and advertiser are taken from the video rather than asked for: the selection
+          // filters videos by location and the survey follows. A promo's video carries neither, and
+          // its survey is served and answered all the same.
           response <- insertSurvey(
             category = SurveyCategory.advertiser.stored,
             videoId = Some(in.videoId),
@@ -1144,13 +1074,9 @@ object SurveyTools:
         yield response
         end for
 
-  /** Behind [[Auth.IdentityWrite]] rather than `content:write`, which is the whole point of it
-    * being a separate tool.
-    *
-    * These three are asked of every guest of every location — `SurveyRepositoryQuill` picks them by
-    * category with no location filter — so replacing one changes the identification flow for the
-    * entire deployment. An operator trusted with a cafe's videos should not be able to do that by
-    * holding the same token, and a scope declared on the tool is what lets `tools/list` say so.
+  /** Behind [[Auth.IdentityWrite]] rather than `content:write`: these three are asked of every
+    * guest of every location, so creating one changes the identification flow for the whole
+    * deployment.
     */
   val createIdentificationSurvey: McpToolHandlerR[QuillSqlite] = McpTool(
     "create_identification_survey")
@@ -1166,14 +1092,11 @@ object SurveyTools:
         name = in.name,
         global = true)
 
-  /** Writes one question with its texts, options and rules.
+  /** Writes one question with its texts, options and rules. Shared with `create_advertiser_video`,
+    * which builds a video's survey in the same call.
     *
-    * Extracted so `create_advertiser_video` can build a video's survey in the same call that
-    * registers the video, rather than leaving the operator to add questions afterwards — which is
-    * the state `captal video add` left behind, with "TODO" standing in for the wording.
-    *
-    * Takes `displayOrder` rather than computing it: a caller writing several questions in one go
-    * knows the order it wants and should not have to re-read the table between each.
+    * `displayOrder` is given rather than computed, so a caller writing several questions in one go
+    * does not re-read the table between each.
     */
   private[mcp] def writeQuestion(
       surveyId: survey.Id,
@@ -1308,13 +1231,8 @@ object SurveyTools:
     wantIdentification = true,
     otherTool = "create_question")
 
-  /** Six tools where there were three, in pairs that differ only in which surveys they accept and
-    * what they require to use them.
-    *
-    * The alternative was one tool each, declaring `content:write` and quietly demanding
-    * `identity:write` once it saw the survey's category. That reads better at the call site and
-    * makes `tools/list` lie: a tool would publish one requirement and enforce another, which is the
-    * failure this codebase has spent the day finding in other forms.
+  /** The question tools come in pairs that differ only in which surveys they accept and which scope
+    * they require, so `tools/list` publishes the requirement each one actually enforces.
     */
   val all: List[McpToolHandlerR[QuillSqlite]] = List(
     list,

@@ -30,16 +30,12 @@ final case class SessionRow(
     clickId: String,
     accessExpiresAt: Option[String] = None)
 
-/** Which survey this is, as stored in `surveys.category` and constrained by V1's CHECK.
+/** Which survey this is, as stored in `surveys.category` and constrained by V1's CHECK. `inline` so
+  * a quoted query can name them — a plain `val` cannot be, and the object-level quotes the read
+  * path uses have no `lift` available.
   *
-  * `inline`, for the reason [[VideoStatus]] records: a plain `val` cannot be named inside a quoted
-  * query, and the object-level quotes the read path uses have no `lift` available. Six comparisons
-  * across `SurveyRepositoryQuill` were spelling these out by hand.
-  *
-  * [[Advertiser]] is a misnomer since promos may carry a survey too — it is the survey that follows
-  * a *video*, whoever the video belongs to. Renaming the stored value would mean another table
-  * rebuild plus the `api/survey/advertiser` routes and the client, so the name stays and this note
-  * stands in for it.
+  * [[Advertiser]] is a misnomer: it is the survey that follows a *video*, whoever the video belongs
+  * to, and promos may carry one too.
   */
 object SurveyCategory:
   /** Asked of every guest before anything else, to get a user to hang answers off. */
@@ -131,16 +127,9 @@ final case class AdvertiserRow(
     createdAt: String,
     updatedAt: String)
 
-/** Where a video is in its life, as one value rather than two flags.
-  *
-  * `pending` and `retired` were both `is_active = 0` until V21, which let an upload path put a
-  * deliberately retired video back into rotation. The fourth combination two booleans would allow —
-  * active with no content — is not representable here, and the column's CHECK enforces it.
-  *
-  * `inline` so a quoted query can name them. A plain `val` is opaque to Quill's parser, and `lift`
-  * is not available inside the object-level quotes the read path uses — so the only way to filter
-  * on a status was to write `"active"` out again, which is exactly what this object exists to stop.
-  * An `inline val` of a literal is constant-folded before Quill ever sees it.
+/** Where a video is in its life, as one value rather than two flags. Introduced by V21, whose CHECK
+  * admits exactly these three. `inline` so a quoted query can name them: a plain `val` is opaque to
+  * Quill's parser, while an `inline val` of a literal is constant-folded before Quill sees it.
   */
 object VideoStatus:
   /** Created, with a key reserved and a row to hang its survey off, but no file in S3 yet. Served
@@ -158,10 +147,8 @@ object VideoStatus:
 final case class AdvertiserVideoRow(
     id: video.Id,
     advertiserId: Option[String],
-    /** The enum rather than its stored word. Quill maps it through the `MappedEncoding` in
-      * `schema.core`, so a query reads `v.videoType == lift(VideoType.Promo)` and the compiler
-      * refuses anything that is not one of the two — where a `String` let `"propaganda"` be typed
-      * into three separate queries, any of which could have been wrong without a word from anyone.
+    /** The enum rather than its stored word: Quill maps it through the `MappedEncoding` in
+      * `schema.core`, so a query reads `v.videoType == lift(VideoType.Promo)`.
       */
     videoType: video.VideoType,
     videoUrl: String,

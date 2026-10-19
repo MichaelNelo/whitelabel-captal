@@ -53,9 +53,6 @@ final class UploadUiSource(uploadOrigin: String, scriptOrigin: String)
         // conversation in a different typeface.
         resourceDomains = Chunk(scriptOrigin, "https://assets.claude.ai")
       )),
-    // No card around the widget. Claude is already borderless by default, but other hosts are not,
-    // and a page that paints no background of its own looks wrong inside a border it did not ask
-    // for.
     prefersBorder = Some(false)
   )
 
@@ -77,18 +74,7 @@ final class UploadUiSource(uploadOrigin: String, scriptOrigin: String)
   private inline def locationByIdQuery = quote: (idParam: String) =>
     query[LocationRow].filter(_.id == idParam).take(1)
 
-  /** The bare page, listed because it is what `_meta.ui.resourceUri` names.
-    *
-    * It used to return nothing, on the reasoning that the per-video URIs `EntityResources`
-    * enumerates are the useful entry points and the bare one stays readable regardless. Readable
-    * turned out not to be enough: a host resolves a tool's declared template against this listing,
-    * and with the URI absent `create_advertiser_video` succeeded and the render failed — while
-    * `resources/read` on that exact URI returned the page. `ui://configure-unifi` was listed and
-    * did not have the problem, which is what the asymmetry pointed at.
-    *
-    * So a declared template is listed, and the listing still answers "which videos are pending"
-    * through the per-video URIs. The two say different things and both are needed.
-    */
+  /** The bare page, listed because it is what `_meta.ui.resourceUri` names. */
   val bareDefinition: ResourceDefinition = McpApps.resource(
     UploadUi.AppUri,
     "Subir video",

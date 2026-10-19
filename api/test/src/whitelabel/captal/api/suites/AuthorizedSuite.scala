@@ -30,11 +30,9 @@ object AuthorizedSuite:
             assertTrue(
               statusResp.code.isSuccess,
               phase == "authorized",
-              // The only expiry the response carries. `accessExpiresAt` used to ride along and was
-              // never read: the countdown is seeded from this, deliberately, so it never touches
-              // the device clock — a captive-portal client has had no internet and may not have
-              // synced NTP. Dropping the absolute instant from the wire took java.time's parser
-              // and Scala.js's 64-bit emulation out of the browser bundle with it.
+              // The only expiry the response carries: the countdown is seeded from this so it
+              // never touches the device clock — a captive-portal client has had no internet and
+              // may not have synced NTP.
               secondsRemaining.exists(s => s > 0 && s <= 3600)
             )
         ,
@@ -113,8 +111,7 @@ object AuthorizedSuite:
               statusResp.code.isSuccess,
               phase == "authorized",
               // Presence, not value: TestUnifiClient grants access until the epoch, so the server
-              // floors this at zero. What is under test is that finishing authorizes and that the
-              // status carries the countdown seed at all.
+              // floors this at zero.
               secondsRemaining.isDefined
             )
         ,
@@ -122,9 +119,8 @@ object AuthorizedSuite:
           ZIO.scoped:
             for
               _ <- TestUnifiClient.enable
-              // The runner comes from the layer graph, as in `Main`: that verifies its four
-              // dependencies resolve together. Starting it here rather than in `testBackend` is
-              // deliberate — with the scheduler running in every case and access that expires
+              // The runner comes from the layer graph, as in `Main`. Started here and not in
+              // `testBackend`: with the scheduler running in every case and access that expires
               // instantly, the tests asserting "session is authorized" would become a race.
               runner <- ZIO.service[JobRunner]
               _      <- runner.start

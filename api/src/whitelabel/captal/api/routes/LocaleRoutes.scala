@@ -24,11 +24,9 @@ end LocaleRoutes
 
 /** The locale list, the translation bundle, and the route that changes a session's language.
   *
-  * Two of these take no session and two take the cookie, one of which writes it back — which is the
-  * only new thing here. `outHeader(HeaderCodec.setCookie)` is what
-  * `out(cookieConfig.tapirOutput.and(…))` did, and the cookie it sets comes from `asSetCookie`,
-  * deliberately the same name and path as the one `asMeta` builds for the routes still on tapir.
-  * Two cookies differing in path would be two entries in the browser rather than one.
+  * `PUT /api/session/locale` writes the session cookie back through `asSetCookie`, with the same
+  * name and path every other route that sets it uses — two cookies differing in path would be two
+  * entries in the browser rather than one.
   */
 final class LocaleRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
   import LocaleRoutes.*
@@ -46,9 +44,7 @@ final class LocaleRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
 
   // ─── SetLocale (sets the session cookie) ──────────────────────────────────
 
-  // `Accept-Language` was an input of the tapir description and no handler ever read it — the
-  // locale comes from the body. Dropped rather than carried over: an input nothing reads is a
-  // claim about the request that nothing honours.
+  // The locale comes from the request body; `Accept-Language` is deliberately not an input here.
   private val setLocale = Endpoint(base(Method.PUT / "api" / "session" / "locale"))
     .header(HeaderCodec.cookie.optional)
     .in[SetLocaleRequest]

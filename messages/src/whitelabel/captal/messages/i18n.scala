@@ -4,12 +4,8 @@ import io.circe.generic.semiauto.*
 import io.circe.{Decoder as CirceDecoder, Encoder as CirceEncoder}
 import whitelabel.captal.core.i18n.I18n
 
-/** Circe codecs for the translation bundle, which both sides of the wire need.
-  *
-  * These were in `object i18n` beside ten tapir `Schema` instances for the same types — the browser
-  * needed the codecs, the server needed both, and sharing one object meant the browser build
-  * compiled against tapir to typecheck declarations it never reads. The server's half is a single
-  * derived `Schema[I18n]` in `api.wire` now, and tapir is gone from the repo.
+/** Circe codecs for the `I18n` translation bundle, which both sides of the wire need. The server's
+  * `Schema[I18n]` is in `api.wire`.
   */
 object i18n:
   // Circe codecs for nested types

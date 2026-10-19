@@ -8,9 +8,9 @@ import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
 import zio.*
 
-/** Direct id-based lookup for the cross-location `captal_user` cookie validation. Kept separate
-  * from `UserRepository` (which is state-based and tied to the SessionContext) so it can be used in
-  * the security logic of routes that don't yet have a session.
+/** Direct id-based lookup, used to validate the cross-location `captal_user` cookie. Separate from
+  * `UserRepository` (state-based, tied to the `SessionContext`) so routes that do not yet have a
+  * session can use it.
   */
 trait UserLookup:
   def existsById(userId: user.Id): UIO[Boolean]

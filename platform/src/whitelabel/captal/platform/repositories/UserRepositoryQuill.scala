@@ -28,16 +28,14 @@ object UserRepositoryQuill:
           session.currentSurveyId.isDefined && session.currentQuestionId.isDefined
       yield (userRow.id, session.currentSurveyId, session.currentQuestionId)
 
-  // Query that returns the (surveyId, questionId) pairs the user has answered
+  // Query that returns the (surveyId, questionId) pairs the user has answered. Feeds
+  // State.Ready/State.Authorized.answeredQuestionIds, an audit payload for the event_log row that
+  // decides nothing; what the flow asks next comes from
+  // SurveyRepositoryQuill.nextIdentificationSurveyQuery instead.
   //
-  // Feeds State.Ready/State.Authorized.answeredQuestionIds, whose only consumer is
-  // Event.UserFinishedProcess -> EventLogHandler -> the event_log row. It is an audit payload; it
-  // decides nothing. What the flow asks next comes from a different subquery, over `answers` alone,
-  // in SurveyRepositoryQuill.nextIdentificationSurveyQuery.
-  //
-  // So it deliberately does NOT filter on is_active: retiring a question in the backoffice must not
-  // rewrite the record of what a user actually answered. (Note the join against `questions` here is
-  // also why a hard delete would silently drop answers from the audit trail.)
+  // It deliberately does NOT filter on is_active: retiring a question must not rewrite the record
+  // of what a user actually answered. It joins `questions`, so a hard delete there would drop
+  // answers from the audit trail.
   inline def findAnsweredQuestionsByUserQuery = quote: (userIdParam: user.Id) =>
     for
       a <- query[AnswerRow]
@@ -98,9 +96,8 @@ object UserRepositoryQuill:
         .flatMap: sessionData =>
           sessionData.userId match
             case Some(userId) =>
-              // The question is what decides whether there is anything to answer. The advertiser
-              // travels along; a promo's survey has none, and requiring both meant the answer was
-              // refused with nothing said about why.
+              // The question alone decides whether there is anything to answer; the advertiser
+              // travels along and a promo's survey has none.
               sessionData.currentQuestion match
                 case Some(question) =>
                   run(findWithEmailByIdQuery(lift(userId)))

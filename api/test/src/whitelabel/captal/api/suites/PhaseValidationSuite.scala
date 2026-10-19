@@ -8,12 +8,9 @@ import zio.test.*
 
 object PhaseValidationSuite:
 
-  /** An option id that refers to nothing, for the tests that only need a request to exist.
-    *
-    * Every endpoint here is expected to refuse on the phase alone, before the body means anything,
-    * so what the option points at is irrelevant. It was the string `"any-option"`, which said so
-    * more plainly but is not an id — and now that the suites build their bodies with the same
-    * encoder the browser uses, a body has to be one a browser could have sent.
+  /** An option id that refers to nothing, for the tests that only need a request to exist: every
+    * endpoint here refuses on the phase alone, before the body means anything. It has to be a real
+    * id, since the suites build their bodies with the same encoder the browser uses.
     */
   private val AnyOption = "44444444-4444-4444-4444-444444444444"
 
@@ -281,9 +278,6 @@ object PhaseValidationSuite:
           // The flow trades access for data. With nothing able to identify the visitor, carrying on
           // to the advertiser video would hand out the access and collect nothing — and the session
           // would reach it with user_id still NULL, since only UserCreated ever sets it.
-          //
-          // Retiring the last active email question is now a single call, so this is reachable by
-          // an operator, not just by a misprovisioned deployment.
           for
             advertiser <- TestFixtures.seedAdvertiserWithVideoAndSurvey(questionCount = 1)
             backend    <- testBackend

@@ -109,8 +109,7 @@ object UnifiUi:
       html(
         head(
           meta(charset := "utf-8"),
-          // See [[Hints]]: the connection to the CDN and the chunks the entry imports, both named
-          // before the `<script>` at the bottom is reached.
+          // [[Hints]]: CDN connection and entry chunks, loaded before script.
           Hints(scriptOrigin, preloads),
           // Without this the browser paints an opaque canvas behind the frame — white in light
           // mode — whenever this document's colour scheme differs from the host's, before any

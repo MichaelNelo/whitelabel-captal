@@ -11,16 +11,13 @@ import whitelabel.captal.core.survey.{AdvertiserId, State as SurveyState, Survey
 import whitelabel.captal.core.user.{State as UserState, User}
 import whitelabel.captal.core.{Op, survey, user, video}
 
-// Test fixture for NextStep
 private val testNextStep = NextStep(Phase.Ready)
 
 object HandlerTests extends TestSuite:
 
-  // Core commands take `occurredAt` as data (CQRS — handlers are pure). Tests pass a
-  // fixed Instant for determinism. No Clock to inject here — utest + cats.Id, not ZIO.
+  // Commands take `occurredAt` as data, so a fixed Instant keeps the handlers deterministic.
   private val FixedNow: Instant = Instant.EPOCH
 
-  // Simple mock implementations using cats.Id
   private def makeRadioQuestion(optionId: OptionId): QuestionToAnswer = QuestionToAnswer(
     id = survey.question.Id.generate,
     text = LocalizedText("Test question", "en"),
@@ -57,8 +54,8 @@ object HandlerTests extends TestSuite:
     survey.Id.generate,
     SurveyState.WithLocationQuestion(question, HierarchyLevel.State))
 
-  /** `advertiserId` defaults to present, which is the advertiser case. Passing `None` gives the
-    * promo case — a video survey with no advertiser, which has to answer the same way.
+  /** Defaults to the advertiser case; pass `None` for the promo case, a video survey with no
+    * advertiser.
     */
   private def makeSurveyWithAdvertiser(
       question: QuestionToAnswer,
@@ -73,7 +70,6 @@ object HandlerTests extends TestSuite:
     user.Id.generate,
     UserState.AnsweringQuestion(surveyId, questionId))
 
-  // Mock SurveyRepository
   private def mockSurveyRepo(
       emailSurvey: Option[Survey[SurveyState.WithEmailQuestion]] = None,
       profilingSurvey: Option[Survey[SurveyState.WithProfilingQuestion]] = None,
@@ -91,7 +87,6 @@ object HandlerTests extends TestSuite:
       def findNextIdentificationSurvey() = None
       def findNextAdvertiserSurvey(videoId: video.Id) = None
 
-  // Mock UserRepository
   private def mockUserRepo(
       answeringUser: Option[User[UserState.AnsweringQuestion]] = None,
       withEmailUser: Option[User[UserState.WithEmail]] = None): UserRepository[Id] =

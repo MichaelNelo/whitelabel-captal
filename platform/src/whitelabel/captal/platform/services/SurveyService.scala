@@ -33,14 +33,9 @@ object SurveyService:
 
   /** True when every *active* question of the survey has an answer from this user.
     *
-    * `==` rather than `<=` is safe because of `idx_answers_user_question`, the unique index on
-    * `answers(user_id, question_id)` from V1: every counted answer maps to a distinct active
-    * question of this survey, so the right side can never exceed the left.
-    *
-    * Both sides filter on is_active, and both are needed. With only the left side filtered,
-    * deactivating an already-answered question would close the survey by itself: the retired
-    * question leaves the left count, but its answer stays on the right and papers over the gap it
-    * just created, marking the survey complete with other questions still unanswered.
+    * `==` rather than `<=` relies on `idx_answers_user_question`, the unique index on
+    * `answers(user_id, question_id)` from V1: the right side can never exceed the left. Both sides
+    * must filter on is_active, or deactivating an answered question would close the survey.
     */
   inline def isSurveyCompleteQuery = quote: (userIdParam: user.Id, surveyIdParam: survey.Id) =>
     query[QuestionRow].filter(q => q.surveyId == surveyIdParam && q.isActive == 1).size ==

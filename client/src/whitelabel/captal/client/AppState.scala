@@ -43,23 +43,15 @@ object AppState:
   val isNavigating: Signal[Boolean] = navigatingVar.signal
   def setNavigating(v: Boolean): Unit = navigatingVar.set(v)
 
-  // Last unhandled error — populated when an API call fails or an unexpected runtime exception
-  // occurs. Read by ErrorView; cleared on retry. Validation errors do NOT live here (they are
-  // inline-only via `.validation-error` divs in the question views).
+  // Last unhandled error: API failures and unexpected runtime exceptions. Read by ErrorView,
+  // cleared on retry. Validation errors do NOT live here — they are inline-only.
   private val errorVar: Var[Option[ApiError]] = Var(None)
   val error: Signal[Option[ApiError]] = errorVar.signal
   def setError(e: Option[ApiError]): Unit = errorVar.set(e)
   def clearError(): Unit = errorVar.set(None)
 
-  // Access expiration timestamp when phase == Authorized. WelcomeView uses this to render the
-  // countdown; when the timestamp passes, it polls `/api/status` and the server resets the
-  // session back to Welcome.
-
-  /** Seconds left of the granted access, as computed by the server.
-    *
-    * Kept separate from [[accessExpiresAt]] on purpose: the countdown is driven off this plain
-    * counter instead of subtracting from an absolute instant, so it never depends on the device
-    * clock. A captive-portal client has had no internet yet and may not have synced NTP.
+  /** Seconds left of the granted access, as computed by the server. Drives the countdown without
+    * reading the device clock.
     */
   private val secondsRemainingVar: Var[Option[Int]] = Var(None)
   val secondsRemaining: Signal[Option[Int]] = secondsRemainingVar.signal

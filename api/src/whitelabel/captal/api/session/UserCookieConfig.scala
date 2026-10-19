@@ -3,10 +3,9 @@ package whitelabel.captal.api.session
 import zio.*
 import zio.http.{Cookie, Header, Path}
 
-/** Cross-location user cookie. Unlike `SessionCookieConfig` (which is slug-aware and scoped by
-  * path), this cookie is broadcast to ALL locations under the same domain via `Path=/`. Used to
-  * recognize a returning user who has already answered the email identification at another location
-  * → skip that question on subsequent visits.
+/** Cross-location user cookie. Unlike `SessionCookieConfig` (slug-aware, path-scoped), this one is
+  * broadcast to ALL locations under the same domain via `Path=/`, so a returning user who already
+  * answered the email identification at another location skips that question.
   *
   * Set when email is answered (`answerEmail`); read on session creation (`status`).
   */
@@ -16,12 +15,9 @@ final case class UserCookieConfig(name: String, path: String, maxAgeSeconds: Lon
   def valueFrom(header: Option[Header.Cookie]): Option[String] = header.flatMap(
     _.value.find(_.name == name).map(_.content))
 
-  /** All five attributes, unlike the session cookie's path-only equivalent.
-    *
-    * Each one is load-bearing here, because this cookie is the whole reason a returning visitor
-    * skips the email question at another location: a `Path` that is not `/` would not be sent
-    * across locations, and a missing `Max-Age` would make it a session cookie that dies with the
-    * tab.
+  /** Sets `Path`, `Secure`, `HttpOnly`, `Max-Age` and `SameSite=Lax` — all five load-bearing: a
+    * `Path` other than `/` is not sent across locations, and without `Max-Age` the cookie dies with
+    * the tab.
     */
   def asSetCookie(value: String): Header.SetCookie = Header.SetCookie(
     Cookie.Response(

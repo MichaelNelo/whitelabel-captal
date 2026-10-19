@@ -1,11 +1,7 @@
 package whitelabel.captal.core.application
 
-/** Phase to redirect to when a `Provide*` command cannot fulfill its job — e.g. there is no next
-  * identification survey, no video, or no advertiser survey available for the current location. The
-  * user "falls back" to the next stop in the captive-portal pipeline.
-  *
-  * Distinct type from [[NextStep]] (which is the success transition emitted by `Answer*` / `Mark*`
-  * commands and serialized to the client) — they are both Phase wrappers but represent different
-  * intents.
+/** Phase to redirect to when a `Provide*` command cannot fulfill its job — no next identification
+  * survey, no video, no advertiser survey for the current location. A separate type from
+  * [[NextStep]], the success transition emitted by `Answer*` / `Mark*` and sent to the client.
   */
 final case class FallbackPhase(phase: Phase)

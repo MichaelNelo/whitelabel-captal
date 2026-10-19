@@ -83,18 +83,10 @@ object WelcomeView:
   )
 
   /** Authorized view: counts down the seconds the server reported and, when they run out, asks
-    * `/api/status` once — by then the scheduler has already reset the session server-side, so the
-    * response carries the Welcome phase and the router re-renders.
+    * `/api/status` once, which by then carries the Welcome phase.
     *
-    * No absolute time is used anywhere: the counter is seeded from `secondsRemaining` and
-    * decremented locally, and the deadline is a single `setTimeout`. The device clock never enters
-    * the picture, which matters because a captive-portal client has had no internet yet and may not
-    * have synced NTP.
-    *
-    * Losing the timer is harmless. If the tab is closed or discarded, `Main.syncPhaseOnLoad` calls
-    * `/api/status` on the next load and gets the right phase; if it fires late (background
-    * throttling, suspended device) the answer is the same. If it somehow fires early, the response
-    * still says Authorized and the countdown is simply re-seeded.
+    * No absolute time is used anywhere: the counter is seeded from `secondsRemaining`, decremented
+    * locally, and the deadline is a single `setTimeout`, so the device clock never enters it.
     */
   private def authorizedContent(remainingSeconds: Int): HtmlElement =
     val remaining: Var[Int] = Var(remainingSeconds)
@@ -102,9 +94,8 @@ object WelcomeView:
     val tickStream = EventStream.periodic(1000).startWith(0)
     div(
       cls := "welcome-view",
-      // Title sits in normal flow right below the brand icon, matching the layout of every
-      // other view (Welcome, Ready, etc.). The card itself is centered on the remaining
-      // viewport via the wrapper below.
+      // Title sits in normal flow right below the brand icon, as in every other view; the card is
+      // centered on the remaining viewport by the wrapper below.
       h1(cls := "welcome-title", child.text <-- I18nClient.i18n.map(_.welcome.authorized.title)),
       div(
         cls := "welcome-countdown-wrapper",
@@ -130,9 +121,8 @@ object WelcomeView:
     */
   private val MaxTimeoutMillis: Double = 2147483647d
 
-  /** The multiplication happens in `Double` rather than `Int`, which would overflow at 24 days of
-    * remaining access — and in `Long`, which is what this used to be and what pulls Scala.js's
-    * 64-bit emulation into the bundle. `setTimeout` takes a Double anyway.
+  /** The `* 1000` must stay in `Double`: `Int` overflows at 24 days of remaining access and `Long`
+    * pulls Scala.js's 64-bit emulation into the bundle.
     */
   private def scheduleExpiry(secondsRemaining: Int): Unit =
     val delayMillis = math.min(math.max(0, secondsRemaining).toDouble * 1000d, MaxTimeoutMillis)
@@ -152,9 +142,8 @@ object WelcomeView:
         case Left(err) =>
           ErrorHandler.escalate(err)
 
-  /** Written out rather than `f"$minutes%02d:$secs%02d"`, because the `f` interpolator goes through
-    * `java.util.Formatter` — a general-purpose format-string engine that measured at 7.6 KB of the
-    * bundle, to pad two numbers to two digits.
+  /** `mm:ss`, padded by hand: the `f` interpolator would pull `java.util.Formatter` into the
+    * bundle.
     */
   private def formatRemaining(seconds: Int): String =
     def twoDigits(n: Int): String =
@@ -169,9 +158,8 @@ object WelcomeView:
     styleAttr := s"animation-delay: ${index * 0.1}s",
     span(cls := "step-text", child.text <-- textSignal))
 
-  /** Fetch the list of available locales for the dropdown. The session-creation `/api/status` call
-    * already happened once at boot in `Main.syncPhaseOnLoad` — locale + phase sync live there. This
-    * view only needs the locales list.
+  /** Fetch the list of available locales for the dropdown. Locale and phase sync happen at boot in
+    * `Main.syncPhaseOnLoad`, not here.
     */
   private def loadLocales(): Unit = Runtime.run:
     WelcomeApi
@@ -205,6 +193,6 @@ object WelcomeView:
             ErrorHandler.escalate(err)
         isStarting.set(false)
         // The nav-loader is deliberately not turned off here: the destination view's Layout does
-        // it on mount, so the overlay covers the gap while the new view's lazy chunk comes down.
+        // it on mount, once its lazy chunk has come down.
   end startFlow
 end WelcomeView

@@ -17,29 +17,14 @@ import zio.schema.{DeriveSchema, Schema}
 import McpSchema.given
 import ToolSchema.readOnly
 
-/** Location tools.
-  *
-  * Every other tool in this server takes a `slug` and refuses to act when it does not resolve, so
-  * until now the only way to get one was file provisioning — which is what this migration exists to
-  * remove. Creating a location is the entry point to all of them.
-  *
-  * The slug is not a display field. It becomes the portal's URL prefix (`/<slug>/api/...`), the S3
-  * key prefix for that location's assets, the suffix of its session cookie, and the ALB target
-  * group and ECS service names at deploy time. That is why it is validated far more strictly than
-  * the name, and why it cannot be changed afterwards: a rename would orphan the assets and leave
-  * every live session holding a cookie for a path that no longer exists.
+/** Location CRUD: entry point for all slug-based tools. Slug immutable (used in URL, S3 keys,
+  * cookies).
   */
 object LocationTools:
-  /** `captal-<slug>` is the ALB target group name, and AWS caps those at 32 characters. Enforced at
-    * creation because the alternative is discovering it during a deploy, long after the location
-    * has content hanging off it.
-    */
+  /** Max slug length: 25 chars (AWS ALB target group limit of 32 minus "captal-"). */
   private val MaxSlugLength = 32 - "captal-".length
 
-  /** Kebab-case, and stricter than the `[a-z0-9-]+` that file provisioning checked: no leading,
-    * trailing or doubled hyphen. Those all pass the looser rule and produce URLs and bucket
-    * prefixes that read as typos.
-    */
+  /** Kebab-case, stricter than [a-z0-9-]+ (no leading, trailing, or doubled hyphens). */
   private val SlugPattern = "[a-z0-9]+(-[a-z0-9]+)*".r
 
   final case class LocationView(
@@ -86,9 +71,7 @@ object LocationTools:
   private inline def bySlugQuery = quote: (slugParam: String) =>
     query[LocationRow].filter(_.slug == slugParam).take(1)
 
-  /** The host is the one field with no default anywhere: without it `UnifiClient` has nothing to
-    * talk to, so its presence is what distinguishes a configured location from a bare one.
-    */
+  /** Check if UniFi host is configured (distinguishes configured from bare location). */
   private def unifiConfigured(row: LocationRow): Boolean = row.unifiHost.exists(_.trim.nonEmpty)
 
   private def validateSlug(raw: String): ZIO[Any, String, String] =

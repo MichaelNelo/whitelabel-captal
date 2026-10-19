@@ -51,10 +51,8 @@ trait SessionService:
     */
   def resetForExpiration(sessionId: user.SessionId): Task[Unit]
 
-  /** Sessions of this location that are `Authorized` with an `accessExpiresAt` set.
-    *
-    * Only used at startup, to re-seed the expiration scheduler — its state lives in memory and does
-    * not survive a task redeploy. Deadlines already in the past fire immediately.
+  /** Sessions of this location that are `Authorized` with an `accessExpiresAt` set. Used at
+    * startup, to re-seed the expiration scheduler.
     */
   def findPendingExpirations(): Task[List[(user.SessionId, java.time.Instant)]]
 end SessionService
@@ -115,10 +113,8 @@ object SessionService:
         .filter(_.id == sessionIdParam)
         .update(_.phase -> phaseParam, _.accessExpiresAt -> Some(expiresAtParam))
 
-  /** Authorized sessions of this location that still have a pending expiration.
-    *
-    * `location_id` comes from the instance — each ECS task serves a single location — so there is
-    * no cross-location lookup.
+  /** Authorized sessions of this location that still have a pending expiration. `location_id` comes
+    * from the instance: each task serves a single location.
     */
   inline def pendingExpirationsQuery = quote:
     (locationIdParam: Option[String], phaseParam: Phase) =>

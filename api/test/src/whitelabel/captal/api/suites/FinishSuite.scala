@@ -76,12 +76,11 @@ object FinishSuite:
         ,
         test("Identification only — no video, no survey → finish has only email answer, no video"):
           for
-            _       <- TestFixtures.seedEmailSurvey
-            backend <- testBackend
-            cookie  <- createSession(backend)
-            _       <- getNextSurvey(backend, cookie)
-            _       <- postEmailAnswer(backend, cookie, "finish-id-only@example.com")
-            // No videos seeded → /api/video/next cascades to Phase.Ready via fallbackFromVideo
+            _          <- TestFixtures.seedEmailSurvey
+            backend    <- testBackend
+            cookie     <- createSession(backend)
+            _          <- getNextSurvey(backend, cookie)
+            _          <- postEmailAnswer(backend, cookie, "finish-id-only@example.com")
             _          <- getNextVideo(backend, cookie)
             finishResp <- postFinish(backend, cookie)
             eventLog   <- TestFixtures.queryEventLog

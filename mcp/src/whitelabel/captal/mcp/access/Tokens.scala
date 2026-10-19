@@ -13,28 +13,21 @@ import zio.*
 
 import QuillArrow.->
 
-/** Operator tokens, in the database rather than in `MCP_TOKENS`.
+/** Operator tokens, in the database and issued by a tool.
   *
-  * The environment variable could only be edited by whoever deploys, so handing a translator their
-  * own credential meant a redeploy — and a credential that takes a redeploy to issue is one people
-  * share instead. These are issued by a tool, which is the point.
-  *
-  * Delegation attenuates: a token can only grant scopes it already holds. That is the whole
-  * authorization model here, and it means the set of things a token can reach never grows by being
-  * passed along. The seeded admin is the only one nobody granted.
+  * Delegation attenuates: a token can only grant scopes it already holds, so the set of things a
+  * token can reach never grows by being passed along. The seeded admin is the only one nobody
+  * granted.
   */
 object Tokens:
 
-  /** Fixed, so seeding is an update rather than an insert of a second admin. Rotating
-    * `MCP_ADMIN_TOKEN` and restarting therefore replaces the credential in place; the id other
-    * tokens point at through `created_by` does not move.
+  /** Fixed, so seeding is an update rather than an insert of a second admin: rotating
+    * `MCP_ADMIN_TOKEN` replaces the credential in place and the id `created_by` points at does not
+    * move.
     */
   private val AdminId = "admin"
 
-  /** Without this Quill derives the table from the type and looks for `row`, which exists nowhere —
-    * and rqlite answers a select against a missing table with "No result set returned", which reads
-    * like a driver problem rather than a naming one.
-    */
+  /** The table is `mcp_tokens`; without this Quill derives the name from the type. */
   inline given SchemaMeta[Row] = schemaMeta[Row]("mcp_tokens")
 
   final case class Row(
@@ -63,16 +56,17 @@ object Tokens:
   private inline def byId = quote: (idParam: String) =>
     query[Row].filter(_.id == idParam)
 
-  /** SHA-256, unsalted and without a work factor, which is right here and would be wrong for a
-    * password. [[mint]] generates 256 bits of entropy, so there is no dictionary to attack and
-    * nothing a slow hash would buy — only a cost paid on every request.
+  /** SHA-256 of the token, base64url without padding. Unsalted and with no work factor, which
+    * [[mint]]'s 256 bits of entropy is what makes safe.
     */
   def hash(token: String): String = Base64
     .getUrlEncoder
     .withoutPadding
     .encodeToString(MessageDigest.getInstance("SHA-256").digest(token.getBytes(UTF_8)))
 
-  /** The plaintext exists here and in the response that carries it, and nowhere else afterwards. */
+  /** A fresh 256-bit secret, base64url without padding. The plaintext exists here and in the
+    * response that carries it, and nowhere else afterwards.
+    */
   def mint: UIO[String] = ZIO.succeed:
     val bytes = new Array[Byte](32)
     SecureRandom().nextBytes(bytes)
@@ -95,23 +89,16 @@ object Tokens:
     createdAt = row.createdAt,
     revoked = row.revokedAt.isDefined)
 
-  /** What the verifier needs, and the only read on the request path.
-    *
-    * Looked up by hash, so the index does the work a constant-time scan used to: there is nothing
-    * secret to compare here, because the hash of a wrong guess is simply absent.
+  /** What the verifier needs, and the only read on the request path. Looked up by hash; a revoked
+    * row answers `None`.
     */
   def authenticate(presented: String): ZIO[QuillSqlite, Nothing, Option[Row]] = ZIO.serviceWithZIO[
     QuillSqlite]: quill =>
     import quill.*
     run(byHash(lift(hash(presented)))).orDie.map(_.headOption.filter(_.revokedAt.isEmpty))
 
-  /** Writes the admin row if it is missing and replaces it if the configured token changed.
-    *
-    * Seeded from the environment rather than generated, for two reasons. A generated token has to
-    * be shown, and the only channel at startup is the log — which is CloudWatch, the last place a
-    * credential with every scope belongs. And this database is known to lose data: with a seeded
-    * admin, recovery is a restart that re-creates the same row and leaves every `.mcp.json` still
-    * working; with a generated one, every loss would lock out every operator at once.
+  /** Writes the admin row if it is missing and replaces it if the configured token changed. Answers
+    * whether anything was written.
     */
   def seedAdmin(token: String, name: String): ZIO[QuillSqlite, String, Boolean] = ZIO
     .serviceWithZIO[QuillSqlite]: quill =>
@@ -130,8 +117,7 @@ object Tokens:
                   _.tokenSha256 -> lift(digest),
                   _.name        -> lift(name),
                   _.scopes      -> lift(render(Auth.AllScopes)),
-                  // Rotation un-revokes: the admin is how a deployment recovers, and leaving it
-                  // revoked would make the recovery path the one thing that cannot be recovered.
+                  // Rotation un-revokes the admin row.
                   _.revokedAt -> lift(Option.empty[String])
                 )).orDie.flatMap(Writes.expectOne(_, "Rotating the admin token")).as(true)
             case None =>
@@ -171,8 +157,8 @@ object Tokens:
     import quill.*
     run(byId(lift(id))).orDie.map(_.headOption)
 
-  /** Soft, because `created_by` points at it from every token it minted. Deleting would orphan that
-    * record exactly when someone is working out why those tokens exist.
+  /** Soft: sets `revoked_at` and keeps the row, which `created_by` points at from every token it
+    * minted.
     */
   def revoke(id: String): ZIO[QuillSqlite, String, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*

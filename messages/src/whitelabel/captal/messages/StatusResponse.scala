@@ -8,11 +8,8 @@ import whitelabel.captal.core.application.Phase
 
 /** @param secondsRemaining
   *   server-computed seconds left of the granted access, present only while `phase == Authorized`.
-  *
-  * The client uses this rather than deriving it from `accessExpiresAt`, so its countdown never
-  * depends on the device clock. That matters here more than in a normal web app: this is a captive
-  * portal, so the device has had no internet yet and may not have synced NTP — a phone that just
-  * booted can be minutes off.
+  *   The client must count down from this and not from `accessExpiresAt`: behind a captive portal
+  *   the device clock may be unsynced.
   */
 final case class StatusResponse(
     phase: Phase,
@@ -21,13 +18,8 @@ final case class StatusResponse(
     secondsRemaining: Option[Int] = None)
 
 object StatusResponse:
-  /** Seconds left until `expiresAt`, floored at zero. `None` when there is no expiration.
-    *
-    * `Int` rather than `Long`, which is the same number on the wire and a different one in the
-    * browser: Scala.js has no 64-bit integers, so every `Long` is emulated with a pair of 32-bit
-    * ones and the emulation is 44 KB of the bundle. A grant measured in seconds has no use for the
-    * range — `Int` reaches 68 years — so the ceiling below is a formality, not a limit anyone can
-    * hit.
+  /** Seconds left until `expiresAt`, floored at zero and capped at `Int.MaxValue`. `None` when
+    * there is no expiration. Keep it `Int`, not `Long`: Scala.js has no native 64-bit integers.
     */
   def secondsRemainingFrom(expiresAt: Option[Instant], now: Instant): Option[Int] = expiresAt.map:
     at =>

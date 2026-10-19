@@ -13,28 +13,18 @@ import zio.http.*
 
 import QuillArrow.->
 
-/** Plain HTTP for the pages this server renders, mounted beside the MCP endpoint.
+/** Plain HTTP for the pages this server renders, mounted under `/ui` beside the MCP endpoint so the
+  * root stays the protocol's.
   *
-  * Under `/ui` so the root stays the protocol's. This route is not MCP and deliberately so: a
-  * secret that travels as a tool argument is recorded by the host and replayed into the model's
-  * context, and the only way to keep it out of both is to let the page talk to this server directly
-  * — the same move the upload page makes when it PUTs a file to S3 rather than sending it over
-  * JSON-RPC.
-  *
-  * Being outside the protocol puts it outside the protocol's authentication too, which is what
-  * [[UiTicket]] replaces. The ticket is not a credential of its own: it is minted only for a caller
-  * that already presented an operator token carrying `content:write`, it names one location, and it
-  * expires in minutes.
+  * Not MCP: it is how a secret reaches this server without travelling as a tool argument, which the
+  * host records and replays into the model's context. Being outside the protocol puts it outside
+  * the protocol's authentication too, and [[UiTicket]] is what stands in for it.
   */
 object UiRoutes:
   val UnifiPath: String = "/ui/unifi"
 
-  /** What is stored for a location, minus the token.
-    *
-    * Here rather than beside the page because the page no longer receives it — it is an App now and
-    * reads everything from the result of the call that opened it. This is the read
-    * `configure_unifi` reports and `get_unifi_config` answers with, kept in one place so the two
-    * cannot disagree.
+  /** What is stored for a location, minus the token: the read `configure_unifi` reports and
+    * `get_unifi_config` answers with, kept in one place so the two cannot disagree.
     */
   final case class UnifiSettings(
       slug: String,
@@ -51,8 +41,7 @@ object UiRoutes:
     query[LocationRow].filter(_.slug == slugParam)
 
   /** Blank means "leave it alone", which is what lets the page render without the token it will
-    * never read back. A field the operator clears is therefore not a way to unset a value — that
-    * would make an accidental empty submission destructive, and unsetting is not what this is for.
+    * never read back. A field the operator clears is not a way to unset a value.
     */
   private def field(form: Form, name: String): Option[String] = form
     .get(name)
@@ -60,10 +49,8 @@ object UiRoutes:
     .map(_.trim)
     .filter(_.nonEmpty)
 
-  /** The page lives in a sandboxed iframe, so its origin is opaque and every request from it is
-    * cross-origin. `*` is safe here precisely because the ticket is the authorization: there is no
-    * cookie or header the browser would attach on its own, so a page on another origin gains
-    * nothing by being allowed to call this — it would still need a ticket this server minted.
+  /** A plain-text response with `Access-Control-Allow-Origin: *`, which the sandboxed iframe's
+    * opaque origin needs and the ticket — not the origin — is what authorizes.
     */
   private def text(status: Status, body: String): Response = Response(
     status = status,
@@ -72,8 +59,8 @@ object UiRoutes:
         Headers(Header.AccessControlAllowOrigin.All),
     body = Body.fromString(body))
 
-  /** Parsed rather than accepted as-is, so a typo lands as a message on the page instead of a
-    * column that silently stops `UnifiAccess.fromRow` from building.
+  /** A positive int or nothing: parsed rather than accepted as-is, so a typo lands as a message on
+    * the page instead of a column that stops `UnifiAccess.fromRow` from building.
     */
   private def number(form: Form, name: String, label: String): Either[String, Option[Int]] =
     field(form, name) match
@@ -82,9 +69,7 @@ object UiRoutes:
       case Some(raw) =>
         raw.toIntOption.filter(_ > 0).map(Some(_)).toRight(s"$label debe ser un número positivo.")
 
-  /** Shared with `configure_unifi`, so the page is filled from the same read the tool reports — a
-    * resource and the tool that answers the same question cannot drift apart.
-    */
+  /** Shared with `configure_unifi`, so the page is filled from the same read the tool reports. */
   private[mcp] def currentFor(slug: String): ZIO[QuillSqlite, String, UnifiSettings] = ZIO
     .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
@@ -114,8 +99,8 @@ object UiRoutes:
       row    <- ZIO.succeed(rows.headOption).someOrFail(s"La location '$slug' ya no existe.")
       host   <- ZIO.fromOption(field(form, "host")).orElseFail("Falta el host.")
       siteId <- ZIO.fromOption(field(form, "siteId")).orElseFail("Falta el site id.")
-      // Kept when the field is blank, which is how the page avoids ever rendering it back. A
-      // location with no token yet has nothing to keep, so there the field is genuinely required.
+      // Kept when the field is blank, which is how the page avoids ever rendering it back; a
+      // location with no token stored yet has nothing to keep, so there the field is required.
       token <- ZIO
         .fromOption(field(form, "apiToken").orElse(row.unifiApiToken))
         .orElseFail("Falta el API token.")
@@ -135,8 +120,7 @@ object UiRoutes:
             _.updatedAt            -> lift(now)
           )).orDie
       _ <- Writes.expectOne(affected, s"Configurando UniFi para '$slug'")
-    // Says what changed without saying what it changed to. This body is shown on the page, and
-    // the operator is the one person who already knows the value.
+    // Says what changed without saying what it changed to: this body is shown on the page.
     yield s"Listo. '$slug' queda configurada contra $host."
     end for
 

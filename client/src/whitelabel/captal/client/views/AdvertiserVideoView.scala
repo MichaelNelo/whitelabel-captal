@@ -15,15 +15,12 @@ import whitelabel.captal.core.application.commands.NextVideo
 import whitelabel.captal.messages.VideoResponse
 
 object AdvertiserVideoView:
-  // A cap on the intro. If `canplaythrough` has not arrived within this window we start anyway —
-  // the indeterminate bar kept moving, but the user does not wait forever.
+  // A cap on the intro: if `canplaythrough` has not arrived within this window, playback starts
+  // anyway.
   private val IntroTimeoutMs = 3000
 
   /** How long the intro takes to dissolve, and how long it stays mounted after being told to go.
-    *
-    * Must match `--video-intro-out` in styles.css: the CSS runs the fade and this decides when the
-    * element is removed, so a shorter value here cuts the transition off mid-way and a longer one
-    * leaves an invisible overlay swallowing clicks.
+    * Must match `--video-intro-out` in styles.css, which runs the fade.
     */
   private val IntroFadeMs = 400
 
@@ -38,8 +35,8 @@ object AdvertiserVideoView:
     // What unmounts the intro: `showIntro=false` once canPlay && minTimeReached.
     val canPlay: Var[Boolean] = Var(false)
     val minTimeReached: Var[Boolean] = Var(false)
-    // Set first, and `showIntro` only once the fade has run. Two flags because an element cannot
-    // transition and be unmounted in the same frame — removing it is what the transition is for.
+    // Set first, and `showIntro` only once the fade has run: an element cannot transition and be
+    // unmounted in the same frame.
     val introLeaving: Var[Boolean] = Var(false)
 
     def onMount(el: Div): Unit =
@@ -59,22 +56,15 @@ object AdvertiserVideoView:
               el.classList.remove("controls-visible"))
 
     // The player and the intro overlay coexist. The `<video>` mounts as soon as there is data and
-    // NEVER changes parent — one mount, one network request. The intro is an overlay on top that
-    // unmounts when `showIntro=false`. The player used to be built imperatively and appendChild'd
-    // on the wrapper's mount: Firefox restarted network activity on re-attach → two requests and a
-    // blink.
+    // must NEVER change parent — one mount, one network request. The intro is an overlay on top
+    // that unmounts when `showIntro=false`.
     div(
       onMountCallback(ctx => onMount(ctx.thisNode.ref.asInstanceOf[Div])),
       // canPlay + minTimeReached → the intro dissolves and the video starts. Both have to be true.
       //
-      // Playback begins here rather than at the player's mount, which is the only moment it can
-      // begin without being hidden: the element mounts behind the intro so it can buffer, and a
-      // video that also played there would be partly or entirely over by the time anyone saw it.
-      // Muted, so no gesture is needed to start it.
-      //
-      // It starts as the fade starts, not after. The video is already moving while the intro
-      // dissolves, so what shows through is the film rather than a frozen first frame — and the
-      // handoff reads as one motion instead of a cut.
+      // Playback begins here, not at the player's mount: the element mounts behind the intro only
+      // to buffer. It starts as the fade starts, so the film shows through the dissolve, and it is
+      // muted, so no user gesture is needed.
       canPlay
         .signal
         .combineWith(minTimeReached.signal)
@@ -150,15 +140,8 @@ object AdvertiserVideoView:
     * view: the ring adopts from the nav-loader, runs `ringOut` on `.loaded-state`, and the content
     * fades in staggered through `.view-content.visible > :nth-child`.
     *
-    * `.video-intro` is what makes it a layer over the player, and dropping it when the `Layout`
-    * went in is what put both on screen at once. The player is `position: fixed; inset: 0`, so
-    * without a fixed, opaque sibling above it the intro simply rendered on top of a visible video —
-    * and with a video shorter than `IntroTimeoutMs`, the whole thing played out behind the card
-    * before it was dismissed.
-    *
-    * The wrapper is only about stacking. The `<video>` is this element's sibling, mounted as soon
-    * as there is data and never re-parented, so it keeps preloading underneath exactly as it does
-    * now — which was the point of moving to `Layout` and is not affected by putting the class back.
+    * `.video-intro` is what makes it a layer over the player: the player is `position: fixed;
+    * inset: 0`, so the intro needs a fixed, opaque sibling above it to cover the video.
     */
   private def renderIntroCard(
       videoDataS: Signal[Option[NextVideo]],
@@ -214,9 +197,7 @@ object AdvertiserVideoView:
           containerRef.now().foreach(_.classList.toggle("controls-visible"))
       },
       // A Laminar-managed `<video>`: it mounts exactly once, and the mount itself starts the
-      // download (`preload=auto`). Since the parent never changes there is no re-fetch. Listeners
-      // and autoplay are set on mount; `canPlay.set(true)` on `canplaythrough` tells the intro the
-      // video is ready to play.
+      // download (`preload=auto`). `canplaythrough` sets `canPlay`, which releases the intro.
       videoTag(
         cls                                      := "video-hero-video",
         src                                      := video.videoUrl,
@@ -237,10 +218,8 @@ object AdvertiserVideoView:
           v.addEventListener(
             "error",
             (_: dom.Event) => ErrorHandler.escalateMessage(s"Video load failed: ${v.currentSrc}"))
-          // Deliberately does not play here. `preload = "auto"` is what fills the buffer, and that is
-          // the whole reason this element mounts behind the intro; playing as well meant the video
-          // ran underneath an opaque card, and anything shorter than `IntroTimeoutMs` was over before
-          // the card was dismissed. Playback starts in `render`, when the intro goes.
+          // Deliberately does not play here: `preload = "auto"` fills the buffer while the intro
+          // covers the element, and playback starts in `render`, when the intro goes.
         }
       ),
       renderControls(isPlaying, videoRef, containerRef, isFullscreen, videoCompleted)
@@ -412,8 +391,7 @@ object AdvertiserVideoView:
   )
 
   /** The metadata request to the backend, and nothing else. Once `videoData` is set, Laminar's
-    * `<video>` element mounts and starts the preload on its own — from there a single download
-    * under one mount, with no re-attach between parents, which is what caused the second request.
+    * `<video>` element mounts and starts the preload on its own.
     */
   private def loadNextVideo(videoData: Var[Option[NextVideo]], showIntro: Var[Boolean]): Unit =
     Runtime.run:

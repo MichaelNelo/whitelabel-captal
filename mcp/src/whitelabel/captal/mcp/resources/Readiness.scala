@@ -266,8 +266,6 @@ object Readiness:
   val tool: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("get_location_readiness")
     .description(
       "What a location still needs before it is worth deploying: translation gaps per locale, branding, videos, and the advertisers available to draw from. Ends with the next steps in the order worth doing them. Read it between steps rather than tracking the state yourself — every tool writes immediately, so there is no commit step and stopping part way leaves nothing broken.")
-    // Meant to be called repeatedly, between every step. An approval each time would make the
-    // advice it gives — re-read rather than track the state yourself — not worth following.
     .readOnly
     .handle: (in: ReadinessRequest) =>
       of(in.slug.trim)

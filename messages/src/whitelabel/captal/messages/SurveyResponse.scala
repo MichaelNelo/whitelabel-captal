@@ -7,15 +7,8 @@ import whitelabel.captal.core.application.commands.NextIdentificationSurvey
 /** What the identification-survey endpoints answer with: the next question or the phase that
   * follows.
   *
-  * Split out of a file that held it beside the tapir `Schema` instances. The client uses this type
-  * in thirteen places and had no use for tapir, so sharing a file with it meant the browser build
-  * compiled against tapir to satisfy declarations it never reads. The server's `Schema` is in
-  * `api.wire`.
-  *
-  * The discriminator was written and read by hand, flattening each case's payload into the same
-  * object rather than nesting it under a key. That is what a zio-schema `Schema` cannot describe,
-  * so both sides are derived now — see `VideoResponse`, which made the same move for the same
-  * reason.
+  * Its server-side `Schema` lives in `api.wire`; both codecs below are derived, so the payload
+  * nests under the case name rather than being flattened beside a discriminator.
   */
 enum SurveyResponse:
   case Survey(data: NextIdentificationSurvey)

@@ -10,8 +10,8 @@ import whitelabel.captal.platform.{AdvertiserRow, RqliteDataSource}
 import zio.*
 import zio.test.*
 
-/** `advertisers` has no unique constraint at all, so everything these tools promise about identity
-  * is enforced in Scala. These exercise that, against a real rqlite instance.
+/** AdvertiserTools exercised against a real rqlite instance. Identity rules are enforced in Scala,
+  * not by table constraints.
   */
 object AdvertiserToolsSpec extends ZIOSpecDefault:
 
@@ -55,12 +55,10 @@ object AdvertiserToolsSpec extends ZIOSpecDefault:
           stored <- rows
         yield assertTrue(
           !first.isError.contains(true),
-          // The table has no unique index; only the Scala check stands between this and a duplicate.
           second.isError.contains(true),
           textOf(second).contains("already exists"),
           stored.size == 1,
-          stored.head.priority == 10
-        )
+          stored.head.priority == 10)
       ,
       test("a negative priority is refused before it reaches the database"):
         for
@@ -125,8 +123,7 @@ object AdvertiserToolsSpec extends ZIOSpecDefault:
           stored.head.isActive == 0,
           // Hidden from the default listing once retired.
           !textOf(listed).contains(id))
-      // No migration layer. `mcp.test` lays the schema down once before forking — see
-      // `migratedRqliteUrl` in build.mill. A Flyway run per spec raced, and since V22 rebuilds a
-      // table the race deleted it.
+      // No migration layer: `mcp.test` lays the schema down once before forking — see
+      // `migratedRqliteUrl` in build.mill.
     ).provideShared(quillLayer) @@ TestAspect.sequential
 end AdvertiserToolsSpec

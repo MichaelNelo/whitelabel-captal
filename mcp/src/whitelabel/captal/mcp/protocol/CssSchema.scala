@@ -90,11 +90,7 @@ object CssSchema:
     "--icon-size-md" -> "The brand icon where it appears smaller.",
     "--control-size" ->
       "Radio and checkbox size. Below about 18px they become hard to hit on a phone.",
-    // `--loader-ring-gap` and `--loader-ring-width` were described here and are gone from the
-    // stylesheet: they belonged to a spinning ring that was dropped, and nothing read them. They
-    // are the case this map cannot catch on its own — the names and defaults are derived from the
-    // declarations, so a variable that is declared and unread still appears, and only the prose
-    // can say so. Which is why these two read as "still named ring, no longer a ring".
+    // Variables exist but are unread: the map catches only declared-and-read pairs.
     "--loader-ring-out" ->
       "First half of --loader-handoff: how long the waiting state takes to leave. Named for a ring that no longer exists; the waiting animation is now `breathe` on the icon itself.",
     "--loader-settle" ->

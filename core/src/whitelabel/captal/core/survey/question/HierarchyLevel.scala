@@ -1,8 +1,7 @@
 package whitelabel.captal.core.survey.question
 
-/** Hierarchy level for location questions.
-  *
-  * Order is strict: State -> City -> Municipality -> Urbanization
+/** Hierarchy level for location questions. The order is strict: State -> City -> Municipality ->
+  * Urbanization.
   */
 enum HierarchyLevel(val order: Int):
   case State        extends HierarchyLevel(1)

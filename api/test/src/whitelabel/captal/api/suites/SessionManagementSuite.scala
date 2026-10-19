@@ -55,12 +55,11 @@ object SessionManagementSuite:
             _               <- postEmailAnswer(backend, firstCookie, "returning@example.com")
             userCountBefore <- TestFixtures.countUsersByEmail(testEmail)
             existingUser    <- TestFixtures.getUserByEmail(testEmail)
-            // Simulate "lost session" - create new session
-            secondCookie   <- createSession(backend)
-            _              <- getNextSurvey(backend, secondCookie)
-            _              <- postEmailAnswer(backend, secondCookie, "returning@example.com")
-            userCountAfter <- TestFixtures.countUsersByEmail(testEmail)
-            session        <- TestFixtures.getSession(user.SessionId.unsafe(secondCookie))
+            secondCookie    <- createSession(backend)
+            _               <- getNextSurvey(backend, secondCookie)
+            _               <- postEmailAnswer(backend, secondCookie, "returning@example.com")
+            userCountAfter  <- TestFixtures.countUsersByEmail(testEmail)
+            session         <- TestFixtures.getSession(user.SessionId.unsafe(secondCookie))
           yield assertTrue(
             userCountBefore == 1L,
             userCountAfter == 1L,

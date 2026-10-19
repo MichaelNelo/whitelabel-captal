@@ -15,9 +15,7 @@ import whitelabel.captal.client.views.{
 }
 import whitelabel.captal.core.application.Phase
 
-/** Closed hierarchy of SPA routes. Scala 3 enum (not `sealed trait`) to match the project
-  * convention for finite enumerations.
-  */
+/** Closed hierarchy of SPA routes. */
 enum Page:
   case Welcome
   case IdentificationQuestion
@@ -27,9 +25,7 @@ enum Page:
   case Error
 
 object Router:
-  /** Slug-aware base path. In production the SPA is served from `/<slug>/index.html`, so all routes
-    * need that prefix; in dev the SPA runs at `/`, no prefix.
-    */
+  /** Slug-aware base path: `/<slug>` in production, empty in dev where the SPA runs at `/`. */
   private val basePath: String =
     val firstSegment = dom.window.location.pathname.split("/").find(_.nonEmpty)
     firstSegment match
@@ -122,20 +118,16 @@ object Router:
         }
       )
 
-  /** Sync router with server-side phase. Skips `pushState` when the router already sits on the
-    * target page — otherwise, a view that polls its own phase (e.g. `ReadyView.callFinish` while
-    * UniFi keeps returning Ready) re-hits `pushState(SamePage)` every response. Waypoint's
-    * `currentPageSignal` re-emits on every pushState even for the same page (not deduped), which
-    * makes the SplitRender's cached view swap out and back in — `onMountCallback` fires again, the
-    * API call fires again, the loader ring restarts. The check breaks the loop at its source.
+  /** Sync router with server-side phase. Must skip `pushState` when already on the target page:
+    * Waypoint's `currentPageSignal` re-emits on every pushState, remounting the cached view.
     */
   def syncWithPhase(phase: Phase): Unit =
     val targetPage = phaseToPage(phase)
     if router.currentPageSignal.now() != targetPage then
       router.pushState(targetPage)
 
-  /** Navigate to the centralized error page. Sits outside the phase machine — call this from
-    * `ErrorHandler.escalate` when an unexpected API or runtime failure occurs.
+  /** Navigate to the centralized error page. Sits outside the phase machine; called from
+    * `ErrorHandler.escalate`.
     */
   def navigateToError(): Unit = router.pushState(Page.Error)
 
@@ -156,22 +148,13 @@ object Router:
       case Phase.Authorized =>
         Page.Welcome // WelcomeView detects Authorized phase + countdown
 
-  /** Each route behind its own dynamic import, so a view and the API it calls travel in their own
-    * chunk and arrive when the route does.
+  /** Wraps one route's view in the stable element slot `collectStatic` requires. The `route-slot`
+    * class carries `display: contents` in styles.css, keeping the wrapper out of the layout tree.
     *
-    * `js.dynamicImport` has to be written here rather than passed in from a helper: the split point
-    * is where the expression appears, so handing the view to a by-name parameter would build the
-    * closure outside and leave everything reachable from the main module.
-    *
-    * `collectStatic` takes its argument by name, which is what keeps these from all firing at
-    * startup — the import begins when the route is first rendered.
-    */
-  /** `SplitRender.collectStatic` demands a stable `HtmlElement` slot per route, and Laminar can
-    * only bind a dynamic `child <--` inside a parent — hence the wrapper div. It ends up between
-    * `.app-root` (`display: flex`) and the view's `.app-layout` (`grid`, `max-width`), and without
-    * a rule of its own it inherits neither's layout contract: `.app-layout`'s `max-width` doesn't
-    * center and `min-height: 100%` resolves against an auto-height parent. The `route-slot` class
-    * carries `display: contents` in styles.css so the wrapper becomes invisible to the layout tree.
+    * `js.dynamicImport` must be written at the `collectStatic` call site, not inside this helper:
+    * the split point is where the expression appears, and a closure built outside leaves the view
+    * reachable from the main module. `collectStatic` takes its argument by name, so the import
+    * begins when the route is first rendered rather than at startup.
     */
   private def lazily(view: => js.Promise[HtmlElement]): HtmlElement = div(
     cls := "route-slot",

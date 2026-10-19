@@ -14,23 +14,16 @@ import zio.*
 
 /** Post-commit event handler that mirrors the guest-access lifecycle onto the UniFi controller.
   *
-  * Handles both ends of the lifecycle symmetrically:
-  *
   *   - [[whitelabel.captal.core.user.Event.UserFinishedProcess]] → `AUTHORIZE_GUEST_ACCESS`, and on
   *     success marks the session `Phase.Authorized` with `expiresAt = occurredAt +
   *     defaultDurationMinutes`.
-  *   - [[whitelabel.captal.core.user.Event.AccessExpired]] → `UNAUTHORIZE_GUEST_ACCESS`, which per
-  *     the Integration v1 spec also disconnects the client. No session write here: the
-  *     transactional [[SessionExpirationHandler]] already reset the row before this runs.
+  *   - [[whitelabel.captal.core.user.Event.AccessExpired]] → `UNAUTHORIZE_GUEST_ACCESS`, which also
+  *     disconnects the client. No session write here: the transactional
+  *     [[SessionExpirationHandler]] already reset the row before this runs.
   *
   * The HTTP mechanics live in [[whitelabel.captal.platform.UnifiClient]]; this is only the event
-  * adapter. Lives outside the transactional chain (composed via `.andThen` after the transaction
-  * commits) so HTTP failures don't roll back DB writes.
-  *
-  * Failure behaviour is the same on both branches — log and skip:
-  *   - Authorize failing leaves the session in `Phase.Ready`, so `/api/finish` retries seamlessly.
-  *   - Revoke failing is already absorbed: the reset is committed, so the session is back at
-  *     `Welcome` regardless, and the UCG expires the voucher on its own `timeLimitMinutes`.
+  * adapter. It must stay outside the transactional chain (composed via `.andThen`, so it runs after
+  * the commit). Both branches log and skip on failure.
   */
 object UnifiAccessHandler:
 
@@ -59,7 +52,7 @@ object UnifiAccessHandler:
             ZIO.unit
 
       /** Shared guard: with no UniFi config (dev, tests, locations without a controller) it logs
-        * and moves on, which has always been this handler's convention.
+        * and moves on.
         */
       private def withConfig(action: String)(body: UnifiAccess => Task[Unit]): Task[Unit] =
         unifi match
@@ -80,9 +73,9 @@ object UnifiAccessHandler:
                   s"UniFi authorize failed for session ${session.sessionId.asString}: ${error
                       .getMessage}")
               case Right(_) =>
-                // The only place an authorization is born, hence the scheduler's only producer.
-                // What gets enqueued is data, not an effect: that is what lets startup rehydration
-                // rebuild the very same job by reading `sessions`.
+                // The only place an authorization is born, and so the scheduler's only producer.
+                // What gets enqueued is data, not an effect, so startup rehydration can rebuild
+                // the same job by reading `sessions`.
                 sessionService.setAuthorized(session.sessionId, expiresAt) *>
                   jobQueue.schedule(
                     ScheduledAt(expiresAt, ScheduledJob.ExpireAccess(session.sessionId))) *>

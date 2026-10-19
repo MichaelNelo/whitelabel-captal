@@ -36,13 +36,9 @@ object VideoRepositoryQuill:
     .headOption
     .map(t => LocalizedText(t.value, t.locale))
 
-  /** The first promo video in rotation order.
-    *
-    * The type arrives as a parameter rather than being written into the quote: `videoType` is the
-    * `VideoType` enum now, and an enum value reaches a query through `lift` — which the
-    * object-level quotes in this file cannot call. Same shape as
-    * `SessionService.pendingExpirationsQuery`, which takes `Phase.Authorized` the same way. The
-    * parameter is always `VideoType.Promo`; the name says so.
+  /** The first promo video in rotation order. `promoParam` is always `VideoType.Promo`, passed as a
+    * parameter because an enum reaches a query through `lift`, which an object-level quote cannot
+    * call.
     */
   inline def firstPromoQuery = quote: (promoParam: VideoType) =>
     query[AdvertiserVideoRow]
@@ -95,12 +91,7 @@ object VideoRepositoryQuill:
           .map(_.headOption.map(toAdvertiserVideo))
           .orDie
 
-      /** Advertiser video first, promo second.
-        *
-        * The promo is the venue's own content and exists so the visitor is not sent onward with
-        * nothing to watch when no advertiser video qualifies — every advertiser video has been
-        * seen, or none has a question left to ask.
-        */
+      /** Advertiser video first, then the venue's own promo when no advertiser video qualifies. */
       def findNextForUser(userId: user.Id): Task[Option[VideoToWatch]] =
         for
           sessionData <- ctx.getOrFail
@@ -111,8 +102,8 @@ object VideoRepositoryQuill:
               case Some(_) =>
                 ZIO.succeed(ad)
               case None =>
-                // The cursor is read here rather than passed in: it lives on the session row, and
-                // SessionVideoHandler advances it whenever a promo is watched.
+                // The promo cursor lives on the session row; SessionVideoHandler advances it
+                // whenever a promo is watched.
                 findNextPromo(sessionData.lastPromoVideoId, locale)
         yield result
 
@@ -174,9 +165,8 @@ object VideoRepositoryQuill:
           priority: Int,
           createdAt: String): Task[List[AdvertiserVideoRow]] = run(
         query[AdvertiserVideoRow]
-          // `lift` on the status, unlike the quotes above. Quill folds an `inline val` inside a
-          // quoted `inline def` but not inside a `run` written out here — there it reports a
-          // variable originating outside the quote.
+          // `lift` on the status, unlike the quotes above: Quill folds an `inline val` inside a
+          // quoted `inline def` but not inside a `run` written out here.
           .filter(v => v.status == lift(VideoStatus.Active) && v.videoType == lift(VideoType.Promo))
           .filter(v =>
             v.priority > lift(priority) ||

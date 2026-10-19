@@ -28,11 +28,9 @@ object AdvertiserSurveyRoutes:
 
 end AdvertiserSurveyRoutes
 
-/** The one question asked about the advertiser's video, and the answer to it.
-  *
-  * Both start by reading `currentVideoId` off the session rather than from the request: the
-  * question belongs to the video this session was shown, and a request cannot be allowed to name a
-  * different one.
+/** The one question asked about the advertiser's video, and the answer to it. Both routes read
+  * `currentVideoId` off the session, never from the request: the question belongs to the video this
+  * session was shown.
   */
 final class AdvertiserSurveyRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
   import AdvertiserSurveyRoutes.*

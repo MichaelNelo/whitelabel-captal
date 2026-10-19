@@ -133,26 +133,8 @@ object ApiError:
   def fromThrowable(cause: Throwable): ApiError = ApiError.InternalError(
     Option(cause.getMessage).getOrElse("Unknown error"))
 
-  /** Derived, both directions, which is the point rather than a tidying.
-    *
-    * These were written by hand and separately: an `Encoder.instance` matching on the ADT, and a
-    * `Decoder.instance` matching on a `String` with a catch-all. The compiler forces the first to
-    * cover every variant — a non-exhaustive match on an enum is an error — and cannot say anything
-    * about the second, because a match on a string with a default is always exhaustive. So the
-    * encoder grew with the type thirty-two times and the decoder stayed at nine, and the catch-all
-    * turned the gap into a plausible value instead of a failure:
-    *
-    * case other => Right(InternalError(s"Unknown error type: $other"))
-    *
-    * Twenty-two variants — every validation error the API can answer with — came back to the
-    * browser as `InternalError("Unknown error type: text_too_short")`, and `ErrorHandler` sends
-    * that to the error screen. A guest whose answer the server rejected for a reason the client
-    * could have shown got dropped out of the flow instead.
-    *
-    * Derivation makes that unrepresentable: there is one description of the shape and both
-    * directions come from it. The wire format changes with it — the hand-written pair wrote
-    * `{"error":"wrong_phase","data":{…}}` and this writes circe's derived shape — which is what
-    * `WireContractSuite` pins against the zio-schema side.
+  /** Derived both directions, so neither can drift from the enum. The wire format is circe's
+    * derived shape, which `WireContractSuite` pins against the zio-schema side.
     */
   given Encoder[ApiError] = Encoder.AsObject.derived
   given Decoder[ApiError] = Decoder.derived

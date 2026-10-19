@@ -16,19 +16,11 @@ import whitelabel.captal.mcp.tools.{
 }
 import zio.test.*
 
-/** Asserts against the resources as a host would see them — definition plus body — rather than
-  * against the loader internals, so a packaging mistake (skills missing from the jar, a wrong
-  * resource path) fails here rather than at runtime in front of an operator.
+/** Asserts against the resources as a host would see them — definition plus body — so a packaging
+  * mistake (skills missing from the jar, a wrong resource path) fails here rather than at runtime.
   */
 object CaptalMcpSpec extends ZIOSpecDefault:
-  /** 12, down from 14. `yaml-reference` documented the directory layout and the YAML schema;
-    * `deploy-shared` documented `captal shared push`. Both described things that no longer exist,
-    * and a skill describing a deleted feature is worse than a missing one — the model follows it.
-    *
-    * A bare count rather than a list of slugs: this catches a packaging mistake, which is what the
-    * suite is for. It cannot catch staleness, and the remaining twelve still need rewriting around
-    * tools instead of files.
-    */
+  /** A bare count rather than a list of slugs: it catches a packaging mistake, not staleness. */
   private val ExpectedSkillCount = 12
 
   def spec =
@@ -103,20 +95,16 @@ object CaptalMcpSpec extends ZIOSpecDefault:
         test("point at the tools rather than inlining anything"):
           val bodies = Skills.all.map(_.body)
           assertTrue(
-            // Loaded in every conversation before any schema, so it stays an index. The skill
-            // bodies are 1937 lines; none of them belongs here.
+            // Loaded in every conversation before any schema, so it stays an index.
             bodies.forall(b => !CaptalMcp.instructions.contains(b)),
             CaptalMcp.instructions.length < 2000,
-            // The catalogue moved to read_skill's description, where it sits against the thing
-            // that can act on it.
+            // The catalogue lives in read_skill's description.
             CaptalMcp.instructions.contains("read_skill"),
             CaptalMcp.instructions.contains("get_location_readiness")
           )
         ,
-        // The instructions used to order two things this server cannot deliver on its own: read a
-        // `skill://` resource, and re-run a prompt. A host decides whether a model ever sees a
-        // resource, and a prompt is invoked by the operator — so both read as impossible to a
-        // model that only has tools. Every capability named here has to be one it can reach.
+        // A host decides whether a model ever sees a resource, and a prompt is invoked by the
+        // operator, so every capability the instructions name has to be one the model can reach.
         test("never instruct the model to read a resource or run a prompt"):
           val text = CaptalMcp.instructions
           assertTrue(
@@ -150,12 +138,8 @@ object CaptalMcpSpec extends ZIOSpecDefault:
             List("slug", "locale", "entries").forall(f => props.get.get(f).isDefined))
         ,
         test("the write tool points the reader at the derived key list"):
-          // Without this the operator has no way to learn which keys are legal, and the tool would
-          // reject their input with nowhere to go next.
-          //
-          // It used to name `i18n://required-keys`. The list is still published there, but a
-          // resource is reachable only if the host chooses to pass it on — so what a tool tells its
-          // caller to read next has to be another tool.
+          // What a tool tells its caller to read next has to be another tool, since a resource is
+          // reachable only if the host passes it on.
           assertTrue(
             I18nTools.setTranslations.definition.description.exists(_.contains("get_i18n_schema")),
             I18nTools
@@ -165,12 +149,7 @@ object CaptalMcpSpec extends ZIOSpecDefault:
           )
       ),
       test("the asset tools declare what they need"):
-        // Not exercised against S3 here: that would need a bucket and a distribution. What is worth
-        // pinning is the contract — writes are scoped, reads are not, and the stylesheet tool names
-        // what an operator has to read before rewriting one.
-        //
-        // It used to name `skill://style-reference/SKILL.md`, a URI whose reader may never be able
-        // to open it. The reference it points at now is a tool call.
+        // Not exercised against S3 here: that would need a bucket and a distribution.
         assertTrue(
           List(AssetTools.setStyles, AssetTools.setIcon).forall(
             _.requiredScopes == Set(Auth.ContentWrite)),
@@ -182,10 +161,8 @@ object CaptalMcpSpec extends ZIOSpecDefault:
         )
       ,
       test("every published question variant names the tag the decoder demands"):
-        // The document and the decoder are two readings of one `Schema`. The SDK's renderer read
-        // fewer annotations than the codec, so the published contract was a strict subset of the
-        // enforced one — silently. This asserts the two agree on the discriminator, per variant,
-        // by going to the codec for the expected value rather than to a transcribed list.
+        // The document and the decoder are two readings of one `Schema`; the expected tags come
+        // from the codec rather than from a transcribed list.
         def variantsOf(schema: zio.json.ast.Json): List[zio.json.ast.Json] =
           schema match
             case zio.json.ast.Json.Obj(fields) =>
@@ -225,9 +202,7 @@ object CaptalMcpSpec extends ZIOSpecDefault:
               Nil
 
         // What the codec puts on the wire for one instance of each case, which is the authority.
-        // No `rating`: `QuestionType.Rating` still exists in core so stored rows decode, but the
-        // portal renders it as the literal "Rating input - TODO", so there is no way to ask for a
-        // new one here.
+        // No `rating`: it still decodes in core, but a new one cannot be asked for.
         val samples = List(
           AnswerFormat.Radio(Nil),
           AnswerFormat.Dropdown(Nil),
@@ -255,36 +230,30 @@ object CaptalMcpSpec extends ZIOSpecDefault:
 
         assertTrue(
           tagsOf(SurveyTools.createQuestion) == fromCodec,
-          // The same enum, nested inside an array of questions. The renderer reaches it wherever it
-          // sits, which the per-tool patch it replaced did not.
-          tagsOf(VideoTools.create) == fromCodec
-        )
+          // The same enum, nested inside an array of questions.
+          tagsOf(VideoTools.create) == fromCodec)
       ,
       test("a variant that rejects extra fields says so"):
-        // `@rejectExtraFields` was enforced by the decoder and absent from the document, which is
-        // how an `options` list sent to an `input` question was dropped without complaint and the
-        // question created with none. Every AnswerFormat case carries it.
+        // `@rejectExtraFields` has to reach the document and not only the decoder; every
+        // AnswerFormat case carries it.
         val rendered =
           (SurveyTools.createQuestion.definition.inputSchema: zio.json.ast.Json).toString
         val needle = """"additionalProperties":false"""
         assertTrue(rendered.split(needle).length - 1 == AnswerFormat.caseIds.size)
       ,
       test("the published schema keeps every description an operator needs"):
-        // The renderer changed; the guidance written for the operator must not have gone with it.
         val rendered =
           (SurveyTools.createQuestion.definition.inputSchema: zio.json.ast.Json).toString
         assertTrue(
           rendered.contains("Ask the operator for this; nothing else can supply it."),
           rendered.contains("Only for questions in a location survey; rejected elsewhere."),
           rendered.contains("Omit for email and url."),
-          // And must not have brought back the generated filler, which told an agent nothing.
+          // And not the generated filler.
           !rendered.contains("a list of LocalizedText")
         )
       ,
       test("output schemas come from the same renderer as the inputs"):
-        // McpOutput had the identical asymmetry: the encoder honours annotations the SDK's renderer
-        // drops. No tool returns a discriminated enum today, so this pins the property rather than
-        // a symptom — every published outputSchema must be what the shared renderer produces.
+        // Every published outputSchema must be what the shared renderer produces.
         val cases = List(
           SurveyTools.createQuestion ->
             McpSchema.fromSchema(summon[zio.schema.Schema[SurveyTools.CreateQuestionResponse]]),
@@ -298,8 +267,7 @@ object CaptalMcpSpec extends ZIOSpecDefault:
       ,
       test("a String-returning tool still answers as text, not wrapped"):
         // The generic given must not out-compete the SDK's `McpOutput[String]`, which returns no
-        // outputSchema and plain text content. Nothing returns String today; this is what would
-        // catch the shadowing reaching further than intended.
+        // outputSchema and plain text content.
         val plain = com
           .jamesward
           .ziohttp
@@ -310,9 +278,6 @@ object CaptalMcpSpec extends ZIOSpecDefault:
         assertTrue(plain.definition.outputSchema.isEmpty)
       ,
       test("every published property carries a description"):
-        // The schema is what an agent reads before asking the operator anything, so an undocumented
-        // field is a question asked badly or a value invented. Pinned rather than left to habit:
-        // this started at 31 of 137 inputs and 3 of 98 outputs documented.
         val tools: List[com.jamesward.ziohttp.mcp.McpToolHandlerR[?]] =
           LocationTools.all ++ I18nTools.all ++ AdvertiserTools.all ++ SurveyTools.all ++
             AssetTools.all ++ VideoTools.all
@@ -328,8 +293,8 @@ object CaptalMcpSpec extends ZIOSpecDefault:
                 .flatMap(_.toList)
                 .flatMap: (name, sub) =>
                   val documented = sub.asObject.exists(_.fields.exists(_._1 == "description"))
-                  // `kind` is synthesised by the generator to carry the discriminator; there
-                  // is no field in the Scala type to annotate, and its one-value enum says what it is.
+                  // `kind` is synthesised to carry the discriminator; there is no field in the
+                  // Scala type to annotate.
                   val exempt = name == "kind"
                   (
                     if documented || exempt then
@@ -362,24 +327,18 @@ object CaptalMcpSpec extends ZIOSpecDefault:
           .map(m => (m: zio.json.ast.Json).toString)
           .getOrElse("")
         assertTrue(
-          // Both, because a View is instantiated only by calling a tool that carries this. A
-          // resource a user opens is never rendered, so resume_video_upload without it would open
-          // nothing and the only way back to an abandoned upload would be creating a second video.
+          // Both, because a View is instantiated only by calling a tool that carries this; a
+          // resource a user opens is never rendered.
           metaOf(VideoTools.create).contains("ui://upload-video"),
           metaOf(VideoTools.resume).contains("ui://upload-video")
         )
       ,
       test("the upload page declares the origin it has to reach"):
-        // The host defaults `connect-src` to 'self'. Without this the page renders, the operator
-        // picks a file, and the browser blocks the PUT — `blocked:csp`, at the last possible
-        // moment, with nothing else in the server failing.
-        //
-        // Asserted on the resource and not on the tool, which is where this lived while it did
-        // nothing: `McpAppsToolMeta` has no field for a policy, so the host never read one there.
+        // The host defaults `connect-src` to 'self', and the policy has to sit on the resource:
+        // `McpAppsToolMeta` has no field for one, so the host never reads it off the tool.
         val origin = "https://captal-assets.s3.us-east-1.amazonaws.com"
-        // Distinct from the PUT origin on purpose: they land in different CSP directives —
-        // `connect-src` for the bucket, `script-src` for the CDN — and asserting with one value
-        // for both could not tell a swap from a correct policy.
+        // Distinct from the PUT origin on purpose: `connect-src` for the bucket, `script-src` for
+        // the CDN, so one value for both could not tell a swap from a correct policy.
         val scriptOrigin = "https://d111.cloudfront.net"
         val source = UploadUiSource(origin, scriptOrigin)
         def metaOf(definition: com.jamesward.ziohttp.mcp.ResourceDefinition) = definition
@@ -391,12 +350,11 @@ object CaptalMcpSpec extends ZIOSpecDefault:
         assertTrue(
           bare.contains("connectDomains"),
           bare.contains("captal-assets.s3.us-east-1.amazonaws.com"),
-          // Plain `text/html` describes a document to show; this one says the page is an app to
-          // render, and serving the former is what "There was a problem displaying content" was.
+          // Plain `text/html` describes a document to show; the profile says the page is an app to
+          // render.
           source.bareDefinition.mimeType.contains("text/html;profile=mcp-app"),
-          // The per-video pages carry the same policy as the bare one. They are listed from
-          // `EntityResources` and served from here, and a page listed with one policy and read
-          // with another is a PUT that works from one entry point and not the other.
+          // The per-video pages, listed from `EntityResources`, carry the same policy as the bare
+          // one.
           perVideo.contains("connectDomains"),
           perVideo.contains("captal-assets.s3.us-east-1.amazonaws.com")
         )

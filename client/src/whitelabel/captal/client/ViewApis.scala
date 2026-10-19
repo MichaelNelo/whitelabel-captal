@@ -17,18 +17,9 @@ import whitelabel.captal.messages.{
   VideoWatchedResponse
 }
 
-/** The API, grouped by which view calls it.
-  *
-  * The grouping is about reachability, not tidiness. One `ApiClient` object referenced from all six
-  * views is reachable from startup, and everything it touches with it: every route, and the decoder
-  * of every response type the app can receive. Nothing can be deferred, because everything is
-  * needed to build the thing that reaches everything.
-  *
-  * Split this way, `AdvertiserSurveyResponse`'s decoder is reachable only from the view that asks
-  * for one. Measured over a route-split build, that moved the deferrable share from 13% to 23% of
-  * the bundle and took 22 KB gzipped out of the first paint.
-  *
-  * The transport stays shared in [[ApiClient]] — it is small, and every view needs it.
+/** The API, grouped by which view calls it, so each view's routes and response decoders are
+  * reachable only from that view and the route split can defer them. The transport itself stays
+  * shared in [[ApiClient]].
   */
 object StatusApi:
   def getStatus(

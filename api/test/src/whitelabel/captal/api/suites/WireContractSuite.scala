@@ -49,9 +49,8 @@ import zio.test.*
 /** One wire format, two libraries, checked in both directions.
   *
   * The server will serialise with zio-schema — zio-http's `Endpoint` API requires it and it is not
-  * pluggable — and the browser stays on circe, because putting zio-schema in `client` means a new
-  * runtime dependency in a bundle this project measures. So two libraries write and read one
-  * format, and nothing but this makes them agree.
+  * pluggable — and the browser stays on circe. So two libraries write and read one format, and
+  * nothing but this makes them agree.
   *
   * Both directions, because agreement is not symmetric. An encoder can emit a field a decoder
   * ignores and the round trip still looks fine from the side that wrote it; the failure only
@@ -60,29 +59,16 @@ import zio.test.*
   *   - zio-schema writes it, circe reads it — the response path, server to browser.
   *   - circe writes it, zio-schema reads it — the request path, browser to server.
   *
-  * This is the test the previous arrangement did not have, and the cost of not having it was
-  * measured: `ApiError`'s circe pair was written by hand in two independent matches, the encoder
-  * covering all thirty-two variants because the compiler forces it and the decoder covering nine
-  * because a match on a `String` with a catch-all is always exhaustive. Twenty-two validation
-  * errors reached the browser as `InternalError("Unknown error type: …")` and sent the guest to the
-  * error screen. Both sides are derived now, which makes that gap unrepresentable — and this suite
-  * is what keeps the two derivations describing the same bytes.
+  * Both sides are derived, and this suite is what keeps the two derivations describing the same
+  * bytes.
   */
 object WireContractSuite:
 
   private given Schema[ApiError] = DeriveSchema.gen[ApiError]
 
-  /** The server's own config, read from `Main` rather than restated here.
-    *
-    * It is part of the contract, which this suite learned the hard way: it had been encoding
-    * through `JsonCodec.jsonEncoder` with no config, where zio-schema's default is
-    * `ignoreEmptyCollections = false`, while zio-http's `CodecConfig` default is `true`. So it
-    * compared two libraries through a setting the server does not use, and an empty `List` — which
-    * the server omitted entirely and circe's derived decoder requires — looked fine here while
-    * three E2E tests failed on it.
-    *
-    * Reading `HttpApp.codecConfig` is what keeps that from recurring. A copy of the value would
-    * agree with the server today and drift silently the first time one of them changed.
+  /** The server's own config, read from `Main` rather than restated here, because it is part of the
+    * contract: zio-schema defaults to `ignoreEmptyCollections = false` and zio-http's `CodecConfig`
+    * to `true`, so a copy of the value would drift from the server the first time one changed.
     */
   private val config = JsonCodec.Config(ignoreEmptyCollections =
     HttpApp.codecConfig.ignoreEmptyCollections)
@@ -105,16 +91,12 @@ object WireContractSuite:
 
   /** Equal as JSON, counting an absent field and a `null` one as the same.
     *
-    * Not string equality, because the two libraries disagree about exactly one thing and it is not
-    * a disagreement anything can observe: circe's derived encoder writes `"redirectUrl":null` for a
-    * `None` and zio-schema omits the field. Every decoder that reads these types reads an `Option`
-    * from both — circe's `deriveDecoder` treats a missing field and a null alike, and so does
-    * zio-schema — so the normalisation is the equivalence the two decoders already implement, not a
-    * looser standard adopted to make the test pass.
+    * Not string equality: circe's derived encoder writes `"redirectUrl":null` for a `None` and
+    * zio-schema omits the field, while every decoder that reads these types treats a missing field
+    * and a null alike. So the normalisation is the equivalence the two decoders already implement.
     *
-    * It still fails on everything that does matter: a renamed field, a changed discriminator, a
-    * different casing, a `Phase` that stopped being `toDbString`. `ApiError` passes this test byte
-    * for byte, having no `Option` fields to differ about.
+    * It still fails on a renamed field, a changed discriminator, a different casing, or a `Phase`
+    * that stopped being `toDbString`. `ApiError` passes byte for byte, having no `Option` fields.
     */
   private def sameJson(left: String, right: String): Boolean =
     val parsed =
@@ -124,11 +106,7 @@ object WireContractSuite:
       yield l.deepDropNullValues == r.deepDropNullValues
     parsed.getOrElse(false)
 
-  /** The three questions, asked of one type over a list of values that should cover its shape.
-    *
-    * One function because every type crossing this seam is asked the same thing, and because the
-    * next route to convert should cost a list of values rather than a new suite.
-    */
+  /** The three questions, asked of one type over a list of values that should cover its shape. */
   private def agreement[A: Schema: CirceEncoder: CirceDecoder](
       what: String,
       values: List[A]): Spec[Any, Nothing] =
@@ -156,7 +134,7 @@ object WireContractSuite:
           assertTrue(broken.isEmpty) ?? broken.mkString("\n      ")
         ,
         test("what circe writes, zio-schema reads back to the same value"):
-          // The request path, which is what a converted route's `.in[A]` will depend on.
+          // The request path, which is what a route's `.in[A]` depends on.
           val broken = values.flatMap: value =>
             zioReads[A](circeWrites(value)) match
               case Right(back) if back == value =>
@@ -169,10 +147,8 @@ object WireContractSuite:
       )
 
   /** Every variant, so a format difference cannot hide in the ones no endpoint happens to return.
-    *
-    * Listed rather than generated: an enum carrying parameters cannot be enumerated at runtime, and
-    * a generator would have to be told each shape anyway. A variant nobody adds here is a variant
-    * nobody checked, which is the same bargain the type already makes with its own exhaustiveness.
+    * Listed by hand, since a parameterised enum cannot be enumerated at runtime: a variant nobody
+    * adds here is a variant nobody checked.
     */
   private val every: List[ApiError] = List(
     ApiError.SessionMissing,
@@ -211,15 +187,12 @@ object WireContractSuite:
 
   /** Every `Phase`, and both `Option` fields each way.
     *
-    * The phases matter more than they look: `Schema[Phase]` is hand-written to keep the seven
-    * `toDbString` strings, because a derived enum schema would write `{"Welcome":{}}` and the
-    * browser reads a plain string. These are what catch that if anyone replaces it with a
-    * `DeriveSchema.gen`.
+    * `Schema[Phase]` is hand-written to keep the seven `toDbString` strings: a derived enum schema
+    * would write `{"Welcome":{}}` and the browser reads a plain string, and these values are what
+    * catch a replacement by `DeriveSchema.gen`.
     *
-    * The `Option`s matter for a different reason: circe's derived encoder writes `null` for a
-    * `None`, and a codec that omits the field instead is a difference the first test sees — but one
-    * circe's own decoder forgives, since a missing field and a null both decode to `None`. So the
-    * byte test is the strict one here and the round trips are not; all three are worth having.
+    * The `Option`s are caught by the byte test alone: circe writes `null` for a `None` and a codec
+    * that omits the field is a difference circe's own decoder forgives.
     */
   private val statuses: List[StatusResponse] =
     Phase.values.toList.map(phase => StatusResponse(phase, "es")) ++
@@ -293,11 +266,9 @@ object WireContractSuite:
     pointsAwarded = 10
   )
 
-  /** The same question with options rather than rules, and both `Option` fields empty.
-    *
-    * Added because the filled fixture above uses `QuestionType.Input`, so nothing covered an
-    * options-bearing question nested inside `QuestionToAnswer` inside `SurveyResponse` — which is
-    * what every profiling and location survey actually returns.
+  /** The same question with options rather than rules, and both `Option` fields empty: an
+    * options-bearing question nested inside `QuestionToAnswer` inside `SurveyResponse`, which is
+    * what every profiling and location survey returns.
     */
   private val aRadioQuestion = QuestionToAnswer(
     id = question.Id.unsafe("55555555-5555-5555-5555-555555555555"),
@@ -309,11 +280,9 @@ object WireContractSuite:
     pointsAwarded = 0
   )
 
-  /** The same question with no options at all.
-    *
-    * Which is a real state — a radio question whose options have all been retired — and the one
-    * this suite missed: an empty `List` is the difference between the two libraries that nothing
-    * here had an example of. Every fixture above fills its collections.
+  /** The same question with no options at all: a real state — a radio question whose options have
+    * all been retired — and the empty-`List` case the two libraries differ on, which every fixture
+    * above fills.
     */
   private val anOptionlessQuestion = aRadioQuestion.copy(questionType = QuestionType.Radio(Nil))
 
@@ -326,8 +295,7 @@ object WireContractSuite:
         agreement("SetLocaleRequest", List(SetLocaleRequest("es"), SetLocaleRequest("en"))),
         agreement("I18n", List(bundle)),
         // Both branches of the discriminated response, and `NextVideo`'s two `Option` fields each
-        // way — this is the type whose wire shape the migration changed, so it is the one where a
-        // derivation drifting apart would be least visible from the outside.
+        // way.
         agreement(
           "VideoResponse",
           List(
@@ -345,9 +313,8 @@ object WireContractSuite:
             MarkVideoWatchedRequest(0, completed = false))),
         agreement("VideoWatchedResponse", List(VideoWatchedResponse("advertiser_video_survey"))),
         // The survey tree, where the format is a column as well as a response: these same bytes go
-        // into `question_rules.rule_config` and `answers.answer_value`. So this suite is checking
-        // more than two libraries agreeing — it is checking that what the MCP backoffice writes is
-        // what the browser can read.
+        // into `question_rules.rule_config` and `answers.answer_value`, so this also checks that
+        // what the MCP backoffice writes is what the browser can read.
         agreement(
           "TextRule",
           List(

@@ -197,13 +197,7 @@ object I18nTools:
   /** The key set itself, which `get_i18n_status` reports coverage against.
     *
     * Derived from the `I18n` type and from an instance the compiler forces to be total, so neither
-    * the list nor the explanations can drift from what the portal reads — this replaced a
-    * hand-written enumeration in a skill that had already lost two keys.
-    *
-    * Published as `i18n://required-keys` as well, and the resource came first. But a resource is
-    * not something every host lets a model read: in Claude Desktop they reach the operator's
-    * attachment menu and never the model, so `set_translations` pointed at a document its caller
-    * could not open.
+    * the list nor the explanations can drift from what the portal reads.
     */
   val schema: McpToolHandlerR[Any] = McpTool("get_i18n_schema")
     .description(

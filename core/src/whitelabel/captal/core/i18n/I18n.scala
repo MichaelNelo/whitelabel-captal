@@ -89,20 +89,13 @@ object I18n:
   given decoder: Decoder[I18n] = deriveDecoder[I18n]
   given encoder: Encoder[I18n] = deriveEncoder[I18n]
 
-  /** Cached on purpose. `I18nSchema.derived` is `inline`, so summoning it re-expands the whole fold
-    * at every call site; binding it once here keeps a single expansion for the codebase.
+  /** Summon the schema through this binding: `I18nSchema.derived` is `inline`, so summoning it
+    * directly re-expands the whole fold at every call site.
     */
   given schema: I18nSchema[I18n] = I18nSchema.derived
 
   /** What each key is for, as an [[I18n]] whose leaves hold descriptions instead of translations.
-    *
-    * Using the schema type itself is what makes this total: adding a field to any of the case
-    * classes above is a compile error until it gets a description here. An annotation such as
-    * `@desc` could not do that — a field without one still compiles — and reading annotations would
-    * need a `scala.quoted` macro, which the rest of this derivation deliberately avoids.
-    *
-    * Wording carried over from the `i18n-reference` skill, which enumerated the same keys by hand
-    * and had already drifted: it was missing `welcome.authorized.*` entirely.
+    * Total by construction: adding a field above is a compile error until it is described here.
     */
   val descriptions: I18n = I18n(
     welcome = Welcome(

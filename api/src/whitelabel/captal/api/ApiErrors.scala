@@ -5,17 +5,11 @@ import whitelabel.captal.messages.ApiError
 import whitelabel.captal.platform.session.SessionContext
 import zio.*
 
-/** Shared error translation for HTTP route handlers.
-  *
-  * Replaces a `private def toApiError` that was duplicated byte-for-byte across `SurveyRoutes`,
-  * `VideoRoutes`, `AdvertiserSurveyRoutes` and `FinishRoutes`. The `failWith` helper folds the
-  * common `toApiError(error).flatMap(ZIO.fail(_))` pattern that appeared in every `.catchAllCause`
-  * block.
-  */
+/** Shared error translation for HTTP route handlers. */
 object ApiErrors:
 
   /** Translate any throwable into the closed `ApiError` ADT. Unexpected throwables are logged via
-    * `Cause.fail` so the stack trace is preserved for the operator's log aggregator.
+    * `Cause.fail`, preserving the stack trace.
     */
   def toApiError(error: Throwable): UIO[ApiError] =
     error match

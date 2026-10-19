@@ -12,23 +12,8 @@ import zio.schema.{DeriveSchema, Schema}
 import McpSchema.given
 import ToolSchema.{readOnly, withUi}
 
-/** UniFi credentials for a location, configured through a page rather than through arguments.
-  *
-  * This is the one write in the backoffice whose input must not reach the model. Everything else a
-  * tool takes — wording, orderings, prices — is content the operator would happily see quoted back.
-  * An API token is not: it authorises guest access on someone else's network, and a `tools/call`
-  * carrying it is recorded by the host, kept in the transcript and replayed into the model's
-  * context on every later turn. There is no retracting it afterwards.
-  *
-  * So the tool takes no token. It opens [[UnifiUi]] and hands that page a ticket; the operator
-  * types the token there and the browser posts it straight to [[UiRoutes]]. What comes back through
-  * the conversation is the page saying a location was configured.
-  *
-  * Without this there is no path at all. `create_location` says UniFi is "configured separately",
-  * and separately has only ever meant the provisioning YAML this migration exists to remove — so a
-  * location created through this server could be translated, given videos and deployed, and would
-  * still never authorize a guest. Its sessions reach Ready and stop, which is exactly what
-  * `cafe-centro` does today.
+/** UniFi credentials configured via page, not arguments. Token never reaches the model; operator
+  * types it into the page, browser posts to [[UiRoutes]].
   */
 object UnifiTools:
 
@@ -63,9 +48,7 @@ object UnifiTools:
       @description("Which location to report on.")
       slug: String)
 
-  /** Deliberately without the token. `Readiness` already reports configuration as a boolean and
-    * this keeps the same contract: whether, never what.
-    */
+  /** Status without the token. Reports whether configured, not what the config is. */
   final case class StatusResponse(
       @description("The location this describes.")
       slug: String,

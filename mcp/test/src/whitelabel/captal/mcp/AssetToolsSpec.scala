@@ -3,9 +3,7 @@ package whitelabel.captal.mcp
 import whitelabel.captal.mcp.tools.AssetTools
 import zio.test.*
 
-/** The SVG check is the only part of the asset tools with logic of its own; the rest is S3 calls
-  * that a unit test cannot reach without a bucket.
-  */
+/** Brand icon SVG validation — the only asset-tool logic reachable without a bucket. */
 object AssetToolsSpec extends ZIOSpecDefault:
   private val plain =
     """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle r="8"/></svg>"""
@@ -23,8 +21,6 @@ object AssetToolsSpec extends ZIOSpecDefault:
         yield assertTrue(result.isRight)
       ,
       test("a script element is refused"):
-        // Through an img element it would never run, but the object sits on the portal's own origin
-        // and opening it directly renders it as a document.
         for
           lower <- refused(
             """<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>""")
@@ -40,7 +36,6 @@ object AssetToolsSpec extends ZIOSpecDefault:
         yield assertTrue(onload, onclick)
       ,
       test("an attribute merely containing 'on' is not mistaken for a handler"):
-        // `font-weight` and friends would match a sloppier pattern and refuse a legitimate icon.
         for result <-
             AssetTools
               .validateSvg(

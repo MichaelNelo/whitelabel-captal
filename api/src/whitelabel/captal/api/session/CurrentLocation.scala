@@ -4,11 +4,11 @@ import whitelabel.captal.platform.UnifiAccess
 import whitelabel.captal.platform.services.LocationService
 import zio.*
 
-/** Snapshot of the location this API instance serves. Loaded once at startup from the
-  * `LOCATION_SLUG` env var → DB lookup. Empty when there is no slug (dev/standalone mode).
+/** Snapshot of the location this API instance serves, loaded once at startup from the
+  * `LOCATION_SLUG` env var via a DB lookup. Empty when there is no slug (dev/standalone mode).
   *
-  * Used to soft-validate inbound captive-portal headers (e.g. compare `X-Ap-Mac` with the
-  * provisioned `unifi.apMac`) without requiring a per-request DB query.
+  * Used to soft-validate inbound captive-portal headers (e.g. `X-Ap-Mac` against the provisioned
+  * `unifi.apMac`) without a per-request DB query.
   */
 final case class CurrentLocation(
     id: Option[String],

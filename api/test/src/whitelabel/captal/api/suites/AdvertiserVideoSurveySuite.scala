@@ -41,21 +41,8 @@ object AdvertiserVideoSurveySuite:
             dbState.sessions.exists(_.phase == Phase.Ready)
           )
         ,
-        // The same cycle over a promo, which is the venue's own video and has no advertiser.
-        //
-        // This was broken in three independent places, each of which failed by returning a
-        // successful response carrying no survey — so the guest watched the promo and went
-        // straight to Ready, and nothing anywhere said a question had been skipped:
-        //
-        //   - `nextAdvertiserSurveyQuery` filtered on `category = 'advertiser'` as well as on the
-        //     video, reading as though the video's type decided whether its survey was reachable.
-        //   - `fetchAdvertiserQuestionDetails` bound `survey.advertiser_id` inside an Option
-        //     comprehension, so no advertiser threw away the question with it.
-        //   - `findAnsweringVideoSurvey` required `sessions.current_advertiser_id` to be set
-        //     before it would rebuild the state needed to answer.
-        //
-        // Hence asserting the answer too, not just that the question was served: the second and
-        // third failures are on different sides of the response.
+        // The same cycle over a promo, which is the venue's own video and has no advertiser. The
+        // answer is asserted as well as the question: serving and answering fail separately.
         test("a promo's survey is served and answered, with no advertiser to attribute it to"):
           for
             _       <- TestFixtures.seedEmailSurvey
@@ -80,15 +67,14 @@ object AdvertiserVideoSurveySuite:
           yield assertTrue(
             videoResp.code.isSuccess,
             surveyResp.code.isSuccess,
-            // The question itself, not merely a 200. The old behaviour was a 200 with a NextStep.
+            // The question itself, not merely a 200.
             question.isDefined,
             question.map(_.question.id).contains(fixture.questionIds.head),
-            // Empty rather than invented. A promo belongs to the venue, so there is nobody to
-            // attribute the answer to, and the response says so instead of omitting the survey.
+            // Empty rather than invented: a promo belongs to the venue, so there is nobody to
+            // attribute the answer to.
             question.exists(_.advertiserId.isEmpty),
             answerResp.code.isSuccess,
-            // And the answer was stored. Without this the assertions above would pass against a
-            // path that serves the question and then refuses it.
+            // And the answer was stored.
             dbState.answers.exists(_.questionId == fixture.questionIds.head),
             dbState.sessions.exists(_.phase == Phase.Ready)
           )

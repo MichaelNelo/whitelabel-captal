@@ -6,29 +6,14 @@ import zio.test.*
 
 /** What the API does with a request body no client would send.
   *
-  * Written before removing tapir, and that is the whole reason it exists. These rejections are not
-  * ours: `.in(jsonBody[AnswerRequest])` carries a codec, and `ZioHttpInterpreter()` is constructed
-  * with no options, so a body that fails to decode is answered by tapir's default
-  * `DecodeFailureHandler` before any handler of ours runs. Its documentation says a query
-  * parameter, header or body that causes a decode failure gets a 400.
-  *
-  * Nothing exercised that, ever. Every other helper in this suite's neighbourhood builds valid JSON
-  * from a typed request, which is what makes them useful and also why an invalid one had never been
-  * sent. So the behaviour was real and unverified at the same time: rewriting these endpoints onto
-  * zio-http handlers would have to reimplement it explicitly, and if it did not, every test here
-  * would still pass.
-  *
-  * That is what this pins. It is deliberately a record of what the current implementation does
-  * rather than of what it should do — the five endpoints taking a body are the surface, and a
-  * rewrite has to answer the same way.
+  * Deliberately a record of what the implementation does rather than of what it should do: the five
+  * endpoints taking a body are the surface, and a rewrite has to answer the same way.
   */
 object ProtocolRejectionSuite:
 
-  /** The three ways a body can be wrong, which are three different failures underneath.
-    *
-    * Not JSON at all is a parse failure; valid JSON of the wrong shape is a missing field; a valid
-    * shape naming a variant that does not exist is a discriminator failure. A hand-written layer
-    * can get one right and the others wrong, so each is asked for separately.
+  /** The three ways a body can be wrong, which are three different failures underneath: not JSON at
+    * all is a parse failure; valid JSON of the wrong shape is a missing field; a valid shape naming
+    * a variant that does not exist is a discriminator failure.
     */
   private val Malformed = "{"
   private val WrongShape = """{"notAnAnswer":true}"""
@@ -39,11 +24,8 @@ object ProtocolRejectionSuite:
       .test
       .suite("Protocol rejections")(
         test("a route that no longer goes through tapir is still served to these suites"):
-          // `/api/health` is the first route on zio-http's `Endpoint`, so it exists only on the
-          // other side of the adapter in `TestHelpers`. Without that adapter a converted route
-          // leaves the stub interpreter and its tests fail for having no server rather than for
-          // anything about the route — which is why this is asserted before any route with
-          // coverage moves.
+          // `/api/health` is on zio-http's `Endpoint`, so it reaches these suites only through the
+          // adapter in `TestHelpers`.
           for
             backend  <- testBackend
             response <- getHealth(backend)
@@ -70,8 +52,7 @@ object ProtocolRejectionSuite:
         ,
         test("an answer naming a type that does not exist is refused"):
           // Closest to something that could actually happen: a client built against a newer
-          // `AnswerValue` than the server has. The discriminator is derived by the codec, so this
-          // is the one of the three a hand-written decoder is most likely to accept by accident.
+          // `AnswerValue` than the server has.
           for
             _        <- TestFixtures.seedEmailSurvey
             backend  <- testBackend

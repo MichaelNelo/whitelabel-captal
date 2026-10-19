@@ -24,9 +24,8 @@ object MarkVideoWatchedHandler:
       type Result = NextStep
 
       def handle(cmd: MarkVideoWatchedCommand) =
-        // This handler expects the current video ID to be in the session context
-        // The actual video ID will be obtained from the session in the route
-        // Here we just emit the VideoVisualized event
+        // No session, so no video id and nothing emitted; use `withSession` to record
+        // VideoVisualized.
         Monad[F].pure(CoreOp.pure(nextStep))
 
   def withSession[F[_]: Monad](

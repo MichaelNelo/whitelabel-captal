@@ -23,20 +23,8 @@ object FinishRoutes:
 
 end FinishRoutes
 
-/** `POST /api/finish`, on zio-http's `Endpoint`.
-  *
-  * The second route off tapir and the first one with a session, so this is where the plumbing
-  * `secured` used to supply has to be said out loud: the cookie arrives as the whole `Cookie`
-  * header and `SessionCookieConfig` picks this deployment's out of it, while the session lookup and
-  * the phase rule stay in `SessionEndpoint.authorise`, which both front ends now call. Nothing
-  * about *what* is allowed moves — only who extracts the cookie.
-  *
-  * `outError[ApiError](Status.BadRequest)` is what `errorOut(jsonBody[ApiError])` did implicitly: a
-  * tapir error output carrying no status is a 400, which is what every test asserting a rejection
-  * here has been reading all along.
-  *
-  * The constructor takes the cookie config rather than a `SessionEndpoint`, which it no longer has
-  * any use for — that class exists to build tapir descriptions.
+/** `POST /api/finish`: runs the finish flow for a session in `Phase.Ready` and answers that
+  * session's refreshed status. Rejections answer 400 with an `ApiError` body.
   */
 final class FinishRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
   import FinishRoutes.*

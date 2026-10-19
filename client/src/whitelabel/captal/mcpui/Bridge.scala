@@ -5,10 +5,6 @@ import scala.scalajs.js
 import org.scalajs.dom
 
 /** JSON-RPC 2.0 over `postMessage`, on `js.Promise` rather than `scala.concurrent.Future`.
-  *
-  * The page is inlined into the HTML the host renders, so its size is paid on every open. Scala's
-  * Future, its ExecutionContext and the collections around them are the bulk of what a Scala.js
-  * bundle carries for work like this; the host already has promises.
   */
 object Bridge:
   private var nextId = 1
@@ -48,14 +44,8 @@ object Bridge:
 
   /** Reports the page's height to the host, now and whenever it changes.
     *
-    * An inline app is sized by what it reports, not by what it holds: the host cannot measure
-    * across the frame boundary, so with nothing to go on it applies a default height and the page
-    * gets an internal scrollbar. The design guidelines name that as the thing an inline card must
-    * not have — on mobile a vertical drag inside the frame scrolls the conversation, not the
-    * content, so whatever is below the fold cannot be reached at all.
-    *
-    * Observed rather than measured once: this page grows after it loads, when the row appears and
-    * again when the status line fills, and both happen after any measurement taken at startup.
+    * The host cannot measure across the frame boundary; without a report it applies a default
+    * height and the page gets an internal scrollbar.
     */
   def trackSize(): Unit =
     def report(): Unit =
@@ -81,16 +71,8 @@ object Bridge:
     applyHostStyles(result)
     notify("ui/notifications/initialized", js.Dynamic.literal())
 
-  /** Writes the host's theme onto `:root`, from the handshake's own reply.
-    *
-    * These do not arrive by themselves. The host returns a `hostContext` with the palette, the
-    * fonts and the current theme, and an app that ignores it — as this did — renders against
-    * nothing: every `var(--color-text-primary, …)` falls through to whatever literal follows it,
-    * which is how a page written for both themes came out light inside a dark conversation.
-    *
-    * The official SDK does this with `applyHostStyleVariables` and `applyDocumentTheme`. Here it is
-    * twenty lines against the same payload, because this page is Scala.js and does not carry that
-    * bundle.
+  /** Writes the host's theme and style variables onto `:root`, from the handshake reply's
+    * `hostContext`.
     */
   private def applyHostStyles(result: js.Dynamic): Unit =
     val context = result.hostContext.asInstanceOf[js.UndefOr[js.Dynamic]]

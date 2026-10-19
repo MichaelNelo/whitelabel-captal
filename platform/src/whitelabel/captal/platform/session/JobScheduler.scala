@@ -9,48 +9,29 @@ import whitelabel.captal.core.application.commands.ExpireAccessCommand
 import whitelabel.captal.core.user
 import zio.*
 
-/** A job with a deadline. Only one exists today; the enum is here so future scheduled work (purging
-  * dead sessions, refreshing tokens, invalidating the CDN) can reuse the same fiber without a
-  * refactor.
-  */
+/** A job with a deadline. */
 enum ScheduledJob:
   case ExpireAccess(sessionId: user.SessionId)
 
 final case class ScheduledAt(deadline: Instant, job: ScheduledJob)
 
-/** Producer side of the scheduler: just the inbound queue.
-  *
-  * Kept separate from [[JobRunner]] to break a layer cycle. `UnifiAccessHandler` lives inside
-  * `eventHandlerLayer` and needs to schedule jobs; the runner needs to execute a `Flow`, which in
-  * turn depends on `eventHandlerLayer`. As a single service the graph would be cyclic:
-  *
-  * {{{
-  * eventHandlerLayer → Scheduler → Flow[ExpireAccess] → eventHandlerLayer   ✗
-  * }}}
-  *
-  * Having no dependencies, `JobQueue` can be injected into `eventHandlerLayer` and the graph stays
-  * acyclic.
+/** Producer side of the scheduler: just the inbound queue. Must stay separate from [[JobRunner]]
+  * and dependency-free, or the layer graph goes cyclic — `UnifiAccessHandler` is inside
+  * `eventHandlerLayer` and schedules jobs, while the runner depends on `eventHandlerLayer` through
+  * its `Flow`.
   */
 final class JobQueue private (private[session] val inbox: Queue[ScheduledAt]):
   def schedule(at: ScheduledAt): UIO[Unit] = inbox.offer(at).unit
 
 object JobQueue:
-  /** Unbounded: at most one entry per authorized session of this location, so growth is bounded by
-    * the venue's capacity.
-    */
+  /** Unbounded: at most one entry per authorized session of this location. */
   val layer: ULayer[JobQueue] = ZLayer.fromZIO(Queue.unbounded[ScheduledAt].map(new JobQueue(_)))
 
 /** Consumer side of the scheduler. */
 trait JobRunner:
-  /** Forks the scheduler fiber and the worker fiber, and rehydrates pending expirations.
-    *
-    * Explicit on purpose, rather than forking as a side effect of building the layer: a service
-    * nobody references gets pruned from the graph by ZLayer (with an easy-to-miss `ZLAYER WARNING`)
-    * and the fibers would never start — with the tests still green. Calling it from `Main.run`
-    * makes it visible where background work begins.
-    *
-    * Takes `Scope` so the fibers die with the application, and so a test can start and clean up a
-    * runner inside a `ZIO.scoped` without leaking them across cases.
+  /** Forks the scheduler fiber and the worker fiber, and rehydrates pending expirations. Must be
+    * called explicitly (`Main.run` does) — building the layer starts nothing. The fibers live for
+    * the given `Scope`.
     */
   def start: ZIO[Scope, Nothing, Unit]
 
@@ -69,9 +50,8 @@ object JobRunner:
         runner   <- make(jobQueue, sessions, ctx, flow)
       yield runner
 
-  /** Direct constructor. Exists so a test can build its own runner per case and start it inside its
-    * own `ZIO.scoped`, rather than sharing the one from the environment — two `start` calls on the
-    * same runner would fork schedulers competing over the same queue.
+  /** Direct constructor, for a caller that needs its own runner. `start` may be called only once
+    * per runner: a second call forks schedulers competing over the same queue.
     */
   def make(
       jobQueue: JobQueue,
@@ -84,8 +64,8 @@ object JobRunner:
         for
           _ <- schedulerLoop(jobQueue.inbox, due, SortedMap.empty).forkScoped
           _ <- workerLoop(due, sessions, ctx, flow).forkScoped
-          // Rehydration: the scheduler's state lives in memory and does not survive a task
-          // redeploy. Deadlines already past fire right away (the computed wait is 0).
+          // Rehydration: the scheduler's state is in memory only. Deadlines already past fire
+          // right away (the computed wait is 0).
           pending <- sessions.findPendingExpirations().orDie
           _       <-
             ZIO.foreachDiscard(pending): (sessionId, deadline) =>
@@ -94,9 +74,7 @@ object JobRunner:
         yield ()
 
   /** A single fiber. `inbox.take.timeout(wait)` covers both signals at once: if a job arrives the
-    * `take` returns and the queue is reordered; if the timeout elapses, some deadlines came due. A
-    * job with an earlier deadline recomputes the wait by itself, without interrupting or recreating
-    * any fiber.
+    * `take` returns and the queue is reordered; if the timeout elapses, some deadlines came due.
     */
   private def schedulerLoop(
       inbox: Queue[ScheduledAt],
@@ -123,16 +101,15 @@ object JobRunner:
           case None =>
             for
               ahora <- Clock.instant
-              // O(n), but n = authorized sessions of one location. Irrelevant.
+              // O(n), n = authorized sessions of one location.
               (due_, rest) = pending.partition((at, _) => !at.isAfter(ahora))
               _ <- ZIO.foreachDiscard(due_.values.flatten)(due.offer)
             yield rest
       _ <- schedulerLoop(inbox, due, next)
     yield ()
 
-  /** A single fiber → concurrency of 1 against the UCG. Deliberate: the
-    * `Fargate → Tailscale → subnet router → LAN` link is slow and fragile. `UnifiClient`'s
-    * `.timeout` bounds how long one job can hold up the rest of the queue.
+  /** A single fiber → concurrency of 1 against the UCG. `UnifiClient`'s `.timeout` bounds how long
+    * one job can hold up the rest of the queue.
     */
   private def workerLoop(
       due: Queue[ScheduledJob],
@@ -153,16 +130,14 @@ object JobRunner:
             case None =>
               ZIO.logDebug(s"Session ${sessionId.asString} no longer exists — job discarded")
             case Some(session) =>
-              // Populating the context is what makes the flow run exactly as in a request: the
+              // The context must be populated for the flow to run as it does in a request: the
               // repository and every DbEventHandler read the session from the ambient context.
-              //
-              // The staleness guard lives in the handler, not here: if the job went stale because
-              // the user got re-authorized, `findAuthorizedUser` returns None and the command is a
-              // silent no-op.
+              // The staleness guard is in the handler — `findAuthorizedUser` returns None for a
+              // re-authorized user and the command becomes a silent no-op.
               ctx.locally(session):
                 Clock.instant.flatMap(now => flow.execute(ExpireAccessCommand(now)))
-        // The error is swallowed here and absent from the return type: neither an unreachable UCG
-        // nor an rqlite failure can take down the worker fiber.
+        // Errors are swallowed and kept out of the return type, so no failure here can take down
+        // the worker fiber.
         effect
           .either
           .flatMap:

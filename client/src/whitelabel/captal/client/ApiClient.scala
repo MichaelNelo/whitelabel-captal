@@ -9,9 +9,8 @@ import whitelabel.captal.client.Promises.*
 import whitelabel.captal.messages.ApiError
 
 object ApiClient:
-  /** API base path. In production the page is served at `/<slug>/index.html`, so we extract the
-    * first path segment and prefix all API calls with `/<slug>/api`. In dev the page is served at
-    * `/` and there is no prefix segment, so we fall back to `/api`.
+  /** First path segment of the page URL, the location slug. `None` in dev, where the page is served
+    * at `/`.
     */
   private val firstSegment: Option[String] = dom
     .window
@@ -27,14 +26,8 @@ object ApiClient:
   private val maintenanceUrl: String =
     firstSegment.fold("/maintenance.html")(slug => s"/$slug/maintenance.html")
 
-  /** What the load balancer answers on this location's API path while the portal is paused.
-    *
-    * A paused location has no task running at all, so this does not come from the API — the rule in
-    * front of it answers directly. Which is the point: it is the one failure the portal can tell
-    * apart from an outage, because an outage does not say anything.
-    *
-    * The value has to match what `pause_location` installs, in `InfraStore.PausedBody`. There is no
-    * schema between them: one is a string in a load balancer rule and the other is this.
+  /** `status` value the load balancer answers on this location's API path while the portal is
+    * paused. Must match what `pause_location` installs, in `InfraStore.PausedBody`.
     */
   private val PausedStatus = "paused"
 
@@ -63,8 +56,7 @@ object ApiClient:
       if response.ok then
         parser.decode[A](text).left.map(e => ApiError.InternalError(e.getMessage))
       else if isPaused(text) then
-        // `replace` rather than `assign`, so the paused page is not left in history: the back
-        // button would otherwise return here and bounce straight out again.
+        // `replace` rather than `assign`: the paused page must not enter history.
         dom.window.location.replace(maintenanceUrl)
         Left(ApiError.InternalError("This location is paused for maintenance."))
       else
@@ -75,12 +67,8 @@ object ApiClient:
             Left(ApiError.InternalError(s"HTTP ${response.status}: $text"))
   end fetchApi
 
-  /** Whether this body is the load balancer saying the location is paused.
-    *
-    * Checked on the parsed field rather than by matching the string, so a 503 that merely happens
-    * to contain the word — an error page, a proxy's own message — is not mistaken for one. Every
-    * other failure keeps going down the path it did before: a paused location is a specific answer,
-    * and everything else is still an error to report.
+  /** Whether this body is the load balancer saying the location is paused. Matches on the parsed
+    * `status` field, never on the raw text.
     */
   private def isPaused(body: String): Boolean = parser
     .parse(body)
@@ -98,11 +86,7 @@ object ApiClient:
   def putJson[B: Encoder, A: Decoder](path: String, body: B): js.Promise[Either[ApiError, A]] =
     fetchApi("PUT", path, Some(body.asJson))
 
-  /** The endpoints themselves live in [[ViewApis]], one object per view.
-    *
-    * Not a style choice: a single object referenced from all six views is reachable from startup,
-    * and so is everything it touches — every route and the decoder of every response type. Split by
-    * view, what only one view calls is only reachable from that view, which is what lets the route
-    * split defer it. Measured, that moved 22 KB gzipped out of the first paint.
+  /** The endpoints themselves live in [[ViewApis]], one object per view, so that the route split
+    * can defer each view's routes and decoders.
     */
 end ApiClient

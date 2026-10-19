@@ -18,14 +18,7 @@ import McpSchema.given
 import QuillArrow.->
 import ToolSchema.readOnly
 
-/** Advertiser tools.
-  *
-  * `advertisers` has no unique constraint of any kind: two rows may share a name, and nothing stops
-  * a duplicate. Under file provisioning the YAML filename acted as the key and `IdGenerator` turned
-  * it into a deterministic id, so re-applying a file updated rather than duplicated. With explicit
-  * CRUD that guard is gone, which is why `create_advertiser` refuses a name already in use instead
-  * of trusting the schema to reject it.
-  */
+/** Advertiser CRUD: name uniqueness enforced here (no schema constraint). */
 object AdvertiserTools:
   final case class AdvertiserView(
       @description("What create_advertiser_video takes to attach a video to this advertiser.")
@@ -116,14 +109,7 @@ object AdvertiserTools:
       .map(_.headOption)
       .someOrFail(s"No advertiser with id '$id'. Call list_advertisers to see what exists.")
 
-  /** Borrowed from [[VideoTools]], which owns the video table's queries.
-    *
-    * It lived here, as a `.size` over `AdvertiserVideoRow`. Harmless until the row started carrying
-    * the `VideoType` enum: Quill derives the row's decoder while expanding the macro even for a
-    * count, so the query needed `schema.core.given` — and scalafix then stripped that import as
-    * unused, because nothing in the source references it. Keeping the query where the decoders
-    * already are costs nothing and leaves no import to defend.
-    */
+  /** Count active videos for an advertiser (see VideoTools). */
   private def countActiveVideos(id: String): ZIO[QuillSqlite, Nothing, Int] = VideoTools
     .countActiveFor(id)
 
@@ -131,10 +117,7 @@ object AdvertiserTools:
     val trimmed = name.trim
     ZIO.fail("Name must not be blank.").when(trimmed.isEmpty).as(trimmed)
 
-  /** Priority weights the rotation: `VideoRepositoryQuill` divides each advertiser's priority by
-    * the sum across active advertisers. Zero means the advertiser is never drawn, which is a valid
-    * but surprising choice, so it is allowed while negatives are not.
-    */
+  /** Priority must be >= 0 (zero means never drawn). */
   private def validatePriority(priority: Int): ZIO[Any, String, Int] = ZIO
     .fail(s"Priority must be zero or greater, got $priority.")
     .when(priority < 0)

@@ -2,13 +2,8 @@ package whitelabel.captal.client
 
 import scala.scalajs.js
 
-/** `map` and `flatMap` on `js.Promise`, so call sites and for-comprehensions read exactly as they
-  * did with `Future`.
-  *
-  * The browser already hands us promises — `dom.fetch` returns one — and wrapping them in
-  * `scala.concurrent.Future` brings an executor, `CopyOnWriteArrayList` and `AtomicReference` along
-  * for a runtime that has one thread. What it buys back is Scala's syntax, and that is what these
-  * fifteen lines provide instead.
+/** `map` and `flatMap` on `js.Promise`, so call sites and for-comprehensions read as they do with
+  * `Future`.
   */
 object Promises:
   extension [A](promise: js.Promise[A])

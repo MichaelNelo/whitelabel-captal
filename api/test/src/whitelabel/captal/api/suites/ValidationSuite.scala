@@ -9,11 +9,8 @@ object ValidationSuite:
     zio
       .test
       .suite("Validation Rules")(
-        // Named "required field" before this assertion checked which error came back: the old one
-        // was `!code.isSuccess || body.contains("error")`, and the first disjunct is true for every
-        // rejection, so the variant was never read. An empty string reaches the email format rule
-        // and fails there, which is why this says `InvalidEmailFormat` and not
-        // `RequiredAnswerMissing` — the request is refused either way.
+        // An empty string reaches the email format rule and fails there, which is why this expects
+        // `InvalidEmailFormat` and not `RequiredAnswerMissing`.
         test("empty email is rejected as a malformed address"):
           for
             _         <- TestFixtures.seedEmailSurvey
