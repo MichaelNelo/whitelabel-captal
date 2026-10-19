@@ -117,11 +117,11 @@ object ClientDecodeSuite:
             response <- getStatus(backend, None)
           yield readsAs[StatusResponse]("StatusResponse", response.body)
         ,
-        test("the same type off a converted route, where zio-schema wrote it"):
-          // `getStatus` above is still tapir, so it proves circe can read what circe wrote.
-          // `/api/finish` is not: the body below is zio-schema's, and it differs — the two `None`
-          // fields are absent rather than null, which `WireContractSuite` measures and this reads.
-          // Both tests, because the one that matters is the one whose writer is being replaced.
+        test("the same type off a second route that also returns it"):
+          // Both routes answer `StatusResponse` and both write it with zio-schema now, so this is
+          // no longer the tapir-versus-converted pair it was written as. It stays because the two
+          // reach it differently: `/api/status` builds one from a session it may have just created,
+          // `/api/finish` re-reads the session after the flow committed. Same type, two producers.
           for
             _        <- TestFixtures.seedEmailSurvey
             backend  <- testBackend

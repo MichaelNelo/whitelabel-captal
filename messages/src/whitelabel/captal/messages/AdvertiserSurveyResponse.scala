@@ -11,8 +11,8 @@ import whitelabel.captal.core.application.commands.NextAdvertiserSurvey
   * `api`'s `AdvertiserSurveyRoutes` builds them inline with its own `jsonBody`, so the shared
   * contract this module is meant to be is not how every route is actually defined.
   *
-  * Renamed to what it contains, and the tapir `Schema` moved to `schemas` — which is what keeps
-  * this type free of tapir for the client that reads it in nine places.
+  * Renamed to what it contains. Its serialisation lives in `api.wire`, which is what keeps this
+  * type free of the server's codec library for the client that reads it in nine places.
   */
 enum AdvertiserSurveyResponse:
   case Survey(data: NextAdvertiserSurvey)

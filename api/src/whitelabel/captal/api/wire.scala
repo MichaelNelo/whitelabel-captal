@@ -17,14 +17,13 @@ import whitelabel.captal.messages.{
 import whitelabel.captal.platform.surveySchemas.given
 import zio.schema.{DeriveSchema, Schema}
 
-/** The server's half of the wire format, for the routes that have left tapir.
+/** The server's half of the wire format: a `Schema` for every type a route sends or receives.
   *
-  * Its opposite number is `schemas`, which holds the tapir `Schema`s still in use. The two are not
-  * the same kind of thing despite the shared name, and that is the whole reason this file exists: a
-  * tapir `Schema` describes a shape circe has already decided, so a type nobody documents can take
-  * `Schema.anyObject` and cost nothing — eight of them do. A zio-schema `Schema` *is* the codec, so
-  * there is no such thing as an undocumented type here. Every entry below is load-bearing, and
-  * entries move from `schemas` to this file as routes convert, one route at a time.
+  * It replaced an `api/schemas.scala` holding tapir `Schema`s, and the two were not the same kind of
+  * thing despite the name. A tapir `Schema` describes a shape circe has already decided, so a type
+  * nobody documents could take `Schema.anyObject` and cost nothing — eight of them did. A zio-schema
+  * `Schema` *is* the codec, so there is no such thing as an undocumented type here and every entry
+  * below is load-bearing. That difference is what made the conversion more than a rename.
   *
   * JVM-only on purpose. These instances were briefly declared beside the types they describe, in
   * `core`, which cross-compiles — so a serialisation library the browser has no use for landed on
