@@ -80,7 +80,7 @@ private def preloadLinks(dir: os.Path, entry: String): String =
   * end-to-end deploy puts in its task definition — which only has to be something already pulled.
   *
   * Matched to what production runs, which is the whole point of the number. It was 8.36.2 while the
-  * infrastructure repo's `docker/rqlite/Dockerfile` said `FROM rqlite/rqlite:latest` and had
+  * `terraform/docker/rqlite/Dockerfile` said `FROM rqlite/rqlite:latest` and had
   * drifted to 10.6.1 — two major versions apart, with the suite on the side that nothing deployed.
   * Both are pinned now; moving one means moving the other, and the driver with them.
   */
@@ -556,14 +556,20 @@ private def ensureDistribution(containerName: String, comment: String, bucket: S
       "--output",
       "text")
 
-/** Where the OpenTofu configuration lives, which is a sibling repository rather than a directory
-  * here. Overridable because that is a layout choice and not a fact: moving it in as `terraform/`
-  * is on the table, and this is the one line that would change.
+/** Where the OpenTofu configuration lives: `terraform/`, in this repository.
+  *
+  * It was a sibling repository, which made the local suite depend on a second clone sitting next to
+  * this one — `mcp.test` could not run without it, and nothing said so until `tofu` failed on a
+  * directory that was not there. It is a subtree now, with its nine commits, so one checkout is the
+  * whole system.
+  *
+  * Still overridable, for the case the move does not cover: pointing at a working copy of the
+  * configuration somewhere else while editing it.
   */
 private def terraformDir(env: Map[String, String], repoRoot: os.Path): os.Path = env
   .get("CAPTAL_TERRAFORM_DIR")
   .map(os.Path(_, repoRoot))
-  .getOrElse(repoRoot / os.up / "whitelabel-captal-infrastructure")
+  .getOrElse(repoRoot / "terraform")
 
 /** The shared infrastructure a location deploy attaches to, applied from the real OpenTofu
   * configuration against LocalStack.
@@ -870,7 +876,7 @@ object platform extends BaseModule:
   // `dockerBuild` and `dockerPush` built and shipped `captal-provision`, an image whose only
   // process was `SharedProvision`. With the ephemeral provisioning task gone there is nothing to
   // run in it. The ECR repositories `captal-provision-{env}` and `captal-shared-{env}` are now
-  // unreferenced; emptying and removing them is a `tofu apply` in the infrastructure repo, not
+  // unreferenced; emptying and removing them is a `tofu apply` under `terraform/`, not
   // something this build can do.
 end platform
 
@@ -1897,10 +1903,23 @@ object mcp extends BaseModule:
       val id = os.proc("docker", "ps", "-q", "-f", s"name=$localStackContainer").call().out.trim()
       s"$id $endpoint $licensed"
 
-    /** The OpenTofu configuration, tracked so that editing it re-applies.
+    /** The configuration's files, declared so that Mill permits reading them.
       *
-      * A plain `Task.Source` would be a path outside this module, which Mill refuses; reading the
-      * files is what makes the content the input.
+      * Not needed while it was a sibling repository: Mill polices reads inside the build's own tree
+      * and that was outside it. Moving it to `terraform/` put it under the rule, and the apply
+      * failed on the copy with a message that names the task rather than the read —
+      * `Reading from terraform not allowed during execution of mcp.test.localStackInfra`.
+      *
+      * The literal path rather than `terraformDir`, because `Task.Sources` cannot read `Task.env`
+      * to honour `CAPTAL_TERRAFORM_DIR`. That costs nothing: an override points somewhere outside
+      * this tree, which is the case Mill does not police anyway.
+      */
+    def tofuSources: T[Seq[PathRef]] = Task.Sources(moduleDir / os.up / os.up / "terraform")
+
+    /** The OpenTofu configuration's content, tracked so that editing it re-applies.
+      *
+      * Still a `Task.Input` and not derived from [[tofuSources]], because the hash has to cover
+      * whichever directory `terraformDir` resolves to, override included.
       */
     private def tofuConfig: T[Int] = Task.Input:
       val dir = terraformDir(Task.env, moduleDir / os.up / os.up)
@@ -1926,8 +1945,10 @@ object mcp extends BaseModule:
       */
     def localStackInfra: T[Map[String, String]] = Task(persistent = true):
       val parts = localStackStamp().split(" ")
-      // Read for the dependency, not the value: the hash is what makes a changed `.tf` re-apply.
+      // Read for the dependency, not the value: the hash is what makes a changed `.tf` re-apply,
+      // and the sources are what let this task read them at all.
       tofuConfig()
+      tofuSources()
       ensureLocalStackTofu(
         endpoint = parts(1),
         licensed = parts(2).toBoolean,
