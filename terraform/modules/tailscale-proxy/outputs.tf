@@ -14,6 +14,6 @@ output "discovery_dns_name" {
 }
 
 output "proxy_url" {
-  description = "URL to put in shared/captal.yaml unifi.proxyUrl"
+  description = "HTTP proxy URL a location's API reaches its UniFi gateway through. Passed to the mcp module, which forwards it into every location's task definition as UNIFI_PROXY_URL."
   value       = "http://${local.dns_name}:${local.proxy_port}"
 }

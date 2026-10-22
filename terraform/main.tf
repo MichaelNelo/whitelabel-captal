@@ -370,10 +370,12 @@ module "mcp" {
   cloudfront_distribution_arn = module.cloudfront.distribution_arn
   public_base_url             = var.enable_dns ? "https://${var.cloudfront_domain}" : "https://${module.cloudfront.distribution_domain_name}"
 
-  # What the deploy tools hand to a location: one image for all of them, and the task role a
-  # location's API runs as -- which is not the server's own.
+  # What the deploy tools hand to a location: one image for all of them, the task role a location's
+  # API runs as -- which is not the server's own -- and the proxy it reaches its venue's gateway
+  # through.
   api_image              = "${module.ecr.api_repository_url}:${var.image_tag}"
   location_task_role_arn = module.ecs.task_role_arn
+  unifi_proxy_url        = var.enable_tailscale ? module.tailscale_proxy[0].proxy_url : ""
 
   create_test_user = var.mcp_create_test_user
 }

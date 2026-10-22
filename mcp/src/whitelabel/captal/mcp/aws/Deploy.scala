@@ -61,6 +61,9 @@ import zio.*
   *
   * `DB_URL` is this server's own, injected into every task definition. The database therefore sits
   * outside what a deploy creates and outside what a teardown destroys.
+  *
+  * `unifiProxyUrl` is forwarded the same way, as `UNIFI_PROXY_URL`: the HTTP proxy a location's API
+  * reaches its venue's gateway through. `None` means the API calls the gateway directly.
   */
 final case class DeployTargets(
     cluster: String,
@@ -74,7 +77,8 @@ final case class DeployTargets(
     dbUrl: String,
     region: String,
     /** The port the API listens on, and the port the target group forwards to. */
-    containerPort: Int = 8080):
+    containerPort: Int = 8080,
+    unifiProxyUrl: Option[String] = None):
 
   /** `captal-<slug>`. AWS caps a target group name at 32 characters, which is where
     * `LocationTools.MaxSlugLength` comes from; the two have to agree or a slug `create_location`
@@ -129,6 +133,11 @@ object DeployTargets:
             image    <- required("API_IMAGE")
             dbUrl    <- required("DB_URL")
             region   <- System.env("AWS_REGION").orDie.map(_.getOrElse("us-east-1"))
+            proxy    <- System.env("UNIFI_PROXY_URL").orDie.map(_.map(_.trim).filter(_.nonEmpty))
+            _        <-
+              ZIO.when(proxy.isEmpty)(
+                ZIO.logWarning(
+                  "UNIFI_PROXY_URL is unset: locations deployed from here call their UniFi gateway directly, which works only if the gateway is reachable from where the task runs."))
           yield Some(
             DeployTargets(
               cluster = cluster,
@@ -141,7 +150,8 @@ object DeployTargets:
               taskRoleArn = taskRole,
               image = image,
               dbUrl = dbUrl,
-              region = region
+              region = region,
+              unifiProxyUrl = proxy
             ))
 end DeployTargets
 
@@ -281,8 +291,14 @@ final case class InfraStore(
         .essential(true)
         .portMappings(PortMapping.builder().containerPort(targets.containerPort).build())
         .environment(
-          KeyValuePair.builder().name("LOCATION_SLUG").value(slug).build(),
-          KeyValuePair.builder().name("DB_URL").value(targets.dbUrl).build())
+          (
+            Seq(
+              KeyValuePair.builder().name("LOCATION_SLUG").value(slug).build(),
+              KeyValuePair.builder().name("DB_URL").value(targets.dbUrl).build()) ++
+              targets
+                .unifiProxyUrl
+                .map(url => KeyValuePair.builder().name("UNIFI_PROXY_URL").value(url).build())
+          )*)
         .logConfiguration(
           LogConfiguration
             .builder()

@@ -100,7 +100,7 @@ output "portal_dispatcher_function_name" {
 # ─── Tailscale proxy ────────────────────────────────────────────────────────
 
 output "tailscale_proxy_url" {
-  description = "URL to put in shared/captal.yaml unifi.proxyUrl (e.g. http://tailscale-proxy.captal.local:1055)"
+  description = "HTTP proxy a location's API reaches its UniFi gateway through (e.g. http://tailscale-proxy.captal.local:1055). Already wired: deploy_location sets it as UNIFI_PROXY_URL; null when enable_tailscale is false."
   value       = one(module.tailscale_proxy[*].proxy_url)
 }
 

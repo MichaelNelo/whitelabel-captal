@@ -22,6 +22,12 @@ locals {
     value = var.aws_endpoint_url
   }]
 
+  # Not read by this server: `deploy_location` forwards it into every location's task definition.
+  unifi_proxy_env = var.unifi_proxy_url == "" ? [] : [{
+    name  = "UNIFI_PROXY_URL"
+    value = var.unifi_proxy_url
+  }]
+
   environment = concat([
     { name = "MCP_PORT", value = tostring(var.container_port) },
     { name = "MCP_RESOURCE_URI", value = "${local.dns_enabled ? "https://${var.hostname}" : "http://${var.alb_dns_name}"}/mcp" },
@@ -44,7 +50,7 @@ locals {
     { name = "TASK_EXECUTION_ROLE_ARN", value = var.execution_role_arn },
     { name = "TASK_ROLE_ARN", value = var.location_task_role_arn },
     { name = "API_IMAGE", value = var.api_image },
-  ], local.endpoint_env)
+  ], local.endpoint_env, local.unifi_proxy_env)
 }
 
 # ─── The admin token ────────────────────────────────────────────────────────

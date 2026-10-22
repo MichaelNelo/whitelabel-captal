@@ -69,7 +69,10 @@ every API call, because no rule matches the path.
 3. the ALB listener rule, **before** the service — `createService` with a load balancer attached
    fails with `400 no associated load balancer` while the target group is not reachable through a
    listener
-4. the task definition, carrying `LOCATION_SLUG` and `DB_URL`
+4. the task definition, carrying `LOCATION_SLUG`, `DB_URL` and — when the deployment has a Tailscale
+   proxy — `UNIFI_PROXY_URL`, which is how the location reaches its venue's UniFi gateway. If the
+   backoffice logged that `UNIFI_PROXY_URL` is unset, a deployed location will stop guests at Ready
+   unless its gateway is reachable from AWS directly
 5. the ECS service, created the first time and updated after that
 
 It is idempotent. Run on a location that is already deployed it registers a fresh task definition

@@ -177,6 +177,12 @@ variable "location_task_role_arn" {
   type        = string
 }
 
+variable "unifi_proxy_url" {
+  description = "HTTP proxy every location's API reaches its UniFi gateway through, forwarded by deploy_location as UNIFI_PROXY_URL. Empty when the deployment has no Tailscale proxy, and then a location calls its gateway directly."
+  type        = string
+  default     = ""
+}
+
 variable "create_test_user" {
   description = "An IAM user with the same policy, for running the server outside ECS where the task role is not reachable. Worth having locally: with LocalStack's IAM enforcement on, a permission missing here fails in the test suite rather than in front of an operator."
   type        = bool

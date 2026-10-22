@@ -461,11 +461,13 @@ Its security group accepts ingress on 1055 only from the application task securi
 all egress (the Tailscale control plane, STUN and DERP relays all need it). The module's `proxy_url`
 output is the value `UNIFI_PROXY_URL` expects: `http://tailscale-proxy.<namespace>:1055`.
 
-WARNING: Nothing in this repository currently sets `UNIFI_PROXY_URL` on the API task.
-`Deploy.registerTaskDefinition` (`mcp/src/whitelabel/captal/mcp/aws/Deploy.scala`) puts only
-`LOCATION_SLUG` and `DB_URL` in the container environment, so a task deployed through the backoffice
-dials the controller directly and cannot reach an on-prem LAN. See
-xref:context/pending.adoc[Pending work].
+That output reaches the API by the same route `DB_URL` does. `terraform/main.tf` passes it to the
+`mcp` module, which sets `UNIFI_PROXY_URL` on the backoffice's own task; `DeployTargets` reads it at
+startup, and `Deploy.registerTaskDefinition` writes it into every location's task definition beside
+`LOCATION_SLUG` and `DB_URL`. With `enable_tailscale` off the variable is absent, the backoffice logs
+a warning at startup, and a deployed location dials its controller directly.
+
+`DeployE2ESpec` reads the registered task definition back from ECS and asserts the variable is there.
 
 === TLS
 

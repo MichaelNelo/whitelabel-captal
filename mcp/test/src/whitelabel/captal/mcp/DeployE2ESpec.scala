@@ -1,6 +1,7 @@
 package whitelabel.captal.mcp
 
 import scala.io.Source
+import scala.jdk.CollectionConverters.*
 
 import com.jamesward.ziohttp.mcp.client.{
   McpClient,
@@ -14,7 +15,10 @@ import io.getquill.*
 import io.getquill.jdbczio.Quill
 import software.amazon.awssdk.core.sync.RequestBody
 import software.amazon.awssdk.services.cloudwatchlogs.model.DescribeLogGroupsRequest
-import software.amazon.awssdk.services.ecs.model.DescribeServicesRequest
+import software.amazon.awssdk.services.ecs.model.{
+  DescribeServicesRequest,
+  DescribeTaskDefinitionRequest
+}
 import software.amazon.awssdk.services.elasticloadbalancingv2.model.{
   DescribeRulesRequest,
   DescribeTargetGroupsRequest
@@ -506,6 +510,23 @@ object DeployE2ESpec extends ZIOSpecDefault:
               .services(store.targets.serviceName(Slug))
               .build())
           .services()
+      // The environment the location's own task runs with, which is the only place a forwarded
+      // variable is visible.
+      taskEnv <- ZIO.attemptBlocking:
+        store
+          .ecs
+          .describeTaskDefinition(
+            DescribeTaskDefinitionRequest
+              .builder()
+              .taskDefinition(redeployed.taskDefinitionArn)
+              .build())
+          .taskDefinition()
+          .containerDefinitions()
+          .get(0)
+          .environment()
+          .asScala
+          .map(pair => pair.name() -> pair.value())
+          .toMap
       targetGroups <- ZIO.attemptBlocking:
         store
           .elb
@@ -741,6 +762,11 @@ object DeployE2ESpec extends ZIOSpecDefault:
       assertTrue(
         // Infrastructure, as AWS reports it.
         service.serviceName() == store.targets.serviceName(Slug),
+        // Forwarded from this server's own environment, the way `DB_URL` is. The first clause keeps
+        // the second from passing on `None == None`.
+        store.targets.unifiProxyUrl.nonEmpty,
+        taskEnv.get("UNIFI_PROXY_URL") == store.targets.unifiProxyUrl,
+        taskEnv.get("LOCATION_SLUG").contains(Slug),
         service.desiredCount() == 1,
         targetGroups.size() == 1,
         // The service is attached to the target group the rule forwards to. Asserted
