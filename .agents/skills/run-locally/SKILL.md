@@ -1,7 +1,7 @@
 ---
 name: run-locally
 description: Use to spin up the captal stack on your dev machine — rqlite, the MCP backoffice, the guest API, and the client bundle. Triggers on "run locally", "local dev", "start dev", "correr en local", "levantar local".
-version: 2.0.0
+version: 2.1.0
 ---
 
 # Run the stack locally
@@ -25,15 +25,31 @@ YAML.
 mill mcp.dev
 ```
 
-In order, this task: ensures the `rqlite-dev` container on port 4001 (image pinned to
-`rqlite/rqlite:10.6.1` — the build recreates the container if an old one is on the wrong image);
-runs `platform.Migrate` against it; ensures a `localstack-dev` container and the
-`captal-assets-dev` bucket; applies the `local` terraform environment against LocalStack when a
-`LOCALSTACK_TOKEN`/`LOCALSTACK_AUTH_TOKEN` is configured (so the deploy tools exist; without one
-they're simply not registered); and starts the backoffice on `:8081` with a **fixed** admin token,
-`dev-token`. The backoffice's own `Main` then runs `McpMigrate` itself as part of its boot, after
-checking the API schema is already at the version it requires — that check is what fails loudly if
-`platform.Migrate` above didn't run.
+Six steps, in order:
+
+1. Ensures the `rqlite-dev` container on port 4001 (image pinned to `rqlite/rqlite:10.6.1` — the
+   build recreates the container if an old one is on the wrong image).
+2. Runs `platform.Migrate` against it.
+3. Ensures a `localstack-dev` container and the `captal-assets-dev` bucket.
+4. **Applies the `local` terraform environment** against LocalStack when a `LOCALSTACK_TOKEN` /
+   `LOCALSTACK_AUTH_TOKEN` is configured. This also builds and pushes the rqlite image. On a fresh
+   container it is **minutes, not seconds** — it is not hung. Without a token the step is skipped and
+   the deploy tools are simply not registered.
+5. Runs `cloudflared tunnel run` pointed at `:8081`, when `CLOUDFLARE_TUNNEL_TOKEN` is set, and
+   kills it when the server exits. Unset, the step says so and is skipped.
+6. Starts the backoffice on `:8081` with a **fixed** admin token, `dev-token`.
+
+The backoffice's own `Main` then runs `McpMigrate` itself as part of its boot, after checking the API
+schema is already at the version it requires — that check is what fails loudly if `platform.Migrate`
+above didn't run.
+
+Every token the task reads lives in `.env`, which `.envrc` sources and `.gitignore` ignores.
+`.env.example` lists the names. Nothing is read from a tracked file.
+
+Step 4 stands up a three-node rqlite cluster inside LocalStack on ports **5001/5002**, deliberately
+off 4001 so it never competes with the `rqlite-dev` container the backoffice and the migrations
+actually use. That cluster is there to exercise Raft locally; nothing connects to it, because it is
+only addressable as `rqlite.captal.local` through service discovery.
 
 It prints a ready-to-paste MCP client config:
 
@@ -131,6 +147,10 @@ Make sure your dev rqlite stays on its own port if you're also running the test 
 | Symptom | Fix |
 |---|---|
 | `Connection refused` on `localhost:4001` | The `rqlite-dev` container isn't running. `docker ps` to check; `mill api.rqliteSetup` or `mill mcp.dev` ensures it. |
+| `Port 4001 is already in use by another container` | Something else took it — most likely a leftover ECS task container LocalStack spawned. `mill mcp.destroyLocal`. |
+| `AlreadyExists` / `EntityAlreadyExists` from the terraform apply | LocalStack holds resources the state doesn't know about; the two came apart. `mill mcp.test.resetLocalStack` recreates the container *with its volume*, which `stopLocalStack` does not. |
+| The backoffice's upload or UniFi page is blank | Its script isn't in the bucket. `mill client.publish --bucket captal-assets-dev --endpoint http://localhost:4566` once. `mcp.dev` does not publish it. |
+| Anything local is wedged and you want a clean slate | `mill mcp.destroyLocal` — every container this build starts, LocalStack's volume, the ECS task containers it spawned, and the images built here. Nothing to clean afterwards: the tofu state is keyed by container id, so the next run builds both together. |
 | `LocationNotFound` and the process exits immediately | The slug doesn't exist in `locations` yet. Create it through the backoffice first (step 2). |
 | `No result set returned` after a restart | rqlite's data was wiped — the dev container has no volume by default. Re-create the content through the backoffice, or mount a volume yourself. |
 | Reset button doesn't appear on the Ready page | `ENVIRONMENT=dev` wasn't set when building the client, or Mill cached the old `BuildInfo`. `mill clean client.generatedSources && ENVIRONMENT=dev mill client.bundle`. |
