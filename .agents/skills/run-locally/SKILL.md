@@ -149,7 +149,7 @@ Make sure your dev rqlite stays on its own port if you're also running the test 
 | `Connection refused` on `localhost:4001` | The `rqlite-dev` container isn't running. `docker ps` to check; `mill api.rqliteSetup` or `mill mcp.dev` ensures it. |
 | `Port 4001 is already in use by another container` | Something else took it — most likely a leftover ECS task container LocalStack spawned. `mill mcp.destroyLocal`. |
 | `AlreadyExists` / `EntityAlreadyExists` from the terraform apply | LocalStack holds resources the state doesn't know about; the two came apart. `mill mcp.test.resetLocalStack` recreates the container *with its volume*, which `stopLocalStack` does not. |
-| The backoffice's upload or UniFi page is blank | Its script isn't in the bucket. `mill client.publish --bucket captal-assets-dev --endpoint http://localhost:4566` once. `mcp.dev` does not publish it. |
+| The backoffice's upload or UniFi page is blank | Its script isn't in the bucket. `mill client.publish --bucket captal-assets-dev --endpoint http://localhost:4567` once. `mcp.dev` does not publish it. |
 | Anything local is wedged and you want a clean slate | `mill mcp.destroyLocal` — every container this build starts, LocalStack's volume, the ECS task containers it spawned, and the images built here. Nothing to clean afterwards: the tofu state is keyed by container id, so the next run builds both together. |
 | `LocationNotFound` and the process exits immediately | The slug doesn't exist in `locations` yet. Create it through the backoffice first (step 2). |
 | `No result set returned` after a restart | rqlite's data was wiped — the dev container has no volume by default. Re-create the content through the backoffice, or mount a volume yourself. |

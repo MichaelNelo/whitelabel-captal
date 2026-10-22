@@ -135,10 +135,16 @@ the content a location's API later reads, and running them against two different
 defeat the point of running both. Migrations run `McpMigrate` (its own history table,
 `db/migration-mcp`) in a forked process. `ensureLocalStack` then starts (or reuses) a `localstack-dev`
 container, creates the `captal-assets-dev` bucket with permissive CORS for the upload flow, and
-creates a real CloudFront distribution over it once (`ensureDistribution`) — a made-up distribution
-id used to be substituted here while invalidation calls against a local endpoint were skipped
-entirely; once that skip was removed, a fictional id started failing the last step of every asset
-write with the object already stored but nothing to invalidate.
+creates a real CloudFront distribution over it once (`ensureDistribution`), so an asset write's
+invalidation has a real distribution to invalidate.
+
+LocalStack runs on port **4567**, not its default 4566, so it coexists with other projects' LocalStack
+containers. It is the same port inside the container and out: `GATEWAY_LISTEN` moves the listener and
+`LOCALSTACK_HOST` names it, because LocalStack writes that host into every URL it returns — an ECR
+repository URI, the endpoint its own ECS tasks are given — and `awslocal` dials it from inside the
+container. A URL saying 4566 would reach whichever LocalStack holds that port; one saying 4567 while
+LocalStack listened on 4566 inside would reach nothing. A container started on any other port is
+replaced, not reused.
 
 Step 4 applies `environments/local` — the same configuration the AWS environments use, against the
 same LocalStack container, sharing `mcp.test.localStackInfra`'s state so the two cannot come apart.

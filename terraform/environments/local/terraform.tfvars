@@ -11,8 +11,10 @@ aws_region   = "us-east-1"
 project_name = "captal"
 environment  = "local"
 
-# This single variable selects LocalStack over AWS; see the providers in versions.tf.
-aws_endpoint_url = "http://localhost:4566"
+# This single variable selects LocalStack over AWS; see the providers in versions.tf. The build passes
+# its own value with -var, from the port it started the container on, so this one only matters for a
+# plan run by hand -- keep it on the same port.
+aws_endpoint_url = "http://localhost:4567"
 
 # Off, each for its own reason:
 #

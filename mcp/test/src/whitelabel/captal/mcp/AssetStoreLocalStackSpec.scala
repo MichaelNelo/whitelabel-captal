@@ -20,10 +20,19 @@ import zio.test.*
   * rather than failing for a reason that has nothing to do with the change under test.
   */
 object AssetStoreLocalStackSpec extends ZIOSpecDefault:
-  private val Endpoint = "http://localhost:4566"
+  /** The build's own LocalStack, as `mcp.test` reports it. Unset, the specs below skip rather than
+    * guess a port, which would reach whichever LocalStack happens to hold it.
+    */
+  private val Endpoint = sys.env.getOrElse("LOCALSTACK_ENDPOINT", "")
   private val Bucket = "captal-assets-test"
 
-  private def reachable: ZIO[Any, Nothing, Boolean] = ZIO
+  private def reachable: ZIO[Any, Nothing, Boolean] =
+    if Endpoint.isEmpty then
+      ZIO.succeed(false)
+    else
+      reachableAt
+
+  private def reachableAt: ZIO[Any, Nothing, Boolean] = ZIO
     .attemptBlocking:
       val connection = java
         .net

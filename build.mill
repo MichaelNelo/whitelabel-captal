@@ -329,9 +329,18 @@ private def ensureLocalStack(
     else
       "0/0"
 
+  // One port inside and out. `LOCALSTACK_HOST` is what LocalStack writes into every URL it returns —
+  // an ECR repository URI, the endpoint its own ECS tasks are given — and what `awslocal` dials from
+  // inside the container, so it has to name a port LocalStack actually listens on there too.
+  // `GATEWAY_LISTEN` moves that listener off the default 4566.
+  val localStackHost = s"localhost.localstack.cloud:$hostPort"
+  val gatewayListen = s"0.0.0.0:$hostPort,0.0.0.0:443"
+
   val running = os.proc("docker", "ps", "-q", "-f", s"name=$containerName").call().out.trim()
   val reusable = running.nonEmpty && localStackServices(containerName).contains(services) &&
-    localStackImage(containerName).contains(image) && localStackIam(containerName) == iam
+    localStackImage(containerName).contains(image) && localStackIam(containerName) == iam &&
+    localStackEnv(containerName, "LOCALSTACK_HOST").contains(localStackHost) &&
+    localStackEnv(containerName, "GATEWAY_LISTEN").contains(gatewayListen)
 
   if reusable then
     println(
@@ -341,7 +350,9 @@ private def ensureLocalStack(
       println(
         s"[localstack] '$containerName' is running ${localStackImage(containerName)
             .getOrElse("<unknown>")} with SERVICES=${localStackServices(containerName)
-            .getOrElse("<unset>")} and IAM=${localStackIam(containerName)}, replacing it with $image / $services / $iam")
+            .getOrElse("<unset>")}, IAM=${localStackIam(containerName)} and LOCALSTACK_HOST=${localStackEnv(
+            containerName,
+            "LOCALSTACK_HOST").getOrElse("<unset>")}, replacing it with $image / $services / $iam / $localStackHost")
     os.proc("docker", "rm", "-f", containerName).call(check = false, stderr = os.Pipe)
     println(
       s"[localstack] Starting '$containerName' on port $hostPort (${
@@ -372,7 +383,11 @@ private def ensureLocalStack(
         "--name",
         containerName,
         "-p",
-        s"$hostPort:4566",
+        s"$hostPort:$hostPort",
+        "-e",
+        s"GATEWAY_LISTEN=$gatewayListen",
+        "-e",
+        s"LOCALSTACK_HOST=$localStackHost",
         "-e",
         s"SERVICES=$services",
         licensedArgs,
@@ -670,6 +685,7 @@ private def ensureLocalStackTofu(
     "-input=false",
     "-target=module.rqlite.aws_ecr_repository.rqlite",
     "-var-file=environments/local/terraform.tfvars",
+    s"-var=aws_endpoint_url=$endpoint",
     s"-state=$state")
   if registry.exitCode != 0 then
     fail("the rqlite registry apply", registry)
@@ -693,6 +709,8 @@ private def ensureLocalStackTofu(
     "-auto-approve",
     "-input=false",
     "-var-file=environments/local/terraform.tfvars",
+    // After the file, so it wins: the build's port is the one the container was started on.
+    s"-var=aws_endpoint_url=$endpoint",
     s"-state=$state")
   if applied.exitCode != 0 then
     fail("apply", applied)
@@ -1642,7 +1660,10 @@ object mcp extends BaseModule:
     // artifact.
     super.resources() ++ Seq(PathRef(Task.dest))
 
-  private val localStackPort = 4566
+  /** LocalStack's port, on the host and inside the container alike. Not its default 4566, which
+    * other projects' LocalStack containers take.
+    */
+  private val localStackPort = 4567
   private val devPort = 8081
 
   def localStackSetup() = Task.Command:
@@ -1862,7 +1883,7 @@ object mcp extends BaseModule:
     name
 
   /** Push the image into a registry, which locally means LocalStack's own ECR. Usage:
-    * `./mill mcp.imagePush --registry 000000000000.dkr.ecr.us-east-1.localhost.localstack.cloud:4566 --repository captal-mcp-local`
+    * `./mill mcp.imagePush --registry 000000000000.dkr.ecr.us-east-1.localhost.localstack.cloud:4567 --repository captal-mcp-local`
     *
     * Separate from [[image]] because building is the common case and pushing needs a registry that
     * exists. Against LocalStack the registry is the one `tofu apply` created, which is what
@@ -2148,7 +2169,14 @@ object mcp extends BaseModule:
           // No `CLOUDFRONT_DISTRIBUTION_ID` here: `localStackInfra` supplies the real one it
           // created. It used to be a made-up value, needed only because `AssetStore.layer` requires
           // the name and safe only because a flag kept the client from ever being called.
-          "PUBLIC_BASE_URL"            -> "https://portal.test"
+          "PUBLIC_BASE_URL"            -> "https://portal.test",
+          // The local configuration has no Tailscale proxy, so this stands in for its output. The
+          // end-to-end spec asserts a deployed task carries it; unset, that assertion could not
+          // tell a forwarded value from a missing one.
+          "UNIFI_PROXY_URL"            -> "http://tailscale-proxy.test:1055",
+          // Set with or without a licence: the S3 specs need LocalStack either way, and only the
+          // build knows which port it started it on.
+          "LOCALSTACK_ENDPOINT"        -> localStackStamp().split(" ")(1)
         ) ++ localStackInfra()
 
     def stopRqlite() = Task.Command:
