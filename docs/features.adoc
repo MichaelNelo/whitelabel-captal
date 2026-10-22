@@ -4,8 +4,8 @@
 
 The guest-facing capabilities of the portal, and the rules that govern them: which question is
 asked when, what a repeat visit skips, how a video is chosen, when access is granted, and when it
-expires. xref:overview.adoc[System overview] has the journey in one page; this document has the
-specifics behind each step. For the mechanism that carries a guest from one step to the next —
+expires. xref:../readme.adoc[The repository readme] has the journey in one page; this document has
+the specifics behind each step. For the mechanism that carries a guest from one step to the next —
 events, the two handler chains, the full endpoint-by-endpoint table — see
 xref:event-sourcing.adoc[Event sourcing]. For the wire shapes, xref:api.adoc[Guest API]; for the
 controller integration, xref:unifi.adoc[UniFi integration]; for how an operator populates any of

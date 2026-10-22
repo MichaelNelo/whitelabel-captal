@@ -1,13 +1,56 @@
 = platform
 
-Everything the guest-facing server and the backoffice both need to touch lives here: where a
-location's content, its guests, their answers and their sessions are stored, and the connection
-to a venue's WiFi controller that puts a device online and takes it off again when its time runs
-out.
+Everything the guest-facing server and the backoffice both need to touch: where a location's
+content, its guests, their answers and their sessions are kept, and the connection out to the
+venue's gateway.
 
-It is shared rather than duplicated because both sides are describing the same guest and the
-same location; if each kept its own copy of that connection, the two could end up disagreeing
-about who is actually online.
+Shared rather than duplicated because both sides describe the same guest and the same location. If
+each kept its own copy of the gateway connection, the two could end up disagreeing about who is
+actually online.
+
+== What it implements
+
+`core` declares what it needs and nothing about how it is stored. This module is the answer:
+
+[cols="1,3"]
+|===
+| Needed by `core` | Provided here
+
+| Guests
+| Who they are, what they have answered, and the lookup that recognises a returning one.
+
+| Surveys and questions
+| A location's questions, their options, and the rules an answer must satisfy.
+
+| Videos
+| What a location has in rotation, and the weighted pick that decides what a given guest sees.
+
+| Sessions
+| Where a guest stands in the journey, when their access was granted, and when it runs out.
+|===
+
+Every write is verified rather than assumed: the database can refuse a statement inside a response
+that otherwise looks successful, so a write that changed no rows is treated as a failure instead of
+a silent no-op.
+
+Soft deletes are the rule for a location's content, which means a delete is only real if every read
+path filters it out — a column nobody consults is a delete that does not delete, and the symptom is
+the backoffice reporting success while the portal keeps serving the row.
+
+== Reaching the venue's gateway
+
+The gateway is a UniFi device on the venue's own premises. Two operations matter:
+
+* *Authorise* — find the guest's device by its hardware address, then let it online.
+* *Revoke* — the same in reverse, when the access expires.
+
+Neither is reachable directly: the gateway sits behind the venue's own network. Calls route through
+a Tailscale node that picks up the subnet the venue's router advertises and offers it as an outbound
+proxy, which is what gives a service running in the cloud a path to a gateway on a LAN.
+
+Expiry is this module's job too. A scheduled job revokes access when its time is up, because nothing
+in the gateway tells us — without it a guest would keep their access until someone noticed.
 
 Architecture: xref:../docs/platform.adoc[docs/platform.adoc]. Database semantics:
-xref:../docs/database.adoc[docs/database.adoc].
+xref:../docs/database.adoc[docs/database.adoc]. Gateway contract:
+xref:../docs/unifi.adoc[docs/unifi.adoc].

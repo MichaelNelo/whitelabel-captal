@@ -1,20 +1,74 @@
 = api
 
-A location is one physical venue — a café, a hotel, a shop — that offers WiFi through the
-portal. Each location has its own public address, its own branding, its own languages, its own
-questions, its own advertiser videos and its own venue controller, and this server is the one
-process that serves exactly one of them.
+The guest-facing server. One process serves exactly one location, and knows which one from the
+moment it boots — it refuses to start if that location does not exist, rather than running and
+serving nothing.
 
-It is where the guest journey actually happens. When a guest's device is held by the venue's
-controller and redirected here, this server opens their session, asks the identification and
-advertiser questions in order, and skips whatever this guest already answered — even if they
-answered it at a different location, because a guest is recognized across the business, not
-just within one venue. It serves the video and its survey, and when the journey completes it is
-the one that tells the venue's controller to let the device online. When that access's bounded
-time runs out, it is revoked here too, and the guest repeats the cycle with only the questions
-still outstanding.
+A location is one physical venue — a café, a hotel, a shop — with its own public address, branding,
+languages, questions, video rotation, advertisers and gateway. This server is where that venue's
+guest journey actually happens.
 
-This server only reads a location's content — its questions, its video rotation, its branding.
-Publishing or changing any of that is the backoffice's job, not this one's.
+It only ever reads a location's content. Everything in it was written by the backoffice.
+
+== What it serves, in order
+
+A guest's device is held by the venue's gateway and redirected here. From then on the order is not
+the browser's choice: every request is checked against the phase the session is in, and one that
+does not belong to that phase is refused. A guest cannot skip the video by asking for the finish
+endpoint.
+
+[cols="1,3"]
+|===
+| Step | What the server does
+
+| Open a session
+| Issues the session on first contact and recognises the returning guest, if there is one, from a
+  cookie that spans every location in the deployment.
+
+| Offer a language
+| Lists what this location was translated into, serves the text for one, and remembers the choice on
+  the session.
+
+| Ask one question
+| Hands over the next identification question, takes the answer, and answers with the phase the
+  guest now belongs in. Separate paths for the email, profiling and location pools, because each
+  means something different to the venue.
+
+| Play a video
+| Picks what this guest should see — an advertiser's video or a venue promo — and records that it
+  was watched when playback reaches the end.
+
+| Ask about it
+| Hands over the question attached to that video, if it has one unanswered, and takes the answer.
+
+| Grant access
+| On completion, tells the venue's gateway to let the device online and sets the moment the access
+  runs out.
+
+| Report status
+| Says where the session stands and how long is left, which is what lets a tab left open stay
+  honest.
+|===
+
+Granting access is not the end of its work. A scheduled job inside the server revokes the access on
+the gateway when it expires and returns the session to the start, because nothing in the gateway
+tells us when the time is up. A reconnecting guest then repeats the cycle with only the questions
+still unanswered.
+
+== Two cookies, on purpose
+
+The session cookie is scoped to this location: two venues on the same domain do not share a session,
+so walking into another café starts a fresh journey there.
+
+The guest cookie is not scoped. It spans the deployment, which is what lets a returning guest skip
+what they already answered somewhere else — the thing that makes the questions feel like they are
+going somewhere instead of starting over at every door.
+
+== When it cannot serve
+
+Failures reach the guest as one error page with a retry, with the reason named rather than swallowed.
+The server answers the same way whether the problem is a question that no longer exists, a session
+that expired, or a gateway that did not respond — the portal does not have to know how to render
+each kind.
 
 Architecture: xref:../docs/api.adoc[docs/api.adoc].

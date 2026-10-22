@@ -1,0 +1,105 @@
+= Captal
+
+A white-label captive portal. A guest connects to a venue's WiFi, the venue's gateway holds their
+traffic and redirects them here, the portal asks them a question, plays them an advertiser's video
+and asks about it, and on completion the system tells the gateway to let that device online for a
+bounded time. Every venue gets its own portal, its own content and its own branding out of one
+codebase.
+
+[cols="1,3"]
+|===
+| Subproject | What it contributes
+
+| xref:core/readme.adoc[`core/`]
+| The rules of the guest journey: which question comes next, what counts as a valid answer, when
+  access is granted and when it expires. The same rules run in the browser and on the server.
+
+| xref:messages/readme.adoc[`messages/`]
+| The vocabulary the portal and the guest-facing server use to talk to each other, defined once so
+  the two halves cannot disagree.
+
+| xref:platform/readme.adoc[`platform/`]
+| Where a location's content, its guests, their answers and their sessions are stored, and the
+  connection out to the venue's gateway.
+
+| xref:api/readme.adoc[`api/`]
+| The guest-facing server. One process serves one location.
+
+| xref:client/readme.adoc[`client/`]
+| Everything a browser loads: the portal a guest sees, the pages the backoffice embeds, and the
+  maintenance page.
+
+| xref:mcp/readme.adoc[`mcp/`]
+| The backoffice. Where locations, questions, videos, advertisers and translations are created.
+
+| xref:terraform/readme.adoc[`terraform/`]
+| The cloud footprint a deployment runs on.
+|===
+
+== Who gets what
+
+[cols="1,3"]
+|===
+| Guest | Free WiFi, in exchange for a question and an advertiser's video.
+| Venue | Identification data about the people on its network, and a channel to advertise in.
+| Advertiser | A captive audience with demographic and location data attached to it.
+|===
+
+A *location* is one physical venue — a café, a hotel, a shop. It is the unit everything is scoped
+by: its own public address, branding, languages, questions, video rotation, advertisers and gateway.
+Its short name is permanent, because it is part of that public address.
+
+Guests are not scoped to a location. A returning guest is recognised across the whole deployment, so
+they are never asked again for something they already answered somewhere else.
+
+== The guest journey
+
+A session moves through seven phases. The portal shows a page per phase and the server refuses
+requests that do not belong to the phase the session is in, so the two cannot drift apart.
+
+. *Welcome* — the portal loads and the language is detected or chosen.
+. *IdentificationQuestion* — **one** question per visit, taken from the email, profiling and
+  location pools in that order and served in the operator's `display_order`. Answering it advances
+  the phase; what the guest has already answered is skipped, so a returning guest starts further in.
+. *AdvertiserVideo* — an advertiser's video or a venue promo, drawn by a weighted random pick across
+  advertiser and video priority.
+. *AdvertiserVideoSurvey* / *AdvertiserQuestion* — the survey attached to what was just watched, if
+  that video has a question still unanswered; otherwise a general advertiser question.
+. *Ready* — the journey is complete and the system is calling the gateway.
+. *Authorized* — the gateway confirmed. The guest has internet until `accessExpiresAt`.
+
+The video gate is completion: the browser's own end-of-playback event is what counts, not a timer.
+
+When the access expires, a scheduled job inside this system revokes it on the gateway and the
+session returns to *Welcome*. Nothing in the gateway notifies us — the expiry is ours to track. A
+reconnecting guest repeats the cycle with whatever questions are still unanswered, which is how a
+venue keeps learning about its regulars instead of asking everything once.
+
+Access lasts `unifi_duration_minutes`, set per location, 24 hours by default.
+
+== Reaching the venue's gateway
+
+The gateway is a UniFi device on the venue's own premises, behind its own NAT. Captal runs in AWS.
+Two things bridge that gap.
+
+*Tailscale* is the path out. The deployment runs a Tailscale node that accepts the subnet the
+venue's on-premise router advertises, and exposes an outbound HTTP proxy that the guest-facing
+server's calls route through. That is how a task in AWS reaches a gateway on a LAN it has no route
+to. The same node advertises the private network back into the tailnet, which is only used for
+reaching the database directly when debugging.
+
+*The portal dispatcher* is the path in. A device being held by a gateway is redirected to a fixed
+address; the dispatcher looks the venue up by the access point's hardware address and redirects the
+device on to that location's own portal. Without it every venue would need its own redirect
+configured by hand.
+
+Granting access is two calls to the gateway: find the client by hardware address, then authorise it.
+Revoking is the same in reverse. Both go through the proxy above.
+
+== Reading further
+
+* xref:docs/readme.adoc[The documentation index] — architecture per area, and the context tree
+  that records why things are the way they are.
+* xref:docs/features.adoc[Features] — the journey in full detail, including what is stored but not
+  yet used.
+* xref:agents.adoc[`agents.adoc`] — read this first if you are an agent working in this repository.

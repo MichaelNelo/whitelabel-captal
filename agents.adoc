@@ -16,8 +16,9 @@ This file is an index. Everything that used to be written out here now lives in 
    has already gone wrong and what was learned, and what is still pending. Written for you, not
    for a human reader. Read it before changing anything: it exists so you do not repeat a mistake
    that has already been made and paid for.
-2. *`docs/overview.adoc`* — the system on one page: the modules, the guest journey, how a
-   request flows.
+2. *`readme.adoc`* at the repository root — what the product is, the guest journey phase by phase,
+   and the subproject table. Then *`docs/overview.adoc`* for the technical shape: how a request
+   travels and how the two sides divide one database.
 3. *The architecture doc for the area you are touching.* Index: `docs/readme.adoc`.
 4. *The relevant skill.* Operational skills (add a location, a video, a survey; troubleshoot;
    recover data) live in `mcp/resources/skills/<name>/SKILL.md` and are served to a model by the

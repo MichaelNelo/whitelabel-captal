@@ -1,26 +1,65 @@
 = client
 
-Everything a guest or an operator looks at in a browser lives here.
+Everything a guest or an operator looks at in a browser. Three audiences, one codebase: the portal
+a guest is redirected to, the pages the backoffice embeds for the jobs that need clicking, and the
+page a paused location serves instead of the portal.
 
 == The captive portal
 
-This is the page a guest's device is redirected to: the identification questions, the
-advertiser video and its survey, and the screen that tells them they are online. It is the only
-part of the business a guest ever actually sees, so its wording, its branding and its languages
+The only part of the business a guest ever sees, which is why its wording, branding and languages
 are what make a location feel like that location rather than a generic form.
+
+One screen per phase of the journey, and the screen is chosen by the phase the server reports — not
+by where the guest clicked. A reload, a return hours later or a switch to another device all land on
+the screen their answers say they should.
+
+[cols="1,3"]
+|===
+| Screen | What the guest sees
+
+| Welcome
+| Title, subtitle, the three steps ahead of them, a language picker and the start button. Pressing
+  start sets the language, asks the server what comes next and goes there.
+
+| Question
+| One question at a time, rendered to suit its type — free text, radio, select, checkboxes, a
+  number, a date, a rating. Answers are checked in the browser before being sent, using the same
+  rules the server will apply.
+
+| Video
+| The advertiser's video, with an intro overlay, custom controls and a progress ring. Completion is
+  reported when playback actually reaches the end.
+
+| Post-video question
+| The question attached to what was just watched. Same card and same checking as the identification
+  question.
+
+| Ready
+| The waiting screen while the system asks the venue's gateway to let the device online.
+
+| Countdown
+| Once online, how long is left, counted down locally and re-checked against the server so a tab
+  left open does not drift.
+
+| Error
+| One page for everything that can go wrong, with a retry. It can load a language by itself when the
+  failure happened before one was known, so it is never untranslated.
+|===
+
+A shared shell wraps all of them and owns the loading transition, so moving between screens is one
+continuous motion rather than a flash of empty page per step.
 
 == The backoffice's pages
 
-Running the backoffice is mostly a conversation with a model, but a couple of jobs need a page a
-person can look at and click through directly: uploading a location's images and videos, and
-configuring the venue's WiFi controller. Those pages live here too, embedded inside the
-backoffice.
+Running the backoffice is mostly a conversation with a model, but two jobs need a page a person can
+look at and click through: uploading a location's images and videos, and configuring the venue's
+gateway. Both are embedded inside the backoffice rather than being a site of their own.
 
 == The maintenance page
 
-While a location is paused — being set up, or taken offline for a reason the venue needs to
-explain — this is the page its guests see instead of the portal, so "the WiFi is broken" never
-has to be the story.
+While a location is paused — being set up, or taken offline for a reason the venue needs to explain
+— this is what its guests get instead of the portal, so "the WiFi is broken" never has to be the
+story.
 
 Architecture: xref:../docs/client.adoc[docs/client.adoc]. CSS reference:
 xref:../docs/client-styling.adoc[docs/client-styling.adoc].

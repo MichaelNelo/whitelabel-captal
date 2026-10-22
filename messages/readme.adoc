@@ -1,16 +1,56 @@
 = messages
 
-The portal and the guest-facing server need to agree, word for word, on how they talk to each
-other: what a request looks like, what a response looks like, and what a guest is shown when
-something goes wrong instead of a raw failure. That shared vocabulary is defined here, once.
+The vocabulary the portal and the guest-facing server use to talk to each other: what is asked, what
+comes back, and what the guest is told when something goes wrong.
 
-It also carries the translated text the portal renders — the questions, the labels, the error
-messages — in whatever language a location's guests need. Because the definition lives in one
-place rather than two, a change to it cannot leave the portal expecting one shape while the
-server sends another.
+Defined once and compiled into both sides, so a change cannot leave the two halves disagreeing about
+the shape of a request. A field renamed here fails to compile on whichever side was not updated,
+instead of becoming a silently missing value in a browser.
 
-Without a shared definition, the two sides could each change on their own schedule, and a guest
-would be the one who pays for the mismatch: a blank screen, or an error with no words in it at
-all, instead of a message they can read and act on.
+== What crosses the wire
+
+[cols="1,3"]
+|===
+| Type | Carries
+
+| `SurveyResponse`
+| The next identification question: its text, its type, its options, and the rules an answer has to
+  satisfy.
+
+| `AdvertiserSurveyResponse`
+| The question that follows a video, same shape as above.
+
+| `AnswerRequest`
+| An answer going the other way.
+
+| `VideoResponse`
+| What to play: its address, and whatever the player needs to know about it.
+
+| `MarkVideoWatchedRequest` / `VideoWatchedResponse`
+| That playback reached the end, and what the server makes of that.
+
+| `StatusResponse`
+| Where the session stands and how long the access has left.
+
+| `SetLocaleRequest`
+| The language the guest picked.
+
+| i18n payload
+| Every piece of text the portal renders, for one language.
+
+| `ApiError`
+| Why a request was refused — 38 variants.
+|===
+
+== Why the errors are enumerated
+
+`ApiError` names each refusal rather than returning a message: the session is missing, the phase is
+wrong, an option that was not offered was selected, a rating is out of range, a question was already
+answered. The portal maps them to text in the guest's own language, which it cannot do with a
+sentence the server wrote in English.
+
+Both halves of that mapping are derived from this one definition. They used to be written by hand
+and had drifted apart for 22 of the variants: the server could report a refusal the browser had no
+way to read.
 
 Architecture: xref:../docs/messages.adoc[docs/messages.adoc].

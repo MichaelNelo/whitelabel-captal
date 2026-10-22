@@ -17,8 +17,10 @@ describes, it is architecture; if it stops making sense, it was context.
 
 == Start here
 
-* xref:overview.adoc[System overview] — the product, the guest journey, the modules, how a request
-  flows. Read this first.
+* xref:../readme.adoc[The repository readme] — what the product is, the guest journey, and the
+  subprojects. Read this first.
+* xref:overview.adoc[How the system fits together] — how a request travels end to end, and how the
+  guest side and the operator side divide one database.
 * xref:development.adoc[Local development] — prerequisites, the build, running the stack, the
   command reference.
 
