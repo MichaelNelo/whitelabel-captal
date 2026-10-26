@@ -22,7 +22,8 @@ YAML.
 ## Step 1 — Start the MCP backoffice
 
 ```bash
-mill mcp.dev
+mill mcp.dev            # localhost only
+mill mcp.dev --tunnel   # also public, through a Cloudflare quick tunnel
 ```
 
 Six steps, in order:
@@ -35,9 +36,12 @@ Six steps, in order:
    `LOCALSTACK_AUTH_TOKEN` is configured. This also builds and pushes the rqlite image. On a fresh
    container it is **minutes, not seconds** — it is not hung. Without a token the step is skipped and
    the deploy tools are simply not registered.
-5. Runs `cloudflared tunnel run` pointed at `:8081`, when `CLOUDFLARE_TUNNEL_TOKEN` is set, and
-   kills it when the server exits. Unset, the step says so and is skipped.
-6. Starts the backoffice on `:8081` with a **fixed** admin token, `dev-token`.
+5. With `--tunnel`, opens a Cloudflare quick tunnel to `:8081` and waits for its
+   `https://<random>.trycloudflare.com` URL, which changes every run. No account or token is
+   needed. The tunnel closes when the server exits. Without the flag the step is skipped.
+6. Starts the backoffice on `:8081` with a **fixed** admin token, `dev-token`. With `--tunnel` the
+   server is public, so the admin token is random and printed instead, and the server's address is
+   the tunnel URL. `--token <value>` overrides either.
 
 The backoffice's own `Main` then runs `McpMigrate` itself as part of its boot, after checking the API
 schema is already at the version it requires — that check is what fails loudly if `platform.Migrate`

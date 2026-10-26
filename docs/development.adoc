@@ -150,17 +150,26 @@ It is what gives the backoffice a cluster, subnets, a listener and two task role
 the deploy tools are not registered at all. It also builds and pushes the rqlite image. On a fresh
 container this is minutes, not seconds. Empty without a LocalStack licence, and then a no-op.
 
-Step 5 runs `cloudflared tunnel run` for as long as the server is up, pointed at
-`http://localhost:<port>`, and kills it on exit. It needs `CLOUDFLARE_TUNNEL_TOKEN` — the same token
-`cloudflared service install` takes; `tunnel run` is used instead so nothing is installed on the
-machine. Unset, the step says so and is skipped. `TUNNEL_URL` is the origin only for a tunnel with no
-ingress rules of its own; one with a public hostname configured in Cloudflare takes its origin from
-there instead.
+Step 5 runs only with `mill mcp.dev --tunnel`. It opens a Cloudflare quick tunnel, `cloudflared
+tunnel --url http://localhost:<port>`, which needs no account, token or domain, and closes it when
+the server exits. Its address is a random `https://<name>.trycloudflare.com` that changes every run
+and is known only once `cloudflared` prints it, so the step waits for that line before the server
+starts. The server is then given that address as `MCP_RESOURCE_URI`: the UniFi and upload pages post
+to it and declare it in their CSP, and a localhost address there would break them for anyone reaching
+the server through the tunnel. Only `cloudflared`'s error lines reach the terminal.
+
+A quick tunnel does not carry Server-Sent Events. The backoffice's stateless routes answer a tool
+call with plain JSON unless the client asks for progress or log notifications, or opens
+`subscriptions/listen`. Those two paths answer with SSE and may not work through the tunnel. Quick
+tunnels also cap a tunnel at 200 in-flight requests and carry no uptime guarantee.
 
 The backoffice starts on port 8081 with a **fixed** admin token, `dev-token` — not generated, because
 it is meant to be copied once into an MCP host's configuration by hand, and a token that changed
-every run would be miscopied more often than it would ever be stolen. The task prints a ready-to-paste
-block:
+every run would be miscopied more often than it would ever be stolen. With `--tunnel` that no longer
+holds. The server is public and `dev-token` is written here, so the token is random instead. Seeding
+replaces the admin row in place, so `dev-token` stops working until the next run without the flag.
+`--token <value>` overrides either. The task prints a ready-to-paste block, addressed to the tunnel
+when there is one:
 
 [source,json]
 ----

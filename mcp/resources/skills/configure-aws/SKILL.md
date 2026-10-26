@@ -45,7 +45,7 @@ something a tool would otherwise discover halfway through a write.
 | `AWS_ENDPOINT_URL` | optional | Points S3 at LocalStack for local work; brings path-style addressing with it |
 
 Locally, `mill mcp.dev` supplies all of them against a dev rqlite container and LocalStack, with
-`dev-token` as the admin token.
+`dev-token` as the admin token, or a random one when it is started with `--tunnel`.
 
 ## AWS credentials
 

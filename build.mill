@@ -1724,9 +1724,16 @@ object mcp extends BaseModule:
     * one that changed every run would be copied wrong more often than it would be secure. It is a
     * local server holding local data.
     *
-    * Usage: mill mcp.dev
+    * `--tunnel` publishes it through a Cloudflare quick tunnel, at a `trycloudflare.com` URL that
+    * changes every run. The server is then public and `dev-token` is written in the docs, so the
+    * token is random instead; `--token` still overrides it.
+    *
+    * Usage: mill mcp.dev, or mill mcp.dev --tunnel
     */
-  def dev(port: Int = devPort, token: String = "dev-token") = Task.Command:
+  def dev(
+      port: Int = devPort,
+      token: Option[String] = None,
+      tunnel: mainargs.Flag = mainargs.Flag()) = Task.Command:
     val migrationCp = platform.runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
     val cp = runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
 
@@ -1742,6 +1749,11 @@ object mcp extends BaseModule:
 
     println("[dev] Step 3/6: Ensuring LocalStack...")
     val endpoint = ensureLocalStack(localStackContainer, localStackPort, devBucket, Task.env)
+    // A real distribution over the dev bucket, created once. It was a made-up id while every
+    // invalidation against a local endpoint was skipped; now that the skip is gone, an asset write
+    // in this flow really does invalidate, and a fictional id would fail the write's last step with
+    // the object already stored.
+    val distributionId = ensureDistribution(localStackContainer, "captal-mcp-dev", devBucket)
 
     // The same configuration the AWS environments use, applied against the same LocalStack
     // container the suite uses — one state, because two states over one container come apart and
@@ -1753,29 +1765,48 @@ object mcp extends BaseModule:
     if infra.isEmpty then
       println("[dev]   no LocalStack licence, so no cluster; the deploy tools stay unregistered")
 
-    // The same token `cloudflared service install` takes, used with `tunnel run` instead: a service
-    // install would outlive the session and change the machine, and this ends when the server does.
-    //
-    // Both values travel in the environment rather than on the command line, so the token stays out
-    // of the process table. `TUNNEL_URL` is the origin only for a tunnel with no ingress rules of
-    // its own; one with a public hostname configured in Cloudflare takes the origin from there.
-    println(s"[dev] Step 5/6: Opening the Cloudflare tunnel...")
-    val tunnel = Task
-      .env
-      .get("CLOUDFLARE_TUNNEL_TOKEN")
-      .map(_.trim)
-      .filter(_.nonEmpty)
-      .map: tunnelToken =>
-        os.proc("cloudflared", "tunnel", "run")
-          .spawn(
-            env = Map(
-              "TUNNEL_TOKEN" -> tunnelToken,
-              "TUNNEL_URL"   -> s"http://localhost:$port"),
-            stdout = os.Inherit,
-            stderr = os.Inherit)
-    if tunnel.isEmpty then
-      println(
-        "[dev]   no CLOUDFLARE_TUNNEL_TOKEN, so no tunnel; the server answers on localhost only")
+    // A quick tunnel needs no account and no configuration, and its URL exists only once cloudflared
+    // prints it. The server is told its own address at start, so it waits for that line.
+    println("[dev] Step 5/6: Opening the Cloudflare tunnel...")
+    val tunnelUrlPattern = """https://[a-z0-9-]+\.trycloudflare\.com""".r
+    val announcedUrl = scala.concurrent.Promise[String]()
+    val closing = java.util.concurrent.atomic.AtomicBoolean(false)
+    // Only errors reach the terminal; cloudflared's info lines would bury the server's own. The ones
+    // it prints while being stopped are not errors.
+    val onTunnelLine: String => Unit =
+      line =>
+        tunnelUrlPattern.findFirstIn(line).foreach(announcedUrl.trySuccess)
+        if line.contains(" ERR ") && !closing.get then
+          System.err.println(s"[tunnel] $line")
+    val tunnelProc =
+      Option.when(tunnel.value):
+        os.proc("cloudflared", "tunnel", "--url", s"http://localhost:$port")
+          .spawn(stdout = os.Inherit, stderr = os.ProcessOutput.Readlines(onTunnelLine))
+    val publicUrl = tunnelProc.map: proc =>
+      val deadline = System.nanoTime + 60_000_000_000L
+      while !announcedUrl.isCompleted && proc.isAlive() && System.nanoTime < deadline do
+        Thread.sleep(200)
+      announcedUrl
+        .future
+        .value
+        .flatMap(_.toOption)
+        .getOrElse:
+          proc.destroy()
+          sys.error("[dev] cloudflared gave no trycloudflare.com URL within a minute")
+    publicUrl match
+      case Some(url) =>
+        println(s"[dev]   $url (it can take a few seconds to resolve)")
+      case None =>
+        println("[dev]   no --tunnel, so the server answers on localhost only")
+
+    val resourceUri = s"${publicUrl.getOrElse(s"http://localhost:$port")}/mcp"
+    val adminToken = token.getOrElse:
+      if tunnel.value then
+        val bytes = new Array[Byte](32)
+        java.security.SecureRandom().nextBytes(bytes)
+        java.util.HexFormat.of().formatHex(bytes)
+      else
+        "dev-token"
 
     println(s"[dev] Step 6/6: Starting MCP backoffice on :$port")
 
@@ -1783,21 +1814,16 @@ object mcp extends BaseModule:
       forkEnv() ++
         infra ++
         Map(
-          "DB_URL"           -> dbUrl,
-          "MCP_PORT"         -> port.toString,
-          "MCP_RESOURCE_URI" -> s"http://localhost:$port/mcp",
+          "DB_URL"   -> dbUrl,
+          "MCP_PORT" -> port.toString,
+          // The address a client reaches, which is where the UniFi and upload pages post. Behind
+          // the tunnel that is the tunnel, not localhost.
+          "MCP_RESOURCE_URI" -> resourceUri,
           // Seeds the admin row, which holds every scope. Other tokens are issued from it with
           // `create_token`; a local run only ever needs the one.
-          "MCP_ADMIN_TOKEN" -> token,
-          "ASSETS_BUCKET"   -> devBucket,
-          // A real distribution over the dev bucket, created once. It was a made-up id while every
-          // invalidation against a local endpoint was skipped; now that the skip is gone, an asset
-          // write in this flow really does invalidate, and a fictional id would fail the write's
-          // last step with the object already stored.
-          "CLOUDFRONT_DISTRIBUTION_ID" -> ensureDistribution(
-            localStackContainer,
-            "captal-mcp-dev",
-            devBucket),
+          "MCP_ADMIN_TOKEN"            -> adminToken,
+          "ASSETS_BUCKET"              -> devBucket,
+          "CLOUDFRONT_DISTRIBUTION_ID" -> distributionId,
           // Where the portal fetches an asset from, which is what gets stored as a video's
           // `video_url`. In production this is the CloudFront distribution; locally it is the
           // bucket on LocalStack, path-style.
@@ -1837,8 +1863,8 @@ object mcp extends BaseModule:
       |
       |  "captal": {
       |    "command": "npx",
-      |    "args": ["mcp-remote", "http://localhost:$port/mcp",
-      |             "--header", "Authorization: Bearer $token"]
+      |    "args": ["mcp-remote", "$resourceUri",
+      |             "--header", "Authorization: Bearer $adminToken"]
       |  }
       |
       |$seeded""".stripMargin)
@@ -1849,7 +1875,8 @@ object mcp extends BaseModule:
     finally
       // Or the tunnel outlives the server it points at, and keeps answering for a port that is
       // closed.
-      tunnel.foreach(_.destroy())
+      closing.set(true)
+      tunnelProc.foreach(_.destroy())
 
   def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "docker" / "mcp.Dockerfile")
 
