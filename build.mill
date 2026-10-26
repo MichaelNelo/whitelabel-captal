@@ -841,7 +841,7 @@ object rqlite extends Module:
     name
 
   /** Pushes it into a registry. Usage:
-    * `./mill rqlite.imagePush --registry 000000000000.dkr.ecr.us-east-1.amazonaws.com --repository captal-rqlite --tag 1.0.4`
+    * `mill rqlite.imagePush --registry 000000000000.dkr.ecr.us-east-1.amazonaws.com --repository captal-rqlite --tag 1.0.4`
     */
   def imagePush(registry: String, repository: String, tag: String = "latest") = Task.Command:
     val local = image(tag)()
@@ -1002,7 +1002,7 @@ object api extends BaseModule:
 
   def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "docker" / "api.Dockerfile")
 
-  /** Build the API image. Usage: `./mill api.image` or `./mill api.image --tag v1.2.3`
+  /** Build the API image. Usage: `mill api.image` or `mill api.image --tag v1.2.3`
     *
     * The same shape as `mcp.image`, and for the reason recorded on `docker/api.Dockerfile`: the previous
     * arrangement compiled inside the image and had been unbuildable for two separate reasons, each
@@ -1090,7 +1090,7 @@ object api extends BaseModule:
       client.fastLinkJS()
     super.run(args)()
 
-  /** Full dev workflow: rqlite + migrations + client + server. Usage: ./mill api.dev, or ./mill
+  /** Full dev workflow: rqlite + migrations + client + server. Usage: mill api.dev, or mill
     * api.dev --slug basic to serve another location.
     *
     * No longer takes a provisioning directory. The server reads what the backoffice wrote; seeding
@@ -1267,7 +1267,7 @@ object client extends BaseJSModule:
       sys.error(s"[bundle] npm install failed: ${result.err.trim()}")
     PathRef(Task.dest)
 
-  /** Build the production bundle. Usage: `./mill client.bundle` Output: out/client/bundle.dest/
+  /** Build the production bundle. Usage: `mill client.bundle` Output: out/client/bundle.dest/
     *
     * Nothing is pre-gzipped, and that is a consequence rather than a preference: a browser loading
     * an ES module imports the chunks by the exact path the linker wrote, so a file cannot be
@@ -1362,7 +1362,7 @@ object client extends BaseJSModule:
     roots.foldLeft(Set.empty[String])((acc, root) => walk(root, acc))
 
   /** Publish the two MCP App pages' scripts. Usage:
-    * `./mill client.publish --bucket captal-dev-assets`
+    * `mill client.publish --bucket captal-dev-assets`
     *
     * Three rules, and each one is load-bearing:
     *
@@ -1439,7 +1439,7 @@ object client extends BaseJSModule:
   /** Publish the bundle to S3 under `<bucket>/<prefix>/`. Replaces 4 manual `aws s3 cp` invocations
     * and ensures Content-Type / Content-Encoding metadata stay consistent.
     *
-    * Usage: `./mill client.publishS3 --bucket captal-dev-assets --prefix bundle` Optional:
+    * Usage: `mill client.publishS3 --bucket captal-dev-assets --prefix bundle` Optional:
     * `--region us-east-1` (default).
     *
     * Operator must run `aws sso login` or have AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY set.
@@ -1724,7 +1724,7 @@ object mcp extends BaseModule:
     * one that changed every run would be copied wrong more often than it would be secure. It is a
     * local server holding local data.
     *
-    * Usage: ./mill mcp.dev
+    * Usage: mill mcp.dev
     */
   def dev(port: Int = devPort, token: String = "dev-token") = Task.Command:
     val migrationCp = platform.runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
@@ -1853,7 +1853,7 @@ object mcp extends BaseModule:
 
   def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "docker" / "mcp.Dockerfile")
 
-  /** Build the server's image. Usage: `./mill mcp.image` or `./mill mcp.image --tag v1.2.3`
+  /** Build the server's image. Usage: `mill mcp.image` or `mill mcp.image --tag v1.2.3`
     *
     * The jar is built here, by the tool that already knows how, and the image only packages it.
     * `docker/api.Dockerfile` did the opposite — it copied the sources in and ran `api.assembly`
@@ -1883,7 +1883,7 @@ object mcp extends BaseModule:
     name
 
   /** Push the image into a registry, which locally means LocalStack's own ECR. Usage:
-    * `./mill mcp.imagePush --registry 000000000000.dkr.ecr.us-east-1.localhost.localstack.cloud:4567 --repository captal-mcp-local`
+    * `mill mcp.imagePush --registry 000000000000.dkr.ecr.us-east-1.localhost.localstack.cloud:4567 --repository captal-mcp-local`
     *
     * Separate from [[image]] because building is the common case and pushing needs a registry that
     * exists. Against LocalStack the registry is the one `tofu apply` created, which is what

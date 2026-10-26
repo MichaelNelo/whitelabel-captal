@@ -21,11 +21,9 @@ languages.scala.mill.enable = true;
 Both `terraform` and `opentofu` are present — not a redundancy. `terraform/` is an OpenTofu
 configuration, but the two tools cannot share a working directory: a state file one writes the other
 refuses to open, and `.terraform.lock.hcl` records provider hashes from whichever registry wrote it.
-See xref:infrastructure.adoc[Infrastructure]. `cloudflared` is provisioned too, and nothing in this
-build or in any doc currently calls it. `languages.scala.mill.enable` puts `mill` on the `PATH` at shell-entry time — there is no launcher checked into the repository,
-which is also why `docker/api.Dockerfile`'s old two-stage build (described in
-xref:infrastructure.adoc[Infrastructure]) broke: it assumed a `mill` wrapper that only exists inside
-a devenv shell.
+See xref:infrastructure.adoc[Infrastructure]. `cloudflared` is what `mcp.dev` runs to open the
+Cloudflare tunnel. `languages.scala.mill.enable` puts `mill` on the `PATH`; there is no launcher
+script in the repository, so every command in these docs is `mill …`.
 
 `.envrc` is not committed, and loads two things beyond the standard devenv hookup:
 
