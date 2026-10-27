@@ -7,7 +7,11 @@ import org.scalajs.dom
 /** JSON-RPC 2.0 over `postMessage`, on `js.Promise` rather than `scala.concurrent.Future`.
   */
 object Bridge:
+  /** The MCP Apps version this bridge speaks, which `ui/initialize` has to name. */
+  private val ProtocolVersion = "2026-01-26"
+
   private var nextId = 1
+  // Each settles its request from the whole reply, which carries either a `result` or an `error`.
   private val waiting = js.Dictionary.empty[js.Function1[js.Dynamic, Unit]]
 
   def listen(onToolResult: js.Dynamic => Unit): Unit = dom
@@ -20,8 +24,8 @@ object Bridge:
           message.jsonrpc.asInstanceOf[js.UndefOr[String]].contains("2.0") then
           val id = message.id.asInstanceOf[js.UndefOr[Int]]
           id.toOption.map(_.toString).flatMap(waiting.remove) match
-            case Some(resolve) =>
-              resolve(message.result.asInstanceOf[js.Dynamic])
+            case Some(settle) =>
+              settle(message)
             case None =>
               if message
                   .method
@@ -32,11 +36,20 @@ object Bridge:
 
   private def post(payload: js.Dynamic): Unit = dom.window.parent.postMessage(payload, "*")
 
+  /** Rejects when the host answers with an error, and says so in the console: the page runs inside
+    * the host's frame, where nothing else would show it.
+    */
   def call(method: String, params: js.Dynamic): js.Promise[js.Dynamic] =
     val id = nextId
     nextId += 1
-    new js.Promise[js.Dynamic]((resolve, _) =>
-      waiting(id.toString) = (value: js.Dynamic) => resolve(value)
+    new js.Promise[js.Dynamic]((resolve, reject) =>
+      waiting(id.toString) =
+        (reply: js.Dynamic) =>
+          if js.isUndefined(reply.error) then
+            resolve(reply.result)
+          else
+            dom.console.error(s"[mcp-app] the host refused $method", reply.error)
+            reject(reply.error)
       post(js.Dynamic.literal(jsonrpc = "2.0", id = id, method = method, params = params)))
 
   def notify(method: String, params: js.Dynamic): Unit = post(
@@ -62,12 +75,21 @@ object Bridge:
     val text = result.contents.asInstanceOf[js.Array[js.Dynamic]](0).text.asInstanceOf[String]
     js.JSON.parse(text)
 
+  /** `ui/initialize`, whose three fields are all required. The host sends the tool's input and
+    * result only after the `initialized` that follows its reply, so a page whose handshake is
+    * refused never hears what it was opened for.
+    */
   def handshake(): js.Promise[Unit] = call(
     "ui/initialize",
     js.Dynamic
-      .literal(appCapabilities = js
-        .Dynamic
-        .literal(availableDisplayModes = js.Array("inline", "fullscreen")))).`then`[Unit]: result =>
+      .literal(
+        protocolVersion = ProtocolVersion,
+        appInfo = js.Dynamic.literal(name = "captal-backoffice", version = "0.1.0"),
+        appCapabilities = js
+          .Dynamic
+          .literal(availableDisplayModes = js.Array("inline", "fullscreen"))
+      )
+  ).`then`[Unit]: result =>
     applyHostStyles(result)
     notify("ui/notifications/initialized", js.Dynamic.literal())
 
