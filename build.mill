@@ -1530,6 +1530,53 @@ object client extends BaseJSModule:
     println(s"[publish] uploaded bundle to $destBase")
 end client
 
+/** Cloudflare quick tunnels to local ports, opened together and closed together.
+  *
+  * A quick tunnel needs no account and no configuration, and its `trycloudflare.com` URL exists
+  * only once cloudflared prints it, so construction waits for every one of them. Only cloudflared's
+  * error lines reach the terminal, and not the ones it prints while being closed.
+  */
+final private class QuickTunnels(ports: Seq[Int]):
+  private val closing = java.util.concurrent.atomic.AtomicBoolean(false)
+  private val urlPattern = """https://[a-z0-9-]+\.trycloudflare\.com""".r
+
+  private val opened = ports.map: port =>
+    val announced = scala.concurrent.Promise[String]()
+    val onLine: String => Unit =
+      line =>
+        urlPattern.findFirstIn(line).foreach(announced.trySuccess)
+        if line.contains(" ERR ") && !closing.get then
+          System.err.println(s"[tunnel :$port] $line")
+    val proc = os
+      .proc("cloudflared", "tunnel", "--url", s"http://localhost:$port")
+      .spawn(stdout = os.Inherit, stderr = os.ProcessOutput.Readlines(onLine))
+    (port, proc, announced)
+
+  private val urls: Map[Int, String] =
+    val deadline = System.nanoTime + 60_000_000_000L
+    opened
+      .map: (port, proc, announced) =>
+        while !announced.isCompleted && proc.isAlive() && System.nanoTime < deadline do
+          Thread.sleep(200)
+        port ->
+          announced
+            .future
+            .value
+            .flatMap(_.toOption)
+            .getOrElse:
+              close()
+              sys.error(
+                s"[dev] cloudflared gave no trycloudflare.com URL for :$port within a minute")
+      .toMap
+
+  /** The public address of `port`, one of those this was opened with. */
+  def url(port: Int): String = urls(port)
+
+  def close(): Unit =
+    closing.set(true)
+    opened.foreach((_, proc, _) => proc.destroy())
+end QuickTunnels
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MCP: backoffice server. Its own deployable, deliberately not linked into `api`.
 //
@@ -1727,9 +1774,9 @@ object mcp extends BaseModule:
     * one that changed every run would be copied wrong more often than it would be secure. It is a
     * local server holding local data.
     *
-    * `--tunnel` publishes it through a Cloudflare quick tunnel, at a `trycloudflare.com` URL that
-    * changes every run. The server is then public and `dev-token` is written in the docs, so the
-    * token is random instead; `--token` still overrides it.
+    * `--tunnel` publishes it, and LocalStack with it, through Cloudflare quick tunnels at
+    * `trycloudflare.com` URLs that change every run. The server is then public and `dev-token` is
+    * written in the docs, so the token is random instead; `--token` still overrides it.
     *
     * Usage: mill mcp.dev, or mill mcp.dev --tunnel
     */
@@ -1770,37 +1817,18 @@ object mcp extends BaseModule:
     if infra.isEmpty then
       println("[dev]   no LocalStack licence, so no cluster; the deploy tools stay unregistered")
 
-    // A quick tunnel needs no account and no configuration, and its URL exists only once cloudflared
-    // prints it. The server is told its own address at start, so it waits for that line.
-    println("[dev] Step 5/6: Opening the Cloudflare tunnel...")
-    val tunnelUrlPattern = """https://[a-z0-9-]+\.trycloudflare\.com""".r
-    val announcedUrl = scala.concurrent.Promise[String]()
-    val closing = java.util.concurrent.atomic.AtomicBoolean(false)
-    // Only errors reach the terminal; cloudflared's info lines would bury the server's own. The ones
-    // it prints while being stopped are not errors.
-    val onTunnelLine: String => Unit =
-      line =>
-        tunnelUrlPattern.findFirstIn(line).foreach(announcedUrl.trySuccess)
-        if line.contains(" ERR ") && !closing.get then
-          System.err.println(s"[tunnel] $line")
-    val tunnelProc =
-      Option.when(tunnel.value):
-        os.proc("cloudflared", "tunnel", "--url", s"http://localhost:$port")
-          .spawn(stdout = os.Inherit, stderr = os.ProcessOutput.Readlines(onTunnelLine))
-    val publicUrl = tunnelProc.map: proc =>
-      val deadline = System.nanoTime + 60_000_000_000L
-      while !announcedUrl.isCompleted && proc.isAlive() && System.nanoTime < deadline do
-        Thread.sleep(200)
-      announcedUrl
-        .future
-        .value
-        .flatMap(_.toOption)
-        .getOrElse:
-          proc.destroy()
-          sys.error("[dev] cloudflared gave no trycloudflare.com URL within a minute")
-    publicUrl match
-      case Some(url) =>
-        println(s"[dev]   $url (it can take a few seconds to resolve)")
+    // Two, because the MCP App pages render in the operator's browser on the host's public origin,
+    // which may not reach localhost. They post to this server, but load their scripts from the
+    // bucket and PUT uploads straight to it, so LocalStack needs a public address too.
+    println("[dev] Step 5/6: Opening the Cloudflare tunnels...")
+    val tunnels = Option.when(tunnel.value)(QuickTunnels(Seq(port, localStackPort)))
+    val publicUrl = tunnels.map(_.url(port))
+    val assetsUrl = tunnels.map(_.url(localStackPort))
+    tunnels match
+      case Some(open) =>
+        println(s"[dev]   ${open.url(port)} for the server")
+        println(s"[dev]   ${open.url(localStackPort)} for LocalStack")
+        println("[dev]   (they can take a few seconds to resolve)")
       case None =>
         println("[dev]   no --tunnel, so the server answers on localhost only")
 
@@ -1843,7 +1871,11 @@ object mcp extends BaseModule:
           // LocalStack does not verify signatures; the signer only needs a pair to exist.
           "AWS_ACCESS_KEY_ID"     -> "test",
           "AWS_SECRET_ACCESS_KEY" -> "test"
-        )
+        ) ++
+        // The bucket as the operator's browser reaches it, for the pages' scripts and the upload
+        // URLs. Not `PUBLIC_BASE_URL`, which is stored in each video row and outlives this URL.
+        assetsUrl.fold(Map.empty[String, String]): assets =>
+          Map("SCRIPT_BASE_URL" -> s"$assets/$devBucket", "PRESIGN_ENDPOINT_URL" -> assets)
 
     // Whether this database has a location at all. `api.dev` does not create one — it serves one —
     // so on a fresh container every tool here has nothing to be scoped to.
@@ -1878,10 +1910,9 @@ object mcp extends BaseModule:
       os.proc("java", forkArgs(), "-cp", cp, "whitelabel.captal.mcp.Main")
         .call(env = env, stdin = os.Inherit, stdout = os.Inherit, stderr = os.Inherit)
     finally
-      // Or the tunnel outlives the server it points at, and keeps answering for a port that is
+      // Or the tunnels outlive the server they point at, and keep answering for a port that is
       // closed.
-      closing.set(true)
-      tunnelProc.foreach(_.destroy())
+      tunnels.foreach(_.close())
 
   def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "docker" / "mcp.Dockerfile")
 

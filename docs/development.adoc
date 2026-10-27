@@ -124,7 +124,7 @@ fresh database.
 [dev] Step 2/6: Running migrations...
 [dev] Step 3/6: Ensuring LocalStack...
 [dev] Step 4/6: Applying the local infrastructure...
-[dev] Step 5/6: Opening the Cloudflare tunnel...
+[dev] Step 5/6: Opening the Cloudflare tunnels...
 [dev] Step 6/6: Starting MCP backoffice on :8081
 ----
 
@@ -152,13 +152,20 @@ It is what gives the backoffice a cluster, subnets, a listener and two task role
 the deploy tools are not registered at all. It also builds and pushes the rqlite image. On a fresh
 container this is minutes, not seconds. Empty without a LocalStack licence, and then a no-op.
 
-Step 5 runs only with `mill mcp.dev --tunnel`. It opens a Cloudflare quick tunnel, `cloudflared
-tunnel --url http://localhost:<port>`, which needs no account, token or domain, and closes it when
-the server exits. Its address is a random `https://<name>.trycloudflare.com` that changes every run
-and is known only once `cloudflared` prints it, so the step waits for that line before the server
-starts. The server is then given that address as `MCP_RESOURCE_URI`: the UniFi and upload pages post
-to it and declare it in their CSP, and a localhost address there would break them for anyone reaching
-the server through the tunnel. Only `cloudflared`'s error lines reach the terminal.
+Step 5 runs only with `mill mcp.dev --tunnel`. It opens two Cloudflare quick tunnels, `cloudflared
+tunnel --url http://localhost:<port>`, one to the server and one to LocalStack. They need no account,
+token or domain, and close when the server exits. Each address is a random
+`https://<name>.trycloudflare.com` that changes every run and is known only once `cloudflared` prints
+it, so the step waits for both before the server starts. Only `cloudflared`'s error lines reach the
+terminal.
+
+The server's tunnel becomes `MCP_RESOURCE_URI`: the UniFi and upload pages post to it and declare it
+in their CSP. LocalStack's is there because those pages render in the operator's browser, on the
+host's public origin, and a page there may not reach localhost. They load their scripts from the
+bucket and PUT uploads straight to it, so the server is given LocalStack's tunnel for both:
+`SCRIPT_BASE_URL` (`<tunnel>/captal-assets-dev`) for the scripts and their place in the CSP, and
+`PRESIGN_ENDPOINT_URL` for the upload URLs. `PUBLIC_BASE_URL` stays on localhost, because it is
+stored in each video row and has to outlive the tunnel.
 
 A quick tunnel does not carry Server-Sent Events. The backoffice's stateless routes answer a tool
 call with plain JSON unless the client asks for progress or log notifications, or opens

@@ -57,6 +57,7 @@ final case class AssetStore(
     bucket: String,
     distributionId: String,
     publicBaseUrl: String,
+    scriptBaseUrl: String,
     s3: S3Client,
     cdn: CloudFrontClient,
     presigner: S3Presigner):
@@ -339,12 +340,13 @@ final case class AssetStore(
     */
   def publicUrl(key: String): String = s"${publicBaseUrl.stripSuffix("/")}/$key"
 
-  /** Where an MCP App's script is served from, under a name that never changes: `ui/<name>` on the
-    * same base the portal's assets use. `mill client.publish` puts the file there, and the hashed
-    * chunks the entry imports are resolved by the browser against this URL, so they are published
-    * flat beside it.
+  /** Where an MCP App's script is served from, under a name that never changes: `ui/<name>` on
+    * `scriptBaseUrl`, which is the base the portal's assets use unless the browser reaches the
+    * bucket somewhere else. `mill client.publish` puts the file there, and the hashed chunks the
+    * entry imports are resolved by the browser against this URL, so they are published flat beside
+    * it.
     */
-  def scriptUrl(name: String): String = publicUrl(s"ui/$name")
+  def scriptUrl(name: String): String = s"${scriptBaseUrl.stripSuffix("/")}/ui/$name"
 
   /** A local ES import, in both forms the bundler emits: `from"./x"` for a binding and a bare
     * `import"./x"` for a side effect. Deliberately not the dynamic `import("./x")`, so a lazily
@@ -415,7 +417,7 @@ final case class AssetStore(
     * `script-src`. Without it the module is blocked and the page renders inert.
     */
   def scriptOrigin: String =
-    val parsed = URI.create(publicBaseUrl)
+    val parsed = URI.create(scriptBaseUrl)
     val port =
       if parsed.getPort < 0 then
         ""
@@ -521,18 +523,33 @@ object AssetStore:
 
   /** Requires `ASSETS_BUCKET`, `CLOUDFRONT_DISTRIBUTION_ID` and `PUBLIC_BASE_URL`, and fails
     * startup without them rather than on the first write.
+    *
+    * `SCRIPT_BASE_URL` and `PRESIGN_ENDPOINT_URL` are for a bucket the operator's browser reaches
+    * at another address than this server does, as it does LocalStack behind a tunnel. The first
+    * moves the MCP App pages' scripts off `PUBLIC_BASE_URL`, the second moves the upload URLs off
+    * `AWS_ENDPOINT_URL`. Neither moves `PUBLIC_BASE_URL` itself, which is stored in each video row.
     */
   val layer: ZLayer[Any, Throwable, AssetStore] = ZLayer.scoped:
     for
-      bucket        <- required("ASSETS_BUCKET")
-      distribution  <- required("CLOUDFRONT_DISTRIBUTION_ID")
-      publicBaseUrl <- required("PUBLIC_BASE_URL")
-      endpoint      <- System.env("AWS_ENDPOINT_URL").orDie
+      bucket          <- required("ASSETS_BUCKET")
+      distribution    <- required("CLOUDFRONT_DISTRIBUTION_ID")
+      publicBaseUrl   <- required("PUBLIC_BASE_URL")
+      scriptBaseUrl   <- System.env("SCRIPT_BASE_URL").orDie
+      endpoint        <- System.env("AWS_ENDPOINT_URL").orDie
+      presignEndpoint <- System.env("PRESIGN_ENDPOINT_URL").orDie
       s3  <- ZIO.acquireRelease(ZIO.attempt(s3ClientFor(endpoint)))(c => ZIO.succeed(c.close()))
       cdn <- ZIO.acquireRelease(ZIO.attempt(cdnClientFor(endpoint)))(c => ZIO.succeed(c.close()))
       presigner <-
-        ZIO.acquireRelease(ZIO.attempt(presignerFor(endpoint)))(p => ZIO.succeed(p.close()))
-    yield AssetStore(bucket, distribution, publicBaseUrl, s3, cdn, presigner)
+        ZIO.acquireRelease(ZIO.attempt(presignerFor(presignEndpoint.orElse(endpoint))))(p =>
+          ZIO.succeed(p.close()))
+    yield AssetStore(
+      bucket,
+      distribution,
+      publicBaseUrl,
+      scriptBaseUrl.getOrElse(publicBaseUrl),
+      s3,
+      cdn,
+      presigner)
 
   /** `AWS_ENDPOINT_URL` points the S3 client somewhere other than AWS — LocalStack, for testing the
     * upload flow without an account.

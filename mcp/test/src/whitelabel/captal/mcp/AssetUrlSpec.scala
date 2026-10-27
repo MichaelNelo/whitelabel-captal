@@ -13,17 +13,26 @@ object AssetUrlSpec extends ZIOSpecDefault:
     bucket = "captal-assets",
     distributionId = "E123",
     publicBaseUrl = "https://d111.cloudfront.net",
+    scriptBaseUrl = "https://d111.cloudfront.net",
     s3 = null,
     cdn = null,
-    presigner = null)
+    presigner = null
+  )
 
   private def localstack = AssetStore(
     bucket = "captal-assets-dev",
     distributionId = "E000",
     publicBaseUrl = "http://localhost:4566/captal-assets-dev",
+    scriptBaseUrl = "http://localhost:4566/captal-assets-dev",
     s3 = null,
     cdn = null,
-    presigner = null)
+    presigner = null
+  )
+
+  /** The same bucket with the browser reaching it through a tunnel, as `mcp.dev --tunnel` runs it.
+    */
+  private def tunnelled = localstack.copy(scriptBaseUrl =
+    "https://some-words.trycloudflare.com/captal-assets-dev")
 
   private val key = "cafe-centro/videos/263f7bf0"
 
@@ -54,5 +63,14 @@ object AssetUrlSpec extends ZIOSpecDefault:
       ,
       test("something unparseable comes back untouched rather than throwing"):
         assertTrue(cdn.keyOf("not a url at all") == "not a url at all")
+      ,
+      // A video row outlives the tunnel, so its URL must not name it.
+      test("the scripts follow their own base and stored URLs do not"):
+        assertTrue(
+          tunnelled.scriptUrl("upload.js") ==
+            "https://some-words.trycloudflare.com/captal-assets-dev/ui/upload.js",
+          tunnelled.scriptOrigin == "https://some-words.trycloudflare.com",
+          tunnelled.publicUrl(key) == localstack.publicUrl(key)
+        )
     )
 end AssetUrlSpec

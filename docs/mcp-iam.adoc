@@ -92,6 +92,12 @@ loudly on a missing object rather than quietly finding a neighbour's.
 | `PUBLIC_BASE_URL`
 | Origin the portal serves assets from; stored in each video row as its playable URL
 
+| `SCRIPT_BASE_URL`
+| Optional, defaults to `PUBLIC_BASE_URL`. Where the MCP App pages load their scripts from, for a bucket the operator's browser reaches at another address
+
+| `PRESIGN_ENDPOINT_URL`
+| Optional, defaults to `AWS_ENDPOINT_URL`. The endpoint the upload URLs name, for the same case
+
 | `DB_URL`
 | rqlite endpoint
 

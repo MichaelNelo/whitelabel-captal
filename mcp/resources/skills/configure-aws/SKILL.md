@@ -43,6 +43,8 @@ something a tool would otherwise discover halfway through a write.
 | `MCP_RESOURCE_URI` | the address clients reach this server at | RFC 8707 audience binding, and the origin the MCP App pages post to and declare in their CSP. Behind an ALB this is the public address, not the bound port |
 | `MCP_PORT` | optional, default `8081` | |
 | `AWS_ENDPOINT_URL` | optional | Points S3 at LocalStack for local work; brings path-style addressing with it |
+| `SCRIPT_BASE_URL` | optional, default `PUBLIC_BASE_URL` | Where the MCP App pages load their scripts from, `<base>/ui/<name>`. For a bucket the operator's browser reaches at another address, such as LocalStack behind a tunnel |
+| `PRESIGN_ENDPOINT_URL` | optional, default `AWS_ENDPOINT_URL` | The endpoint the upload URLs name, for the same case |
 
 Locally, `mill mcp.dev` supplies all of them against a dev rqlite container and LocalStack, with
 `dev-token` as the admin token, or a random one when it is started with `--tunnel`.

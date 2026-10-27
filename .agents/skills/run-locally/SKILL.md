@@ -23,7 +23,7 @@ YAML.
 
 ```bash
 mill mcp.dev            # localhost only
-mill mcp.dev --tunnel   # also public, through a Cloudflare quick tunnel
+mill mcp.dev --tunnel   # also public, through Cloudflare quick tunnels
 ```
 
 Six steps, in order:
@@ -37,9 +37,12 @@ Six steps, in order:
    `LOCALSTACK_AUTH_TOKEN` is configured. This also builds and pushes the rqlite image. On a fresh
    container it is **minutes, not seconds** — it is not hung. Without a token the step is skipped and
    the deploy tools are simply not registered.
-5. With `--tunnel`, opens a Cloudflare quick tunnel to `:8081` and waits for its
-   `https://<random>.trycloudflare.com` URL, which changes every run. No account or token is
-   needed. The tunnel closes when the server exits. Without the flag the step is skipped.
+5. With `--tunnel`, opens two Cloudflare quick tunnels, to `:8081` and to LocalStack on `:4567`,
+   and waits for their `https://<random>.trycloudflare.com` URLs, which change every run. No
+   account or token is needed. The MCP App pages load their scripts and PUT uploads through
+   LocalStack's tunnel (`SCRIPT_BASE_URL`, `PRESIGN_ENDPOINT_URL`), since a page rendered by a hosted
+   client may not reach localhost. The tunnels close when the server exits. Without the flag the
+   step is skipped.
 6. Starts the backoffice on `:8081` with a **fixed** admin token, `dev-token`. With `--tunnel` the
    server is public, so the admin token is random and printed instead, and the server's address is
    the tunnel URL. `--token <value>` overrides either.
@@ -154,7 +157,7 @@ Make sure your dev rqlite stays on its own port if you're also running the test 
 | `Connection refused` on `localhost:4001` | The `rqlite-dev` container isn't running. `docker ps` to check; `mill api.rqliteSetup` or `mill mcp.dev` ensures it. |
 | `Port 4001 is already in use by another container` | Something else took it — most likely a leftover ECS task container LocalStack spawned. `mill mcp.destroyLocal`. |
 | `AlreadyExists` / `EntityAlreadyExists` from the terraform apply | LocalStack holds resources the state doesn't know about; the two came apart. `mill mcp.test.resetLocalStack` recreates the container *with its volume*, which `stopLocalStack` does not. |
-| The backoffice's upload or UniFi page is blank | `mcp.dev` publishes the page scripts at step 3, so check that they answer: `curl -I http://localhost:4567/captal-assets-dev/ui/upload.js` should give 200 with `Access-Control-Allow-Origin: *`. If they do, the browser did not load them. They are served from `localhost:4567`, and a page rendered by a hosted client such as claude.ai may not be allowed to reach localhost; the browser console says so. |
+| The backoffice's upload or UniFi page is blank | `mcp.dev` publishes the page scripts at step 3, so check that they answer: `curl -I http://localhost:4567/captal-assets-dev/ui/upload.js` should give 200 with `Access-Control-Allow-Origin: *`. If they do, the browser did not load them. Without `--tunnel` they are served from `localhost:4567`, and a page rendered by a hosted client such as claude.ai may not be allowed to reach localhost; the browser console says so. Run with `--tunnel`. |
 | Anything local is wedged and you want a clean slate | `mill mcp.destroyLocal` — every container this build starts, LocalStack's volume, the ECS task containers it spawned, and the images built here. Nothing to clean afterwards: the tofu state is keyed by container id, so the next run builds both together. |
 | `LocationNotFound` and the process exits immediately | The slug doesn't exist in `locations` yet. Create it through the backoffice first (step 2). |
 | `No result set returned` after a restart | rqlite's data was wiped — the dev container has no volume by default. Re-create the content through the backoffice, or mount a volume yourself. |

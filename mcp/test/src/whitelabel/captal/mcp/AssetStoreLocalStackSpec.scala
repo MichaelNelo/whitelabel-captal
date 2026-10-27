@@ -60,7 +60,14 @@ object AssetStoreLocalStackSpec extends ZIOSpecDefault:
           ZIO
             .attempt(AssetStore.presignerFor(Some(Endpoint)))
             .map: presigner =>
-              AssetStore(Bucket, "E000000", "https://portal.test", s3, null, presigner)
+              AssetStore(
+                Bucket,
+                "E000000",
+                "https://portal.test",
+                "https://portal.test",
+                s3,
+                null,
+                presigner)
 
   private def ensureBucket(s: AssetStore): ZIO[Any, Throwable, Unit] = ensureBucketNamed(
     s,
