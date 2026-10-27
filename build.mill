@@ -76,6 +76,103 @@ private def preloadLinks(dir: os.Path, entry: String): String =
     .map(name => s"""  <link rel="modulepreload" fetchpriority="low" href="./$name">""")
     .mkString("\n")
 
+/** The prefix both MCP App pages name. Flat, because Rollup writes the chunk import as
+  * `./<name>-<hash>.js` and the browser resolves that against the entry's own URL.
+  */
+private val uiPrefix = "ui"
+
+/** The two entries the MCP App pages load, and nothing else. */
+private val uiEntries = Seq("upload.js", "unifi.js")
+
+/** Every local module reachable from `roots`, by reading the `import`s Rollup wrote.
+  *
+  * This exists because of the merge. While the MCP App pages were their own linker run, every chunk
+  * in their bundle belonged to them and `publish` could take the whole directory. Sharing a run
+  * with the portal means the directory now also holds `main.js`, `maintenance.js` and the portal's
+  * route chunks, none of which belong under `ui/` — and the chunks the two pages *do* import are
+  * shared with the portal, so they cannot be told apart by name either. The only honest selector
+  * left is the import graph.
+  */
+private def moduleClosure(dir: os.Path, roots: Seq[String]): Set[String] =
+  def walk(name: String, seen: Set[String]): Set[String] =
+    if seen.contains(name) || !os.exists(dir / name) then
+      seen
+    else
+      localImport
+        .findAllMatchIn(os.read(dir / name))
+        .map(_.group(1))
+        .foldLeft(seen + name)((acc, next) => walk(next, acc))
+  roots.foldLeft(Set.empty[String])((acc, root) => walk(root, acc))
+
+/** Publishes the two MCP App pages' scripts from the bundle in `src` to `<bucket>/ui/`.
+  *
+  * Three rules, and each one is load-bearing:
+  *
+  *   - **Chunks before entries.** An entry published ahead of the chunk it imports is a 404 on an
+  *     `import`, which renders as a page that loads and does nothing — no error the operator can
+  *     see. The reverse order has no window at all: an unreferenced chunk is inert.
+  *   - **Entries revalidate, chunks are immutable.** The server renders `<script src=".../ui/
+  *     upload.js">` as a constant and must not know anything about the content, so the entry name
+  *     is stable and the browser has to ask whether it changed — a 304 is ~200 bytes against the 9
+  *     KB this replaces. The chunks carry a content hash and are only ever referenced by an entry,
+  *     so they can be cached for a year.
+  *   - **Old chunks are not deleted.** A browser mid-session holds an entry that imports a hash
+  *     this deploy replaced, and CloudFront may still serve a previous entry until `s-maxage` runs
+  *     out. They are small and immutable; collect them by age, never on deploy.
+  *
+  * `Access-Control-Allow-Origin: *` because a `<script type="module">` is fetched in CORS mode,
+  * unlike a classic one — so without it the module fails to load and the page is inert. `*` and not
+  * the sandbox origin: these are public JavaScript files with no credentials and no data, and the
+  * sandbox origin is derived from our own server URL, so pinning it adds a way to break without
+  * adding protection.
+  */
+private def publishUiScripts(src: os.Path, bucket: String, region: String, local: Boolean): Unit =
+  val Revalidate = "public, max-age=0, must-revalidate, s-maxage=86400"
+  val Immutable = "public, max-age=31536000, immutable"
+  val missing = uiEntries.filterNot(name => os.exists(src / name))
+  if missing.nonEmpty then
+    sys.error(s"[publish] missing from $src: ${missing.mkString(", ")}")
+  val (entries, chunks) = moduleClosure(src, uiEntries).toSeq.sorted.partition(uiEntries.contains)
+
+  // Two transports for one operation. Against LocalStack the copy runs *inside* the container with
+  // `awslocal`, which is what `ensureLocalStack` already does and for the same reason: `aws` is not
+  // on the PATH Mill gives a subprocess, so a dev loop that needed it would work only on a machine
+  // that happens to have it. `docker cp` first, since `docker exec` cannot read a host file.
+  def put(name: String, cache: String): Unit =
+    val target = s"s3://$bucket/$uiPrefix/$name"
+    val metadata = Seq(
+      "--content-type",
+      "application/javascript",
+      "--cache-control",
+      cache,
+      "--metadata-directive",
+      "REPLACE")
+    println(s"[publish] $name -> $target")
+    val result =
+      if local then
+        val staged = s"/tmp/$name"
+        val copied = os
+          .proc("docker", "cp", (src / name).toString, s"$localStackContainer:$staged")
+          .call(check = false, stderr = os.Pipe)
+        if copied.exitCode != 0 then
+          sys.error(s"[publish] docker cp failed for $name: ${copied.err.trim()}")
+        os.proc(
+            Seq("docker", "exec", localStackContainer, "awslocal", "s3", "cp", staged, target) ++
+              metadata)
+          .call(check = false, stderr = os.Pipe)
+      else
+        os.proc(
+            Seq("aws", "s3", "cp", (src / name).toString, target, "--region", region) ++ metadata)
+          .call(check = false, stderr = os.Pipe)
+    if result.exitCode != 0 then
+      sys.error(s"[publish] s3 cp failed for $name: ${result.err.trim()}")
+  end put
+
+  chunks.foreach(put(_, Immutable))
+  entries.foreach(put(_, Revalidate))
+  println(s"[publish] ${chunks.size} chunk(s) then ${entries.size} entr(ies)")
+end publishUiScripts
+
 /** Named once because two places need it: the container every suite runs against, and the image the
   * end-to-end deploy puts in its task definition — which only has to be something already pulled.
   *
@@ -1333,108 +1430,14 @@ object client extends BaseJSModule:
 
     PathRef(dest)
 
-  /** The prefix both MCP App pages name. Flat, because Rollup writes the chunk import as
-    * `./<name>-<hash>.js` and the browser resolves that against the entry's own URL.
-    */
-  private val uiPrefix = "ui"
-
-  /** The two entries the MCP App pages load, and nothing else. */
-  private val uiEntries = Seq("upload.js", "unifi.js")
-
-  /** Every local module reachable from `roots`, by reading the `import`s Rollup wrote.
-    *
-    * This exists because of the merge. While the MCP App pages were their own linker run, every
-    * chunk in their bundle belonged to them and `publish` could take the whole directory. Sharing a
-    * run with the portal means the directory now also holds `main.js`, `maintenance.js` and the
-    * portal's route chunks, none of which belong under `ui/` — and the chunks the two pages *do*
-    * import are shared with the portal, so they cannot be told apart by name either. The only
-    * honest selector left is the import graph.
-    */
-  private def moduleClosure(dir: os.Path, roots: Seq[String]): Set[String] =
-    val Import = """(?:from|import)\s*"\./([^"]+)"""".r
-    def walk(name: String, seen: Set[String]): Set[String] =
-      if seen.contains(name) || !os.exists(dir / name) then seen
-      else
-        Import
-          .findAllMatchIn(os.read(dir / name))
-          .map(_.group(1))
-          .foldLeft(seen + name)((acc, next) => walk(next, acc))
-    roots.foldLeft(Set.empty[String])((acc, root) => walk(root, acc))
-
   /** Publish the two MCP App pages' scripts. Usage:
     * `mill client.publish --bucket captal-dev-assets`
     *
-    * Three rules, and each one is load-bearing:
-    *
-    *   - **Chunks before entries.** An entry published ahead of the chunk it imports is a 404 on an
-    *     `import`, which renders as a page that loads and does nothing — no error the operator can
-    *     see. The reverse order has no window at all: an unreferenced chunk is inert.
-    *   - **Entries revalidate, chunks are immutable.** The server renders `<script src=".../ui/
-    *     upload.js">` as a constant and must not know anything about the content, so the entry name
-    *     is stable and the browser has to ask whether it changed — a 304 is ~200 bytes against the
-    *     9 KB this replaces. The chunks carry a content hash and are only ever referenced by an
-    *     entry, so they can be cached for a year.
-    *   - **Old chunks are not deleted.** A browser mid-session holds an entry that imports a hash
-    *     this deploy replaced, and CloudFront may still serve a previous entry until `s-maxage`
-    *     runs out. They are small and immutable; collect them by age, never on deploy.
-    *
-    * `Access-Control-Allow-Origin: *` because a `<script type="module">` is fetched in CORS mode,
-    * unlike a classic one — so without it the module fails to load and the page is inert. `*` and
-    * not the sandbox origin: these are public JavaScript files with no credentials and no data, and
-    * the sandbox origin is derived from our own server URL, so pinning it adds a way to break
-    * without adding protection.
+    * An `--endpoint` means LocalStack. `mcp.dev` publishes to its own bucket on every run, so this
+    * is for the AWS environments. See [[publishUiScripts]].
     */
-  def publish(bucket: String, region: String = "us-east-1", endpoint: String = "") =
-    Task.Command:
-      val src = bundle().path
-      val Revalidate = "public, max-age=0, must-revalidate, s-maxage=86400"
-      val Immutable = "public, max-age=31536000, immutable"
-      val missing = uiEntries.filterNot(name => os.exists(src / name))
-      if missing.nonEmpty then
-        sys.error(s"[publish] missing from $src: ${missing.mkString(", ")}")
-      val (entries, chunks) =
-        moduleClosure(src, uiEntries).toSeq.sorted.partition(uiEntries.contains)
-
-      // Two transports for one operation. Against LocalStack the copy runs *inside* the container
-      // with `awslocal`, which is what `ensureLocalStack` already does and for the same reason:
-      // `aws` is not on the PATH Mill gives a subprocess, so a dev loop that needed it would work
-      // only on a machine that happens to have it. `docker cp` first, since `docker exec` cannot
-      // read a host file.
-      val local = endpoint.nonEmpty
-      def put(name: String, cache: String): Unit =
-        val target = s"s3://$bucket/$uiPrefix/$name"
-        val metadata = Seq(
-          "--content-type",
-          "application/javascript",
-          "--cache-control",
-          cache,
-          "--metadata-directive",
-          "REPLACE")
-        println(s"[publish] $name -> $target")
-        val result =
-          if local then
-            val staged = s"/tmp/$name"
-            val copied = os
-              .proc("docker", "cp", (src / name).toString, s"$localStackContainer:$staged")
-              .call(check = false, stderr = os.Pipe)
-            if copied.exitCode != 0 then
-              sys.error(s"[publish] docker cp failed for $name: ${copied.err.trim()}")
-            os.proc(
-              Seq("docker", "exec", localStackContainer, "awslocal", "s3", "cp", staged, target) ++
-                metadata)
-              .call(check = false, stderr = os.Pipe)
-          else
-            os.proc(
-              Seq("aws", "s3", "cp", (src / name).toString, target, "--region", region) ++
-                metadata)
-              .call(check = false, stderr = os.Pipe)
-        if result.exitCode != 0 then
-          sys.error(s"[publish] s3 cp failed for $name: ${result.err.trim()}")
-      end put
-
-      chunks.foreach(put(_, Immutable))
-      entries.foreach(put(_, Revalidate))
-      println(s"[publish] ${chunks.size} chunk(s) then ${entries.size} entr(ies)")
+  def publish(bucket: String, region: String = "us-east-1", endpoint: String = "") = Task.Command:
+    publishUiScripts(bundle().path, bucket, region, local = endpoint.nonEmpty)
 
   /** Publish the bundle to S3 under `<bucket>/<prefix>/`. Replaces 4 manual `aws s3 cp` invocations
     * and ensures Content-Type / Content-Encoding metadata stay consistent.
@@ -1754,6 +1757,8 @@ object mcp extends BaseModule:
     // in this flow really does invalidate, and a fictional id would fail the write's last step with
     // the object already stored.
     val distributionId = ensureDistribution(localStackContainer, "captal-mcp-dev", devBucket)
+    // The MCP App pages load their scripts from this bucket, and a page without them renders empty.
+    publishUiScripts(client.bundle().path, devBucket, "us-east-1", local = true)
 
     // The same configuration the AWS environments use, applied against the same LocalStack
     // container the suite uses — one state, because two states over one container come apart and

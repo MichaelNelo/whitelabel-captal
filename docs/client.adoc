@@ -798,7 +798,8 @@ through `_meta.ui`, the host reads that resource and renders the HTML in a sandb
 
 The scripts themselves are not carried by the MCP server. `mill client.publish` puts `upload.js`
 and `unifi.js` at `<bucket>/ui/<name>.js` under stable, revalidating names, with their hashed chunks
-beside them as immutable objects, and the server names them through `AssetStore.scriptUrl`.
+beside them as immutable objects, and the server names them through `AssetStore.scriptUrl`. Locally,
+`mcp.dev` does the same against the LocalStack bucket on every run.
 
 == The maintenance entry point
 
