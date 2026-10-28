@@ -446,36 +446,37 @@ object DeployTools:
         keys   <- assets.listPrefix(s"${in.slug}/")
         videos = keys.count(_.startsWith(s"${in.slug}/videos/"))
         // Declined is the default when there is no answer: `McpToolContext.elicit` returns
-        // `decline` for an unanswered request, which is also what a client with no elicitation
-        // support produces. So a host that cannot ask keeps the objects, and the one irreversible
-        // step here is the one that needs something to actively say yes.
-        answer <- ctx
-          .elicit(
-            s"Also delete this location's ${keys
-                .size} objects from S3? That includes $videos uploaded video file${
-                if videos == 1 then
-                  ""
-                else
-                  "s"
-              }, its stylesheet and its brand icon. The database is not touched either way, so the video rows will survive pointing at files that no longer exist. Declining removes the infrastructure and leaves every object in place.",
-            Json.Obj(
-              "type"       -> Json.Str("object"),
-              "properties" ->
-                Json.Obj(
-                  "deleteAssets" ->
-                    Json.Obj(
-                      "type"        -> Json.Str("boolean"),
-                      "description" ->
-                        Json.Str(
-                          "True to delete the location's S3 objects, including its uploaded videos."))),
-              "required" -> Json.Arr(Json.Str("deleteAssets"))
+        // `decline` for an unanswered request, and fails for a client that cannot ask at all, which
+        // `option` turns into no answer. So a host that cannot ask keeps the objects, and the one
+        // irreversible step here is the one that needs something to actively say yes.
+        answer <-
+          ctx
+            .elicit(
+              s"Also delete this location's ${keys
+                  .size} objects from S3? That includes $videos uploaded video file${
+                  if videos == 1 then
+                    ""
+                  else
+                    "s"
+                }, its stylesheet and its brand icon. The database is not touched either way, so the video rows will survive pointing at files that no longer exist. Declining removes the infrastructure and leaves every object in place.",
+              Json.Obj(
+                "type"       -> Json.Str("object"),
+                "properties" ->
+                  Json.Obj(
+                    "deleteAssets" ->
+                      Json.Obj(
+                        "type"        -> Json.Str("boolean"),
+                        "description" ->
+                          Json.Str(
+                            "True to delete the location's S3 objects, including its uploaded videos."))),
+                "required" -> Json.Arr(Json.Str("deleteAssets"))
+              )
             )
-          )
-          .mapError(error => s"Could not ask about the S3 objects: ${error.message}")
+            .option
         // Accepting the question with deleteAssets=true means delete.
-        wanted =
-          answer.action == "accept" &&
-            !answer.content.flatMap(_.get("deleteAssets")).flatMap(_.asBoolean).contains(false)
+        wanted = answer.exists(answered =>
+          answered.action == "accept" &&
+            !answered.content.flatMap(_.get("deleteAssets")).flatMap(_.asBoolean).contains(false))
         steps = List(
           DestroySteps.Scale,
           DestroySteps.Drain,
