@@ -99,6 +99,23 @@ object LocationToolsSpec extends ZIOSpecDefault:
           doubled.isError.contains(true),
           stored.isEmpty)
       ,
+      // Outside the prefix on purpose, so `rows` cannot see them: what is asserted is the refusal,
+      // read back by slug.
+      test("the two prefixes every location shares are refused as slugs"):
+        for
+          ui      <- create("ui", "Scripts")
+          bundle  <- create("bundle", "Bundle")
+          written <- ZIO.serviceWithZIO[QuillSqlite]: quill =>
+            import quill.*
+            quill
+              .run(query[LocationRow])
+              .map(_.filter(row => row.slug == "ui" || row.slug == "bundle"))
+        yield assertTrue(
+          ui.isError.contains(true),
+          bundle.isError.contains(true),
+          textOf(ui).contains("reserved"),
+          written.isEmpty)
+      ,
       test("a slug too long for the ALB target group name is refused, and the message says why"):
         for
           _ <- clear

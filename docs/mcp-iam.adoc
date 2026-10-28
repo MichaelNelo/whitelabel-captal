@@ -117,8 +117,8 @@ writing to the wrong bucket is worse than one that does not start.
 == CORS, which is not an IAM permission and fails the same way
 
 Two browser-to-AWS paths need a header that no role grants, and both fail mute — the operator sees
-a page that renders and does nothing. Neither is configured by this server; both live in the
-configuration under `terraform/`.
+a page that renders and does nothing. Neither is configured by this server; both live in
+`terraform/modules/cloudfront`.
 
 *The upload PUT, browser to S3 directly.* The presigned URL points at the bucket, and the page
 sends the file's own `Content-Type`. `video/mp4` is not one of the three CORS-safelisted types, so
@@ -132,7 +132,7 @@ file. The bucket needs:
   "AllowedHeaders":["*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":3000}]}
 ----
 
-`ensureLocalStack` applies exactly this for dev. Production does not get it from there.
+`aws_s3_bucket_cors_configuration.assets` is exactly this.
 
 *The MCP Apps' modules, browser to CloudFront.* Since the pages stopped inlining their script,
 each loads `<script type="module" src="<PUBLIC_BASE_URL>/ui/upload.js">`. A module script is fetched
@@ -149,9 +149,11 @@ not forward by default. Two ways, and they are not equivalent:
   to the cache key, so the same file is cached once per requesting origin — and the sandbox origin is
   derived per server URL, so that is churn for no gain.
 
-The policy is the one to use. `*` rather than the sandbox origin: three public JavaScript files with
-no credentials and no data, and the sandbox origin is a hash of our own server URL, so pinning it
-adds a way to break without adding protection.
+The policy is the one in use: `aws_cloudfront_response_headers_policy.ui`, on the `/ui/*` behavior.
+`*` rather than the sandbox origin: public JavaScript files with no credentials and no data, and the
+sandbox origin is a hash of our own server URL, so pinning it adds a way to break without adding
+protection. Because `ui/` and `bundle/` are prefixes every location shares, `create_location`
+refuses either as a slug.
 
 == Coming, per the migration plan
 

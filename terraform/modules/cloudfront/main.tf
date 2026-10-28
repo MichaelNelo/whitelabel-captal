@@ -74,6 +74,23 @@ resource "aws_s3_bucket_policy" "assets" {
   policy = data.aws_iam_policy_document.bucket.json
 }
 
+# The upload page PUTs the video straight to this bucket with a presigned URL. Its `Content-Type`,
+# `video/mp4`, is not CORS-safelisted, so the browser asks with a preflight first, and a bucket with
+# no CORS configuration refuses it: the upload fails before it starts. Any origin, because the page
+# runs in a host's sandboxed frame whose origin is opaque or host-generated; the signature on the
+# URL is what authorises the write.
+resource "aws_s3_bucket_cors_configuration" "assets" {
+  bucket = aws_s3_bucket.assets.id
+
+  cors_rule {
+    allowed_origins = ["*"]
+    allowed_methods = ["PUT", "GET", "HEAD"]
+    allowed_headers = ["*"]
+    expose_headers  = ["ETag"]
+    max_age_seconds = 3000
+  }
+}
+
 # CloudFront Function: rewrite extensionless URIs to <slug>/index.html (SPA fallback per slug).
 # Applied only to the S3 default behavior; the ALB behavior never sees it.
 resource "aws_cloudfront_function" "spa_fallback" {
@@ -167,6 +184,34 @@ resource "aws_cloudfront_origin_request_policy" "api" {
   }
 }
 
+# The MCP App pages load their module scripts from `ui/` through this distribution, and a module
+# script is fetched in CORS mode: without `Access-Control-Allow-Origin` the browser blocks it and
+# the page renders blank. S3 only answers CORS to a request whose `Origin` reaches it, which these
+# cache policies do not forward, so the header is set at the edge instead — outside the cache key,
+# so nothing about caching changes.
+resource "aws_cloudfront_response_headers_policy" "ui" {
+  name    = "${local.bucket_name}-ui"
+  comment = "MCP App scripts: readable from any origin"
+
+  cors_config {
+    access_control_allow_credentials = false
+    access_control_max_age_sec       = 3000
+    origin_override                  = true
+
+    access_control_allow_headers {
+      items = ["*"]
+    }
+
+    access_control_allow_methods {
+      items = ["GET", "HEAD", "OPTIONS"]
+    }
+
+    access_control_allow_origins {
+      items = ["*"]
+    }
+  }
+}
+
 resource "aws_cloudfront_distribution" "main" {
   enabled             = true
   is_ipv6_enabled     = true
@@ -211,6 +256,19 @@ resource "aws_cloudfront_distribution" "main" {
       event_type   = "viewer-request"
       function_arn = aws_cloudfront_function.spa_fallback.arn
     }
+  }
+
+  # MCP App scripts: the assets behavior, without the SPA fallback, plus the CORS header above.
+  ordered_cache_behavior {
+    path_pattern           = "/ui/*"
+    target_origin_id       = local.s3_origin
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
+    cached_methods         = ["GET", "HEAD"]
+    compress               = true
+
+    cache_policy_id            = aws_cloudfront_cache_policy.assets.id
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.ui.id
   }
 
   # API behavior: forward to ALB, no caching, preserve all headers/cookies

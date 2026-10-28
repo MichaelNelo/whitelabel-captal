@@ -555,8 +555,7 @@ private def ensureLocalStack(
   // (sending `Origin: null`) or a host-generated sandbox domain; naming either one would be
   // guessing at something that is not ours to pin. This is a local bucket holding test videos.
   //
-  // The real bucket needs the same configuration and does not get it from here. Until it does,
-  // this works in dev and fails in production — see docs/mcp-iam.adoc.
+  // The real bucket gets the same rule from `terraform/modules/cloudfront`; see docs/mcp-iam.adoc.
   val cors =
     """{"CORSRules":[{"AllowedOrigins":["*"],"AllowedMethods":["PUT","GET","HEAD"],"AllowedHeaders":["*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":3000}]}"""
   val corsResult = os
