@@ -133,12 +133,10 @@ that this stays a manual check and saying so where someone will read it.
 == Nothing pins the images prod would run
 
 `prod/terraform.tfvars` does not set `rqlite_image_tag`, so it falls to the variable's default
-`1.0.0` — two entrypoint revisions behind `local`, chosen by omission rather than by anyone. And
-`image_tag` is the literal `latest`, which the variable's own validation rejects; that one is a
-deliberate stop, so prod cannot be applied until someone names a version.
-
-`mill rqlite.imagePush` and `mill api.imagePush` are what put a real tag in a registry. Neither has
-ever run against AWS: every tag in a deployed environment was pushed by hand.
+`1.0.0` — two entrypoint revisions behind `local`, chosen by omission rather than by anyone.
+`image_tag` and `mcp_image_tag` are the modules' versions now, which `ci.run` passes, but no release
+has run against AWS: no `api/v*` or `mcp/v*` tag exists, and every image in a deployed environment
+was pushed by hand.
 
 == Documentation still in flight
 

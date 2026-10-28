@@ -1,94 +1,67 @@
 ---
 name: bump-api-version
-description: Use when releasing a new version of the captal-api image. Covers build, push, tagging, and rolling the new image out to deployed locations through the MCP backoffice's deploy tools. Triggers on "bump api version", "release api", "publish api image", "subir api", "deploy api".
-version: 2.0.0
+description: Use when releasing a new version of the captal-api or captal-mcp image. Covers how the version is computed from conventional commits and git tags, the release `mill ci.run` makes (images, terraform, every location rolled, client, tags), and rolling back. Triggers on "bump api version", "release api", "release mcp", "publish api image", "subir api", "deploy api", "nueva versión".
+version: 3.0.0
 ---
 
-# Release a new API image
+# Release a new API or backoffice image
 
 ## When to use
 
-After any change in `core/`, `messages/`, `platform/`, or `api/`. There is a single API image —
-`captal-api` — built from an already-assembled jar; there is no separate "provision" image any
-more, because there is nothing left to provision. Both migrations and the server run as one `CMD`
-inside the same image, so a migration that ships with this release applies the moment a task starts
-on it.
+After any change in `core/`, `messages/`, `platform/`, `api/` or `mcp/` that should reach a deployed
+environment. There is one API image, `captal-api`, and one backoffice image, `captal-mcp`, each
+built from an already-assembled jar. Migrations run inside the image's own startup, so a migration
+that ships with a release applies the moment a task starts on it.
 
-## Pre-flight
+## The version is computed, not chosen
 
-- Tests pass: `mill api.test` and `mill core.test`.
-- Working tree is committed (you want the deployed bits to match a git SHA).
-- Logged into the target ECR registry: `aws ecr get-login-password --region <region> | docker login --username AWS --password-stdin <account>.dkr.ecr.<region>.amazonaws.com`.
+Each module is versioned by its own git tags, `api/vX.Y.Z` and `mcp/vX.Y.Z`. git-cliff computes the
+next one from the conventional commits since the last tag that touch the module, the modules it
+depends on, or its Dockerfile — the rules are `api/cliff.toml` and `mcp/cliff.toml`, the paths come
+from the build's module graph:
 
-## Pick a version
+| Commit | Bump |
+|---|---|
+| `feat: …` | minor |
+| `fix: …`, `perf: …` | patch |
+| `feat!: …` (any type with `!`) | major |
+| `docs`, `refactor`, `tests`, `chore`, `build`, `lint` | none |
 
-Look at what's in ECR for the environment you're releasing to — the repository is `captal-api`,
-and its full URI is a terraform output, not a value to hardcode:
+So the type of the commit *is* the release decision. A breaking change for operators (cookie name,
+header, a dropped column) is a `!`; coordinate it before merging.
 
-```bash
-cd terraform
-tofu output api_image_repository_url
-aws ecr describe-images --repository-name captal-api --region <region> \
-  --query 'sort_by(imageDetails[?imageTags!=null],&imagePushedAt)[-1].imageTags[0]'
-```
-
-Bump SemVer:
-- **Patch** (`v1.5.0 → v1.5.1`): bug fix, no API contract change.
-- **Minor** (`v1.5.0 → v1.6.0`): new endpoint / feature, no breaking change.
-- **Major** (`v1.5.0 → v2.0.0`): breaking change (cookie name shift, header rename, DB column drop). Coordinate with operators.
-
-`image_tag` (the terraform variable every location's task references) has a validation that
-rejects the literal string `"latest"` — pick a real tag, always.
-
-## Steps
-
-### 1. Build and push the image
+See what the next release would be:
 
 ```bash
-TAG=vX.Y.Z
-REPO=$(cd terraform && tofu output -raw api_image_repository_url)
-mill api.imagePush --registry "${REPO%/*}" --repository "${REPO##*/}" --tag "$TAG"
+mill show api.releaseVersion   # {"tag": "api/v1.3.0", "previousTag": "api/v1.2.0"}
+mill show mcp.releaseVersion
 ```
 
-`api.imagePush` builds `docker/api.Dockerfile` around the jar Mill already has, then tags and pushes
-it. The registry needs a `docker login` first: `aws ecr get-login-password --region us-east-1 |
-docker login --username AWS --password-stdin "${REPO%%/*}"`.
+`tag` equal to `previousTag` means nothing since the last release moves the version.
 
-### 2. Point the environment at the new tag
+## Release
 
-The image a deploy uses comes from the `image_tag` terraform variable, which flows into the MCP
-backoffice's own task definition as `API_IMAGE` (`modules/mcp`) — `DeployTargets` reads that
-environment variable once at the backoffice's own startup, so the tag change takes effect only
-after the backoffice's task restarts with the new value:
+`mill ci.run` is the release, the one CodeBuild runs with `CAPTAL_ENV=<env>`:
+
+1. builds the rqlite, API and backoffice images;
+2. applies the configuration with `image_tag` and `mcp_image_tag` set to the versions, pushing each
+   image whose version is not in its registry yet — a published version is never pushed again;
+3. moves every deployed location onto the API image (a new task definition revision differing only
+   in the image) and waits for them to settle;
+4. publishes the client and copies it under every location's prefix;
+5. tags the commit with every version that moved and pushes the tags.
+
+Nothing to edit: `image_tag` and `mcp_image_tag` are not in any `terraform.tfvars`. Rehearse the
+whole release against LocalStack first — it tags nothing there:
 
 ```bash
-cd terraform
-# edit environments/<env>/terraform.tfvars: image_tag = "vX.Y.Z"
-tofu plan  -var-file=environments/<env>/terraform.tfvars
-tofu apply -var-file=environments/<env>/terraform.tfvars
+CAPTAL_ENV=local AWS_ENDPOINT_URL=http://localhost:4567 mill ci.run
 ```
 
-### 3. Migrate
+## Migrate
 
 Nothing to do by hand. Every task — the backoffice's and every location's API — runs `Migrate` (or
-`McpMigrate`) as part of its own startup `CMD`, guarded by `Migrate.Lock` so concurrent starts don't
-race. The first task to boot on the new image applies any migration this release shipped; every
-later one finds `0` migrations executed.
-
-### 4. Roll out to deployed locations
-
-There is no bulk "push all" tool. Call `deploy_location` through the MCP backoffice for each slug
-that should move to the new image — `list_locations` first if you need the full set:
-
-```
-list_locations
-deploy_location(slug = "<each slug>")
-```
-
-`deploy_location` is idempotent: an already-deployed location gets its service updated to a fresh
-task definition revision rather than a second service created, and it registers the task
-definition with whatever `API_IMAGE` the backoffice currently has in its environment — which is why
-step 2 has to land (and the backoffice's task has to actually restart) before this step.
+`McpMigrate`) as part of its own startup, guarded by `Migrate.Lock` so concurrent starts don't race.
 
 ## Verification
 
@@ -97,6 +70,7 @@ aws ecs describe-services --cluster <cluster> --services captal-<slug> \
   --query 'services[0].taskDefinition'
 aws ecs describe-task-definition --task-definition captal-<slug>:<revision> \
   --query 'taskDefinition.containerDefinitions[0].image'
+git ls-remote --tags origin 'api/v*'
 ```
 
 End-to-end:
@@ -115,28 +89,28 @@ aws ecs update-service --cluster <cluster> --service captal-<slug> \
   --task-definition captal-<slug>:<old-revision>
 ```
 
-To make it permanent, revert `image_tag` in the environment's `terraform.tfvars`, `tofu apply`
-again so the backoffice's `API_IMAGE` goes back, and call `deploy_location` for every affected slug
-so the next registered revision matches.
+That lasts until the next release moves every location again. To make it permanent, revert the
+change in a commit (`revert: …` bumps the patch) and release: the fixed code goes out as a new
+version, rather than an old version being re-released under its own tag.
 
 ## Caveats
 
-- **rqlite data loss**: prod rqlite runs on Fargate ephemeral storage with Raft; dev runs one node
-  on EFS. See `docs/database.adoc`'s operational-shape section and the `recover-data` MCP skill if
-  rqlite itself needs to be rebuilt during this rollout.
+- **rqlite data loss**: prod rqlite runs on Fargate ephemeral storage with Raft. See
+  `docs/database.adoc`'s operational-shape section and the `recover-data` MCP skill if rqlite itself
+  needs to be rebuilt during a rollout.
 - **Cross-version cookie name**: if you change `SessionCookieConfig`'s semantics, old browsers may
   hold a cookie the new server can't read. Plan for a deprecation window.
-- **Bundle is separate**: `client.bundle` + `client.publishS3` are a different release, not tied to
-  the API image tag. If the client changed too, publish it too — see `docs/client.adoc`.
+- **`build.mill` does not count** toward a version: most commits touching it change other modules. A
+  change there that only alters how an image is built needs a `fix:` in the module, or it is not
+  released.
 
 ## Anti-patterns
 
-- ❌ Looking for a `platform.dockerBuild`/`captal-provision` image — it doesn't exist. Migrations
-  ship inside `captal-api` itself.
-- ❌ Looking for `shared/captal.yaml` or a `captal shared push`/`captal locations push-all` command
-  — there is no CLI. The equivalent is a terraform `tofu apply` (step 2) followed by `deploy_location`
-  calls (step 4).
-- ❌ Tagging `:latest` — rejected outright by the `image_tag` variable's own validation, and there
-  is no immutable reference to roll back to if you do.
-- ❌ Calling `deploy_location` before the backoffice's own task has picked up the new `API_IMAGE` —
-  it will faithfully register a task definition pointing at the *old* tag.
+- ❌ Setting `image_tag` or `mcp_image_tag` in a `terraform.tfvars` — the build passes them, and a
+  value there would only disagree with it.
+- ❌ Creating an `api/v*` or `mcp/v*` tag by hand — the next release counts from it, and an image
+  for it was never published.
+- ❌ Asking git-cliff for `--bumped-version` to check a version — it ignores the module's paths and
+  answers from every commit. `mill show <module>.releaseVersion` is the answer.
+- ❌ Tagging `:latest` — rejected by the `image_tag` variable's own validation, and there is no
+  immutable reference to roll back to.

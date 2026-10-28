@@ -39,7 +39,8 @@ Six steps, in order:
    seconds** — it is not hung. Without a LocalStack licence it stops here and says so.
 3. Waits for that rqlite to have a leader on `localhost:5001`, then runs `platform.Migrate`.
 4. Runs the release `mill ci.run` makes, with LocalStack's variables: builds and pushes the API and
-   backoffice images under the tags the local tfvars name, moves every deployed location onto the
+   backoffice images under their next versions (`mill show api.releaseVersion`; git-cliff, from the
+   conventional commits since each one's last tag), moves every deployed location onto the
    new API image, and publishes the client — `bundle/` and `ui/` — and copies it under every
    deployed location's prefix. So a deploy from here runs the real API, and what is already
    deployed runs the build being run. To run that release on its own, waiting for the locations as

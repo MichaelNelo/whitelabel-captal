@@ -70,8 +70,8 @@ Add a row in `api/test/src/whitelabel/captal/api/TestFixtures.scala` that exerci
 ### 7. Deploy
 
 The migration is baked into the `captal-api` image's own classpath — there's no separate
-provisioning image to rebuild. Follow skill `bump-api-version`: build and push `captal-api` with a
-new tag, point the environment's `image_tag` at it, then call `deploy_location` for each location.
+provisioning image to rebuild. Follow skill `bump-api-version`: commit it as a `feat:` or `fix:` so
+the API's version moves, and release with `mill ci.run`, which moves every location onto it.
 Every location task that starts on the new image runs `Migrate` as part of its own boot; it's
 idempotent, so a location still on the old image and one already moved over both end up correct.
 

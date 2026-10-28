@@ -617,7 +617,8 @@ private def ensureLocalStackTofu(
     licensed: Boolean,
     configDir: os.Path,
     stateDir: os.Path,
-    rqliteImage: String): Map[String, String] =
+    rqliteImage: String,
+    tags: ImageTags): Map[String, String] =
   // Same signal production uses: no `ECS_CLUSTER` means the deploy tools are not registered and
   // the end-to-end test skips itself, rather than the suite failing on a machine that was never
   // going to run it. ECS and ELBv2 are not in the free tier's registry at all.
@@ -631,10 +632,12 @@ private def ensureLocalStackTofu(
       s"[tofu] no OpenTofu configuration at $configDir. It is a sibling repository; set CAPTAL_TERRAFORM_DIR if it lives elsewhere.")
 
   // The apply `ci.run` makes, against LocalStack, with rqlite's image alone: the suite runs neither
-  // the API nor the backoffice from an image, and building both would slow every run of it.
+  // the API nor the backoffice from an image, and building both would slow every run of it. Their
+  // tags are still the versions, the ones `mcp.dev` and `ci.run` apply this same state with, so
+  // the three do not take turns changing the task definitions.
   val target = ReleaseTarget.localStack(endpoint)
-  val (outputs, _) = applyConfiguration(target, configDir, stateDir): registries =>
-    publishImages(target, configDir, registries, BuiltImages(Some(rqliteImage), None, None))
+  val (outputs, _) = applyConfiguration(target, configDir, stateDir, tags): registries =>
+    publishImages(target, configDir, registries, BuiltImages(Some(rqliteImage), None, None), tags)
 
   def output(name: String): String = outputs.getOrElse(
     name,
@@ -743,17 +746,11 @@ private def awaitLocalDb(dbUrl: String): Unit =
   * definition pulls cannot drift apart.
   */
 private def rqliteImageTag(configDir: os.Path, environment: String): String =
-  imageTag(configDir, environment, "rqlite_image_tag")
-
-/** An image tag `environments/<env>/terraform.tfvars` names, read from the file so that what this
-  * build pushes and what the configuration's task definitions pull cannot drift apart.
-  */
-private def imageTag(configDir: os.Path, environment: String, variable: String): String =
   val file = configDir / "environments" / environment / "terraform.tfvars"
-  s"""(?m)^\\s*$variable\\s*=\\s*"([^"]+)"""".r
+  """(?m)^\s*rqlite_image_tag\s*=\s*"([^"]+)"""".r
     .findFirstMatchIn(os.read(file))
     .map(_.group(1))
-    .getOrElse(sys.error(s"[image] $file sets no $variable, so there is no tag to push"))
+    .getOrElse(sys.error(s"[image] $file sets no rqlite_image_tag, so there is no tag to push"))
 
 // ─────────────────────────────────────────────────────────────────────────────
 // rqlite image
@@ -823,16 +820,8 @@ private def pushImage(local: String, remote: String): String =
   *   `AWS_ENDPOINT_URL`. Set, it is this build's LocalStack: every AWS call goes through `awslocal`
   *   inside its container, which needs no credentials, and the state is the one `mcp.dev` applies
   *   with. Unset, it is the account the credentials name.
-  * @param imageTag
-  *   `IMAGE_TAG`, or else CodeBuild's `CODEBUILD_RESOLVED_SOURCE_VERSION`: the tag the API and
-  *   backoffice images go up under, overriding the tfvars' `image_tag` and `mcp_image_tag`. Unset,
-  *   the tfvars decide.
   */
-final private case class ReleaseTarget(
-    environment: String,
-    region: String,
-    endpoint: Option[String],
-    imageTag: Option[String]):
+final private case class ReleaseTarget(environment: String, region: String, endpoint: Option[String]):
   def local: Boolean = endpoint.isDefined
 
 private object ReleaseTarget:
@@ -842,16 +831,20 @@ private object ReleaseTarget:
       environment = value("CAPTAL_ENV").getOrElse(
         sys.error("[release] CAPTAL_ENV is not set: name the terraform/environments/<name> to release to")),
       region = value("AWS_REGION").orElse(value("AWS_DEFAULT_REGION")).getOrElse("us-east-1"),
-      endpoint = value("AWS_ENDPOINT_URL"),
-      imageTag = value("IMAGE_TAG").orElse(value("CODEBUILD_RESOLVED_SOURCE_VERSION").map(_.take(12)))
+      endpoint = value("AWS_ENDPOINT_URL")
     )
 
   /** The variables `mcp.dev` and the local suite release with: the `local` environment, on the
-    * LocalStack at `endpoint`, with the tags its tfvars name.
+    * LocalStack at `endpoint`.
     */
   def localStack(endpoint: String): ReleaseTarget = fromEnv(
     Map("CAPTAL_ENV" -> "local", "AWS_REGION" -> "us-east-1", "AWS_ENDPOINT_URL" -> endpoint))
 end ReleaseTarget
+
+/** The tags the API and backoffice images go up under, their [[ReleaseVersion.version]]s, which the
+  * configuration's task definitions are applied with as `image_tag` and `mcp_image_tag`.
+  */
+final private case class ImageTags(api: String, mcp: String)
 
 /** One AWS CLI call: `awslocal` inside LocalStack's container for a local target, `aws` otherwise. */
 private def awsCall(target: ReleaseTarget, args: String*): os.CommandResult =
@@ -880,9 +873,9 @@ private def awsText(target: ReleaseTarget, args: String*): Option[String] =
     .when(result.exitCode == 0)(result.out.text().trim)
     .filter(text => text.nonEmpty && text != "None")
 
-/** Applies the configuration to the target: `init`, then the image registries alone, then
-  * `pushImages` into them, then a plan of everything and that plan applied. Answers the
-  * configuration's string outputs and what `pushImages` answered.
+/** Applies the configuration to the target with the images under `tags`: `init`, then the image
+  * registries alone, then `pushImages` into them, then a plan of everything and that plan applied.
+  * Answers the configuration's string outputs and what `pushImages` answered.
   *
   * The registries go first because the task definitions name images, and an image has to be in its
   * registry before a service that pulls it is created or updated.
@@ -895,7 +888,8 @@ private def awsText(target: ReleaseTarget, args: String*): Option[String] =
 private def applyConfiguration[A](
     target: ReleaseTarget,
     configDir: os.Path,
-    workDir: os.Path)(pushImages: Map[String, String] => A): (Map[String, String], A) =
+    workDir: os.Path,
+    tags: ImageTags)(pushImages: Map[String, String] => A): (Map[String, String], A) =
   val staged = workDir / "config"
   val state = workDir / "terraform.tfstate"
   val plan = workDir / "release.tfplan"
@@ -942,7 +936,7 @@ private def applyConfiguration[A](
   val variables =
     Seq(s"-var-file=environments/${target.environment}/terraform.tfvars") ++
       target.endpoint.map(endpoint => s"-var=aws_endpoint_url=$endpoint") ++
-      target.imageTag.toSeq.flatMap(tag => Seq(s"-var=image_tag=$tag", s"-var=mcp_image_tag=$tag")) ++
+      Seq(s"-var=image_tag=${tags.api}", s"-var=mcp_image_tag=${tags.mcp}") ++
       stateArgs
 
   def outputs(): Map[String, String] =
@@ -1001,18 +995,22 @@ final private case class BuiltImages(rqlite: Option[String], api: Option[String]
 final private case class PublishedApi(image: String, changed: Boolean)
 
 /** Pushes the built images into the configuration's registries, under the tags its task definitions
-  * pull: rqlite's from the tfvars, and the API's and backoffice's from `IMAGE_TAG` or else the
-  * tfvars. Outside LocalStack it logs Docker in to each registry first.
+  * pull: rqlite's from the tfvars, and the API's and backoffice's from `tags`.
+  *
+  * Outside LocalStack a version is published once: a tag already in its registry is that release,
+  * built from the commit it was cut from, and is left as it is; a new one is pushed after logging
+  * Docker in to the registry. Locally the tag is the version being worked towards, and every build
+  * replaces it.
   */
 private def publishImages(
     target: ReleaseTarget,
     configDir: os.Path,
     outputs: Map[String, String],
-    built: BuiltImages): Option[PublishedApi] =
+    built: BuiltImages,
+    tags: ImageTags): Option[PublishedApi] =
   def repository(output: String) = outputs.getOrElse(
     output,
     sys.error(s"[image] the configuration has no $output output, so there is nowhere to push to"))
-  def tag(variable: String) = target.imageTag.getOrElse(imageTag(configDir, target.environment, variable))
 
   // The digest a tag points at in its registry, to tell a rebuilt image from an unchanged one.
   def digest(remote: String): Option[String] =
@@ -1029,7 +1027,11 @@ private def publishImages(
       "imageDetails[0].imageDigest")
 
   def push(local: String, remote: String): Unit =
-    if !target.local then
+    if target.local then
+      val _ = pushImage(local, remote)
+    else if digest(remote).isDefined then
+      println(s"[image] $remote is already published")
+    else
       val registry = remote.takeWhile(_ != '/')
       val password = awsText(target, "ecr", "get-login-password").getOrElse(
         sys.error(s"[image] could not get an ECR login for $registry"))
@@ -1038,16 +1040,16 @@ private def publishImages(
         .call(stdin = password, check = false, stderr = os.Pipe)
       if login.exitCode != 0 then
         sys.error(s"[image] docker login to $registry failed: ${login.err.trim()}")
-    val _ = pushImage(local, remote)
+      val _ = pushImage(local, remote)
 
   // rqlite's tag is always the tfvars': the engine changes deliberately, not on every commit.
   built.rqlite.foreach(local =>
     push(
       local,
-      s"${repository("rqlite_ecr_repository_url")}:${imageTag(configDir, target.environment, "rqlite_image_tag")}"))
-  built.mcp.foreach(local => push(local, s"${repository("mcp_image_repository_url")}:${tag("mcp_image_tag")}"))
+      s"${repository("rqlite_ecr_repository_url")}:${rqliteImageTag(configDir, target.environment)}"))
+  built.mcp.foreach(local => push(local, s"${repository("mcp_image_repository_url")}:${tags.mcp}"))
   built.api.map: local =>
-    val remote = s"${repository("api_image_repository_url")}:${tag("image_tag")}"
+    val remote = s"${repository("api_image_repository_url")}:${tags.api}"
     val before = digest(remote)
     push(local, remote)
     PublishedApi(remote, changed = before != digest(remote))
@@ -1260,6 +1262,64 @@ trait BaseJSModule extends ScalaJSModule with ScalafmtModule with ScalafixModule
   def scalaJSVersion = "1.20.1"
   def scalacOptions = Seq("-Wunused:imports,locals,explicits,implicits")
 
+/** A module's release: the tag git-cliff computes for it, and the one it was last released under.
+  *
+  * @param tag
+  *   The tag the next release goes out under, such as `api/v1.3.0`. The same as `previousTag` when
+  *   nothing since that release bumps the version.
+  * @param previousTag
+  *   The last tag the module's `cliff.toml` matches, `None` before its first release.
+  */
+final case class ReleaseVersion(tag: String, previousTag: Option[String])
+    derives upickle.default.ReadWriter:
+  /** The version alone, `1.3.0`, which is what an image is tagged with. */
+  def version: String = tag.replaceFirst("^.*?v(?=[0-9])", "")
+
+  /** Whether anything since the last release bumps the version. */
+  def changed: Boolean = !previousTag.contains(tag)
+
+/** A module released under its own version, tagged `<module>/v<version>`, which git-cliff computes
+  * from the conventional commits since the module's last tag. The rules are the module's
+  * `cliff.toml`; the paths whose commits count are the build's: the folders of the module and of
+  * every module it depends on, plus [[versionFiles]]. A commit touching only other modules does not
+  * move this one's version.
+  */
+trait Released extends JavaModule:
+  def dockerfile: T[PathRef]
+
+  /** Files outside those folders that go into the release, such as its Dockerfile. */
+  def versionFiles: T[Seq[PathRef]] = Task(Seq(dockerfile()))
+
+  /** `--bump --unreleased --context` and not `--bumped-version`: git-cliff (2.13 and 2.14) computes
+    * the latter from every commit, ignoring `--include-path`, while the context's version honours it.
+    */
+  def releaseVersion: T[ReleaseVersion] = Task.Uncached:
+    val workspace = mill.api.BuildCtx.workspaceRoot
+    val paths =
+      transitiveModuleDeps.map(module => s"${module.moduleDir.relativeTo(workspace)}/**").distinct ++
+        versionFiles().map(_.path.relativeTo(workspace).toString)
+    val result =
+      try
+        os.proc(
+          "git-cliff",
+          "--config",
+          moduleDir / "cliff.toml",
+          paths.flatMap(path => Seq("--include-path", path)),
+          "--bump",
+          "--unreleased",
+          "--context")
+          .call(cwd = workspace, check = false, stderr = os.Pipe)
+      catch
+        case _: java.io.IOException =>
+          sys.error(
+            "[version] git-cliff is not on the PATH Mill runs with. devenv installs it: reload the shell, then `mill shutdown` so the daemon starts with it.")
+    if result.exitCode != 0 then
+      sys.error(s"[version] git-cliff failed for ${moduleSegments.render}: ${result.err.trim()}")
+    val release = ujson.read(result.out.text())(0)
+    ReleaseVersion(
+      tag = release("version").str,
+      previousTag = release.obj.get("previous").flatMap(_.objOpt).flatMap(_.get("version")).flatMap(_.strOpt))
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Core: JVM + JS (shared sources)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1384,7 +1444,7 @@ end platform
 // API: JVM only (server implementation)
 // ─────────────────────────────────────────────────────────────────────────────
 
-object api extends BaseModule:
+object api extends BaseModule with Released:
   // `endpoints` was in here and is gone, and so is the tapir it carried. `messages` holds what the
   // browser actually shared with this module — the request and response types — and the route
   // descriptions live beside the routes, which is the only place that ever read them.
@@ -1888,7 +1948,7 @@ end QuickTunnels
 // UniFi controller, align the versions first rather than finding out through a NoSuchMethodError.
 // ─────────────────────────────────────────────────────────────────────────────
 
-object mcp extends BaseModule:
+object mcp extends BaseModule with Released:
   // Pinned to whatever zio-http-mcp was built with, and nothing else: 0.10.0 ships TASTy 28.10,
   // which a 3.9 compiler refuses outright ("expected stable TASTy from 28.0 to 28.9"). It was 3.9.0
   // for 0.8.3 and 3.8.4 before that, for the same reason each time.
@@ -1984,6 +2044,9 @@ object mcp extends BaseModule:
     */
   def defaultStyles: T[PathRef] = Task.Source(
     moduleDir / os.up / "client" / "assets" / "styles.css")
+
+  /** The stylesheet too: it goes into the jar, so a change to it is a change to the backoffice. */
+  override def versionFiles: T[Seq[PathRef]] = Task(super.versionFiles() :+ defaultStyles())
 
   def resources: T[Seq[PathRef]] = Task:
     // Only the index is generated. The skills themselves are already on the classpath through
@@ -2107,10 +2170,10 @@ object mcp extends BaseModule:
       sys.error("[dev] Migrations failed; the server would start against a schema-less database.")
 
     // The release `ci.run` makes, with the variables of this machine's LocalStack, on every run, so
-    // everything deployed here is the build being run: the API and backoffice images under the
-    // tags the local tfvars name (rqlite's went up with the apply), every deployed location moved
-    // onto the new API, and the client given to every location. Not waited for: a location taking
-    // minutes to settle should not hold up the server.
+    // everything deployed here is the build being run: the API and backoffice images under their
+    // next versions (rqlite's went up with the apply), every deployed location moved onto the new
+    // API, and the client given to every location. Not waited for: a location taking minutes to
+    // settle should not hold up the server.
     println("[dev] Step 4/6: Releasing the images and the client into LocalStack...")
     val release = ReleaseTarget.localStack(endpoint)
     val bucket = infra("ASSETS_BUCKET")
@@ -2121,7 +2184,8 @@ object mcp extends BaseModule:
       Map(
         "api_image_repository_url" -> infra("API_IMAGE_REPOSITORY_URL"),
         "mcp_image_repository_url" -> infra("MCP_IMAGE_REPOSITORY_URL")),
-      BuiltImages(rqlite = None, api = Some(api.image()()), mcp = Some(image()()))
+      BuiltImages(rqlite = None, api = Some(api.image()()), mcp = Some(image()())),
+      ImageTags(api.releaseVersion().version, releaseVersion().version)
     ).getOrElse(sys.error("[dev] the API image was not published"))
     val locations = locationServices(release, cluster)
     rollLocations(release, cluster, locations, published, await = false)
@@ -2472,13 +2536,15 @@ object mcp extends BaseModule:
       // Built under its default tag, because only the remote one matters and the push applies it.
       // Mill also forbids passing a value defined in this block to a task call.
       val built = if tag.isEmpty then "" else rqlite.image()()
+      val tags = ImageTags(api.releaseVersion().version, mcp.releaseVersion().version)
       mill.api.BuildCtx.withFilesystemCheckerDisabled:
         ensureLocalStackTofu(
           endpoint = parts(1),
           licensed = licensed,
           configDir = configDir,
           stateDir = localStackStateDir(parts(0)),
-          rqliteImage = built)
+          rqliteImage = built,
+          tags = tags)
 
     /** Recreates LocalStack, which is what clears a state that has come apart from it.
       *
@@ -2565,18 +2631,25 @@ end mcp
 
 object ci extends Module:
 
-  /** Releases this build to an AWS environment, in four operations:
+  /** Releases this build to an AWS environment, in five operations:
     *
     *   1. builds the rqlite, API and backoffice images;
     *   2. applies the configuration — `init`, the image registries, the images pushed into them, a
-    *      plan of everything and that plan applied — with the API and backoffice under `IMAGE_TAG`;
-    *   3. moves every deployed location onto the new API image, and waits for them to settle;
-    *   4. publishes the client, copies it under every location's prefix, and invalidates.
+    *      plan of everything and that plan applied — with the API and backoffice under their
+    *      versions, which git-cliff computes from the commits since each one's last tag (see
+    *      [[Released]]);
+    *   3. moves every deployed location onto the API image, and waits for them to settle;
+    *   4. publishes the client, copies it under every location's prefix, and invalidates;
+    *   5. tags the commit with every version that moved, and pushes those tags.
+    *
+    * A module whose version did not move goes out as it was: its image is in the registry under
+    * that version already, so nothing is pushed, and the locations run it already. The
+    * configuration and the client go out either way; neither is versioned.
     *
     * Configured entirely through the environment, which CodeBuild injects: `CAPTAL_ENV` names the
-    * environment, the credentials are the build's role, and `IMAGE_TAG` defaults to the commit
-    * CodeBuild resolved. See [[ReleaseTarget]]. The build needs Docker (a privileged CodeBuild
-    * project), `tofu` and the `aws` CLI.
+    * environment and the credentials are the build's role. See [[ReleaseTarget]]. The build needs
+    * Docker (a privileged CodeBuild project), `tofu`, `git-cliff` and the `aws` CLI, a clone with
+    * its history and tags, and permission to push tags.
     *
     * With `AWS_ENDPOINT_URL` at this build's LocalStack, it releases there, which is how it runs on
     * a dev machine:
@@ -2584,9 +2657,9 @@ object ci extends Module:
     * CAPTAL_ENV=local AWS_ENDPOINT_URL=http://localhost:4567 mill ci.run
     * }}}
     * No credentials: LocalStack's are fixed, and both the provider and `awslocal` use them. The
-    * container is started as `mcp.dev` starts it, the apply shares `mcp.dev`'s state, and the tags
-    * are the local tfvars' unless `IMAGE_TAG` is set. `mcp.dev` runs these same operations, without
-    * waiting for the locations to settle.
+    * container is started as `mcp.dev` starts it, the apply shares `mcp.dev`'s state, and nothing
+    * is tagged: a release to LocalStack is not a release. `mcp.dev` runs the first four operations,
+    * without waiting for the locations to settle.
     *
     * Usage: `mill ci.run`
     */
@@ -2596,36 +2669,59 @@ object ci extends Module:
       if target.local then
         localStackWorkDir(target, Task.env)
       else
-        if target.imageTag.isEmpty then
-          sys.error("[ci] no IMAGE_TAG, and no CODEBUILD_RESOLVED_SOURCE_VERSION to default it to")
         Task.dest
-    val configDir = terraformDir(Task.env, moduleDir / os.up)
+    val workspace = moduleDir / os.up
+    val configDir = terraformDir(Task.env, workspace)
+    val versions = Seq(api.releaseVersion(), mcp.releaseVersion())
+    val tags = ImageTags(api = versions(0).version, mcp = versions(1).version)
     val built = BuiltImages(
       rqlite = Some(rqlite.image()()),
       api = Some(api.image()()),
       mcp = Some(mcp.image()()))
     val bundle = client.bundle().path
 
-    println(s"[ci] Steps 1-2/4: Images built; applying the ${target.environment} configuration...")
-    val (outputs, published) = applyConfiguration(target, configDir, workDir): registries =>
-      publishImages(target, configDir, registries, built)
+    versions.foreach: release =>
+      println(s"[ci] ${release.previousTag match
+          case None                               => s"${release.tag}, the first release"
+          case Some(previous) if release.changed => s"$previous -> ${release.tag}"
+          case Some(previous)                     => s"$previous, which nothing since moves"
+        }")
+    println(s"[ci] Steps 1-2/5: Images built; applying the ${target.environment} configuration...")
+    val (outputs, published) = applyConfiguration(target, configDir, workDir, tags): registries =>
+      publishImages(target, configDir, registries, built, tags)
     val apiImage = published.getOrElse(sys.error("[ci] the API image was not published"))
     def output(name: String) = outputs.getOrElse(
       name,
       sys.error(s"[ci] the configuration has no $name output"))
     val cluster = output("ecs_cluster_name")
 
-    println("[ci] Step 3/4: Moving every location onto the new API image...")
+    println("[ci] Step 3/5: Moving every location onto the API image...")
     val locations = locationServices(target, cluster)
     rollLocations(target, cluster, locations, apiImage, await = true)
 
-    println("[ci] Step 4/4: Publishing the client to every location...")
+    println("[ci] Step 4/5: Publishing the client to every location...")
     publishClient(
       target,
       bundle,
       output("assets_bucket_name"),
       output("cloudfront_distribution_id"),
       locations)
+
+    val moved = versions.filter(_.changed).map(_.tag)
+    if moved.isEmpty then
+      println("[ci] Step 5/5: No version moved, so there is nothing to tag")
+    else if target.local then
+      println(
+        s"[ci] Step 5/5: Not tagging ${moved.mkString(", ")}: a release to LocalStack is not a release")
+    else
+      println(s"[ci] Step 5/5: Tagging ${moved.mkString(", ")}...")
+      def git(args: String*): Unit =
+        val result = os.proc("git", args).call(cwd = workspace, check = false, stderr = os.Pipe)
+        if result.exitCode != 0 then
+          sys.error(s"[ci] git ${args.head} failed: ${result.err.trim()}")
+      moved.foreach: tag =>
+        git("tag", tag)
+        git("push", "origin", s"refs/tags/$tag")
 
   /** For a release to LocalStack: starts this build's container if it is not running, and answers
     * the state `mcp.dev` applies with, which is that container's.

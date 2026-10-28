@@ -38,7 +38,7 @@ Miss one and it silently keeps the default.
 2. `terraform/modules/<m>/main.tf` — consume it. If the module has a `locals` block that hardcodes
    the value, point the local at `var.<name>` rather than adding a second source of truth.
 3. `terraform/variables.tf` — declare the root-level one, prefixed by area (`rqlite_http_port`,
-   `mcp_image_tag`).
+   `mcp_desired_count`).
 4. `terraform/main.tf` — pass it in the `module "<m>"` block.
 5. `terraform/environments/<env>/terraform.tfvars` — override it only where the default is wrong.
 

@@ -37,12 +37,10 @@ domain_name       = "captal.invalid"
 
 container_port = 8080
 
-# The tags the build pushes into this environment's own ECR, read from these lines rather than
-# carried by the build, so what it pushes and what the task definitions pull cannot drift apart.
-# `rqlite_image_tag` goes up with the apply, before the service that pulls it exists; bump it with
-# the Dockerfile or the entrypoint. `image_tag` (the API every deployed location runs) and
-# `mcp_image_tag` (the backoffice) go up on every `mill mcp.dev`.
-image_tag        = "1.0.1"
+# The tag the build pushes rqlite under, read from this line so what it pushes and what the task
+# definitions pull cannot drift apart. It goes up with the apply, before the service that pulls it
+# exists; bump it with the Dockerfile or the entrypoint. `image_tag` (the API) and `mcp_image_tag`
+# (the backoffice) are not set here: they are each module's version, which the build passes.
 rqlite_image_tag = "1.0.5"
 
 # Off 4001/4002, which the test suites' own rqlite containers sit beside. LocalStack publishes an
@@ -66,8 +64,6 @@ rqlite_memory        = 512
 # The service is declared and its image published, but it runs no task: the backoffice runs on the
 # host, with `mill mcp.dev`. Raising this runs the published image here instead.
 mcp_desired_count = 0
-
-mcp_image_tag = "latest"
 
 # The identity the suite runs as, and the reason `ENFORCE_IAM` can do anything here. LocalStack
 # accepts any key pair and allows everything when enforcement is off, so a suite passing

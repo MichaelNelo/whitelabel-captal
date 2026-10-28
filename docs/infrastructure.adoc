@@ -96,11 +96,11 @@ validation {
 ----
 
 See xref:context/incidents.adoc[Incidents] for the drift that validation exists to stop.
-`mcp_image_tag` carries no default at all, for the same reason. As committed today,
-`environments/prod/terraform.tfvars` still sets `image_tag = "latest"` (which the validation above
-refuses) and `mcp_image_tag = "latest"` (which has never been published) — a `tofu plan` against
-prod with the current `terraform.tfvars` fails validation before it reaches a provider call, which
-is deliberate: nothing is running in that environment yet, so being stopped here costs nothing.
+`mcp_image_tag` carries no default at all, for the same reason. Neither is set in any
+`terraform.tfvars`: they are the API's and the backoffice's versions, computed from git tags, and
+the build passes them with `-var` — see xref:development.adoc#versions[Versions]. A plan run by
+hand has to pass the released ones too, `-var=image_tag=<api version> -var=mcp_image_tag=<mcp
+version>`, which `git describe --tags --abbrev=0 --match 'api/v*'` (and `mcp/v*`) names.
 
 Per-environment sizing, as committed:
 
@@ -511,6 +511,8 @@ an address that is gone.
 None of the three image-tag variables (`image_tag`, `mcp_image_tag`, `rqlite_image_tag`) default to
 or tolerate `latest` in the shared variable (`image_tag` is validated against it directly); see
 xref:context/incidents.adoc[Incidents] for the rqlite version drift that made the point concretely.
+The first two are the modules' versions, which the build passes; `rqlite_image_tag` is the one an
+environment's tfvars names, since the engine changes deliberately rather than per commit.
 
 The SPA bundle and the MCP-UI apps are not released through Tofu or through ECR: `client.bundle`,
 `client.publishS3` and `client.publish` (Mill tasks, detailed in xref:client.adoc[Client]) write
