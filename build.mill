@@ -755,10 +755,11 @@ private def ensureLocalStackTofu(
     // than the suite's. Nothing fetches through it — the spec calls `createInvalidation` and polls
     // for `Completed` — so the origin does not matter; the id being a real one does.
     "CLOUDFRONT_DISTRIBUTION_ID" -> output("cloudfront_distribution_id"),
-    // Not read by the server. `mcp.dev` builds `PUBLIC_BASE_URL` from the first, pushes the API
-    // image into the second, and hands the third to the tasks a deploy starts.
+    // Not read by the server. `mcp.dev` builds `PUBLIC_BASE_URL` from the first, pushes the API and
+    // backoffice images into the next two, and hands the last to the tasks a deploy starts.
     "CLOUDFRONT_DOMAIN_NAME" -> output("cloudfront_domain_name"),
     "API_IMAGE_REPOSITORY_URL" -> output("api_image_repository_url"),
+    "MCP_IMAGE_REPOSITORY_URL" -> output("mcp_image_repository_url"),
     "RQLITE_URL" -> output("rqlite_url"),
     // Deliberately an image that is already on the machine. LocalStack runs an ECS task as a real
     // container, so a task definition naming an ECR repository nobody can pull would leave the
@@ -816,11 +817,17 @@ private def awaitLocalDb(dbUrl: String): Unit =
   * definition pulls cannot drift apart.
   */
 private def rqliteImageTag(configDir: os.Path, environment: String): String =
+  imageTag(configDir, environment, "rqlite_image_tag")
+
+/** An image tag `environments/<env>/terraform.tfvars` names, read from the file so that what this
+  * build pushes and what the configuration's task definitions pull cannot drift apart.
+  */
+private def imageTag(configDir: os.Path, environment: String, variable: String): String =
   val file = configDir / "environments" / environment / "terraform.tfvars"
-  """(?m)^\s*rqlite_image_tag\s*=\s*"([^"]+)"""".r
+  s"""(?m)^\\s*$variable\\s*=\\s*"([^"]+)"""".r
     .findFirstMatchIn(os.read(file))
     .map(_.group(1))
-    .getOrElse(sys.error(s"[rqlite] $file sets no rqlite_image_tag, so there is no tag to push"))
+    .getOrElse(sys.error(s"[image] $file sets no $variable, so there is no tag to push"))
 
 // ─────────────────────────────────────────────────────────────────────────────
 // rqlite image
@@ -1729,7 +1736,8 @@ object mcp extends BaseModule:
 
     println("[dev] Step 3/6: Waiting for rqlite, then running migrations...")
     test.tofuSources()
-    val dbUrl = localDbUrl(terraformDir(Task.env, moduleDir / os.up))
+    val configDir = terraformDir(Task.env, moduleDir / os.up)
+    val dbUrl = localDbUrl(configDir)
     awaitLocalDb(dbUrl)
     val migration = os
       .proc("java", "-cp", migrationCp, "whitelabel.captal.platform.Migrate")
@@ -1738,23 +1746,22 @@ object mcp extends BaseModule:
       sys.error("[dev] Migrations failed; the server would start against a schema-less database.")
 
     // On every run, so what a deploy copies under a location's prefix, what the MCP App pages load
-    // and what a deploy's task runs are all the build being run. The image goes up under a tag taken
-    // from the image itself: a rebuild is a new tag, so a task can never start on a stale one, and
-    // an unchanged image keeps its tag.
-    println("[dev] Step 4/6: Publishing the portal, the MCP App scripts and the API image...")
+    // and what the configuration's tasks run are all the build being run. The rqlite image went up
+    // with the apply; the API and backoffice images go up here, under the tags the local tfvars
+    // name, which is what production's task definitions are built from too. A rebuild reuses the
+    // tag, and the tasks still get it: they run on this machine's Docker, where the push re-points
+    // that tag at the new build.
+    println("[dev] Step 4/6: Publishing the portal, the MCP App scripts and the images...")
     val bucket = infra("ASSETS_BUCKET")
     val bundle = client.bundle().path
     client.publishBundle(bundle, bucket, "bundle", "us-east-1", local = true)
     publishUiScripts(bundle, bucket, "us-east-1", local = true)
-    val builtApi = api.image()()
-    val apiTag = os
-      .proc("docker", "image", "inspect", "--format", "{{.Id}}", builtApi)
-      .call()
-      .out
-      .trim()
-      .stripPrefix("sha256:")
-      .take(12)
-    val apiImage = pushImage(builtApi, s"${infra("API_IMAGE_REPOSITORY_URL")}:$apiTag")
+    val apiImage = pushImage(
+      api.image()(),
+      s"${infra("API_IMAGE_REPOSITORY_URL")}:${imageTag(configDir, "local", "image_tag")}")
+    pushImage(
+      image()(),
+      s"${infra("MCP_IMAGE_REPOSITORY_URL")}:${imageTag(configDir, "local", "mcp_image_tag")}")
 
     // Two, because the MCP App pages render in the operator's browser on the host's public origin,
     // which may not reach localhost. They post to this server, but load their scripts from the

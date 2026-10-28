@@ -126,7 +126,7 @@ directory of its own: `MILL_OUTPUT_DIR=/tmp/captal-api-out mill api.dev --slug <
 [dev] Step 1/6: Ensuring LocalStack...
 [dev] Step 2/6: Applying the local infrastructure...
 [dev] Step 3/6: Waiting for rqlite, then running migrations...
-[dev] Step 4/6: Publishing the portal, the MCP App scripts and the API image...
+[dev] Step 4/6: Publishing the portal, the MCP App scripts and the images...
 [dev] Step 5/6: Opening the Cloudflare tunnels...
 [dev] Step 6/6: Starting MCP backoffice on :8081
 ----
@@ -152,10 +152,12 @@ Step 4 publishes, on every run, so all three are the build being run:
 * the portal's bundle under `bundle/` in the configuration's bucket, the way `client.publishS3`
   does, which is what `deploy_location` copies under a location's prefix;
 * the MCP App pages' scripts under `ui/`, the way `client.publish` does;
-* the API image, built by `api.image` and pushed into the configuration's repository under a tag
-  taken from the image itself — a rebuild is a new tag, so a deploy never starts a stale one. That
-  tag is what the server is given as `API_IMAGE`, so a location deployed from here runs the real
-  API.
+* the API and backoffice images, built by `api.image` and `mcp.image` and pushed into the
+  configuration's repositories under the tags the local tfvars name (`image_tag`, `mcp_image_tag`)
+  — the same tags its task definitions pull, as in production. The API's is what the server is
+  given as `API_IMAGE`, so a location deployed from here runs the real API. The backoffice's is
+  there for the MCP service the configuration declares with no tasks. A rebuild reuses the tag and
+  the tasks still get it: they run on this machine's Docker, where the push re-points the tag.
 
 The server is then given the configuration's bucket, distribution and credentials, with
 `PUBLIC_BASE_URL` set to the distribution as LocalStack serves it,

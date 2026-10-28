@@ -37,21 +37,18 @@ domain_name       = "captal.invalid"
 
 container_port = 8080
 
-# `rqlite_image_tag` is the tag `mill rqlite.image` builds and the apply pushes into this
-# environment's own ECR before the service that pulls it exists. Bump it with the Dockerfile or the
-# entrypoint, and the build follows -- it reads this line rather than carrying a tag of its own.
-#
-# `image_tag` has no such task yet: nothing pushes `captal-api` here, and with no portal service in
-# this configuration nothing pulls it either. The backoffice stamps its own image into the task
-# definition it registers, and the suite points that at an image already on the machine.
+# The tags the build pushes into this environment's own ECR, read from these lines rather than
+# carried by the build, so what it pushes and what the task definitions pull cannot drift apart.
+# `rqlite_image_tag` goes up with the apply, before the service that pulls it exists; bump it with
+# the Dockerfile or the entrypoint. `image_tag` (the API every deployed location runs) and
+# `mcp_image_tag` (the backoffice) go up on every `mill mcp.dev`.
 image_tag        = "1.0.1"
 rqlite_image_tag = "1.0.5"
 
-# Off 4001/4002, which is where `mill api.dev` and `mill mcp.dev` run the plain rqlite container the
-# backoffice and the migrations talk to. LocalStack publishes an ECS task's ports on the host, so the
-# first cluster node to start would otherwise take that port and whichever of the two came second
-# would fail -- in either order, depending on nothing. The cluster does not need a host port at all:
-# its nodes find each other by service discovery inside LocalStack's own network.
+# Off 4001/4002, which the test suites' own rqlite containers sit beside. LocalStack publishes an
+# ECS task's ports on the host, and the first node to start takes 5001: that is how `mill mcp.dev`
+# and `mill api.dev` reach the cluster from the host. Its nodes and the locations' tasks find it by
+# service discovery inside LocalStack's own network.
 rqlite_http_port = 5001
 rqlite_raft_port = 5002
 
@@ -60,17 +57,16 @@ rqlite_raft_port = 5002
 # in a deployed environment. LocalStack runs an ECS task as a real container, which is what makes
 # that worth doing and also why the image has to be in ECR first.
 #
-# The backoffice still runs in-process against the plain rqlite container, not against this cluster:
-# the cluster is only addressable as `rqlite.captal.local` through service discovery, and the schema
-# has to be migrated before any of this exists.
+# It is the database everything local uses: the backoffice on the host through port 5001, and every
+# deployed location's task as `rqlite.captal.local`.
 rqlite_desired_count = 3
 rqlite_cpu           = 256
 rqlite_memory        = 512
 
+# The service is declared and its image published, but it runs no task: the backoffice runs on the
+# host, with `mill mcp.dev`. Raising this runs the published image here instead.
 mcp_desired_count = 0
 
-# Named because the variable has no default, not because it is pulled: with zero tasks nothing
-# fetches it. `mill mcp.imagePush` is what would put a real tag in this registry.
 mcp_image_tag = "latest"
 
 # The identity the suite runs as, and the reason `ENFORCE_IAM` can do anything here. LocalStack
