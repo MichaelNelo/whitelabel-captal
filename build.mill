@@ -134,44 +134,59 @@ private def publishUiScripts(src: os.Path, bucket: String, region: String, local
     sys.error(s"[publish] missing from $src: ${missing.mkString(", ")}")
   val (entries, chunks) = moduleClosure(src, uiEntries).toSeq.sorted.partition(uiEntries.contains)
 
-  // Two transports for one operation. Against LocalStack the copy runs *inside* the container with
-  // `awslocal`, which is what `ensureLocalStack` already does and for the same reason: `aws` is not
-  // on the PATH Mill gives a subprocess, so a dev loop that needed it would work only on a machine
-  // that happens to have it. `docker cp` first, since `docker exec` cannot read a host file.
-  def put(name: String, cache: String): Unit =
-    val target = s"s3://$bucket/$uiPrefix/$name"
-    val metadata = Seq(
-      "--content-type",
-      "application/javascript",
-      "--cache-control",
-      cache,
-      "--metadata-directive",
-      "REPLACE")
-    println(s"[publish] $name -> $target")
-    val result =
-      if local then
-        val staged = s"/tmp/$name"
-        val copied = os
-          .proc("docker", "cp", (src / name).toString, s"$localStackContainer:$staged")
-          .call(check = false, stderr = os.Pipe)
-        if copied.exitCode != 0 then
-          sys.error(s"[publish] docker cp failed for $name: ${copied.err.trim()}")
-        os.proc(
-            Seq("docker", "exec", localStackContainer, "awslocal", "s3", "cp", staged, target) ++
-              metadata)
-          .call(check = false, stderr = os.Pipe)
-      else
-        os.proc(
-            Seq("aws", "s3", "cp", (src / name).toString, target, "--region", region) ++ metadata)
-          .call(check = false, stderr = os.Pipe)
-    if result.exitCode != 0 then
-      sys.error(s"[publish] s3 cp failed for $name: ${result.err.trim()}")
-  end put
+  def put(name: String, cache: String): Unit = s3Copy(
+    src / name,
+    s"s3://$bucket/$uiPrefix/$name",
+    "application/javascript",
+    cache,
+    region,
+    local)
 
   chunks.foreach(put(_, Immutable))
   entries.foreach(put(_, Revalidate))
   println(s"[publish] ${chunks.size} chunk(s) then ${entries.size} entr(ies)")
 end publishUiScripts
+
+/** One file to one S3 key, with its type and cache policy, against LocalStack or AWS.
+  *
+  * Against LocalStack the copy runs *inside* the container with `awslocal`, for the same reason
+  * `ensureLocalStack` does: `aws` is not on the PATH Mill gives a subprocess, so a dev loop that
+  * needed it would work only on a machine that happens to have it. `docker cp` first, since `docker
+  * exec` cannot read a host file.
+  */
+private def s3Copy(
+    file: os.Path,
+    target: String,
+    contentType: String,
+    cache: String,
+    region: String,
+    local: Boolean): Unit =
+  val metadata = Seq(
+    "--content-type",
+    contentType,
+    "--cache-control",
+    cache,
+    "--metadata-directive",
+    "REPLACE")
+  println(s"[publish] ${file.last} -> $target")
+  val result =
+    if local then
+      val staged = s"/tmp/${file.last}"
+      val copied = os
+        .proc("docker", "cp", file.toString, s"$localStackContainer:$staged")
+        .call(check = false, stderr = os.Pipe)
+      if copied.exitCode != 0 then
+        sys.error(s"[publish] docker cp failed for ${file.last}: ${copied.err.trim()}")
+      os.proc(
+          Seq("docker", "exec", localStackContainer, "awslocal", "s3", "cp", staged, target) ++
+            metadata)
+        .call(check = false, stderr = os.Pipe)
+    else
+      os.proc(Seq("aws", "s3", "cp", file.toString, target, "--region", region) ++ metadata)
+        .call(check = false, stderr = os.Pipe)
+  if result.exitCode != 0 then
+    sys.error(s"[publish] s3 cp failed for ${file.last}: ${result.err.trim()}")
+end s3Copy
 
 /** Named once because two places need it: the container every suite runs against, and the image the
   * end-to-end deploy puts in its task definition — which only has to be something already pulled.
@@ -271,18 +286,10 @@ private def ensureRqlite(containerName: String, hostPort: Int): String =
   s"jdbc:rqlite:http://localhost:$hostPort"
 end ensureRqlite
 
-/** Starts LocalStack if it is not already up, creates the bucket, and returns its endpoint.
-  *
-  * The MCP server needs S3 to hand out upload URLs and store per-location assets. Against real AWS
-  * that means an account and an identity; against LocalStack it means neither — it does not verify
-  * signatures, so the dummy credentials below are enough for the SDK's signer and are never
-  * checked.
-  */
 /** Shared by `mcp` (which starts the container) and `client` (which publishes into it), so the two
-  * cannot disagree about where dev assets live.
+  * cannot disagree about where it is.
   */
 private val localStackContainer = "localstack-dev"
-private val devBucket = "captal-assets-dev"
 
 /** Pinned, and the same for both editions so a developer with a licence and one without are running
   * the same LocalStack rather than two.
@@ -375,10 +382,13 @@ private def localStackImage(containerName: String): Option[String] = os
   .map(_.trim)
   .filter(_.nonEmpty)
 
+/** Starts LocalStack if it is not already up, and returns its endpoint. What runs inside it — the
+  * bucket, the distribution, the cluster — is the local configuration's, applied by
+  * [[ensureLocalStackTofu]]; nothing here creates a resource of its own.
+  */
 private def ensureLocalStack(
     containerName: String,
     hostPort: Int,
-    bucket: String,
     env: Map[String, String]): String =
   val endpoint = s"http://localhost:$hostPort"
   val token = localStackToken(env)
@@ -540,132 +550,9 @@ private def ensureLocalStack(
             "No LOCALSTACK_AUTH_TOKEN / LOCALSTACK_TOKEN was set, and these are licensed services"
         }.")
 
-  // Idempotent: creating a bucket that exists is not an error worth stopping for.
-  os.proc("docker", "exec", containerName, "awslocal", "s3api", "create-bucket", "--bucket", bucket)
-    .call(check = false, stderr = os.Pipe)
-
-  // CORS, without which the upload page cannot PUT anything.
-  //
-  // The page sends the file's own `Content-Type`, and `video/mp4` is not one of the three types
-  // CORS treats as safe — so the browser asks permission first with an OPTIONS, and a bucket with
-  // no CORS configuration answers that with a 403. The PUT is never attempted and the failure
-  // arrives after the operator has chosen a file.
-  //
-  // `*` for the origin because the page runs in a sandboxed frame, whose origin is either opaque
-  // (sending `Origin: null`) or a host-generated sandbox domain; naming either one would be
-  // guessing at something that is not ours to pin. This is a local bucket holding test videos.
-  //
-  // The real bucket gets the same rule from `terraform/modules/cloudfront`; see docs/mcp-iam.adoc.
-  val cors =
-    """{"CORSRules":[{"AllowedOrigins":["*"],"AllowedMethods":["PUT","GET","HEAD"],"AllowedHeaders":["*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":3000}]}"""
-  val corsResult = os
-    .proc(
-      "docker",
-      "exec",
-      containerName,
-      "awslocal",
-      "s3api",
-      "put-bucket-cors",
-      "--bucket",
-      bucket,
-      "--cors-configuration",
-      cors)
-    .call(check = false, stderr = os.Pipe)
-  if corsResult.exitCode != 0 then
-    sys.error(
-      s"[localstack] Could not set CORS on '$bucket'; the upload page's PUT would be refused at the preflight: ${corsResult
-          .err
-          .trim()}")
-
-  println(s"[localstack] '$containerName' ready on $endpoint, bucket $bucket (CORS set)")
+  println(s"[localstack] '$containerName' ready on $endpoint")
   endpoint
 end ensureLocalStack
-
-/** One `awslocal` call inside the container, failing loudly with what AWS said.
-  *
-  * `docker exec` rather than the host's `aws`, matching how the bucket is created above and for the
-  * same reasons: `awslocal` ships in the image already pointed at the right endpoint, and it needs
-  * no credentials on the machine running the build.
-  */
-private def awslocal(containerName: String, args: String*): String =
-  val result = os
-    .proc("docker", "exec", containerName, "awslocal", args)
-    .call(check = false, stderr = os.Pipe)
-  if result.exitCode != 0 then
-    sys.error(s"[localstack] awslocal ${args.mkString(" ")} failed: ${result.err.trim()}")
-  result.out.trim()
-
-/** An `awslocal` query that is allowed to find nothing.
-  *
-  * The CLI is inconsistent about absence: a `--query` into an empty list prints `None`, while
-  * `describe-load-balancers --names` for a name that does not exist exits non-zero. Both mean the
-  * same thing here, so both become `None`.
-  */
-private def awslocalOption(containerName: String, args: String*): Option[String] =
-  val result = os
-    .proc("docker", "exec", containerName, "awslocal", args)
-    .call(check = false, stderr = os.Pipe)
-  Option
-    .when(result.exitCode == 0)(result.out.trim())
-    .filter(value => value.nonEmpty && value != "None")
-
-/** The shared infrastructure a deploy assumes already exists, created in LocalStack.
-  *
-  * [[whitelabel.captal.mcp.DeployTools]] creates five resources *per location* and reads the rest
-  * from its environment, because in production those are applied with OpenTofu from another
-  * repository. Nothing was standing them up locally, which is why `mcp.localStackSetup` only ever
-  * made a bucket: the licensed services were available and no cluster, VPC or load balancer existed
-  * for a deploy to attach to.
-  *
-  * Returned as the environment rather than as objects, so a test goes through `DeployTargets.layer`
-  * and `AssetStore.layer` — the same reading of the same variables production does. A fixture that
-  * built `DeployTargets` directly would skip the one part that has already gone wrong once.
-  *
-  * Every step is look-up-or-create, keyed on a `Name` tag, because `create-vpc` is not idempotent:
-  * running twice without the lookup leaves two VPCs and a subnet in whichever one came back first.
-  */
-/** A CloudFront distribution in front of `bucket`, created once and found thereafter.
-  *
-  * Needed because `AssetStore` no longer has a way to not have one. It used to turn every
-  * invalidation against a local endpoint into the string `"skipped-no-cdn"`, and the environment
-  * handed it a made-up id -- which meant the whole CloudFront path was never executed by anything
-  * until it reached AWS: `createInvalidation`, the poll to `Completed`, and the ordering in
-  * `pause_location` that depends on the wait actually waiting.
-  *
-  * Looked up by `Comment` rather than tracked, the same shape as the other lookups here: the id is
-  * generated, so a second run has to find the first run's distribution instead of adding one.
-  *
-  * Requires a licence. CloudFront is not in the free tier's registry, so callers that may run
-  * without one have to be prepared for this to fail.
-  */
-private def ensureDistribution(containerName: String, comment: String, bucket: String): String =
-  awslocalOption(
-    containerName,
-    "cloudfront",
-    "list-distributions",
-    "--query",
-    s"DistributionList.Items[?Comment=='$comment'].Id | [0]",
-    "--output",
-    "text").getOrElse:
-    awslocal(
-      containerName,
-      "cloudfront",
-      "create-distribution",
-      "--distribution-config",
-      // Inline rather than a staged file: `os.proc` passes arguments without a shell, so the JSON
-      // needs no quoting of its own. The legacy `ForwardedValues` form instead of a cache policy
-      // id, which would otherwise have to be looked up from a managed policy LocalStack need not
-      // have.
-      s"""{"CallerReference":"$comment","Comment":"$comment","Enabled":true,
-         |"Origins":{"Quantity":1,"Items":[{"Id":"assets","DomainName":"$bucket.s3.amazonaws.com",
-         |"S3OriginConfig":{"OriginAccessIdentity":""}}]},
-         |"DefaultCacheBehavior":{"TargetOriginId":"assets","ViewerProtocolPolicy":"allow-all",
-         |"ForwardedValues":{"QueryString":false,"Cookies":{"Forward":"none"}},"MinTTL":0,
-         |"TrustedSigners":{"Enabled":false,"Quantity":0}}}""".stripMargin.replace("\n", ""),
-      "--query",
-      "Distribution.Id",
-      "--output",
-      "text")
 
 /** Where the OpenTofu configuration lives: `terraform/`, in this repository.
   *
@@ -868,6 +755,11 @@ private def ensureLocalStackTofu(
     // than the suite's. Nothing fetches through it — the spec calls `createInvalidation` and polls
     // for `Completed` — so the origin does not matter; the id being a real one does.
     "CLOUDFRONT_DISTRIBUTION_ID" -> output("cloudfront_distribution_id"),
+    // Not read by the server. `mcp.dev` builds `PUBLIC_BASE_URL` from the first, pushes the API
+    // image into the second, and hands the third to the tasks a deploy starts.
+    "CLOUDFRONT_DOMAIN_NAME" -> output("cloudfront_domain_name"),
+    "API_IMAGE_REPOSITORY_URL" -> output("api_image_repository_url"),
+    "RQLITE_URL" -> output("rqlite_url"),
     // Deliberately an image that is already on the machine. LocalStack runs an ECS task as a real
     // container, so a task definition naming an ECR repository nobody can pull would leave the
     // service trying forever. Nothing here waits for a task to start, but a pull that cannot
@@ -882,10 +774,41 @@ end ensureLocalStackTofu
 // someone kept it agreeing, and `modules/alb` had already grown rules it did not know about.
 // `ensureLocalStackTofu` applies the same configuration the AWS environments use.
 
-// Shared by api.dev and mcp.dev on purpose: the backoffice writes what the portal reads, so they
-// have to be looking at the same database to be worth running together.
-private val rqliteDevPort = 4001
-private val rqliteDevContainerName = "rqlite-dev"
+/** The rqlite the local configuration runs, as this machine reaches it: one of its tasks publishes
+  * `rqlite_http_port` on the host. Shared by `api.dev` and `mcp.dev` on purpose: the backoffice
+  * writes what the portal reads, so they have to be looking at the same database to be worth
+  * running together. The tasks a deploy starts reach the same database by its service-discovery
+  * name instead, which is what the configuration's `rqlite_url` output says.
+  */
+private def localDbUrl(configDir: os.Path): String =
+  val file = configDir / "environments" / "local" / "terraform.tfvars"
+  val port = """(?m)^\s*rqlite_http_port\s*=\s*(\d+)""".r
+    .findFirstMatchIn(os.read(file))
+    .map(_.group(1))
+    .getOrElse(sys.error(s"[rqlite] $file sets no rqlite_http_port"))
+  s"jdbc:rqlite:http://localhost:$port"
+
+/** Waits for that rqlite to have a leader and a store, which a cluster that is still electing does
+  * not. Fails with what to do when it never answers: it only exists once the local configuration
+  * has been applied, which `mcp.dev` does.
+  */
+private def awaitLocalDb(dbUrl: String): Unit =
+  val ready = dbUrl.stripPrefix("jdbc:rqlite:") + "/readyz"
+  val deadline = System.nanoTime + 180_000_000_000L
+  def answers: Boolean = scala
+    .util
+    .Try:
+      val connection = java.net.URI.create(ready).toURL.openConnection()
+      connection.setConnectTimeout(2000)
+      connection.setReadTimeout(2000)
+      connection.asInstanceOf[java.net.HttpURLConnection].getResponseCode == 200
+    .getOrElse(false)
+  while !answers && System.nanoTime < deadline do
+    Thread.sleep(2000)
+  if !answers then
+    sys.error(
+      s"[rqlite] nothing ready at $ready after three minutes. It is the local configuration's rqlite service, which `mill mcp.dev` applies; start that first.")
+  println(s"[rqlite] ready at ${dbUrl.stripPrefix("jdbc:rqlite:")}")
 
 /** The tag `environments/<env>/terraform.tfvars` names for the rqlite image.
   *
@@ -1170,13 +1093,6 @@ object api extends BaseModule:
   // would leave a build that compiles and a CLI that cannot run.
   private val defaultLocationSlug = "cafe-centro"
 
-  def rqliteSetup() = Task.Command:
-    ensureRqlite(rqliteDevContainerName, rqliteDevPort)
-
-  def stopRqlite() = Task.Command:
-    os.proc("docker", "rm", "-f", rqliteDevContainerName).call(check = false)
-    println("rqlite test container stopped")
-
   // Compile client before running server
   override def run(args: Task[Args] = Task.Anon(Args())) = Task.Command:
     copyIndex()()
@@ -1189,14 +1105,25 @@ object api extends BaseModule:
   /** Full dev workflow: rqlite + migrations + client + server. Usage: mill api.dev, or mill
     * api.dev --slug basic to serve another location.
     *
-    * No longer takes a provisioning directory. The server reads what the backoffice wrote; seeding
-    * a fresh database is `mill mcp.dev` and the tools, not a directory replayed at startup.
+    * The database is the one `mcp.dev` writes to, the local configuration's rqlite, so `mcp.dev`
+    * has to have applied that configuration first. The server reads what the backoffice wrote;
+    * seeding a fresh database is the backoffice's tools, not a directory replayed at startup.
     */
   def dev(slug: String = defaultLocationSlug) = Task.Command:
-    println("[dev] Step 1/3: Ensuring rqlite container...")
-    rqliteSetup()()
+    mcp.test.tofuSources()
+    val dbUrl = localDbUrl(terraformDir(Task.env, moduleDir / os.up))
+    println("[dev] Step 1/3: Waiting for the local configuration's rqlite...")
+    awaitLocalDb(dbUrl)
     println("[dev] Step 2/3: Running migrations...")
-    platform.migrate()()
+    val migrationCp = platform
+      .runClasspath()
+      .map(_.path.toString)
+      .mkString(java.io.File.pathSeparator)
+    val migration = os
+      .proc("java", "-cp", migrationCp, "whitelabel.captal.platform.Migrate")
+      .call(env = Map("DB_URL" -> dbUrl), check = false, stdout = os.Inherit, stderr = os.Inherit)
+    if migration.exitCode != 0 then
+      sys.error("[dev] Migrations failed; the server would start against a schema-less database.")
     println(s"[dev] Step 3/3: Starting server (location=$slug)...")
     copyIndex()()
     if Task.env.getOrElse("CLIENT_LINKER", "fast") == "full" then
@@ -1205,7 +1132,7 @@ object api extends BaseModule:
       client.fastLinkJS()
     val cp = runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
     val mc = "whitelabel.captal.api.Main"
-    val env = forkEnv() ++ Map("LOCATION_SLUG" -> slug)
+    val env = forkEnv() ++ Map("LOCATION_SLUG" -> slug, "DB_URL" -> dbUrl)
     os.proc("java", forkArgs(), "-cp", cp, mc)
       .call(env = env, stdin = os.Inherit, stdout = os.Inherit, stderr = os.Inherit)
 
@@ -1429,11 +1356,11 @@ object client extends BaseJSModule:
 
     PathRef(dest)
 
-  /** Publish the two MCP App pages' scripts. Usage:
-    * `mill client.publish --bucket captal-dev-assets`
+  /** Publish the MCP App pages' scripts. Usage:
+    * `mill client.publish --bucket captal-prod-assets`
     *
-    * An `--endpoint` means LocalStack. `mcp.dev` publishes to its own bucket on every run, so this
-    * is for the AWS environments. See [[publishUiScripts]].
+    * An `--endpoint` means LocalStack. `mcp.dev` publishes to the local configuration's bucket on
+    * every run, so this is for the AWS environments. See [[publishUiScripts]].
     */
   def publish(bucket: String, region: String = "us-east-1", endpoint: String = "") = Task.Command:
     publishUiScripts(bundle().path, bucket, region, local = endpoint.nonEmpty)
@@ -1441,13 +1368,26 @@ object client extends BaseJSModule:
   /** Publish the bundle to S3 under `<bucket>/<prefix>/`. Replaces 4 manual `aws s3 cp` invocations
     * and ensures Content-Type / Content-Encoding metadata stay consistent.
     *
-    * Usage: `mill client.publishS3 --bucket captal-dev-assets --prefix bundle` Optional:
-    * `--region us-east-1` (default).
+    * Usage: `mill client.publishS3 --bucket captal-prod-assets --prefix bundle` Optional:
+    * `--region us-east-1` (default), and `--endpoint` for LocalStack, which `mcp.dev` already
+    * publishes to on every run.
     *
     * Operator must run `aws sso login` or have AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY set.
     */
-  def publishS3(bucket: String, prefix: String, region: String = "us-east-1") = Task.Command:
-    val src = bundle().path
+  def publishS3(
+      bucket: String,
+      prefix: String,
+      region: String = "us-east-1",
+      endpoint: String = "") = Task.Command:
+    publishBundle(bundle().path, bucket, prefix, region, local = endpoint.nonEmpty)
+
+  /** The work behind [[publishS3]], for `mcp.dev` to do as well. */
+  def publishBundle(
+      src: os.Path,
+      bucket: String,
+      prefix: String,
+      region: String,
+      local: Boolean): Unit =
     val normalizedPrefix = prefix.stripSuffix("/")
     val destBase = s"s3://$bucket/$normalizedPrefix"
     // Cache-Control is part of the contract rather than a tuning knob. Left unset, browsers fall
@@ -1510,23 +1450,9 @@ object client extends BaseJSModule:
         ))
 
     for (name, ctype, cache) <- files do
-      val args = Seq(
-        "aws",
-        "s3",
-        "cp",
-        (src / name).toString,
-        s"$destBase/$name",
-        "--region",
-        region,
-        "--content-type",
-        ctype,
-        "--cache-control",
-        cache)
-      println(s"[publish] $name -> $destBase/$name")
-      val result = os.proc(args).call(check = false, stderr = os.Pipe)
-      if result.exitCode != 0 then
-        sys.error(s"[publish] aws s3 cp failed for $name: ${result.err.trim()}")
+      s3Copy(src / name, s"$destBase/$name", ctype, cache, region, local)
     println(s"[publish] uploaded bundle to $destBase")
+  end publishBundle
 end client
 
 /** Cloudflare quick tunnels to local ports, opened together and closed together.
@@ -1716,7 +1642,7 @@ object mcp extends BaseModule:
   private val devPort = 8081
 
   def localStackSetup() = Task.Command:
-    ensureLocalStack(localStackContainer, localStackPort, devBucket, Task.env)
+    ensureLocalStack(localStackContainer, localStackPort, Task.env)
 
   def stopLocalStack() = Task.Command:
     os.proc("docker", "rm", "-f", localStackContainer).call(check = false)
@@ -1741,7 +1667,6 @@ object mcp extends BaseModule:
 
     val containers = Seq(
       localStackContainer,
-      rqliteDevContainerName,
       "rqlite-test",
       "rqlite-mcp-test",
       "rqlite-mcp-e2e")
@@ -1764,7 +1689,9 @@ object mcp extends BaseModule:
     println(
       s"[destroy] removed ${removedContainers.size} container(s) and ${removedImages.size} image id(s); the next run rebuilds what it needs")
 
-  /** Runs the backoffice against local rqlite and LocalStack.
+  /** Runs the backoffice on this machine against the local configuration, applied to LocalStack:
+    * its rqlite, its bucket and distribution, and the cluster a deploy attaches to. Needs a
+    * LocalStack licence, since most of that is licensed.
     *
     * Everything the server refuses to start without is supplied here, so the failure modes it is
     * designed to have — no tokens, no bucket — do not get in the way of running it locally.
@@ -1786,35 +1713,48 @@ object mcp extends BaseModule:
     val migrationCp = platform.runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
     val cp = runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
 
-    println("[dev] Step 1/6: Ensuring rqlite...")
-    val dbUrl = ensureRqlite(rqliteDevContainerName, rqliteDevPort)
+    println("[dev] Step 1/6: Ensuring LocalStack...")
+    val endpoint = ensureLocalStack(localStackContainer, localStackPort, Task.env)
 
-    println("[dev] Step 2/6: Running migrations...")
+    // The same configuration the AWS environments use, applied against the same LocalStack
+    // container the suite uses — one state, because two states over one container come apart and
+    // the next apply fails on `AlreadyExists`. Everything the backoffice runs against comes out of
+    // it, as in production: the database, the bucket, the distribution, and the cluster, subnets,
+    // listener and roles a deploy attaches to.
+    println("[dev] Step 2/6: Applying the local infrastructure...")
+    val infra = test.localStackInfra()
+    if infra.isEmpty then
+      sys.error(
+        "[dev] mcp.dev runs against the local configuration — its database, bucket, distribution and cluster — and LocalStack runs most of that only with a licence. Set LOCALSTACK_AUTH_TOKEN in .env.")
+
+    println("[dev] Step 3/6: Waiting for rqlite, then running migrations...")
+    test.tofuSources()
+    val dbUrl = localDbUrl(terraformDir(Task.env, moduleDir / os.up))
+    awaitLocalDb(dbUrl)
     val migration = os
       .proc("java", "-cp", migrationCp, "whitelabel.captal.platform.Migrate")
       .call(env = Map("DB_URL" -> dbUrl), check = false, stdout = os.Inherit, stderr = os.Inherit)
     if migration.exitCode != 0 then
       sys.error("[dev] Migrations failed; the server would start against a schema-less database.")
 
-    println("[dev] Step 3/6: Ensuring LocalStack...")
-    val endpoint = ensureLocalStack(localStackContainer, localStackPort, devBucket, Task.env)
-    // A real distribution over the dev bucket, created once. It was a made-up id while every
-    // invalidation against a local endpoint was skipped; now that the skip is gone, an asset write
-    // in this flow really does invalidate, and a fictional id would fail the write's last step with
-    // the object already stored.
-    val distributionId = ensureDistribution(localStackContainer, "captal-mcp-dev", devBucket)
-    // The MCP App pages load their scripts from this bucket, and a page without them renders empty.
-    publishUiScripts(client.bundle().path, devBucket, "us-east-1", local = true)
-
-    // The same configuration the AWS environments use, applied against the same LocalStack
-    // container the suite uses — one state, because two states over one container come apart and
-    // the next apply fails on `AlreadyExists`. What it buys here is the deploy tools: in production
-    // the backoffice is given a cluster, subnets, a listener and two roles, and without them those
-    // tools are not registered at all. Empty without a licence, and then this is a no-op.
-    println("[dev] Step 4/6: Applying the local infrastructure...")
-    val infra = test.localStackInfra()
-    if infra.isEmpty then
-      println("[dev]   no LocalStack licence, so no cluster; the deploy tools stay unregistered")
+    // On every run, so what a deploy copies under a location's prefix, what the MCP App pages load
+    // and what a deploy's task runs are all the build being run. The image goes up under a tag taken
+    // from the image itself: a rebuild is a new tag, so a task can never start on a stale one, and
+    // an unchanged image keeps its tag.
+    println("[dev] Step 4/6: Publishing the portal, the MCP App scripts and the API image...")
+    val bucket = infra("ASSETS_BUCKET")
+    val bundle = client.bundle().path
+    client.publishBundle(bundle, bucket, "bundle", "us-east-1", local = true)
+    publishUiScripts(bundle, bucket, "us-east-1", local = true)
+    val builtApi = api.image()()
+    val apiTag = os
+      .proc("docker", "image", "inspect", "--format", "{{.Id}}", builtApi)
+      .call()
+      .out
+      .trim()
+      .stripPrefix("sha256:")
+      .take(12)
+    val apiImage = pushImage(builtApi, s"${infra("API_IMAGE_REPOSITORY_URL")}:$apiTag")
 
     // Two, because the MCP App pages render in the operator's browser on the host's public origin,
     // which may not reach localhost. They post to this server, but load their scripts from the
@@ -1842,39 +1782,35 @@ object mcp extends BaseModule:
 
     println(s"[dev] Step 6/6: Starting MCP backoffice on :$port")
 
+    // The configuration's bucket, distribution, cluster and credentials come in with `infra`.
     val env =
       forkEnv() ++
         infra ++
         Map(
-          "DB_URL"   -> dbUrl,
-          "MCP_PORT" -> port.toString,
+          "DB_URL" -> dbUrl,
+          // The tasks a deploy starts reach the same database by its service-discovery name, as
+          // they do in production, where this server reaches it by that name too.
+          "TASK_DB_URL" -> infra("RQLITE_URL"),
+          "API_IMAGE"   -> apiImage,
+          "MCP_PORT"    -> port.toString,
           // The address a client reaches, which is where the UniFi and upload pages post. Behind
           // the tunnel that is the tunnel, not localhost.
           "MCP_RESOURCE_URI" -> resourceUri,
           // Seeds the admin row, which holds every scope. Other tokens are issued from it with
           // `create_token`; a local run only ever needs the one.
-          "MCP_ADMIN_TOKEN"            -> adminToken,
-          "ASSETS_BUCKET"              -> devBucket,
-          "CLOUDFRONT_DISTRIBUTION_ID" -> distributionId,
-          // Where the portal fetches an asset from, which is what gets stored as a video's
-          // `video_url`. In production this is the CloudFront distribution; locally it is the
-          // bucket on LocalStack, path-style.
-          //
-          // It used to be this server's own address, which is a thing no asset is ever served
-          // from: every video created locally was stored with a URL that answers nothing, and the
-          // player would fail on a row that looked perfectly well-formed. The MCP port and the
-          // asset origin have nothing to do with each other.
-          "PUBLIC_BASE_URL"  -> s"$endpoint/$devBucket",
-          "AWS_ENDPOINT_URL" -> endpoint,
-          "AWS_REGION"       -> "us-east-1",
-          // LocalStack does not verify signatures; the signer only needs a pair to exist.
-          "AWS_ACCESS_KEY_ID"     -> "test",
-          "AWS_SECRET_ACCESS_KEY" -> "test"
+          "MCP_ADMIN_TOKEN" -> adminToken,
+          // Where the portal fetches an asset from, and what is stored as a video's `video_url`:
+          // the distribution, as in production, on the port LocalStack serves it on.
+          "PUBLIC_BASE_URL" -> s"https://${infra("CLOUDFRONT_DOMAIN_NAME")}:$localStackPort",
+          // The pages' scripts from the bucket itself rather than through the distribution, which
+          // in production adds their CORS header at the edge. LocalStack's gateway refuses a
+          // request to a distribution that carries an `Origin` it does not know, and a page in a
+          // host's frame always sends one; the bucket answers with its own CORS rule instead.
+          "SCRIPT_BASE_URL" -> s"${assetsUrl.getOrElse(endpoint)}/$bucket"
         ) ++
-        // The bucket as the operator's browser reaches it, for the pages' scripts and the upload
-        // URLs. Not `PUBLIC_BASE_URL`, which is stored in each video row and outlives this URL.
-        assetsUrl.fold(Map.empty[String, String]): assets =>
-          Map("SCRIPT_BASE_URL" -> s"$assets/$devBucket", "PRESIGN_ENDPOINT_URL" -> assets)
+        // The bucket as the operator's browser reaches it through the tunnel, for the upload URLs.
+        // Not `PUBLIC_BASE_URL`, which is stored in each video row and outlives this URL.
+        assetsUrl.fold(Map.empty[String, String])(assets => Map("PRESIGN_ENDPOINT_URL" -> assets))
 
     // Whether this database has a location at all. `api.dev` does not create one — it serves one —
     // so on a fresh container every tool here has nothing to be scoped to.
@@ -1886,7 +1822,8 @@ object mcp extends BaseModule:
             java
               .net
               .URI
-              .create(s"http://localhost:$rqliteDevPort/db/query?q=SELECT+COUNT(*)+FROM+locations")
+              .create(
+                s"${dbUrl.stripPrefix("jdbc:rqlite:")}/db/query?q=SELECT+COUNT(*)+FROM+locations")
               .toURL
           scala.io.Source.fromInputStream(url.openStream()).mkString
       if probe.toOption.exists(_.contains("[[0]]")) then
@@ -2103,7 +2040,7 @@ object mcp extends BaseModule:
       */
     private def localStackStamp: T[String] = Task.Input:
       val licensed = localStackToken(Task.env).isDefined
-      val endpoint = ensureLocalStack(localStackContainer, localStackPort, devBucket, Task.env)
+      val endpoint = ensureLocalStack(localStackContainer, localStackPort, Task.env)
       val id = os.proc("docker", "ps", "-q", "-f", s"name=$localStackContainer").call().out.trim()
       s"$id $endpoint $licensed"
 
@@ -2177,8 +2114,9 @@ object mcp extends BaseModule:
       * carrying every resource the last one had, which is the divergence this exists to clear.
       *
       * The state is not deleted here and does not need to be: it is keyed by container id, so the
-      * replacement container reaches a directory that has never existed. The dev buckets do go.
-      * They are emulated and the build recreates them, but a bundle published locally is gone.
+      * replacement container reaches a directory that has never existed. Everything the
+      * configuration made goes with the container — the database's rows and the bucket's objects
+      * included — and the next apply makes it again, empty.
       */
     def resetLocalStack() = Task.Command:
       os.proc("docker", "rm", "-fv", localStackContainer).call(check = false)

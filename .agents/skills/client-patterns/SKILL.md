@@ -234,7 +234,7 @@ Don't reinvent these in individual views.
 ```bash
 mill clean client.generatedSources       # invalidate BuildInfo cache
 ENVIRONMENT=dev mill client.bundle       # produces out/client/bundle.dest/
-mill client.publishS3 --bucket captal-assets-dev --prefix bundle   # uploads to S3
+mill client.publishS3 --bucket captal-prod-assets --prefix bundle   # uploads to S3; mcp.dev does this locally
 ```
 
 Skill `run-locally` covers the full local dev loop. The bundle is published per deployment,

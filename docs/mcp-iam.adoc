@@ -98,6 +98,9 @@ loudly on a missing object rather than quietly finding a neighbour's.
 | `PRESIGN_ENDPOINT_URL`
 | Optional, defaults to `AWS_ENDPOINT_URL`. The endpoint the upload URLs name, for the same case
 
+| `TASK_DB_URL`
+| Optional, defaults to `DB_URL`. The database URL every deployed location's task is given, for a server that reaches the database by another name than its tasks do — one running on a developer's machine
+
 | `DB_URL`
 | rqlite endpoint
 

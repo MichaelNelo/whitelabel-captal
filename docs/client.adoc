@@ -150,6 +150,9 @@ git-ignored.
   first and immutable, entries afterwards and revalidating.
 |===
 
+Both take `--endpoint` to publish into LocalStack instead, through `awslocal` inside its container.
+`mcp.dev` does both, into the local configuration's bucket, on every run.
+
 See xref:infrastructure.adoc[Infrastructure] for what the edge does with those objects.
 
 == Guest portal
@@ -824,7 +827,9 @@ through `_meta.ui`, the host reads that resource and renders the HTML in a sandb
 The scripts themselves are not carried by the MCP server. `mill client.publish` puts `upload.js`,
 `unifi.js` and `run.js` at `<bucket>/ui/<name>.js` under stable, revalidating names, with their hashed chunks
 beside them as immutable objects, and the server names them through `AssetStore.scriptUrl`. Locally,
-`mcp.dev` does the same against the LocalStack bucket on every run.
+`mcp.dev` does the same against the local configuration's bucket on every run, and points
+`SCRIPT_BASE_URL` at the bucket itself rather than the distribution, whose LocalStack gateway refuses
+a request carrying an unfamiliar `Origin`.
 
 == The maintenance entry point
 

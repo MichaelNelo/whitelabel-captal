@@ -85,10 +85,11 @@ image survived three version drifts unnoticed in the past (see
 xref:context/incidents.adoc[Incidents]). A container on the wrong image, or none at all, is removed
 and recreated; a container already on the right image is left alone.
 
-Four containers exist across the whole build, never shared between purposes: `rqlite-dev` on port
-4001 (used by both `api.dev` and `mcp.dev` — see <<Running the stack locally>>), and three
-test-only containers (`rqlite-test`, `rqlite-mcp-test`, `rqlite-mcp-e2e`) covered in
-xref:testing.adoc[Test strategy].
+Three of those containers exist across the whole build, never shared between purposes:
+`rqlite-test`, `rqlite-mcp-test` and `rqlite-mcp-e2e`, covered in xref:testing.adoc[Test strategy].
+The database `api.dev` and `mcp.dev` run against is not one of them: it is the local
+configuration's rqlite service, the same one production runs, in LocalStack — see
+<<Running the stack locally>>.
 
 == Running the stack locally
 
@@ -96,13 +97,15 @@ xref:testing.adoc[Test strategy].
 
 [source]
 ----
-[dev] Step 1/3: Ensuring rqlite container...
+[dev] Step 1/3: Waiting for the local configuration's rqlite...
 [dev] Step 2/3: Running migrations...
 [dev] Step 3/3: Starting server (location=cafe-centro)...
 ----
 
-In order: `ensureRqlite` on `rqlite-dev`; `whitelabel.captal.platform.Migrate` against it;
-`copyIndex` renders `client/index.html` from the template (pointing at `fastLinkJS`'s output by
+In order: waits for the local configuration's rqlite to have a leader, on the host port
+`environments/local/terraform.tfvars` gives it (`rqlite_http_port`, 5001) — it exists only once
+`mcp.dev` has applied that configuration, and the wait says so when it never answers;
+`whitelabel.captal.platform.Migrate` against it; `copyIndex` renders `client/index.html` from the template (pointing at `fastLinkJS`'s output by
 default, or at `client.bundle`'s Vite-processed output when `CLIENT_LINKER=full` — the shape
 production actually serves); then the server is forked with `LOCATION_SLUG` set to the `--slug`
 argument, defaulting to `cafe-centro`.
@@ -110,33 +113,62 @@ argument, defaulting to `cafe-centro`.
 IMPORTANT: **A location row must already exist before this will boot.** `ServerSettings`/`AppLayers`
 resolve `LOCATION_SLUG` against the `locations` table during layer construction and fail the whole
 process with `LocationNotFound` if it is absent — see xref:api.adoc[Guest API]. Nothing in this task
-writes that row; a comment on `mcp.dev` claims `api.dev` "seeds `cafe-centro` into this same
-container on boot," but the task's own body only ensures rqlite, migrates, and starts the JVM — no
-insert. Create the location first (through the MCP backoffice's `create_location` tool — run
-`mcp.dev` and drive it from a client, or any other content tool) before running `api.dev` against a
-fresh database.
+writes that row. Create the location first (through the MCP backoffice's `create_location` tool —
+run `mcp.dev` and drive it from a client) before running `api.dev` against a fresh database.
+
+While `mcp.dev` runs it holds Mill's lock on `out/`, so `api.dev` beside it needs an output
+directory of its own: `MILL_OUTPUT_DIR=/tmp/captal-api-out mill api.dev --slug <slug>`.
 
 === `mill mcp.dev`
 
 [source]
 ----
-[dev] Step 1/6: Ensuring rqlite...
-[dev] Step 2/6: Running migrations...
-[dev] Step 3/6: Ensuring LocalStack...
-[dev] Step 4/6: Applying the local infrastructure...
+[dev] Step 1/6: Ensuring LocalStack...
+[dev] Step 2/6: Applying the local infrastructure...
+[dev] Step 3/6: Waiting for rqlite, then running migrations...
+[dev] Step 4/6: Publishing the portal, the MCP App scripts and the API image...
 [dev] Step 5/6: Opening the Cloudflare tunnels...
 [dev] Step 6/6: Starting MCP backoffice on :8081
 ----
 
-Shares the *same* `rqlite-dev` container `api.dev` uses — deliberately, since the backoffice writes
-the content a location's API later reads, and running them against two different databases would
-defeat the point of running both. Migrations run `McpMigrate` (its own history table,
-`db/migration-mcp`) in a forked process. `ensureLocalStack` then starts (or reuses) a `localstack-dev`
-container, creates the `captal-assets-dev` bucket with permissive CORS for the upload flow, and
-creates a real CloudFront distribution over it once (`ensureDistribution`), so an asset write's
-invalidation has a real distribution to invalidate. It then publishes the MCP App pages' scripts to
-that bucket the way `client.publish` does, on every run, so the upload, UniFi and run pages always
-load the scripts of the bundle being run.
+Everything the backoffice runs against is the local configuration's, applied to LocalStack: the
+same OpenTofu configuration production uses, so nothing here is a resource the build made on the
+side. That needs a LocalStack licence, and `mcp.dev` stops at step 2 without one.
+
+Step 1 starts (or reuses) the `localstack-dev` container. Step 2 applies `environments/local`,
+sharing `mcp.test.localStackInfra`'s state so the two cannot come apart. It builds and pushes the
+rqlite image first, then creates the rqlite service, the assets bucket with its CORS rule, the
+distribution, and the cluster, subnets, listener and roles a deploy attaches to. On a fresh
+container this is minutes, not seconds. The MCP service is declared too, with no tasks
+(`mcp_desired_count = 0`): the backoffice is the one running here.
+
+Step 3 waits for that rqlite service to have a leader, on the host port the local tfvars give it
+(`rqlite_http_port`, 5001), then runs `whitelabel.captal.platform.Migrate` against it. The
+backoffice's own `Main` runs `McpMigrate` itself as part of its boot. `api.dev` uses the same
+database — deliberately, since the backoffice writes the content a location's API later reads.
+
+Step 4 publishes, on every run, so all three are the build being run:
+
+* the portal's bundle under `bundle/` in the configuration's bucket, the way `client.publishS3`
+  does, which is what `deploy_location` copies under a location's prefix;
+* the MCP App pages' scripts under `ui/`, the way `client.publish` does;
+* the API image, built by `api.image` and pushed into the configuration's repository under a tag
+  taken from the image itself — a rebuild is a new tag, so a deploy never starts a stale one. That
+  tag is what the server is given as `API_IMAGE`, so a location deployed from here runs the real
+  API.
+
+The server is then given the configuration's bucket, distribution and credentials, with
+`PUBLIC_BASE_URL` set to the distribution as LocalStack serves it,
+`https://<id>.cloudfront.localhost.localstack.cloud:4567`. A location deployed from here answers
+there: `/<slug>/` for the portal, `/<slug>/api/*` through the load balancer to its task. Two
+variables differ from production:
+
+* `TASK_DB_URL`, the configuration's `rqlite_url` (`rqlite.captal.local`, by service discovery),
+  which is how a deployed task reaches the database; the backoffice itself reaches it on
+  `localhost`.
+* `SCRIPT_BASE_URL`, the bucket itself rather than the distribution. LocalStack's gateway refuses a
+  request to a distribution carrying an `Origin` it does not know, which a page in a host's frame
+  always sends; the bucket answers with its own CORS rule instead.
 
 LocalStack runs on port **4567**, not its default 4566, so it coexists with other projects' LocalStack
 containers. It is the same port inside the container and out: `GATEWAY_LISTEN` moves the listener and
@@ -145,12 +177,6 @@ repository URI, the endpoint its own ECS tasks are given — and `awslocal` dial
 container. A URL saying 4566 would reach whichever LocalStack holds that port; one saying 4567 while
 LocalStack listened on 4566 inside would reach nothing. A container started on any other port is
 replaced, not reused.
-
-Step 4 applies `environments/local` — the same configuration the AWS environments use, against the
-same LocalStack container, sharing `mcp.test.localStackInfra`'s state so the two cannot come apart.
-It is what gives the backoffice a cluster, subnets, a listener and two task roles, and without those
-the deploy tools are not registered at all. It also builds and pushes the rqlite image. On a fresh
-container this is minutes, not seconds. Empty without a LocalStack licence, and then a no-op.
 
 Step 5 runs only with `mill mcp.dev --tunnel`. It opens two Cloudflare quick tunnels, `cloudflared
 tunnel --url http://localhost:<port>`, one to the server and one to LocalStack. They need no account,
@@ -163,14 +189,14 @@ The server's tunnel becomes `MCP_RESOURCE_URI`: the UniFi and upload pages post 
 in their CSP. LocalStack's is there because those pages render in the operator's browser, on the
 host's public origin, and a page there may not reach localhost. They load their scripts from the
 bucket and PUT uploads straight to it, so the server is given LocalStack's tunnel for both:
-`SCRIPT_BASE_URL` (`<tunnel>/captal-assets-dev`) for the scripts and their place in the CSP, and
-`PRESIGN_ENDPOINT_URL` for the upload URLs. `PUBLIC_BASE_URL` stays on localhost, because it is
+`SCRIPT_BASE_URL` (`<tunnel>/<bucket>`) for the scripts and their place in the CSP, and
+`PRESIGN_ENDPOINT_URL` for the upload URLs. `PUBLIC_BASE_URL` stays the distribution, because it is
 stored in each video row and has to outlive the tunnel.
 
-A quick tunnel does not carry Server-Sent Events. The backoffice's stateless routes answer a tool
-call with plain JSON unless the client asks for progress or log notifications, or opens
-`subscriptions/listen`. Those two paths answer with SSE and may not work through the tunnel. Quick
-tunnels also cap a tunnel at 200 in-flight requests and carry no uptime guarantee.
+Cloudflare documents quick tunnels as not carrying Server-Sent Events. Through this one they do: a
+stream sending a comment every 30 seconds stayed open well past Cloudflare's 100-second limit, which
+only counts silence. Nothing guarantees it, though, and quick tunnels also cap a tunnel at 200
+in-flight requests and carry no uptime guarantee.
 
 The backoffice starts on port 8081 with a **fixed** admin token, `dev-token` — not generated, because
 it is meant to be copied once into an MCP host's configuration by hand, and a token that changed
@@ -189,12 +215,13 @@ when there is one:
 }
 ----
 
-and, if a quick probe of the `locations` table over raw HTTP finds it empty, a reminder to run
-`mill api.dev` once — which, per the note above, does not itself write the row either; a location
-still has to be created through a content tool before either side of the loop has anything to serve.
-`mill mcp.stopLocalStack` and `mill api.stopRqlite` stop one dev container each; `mill
-mcp.localStackSetup` ensures LocalStack is up without starting the server, for working against it
-with another client.
+and, if a quick probe of the `locations` table over raw HTTP finds it empty, a reminder that a
+location has to be created through `create_location` before either side of the loop has anything to
+serve. `mill mcp.stopLocalStack` stops the LocalStack container; `mill mcp.localStackSetup` ensures
+it is up without starting the server, for working against it with another client.
+
+The database lives in LocalStack's ECS tasks, so it goes wherever they go: recreating the container
+empties it along with the bucket, and the next apply makes both again, empty.
 
 `mill mcp.destroyLocal` is the whole teardown: every container this build starts, LocalStack's
 anonymous volume, the ECS task containers LocalStack spawned for a service, and the images built
@@ -205,11 +232,13 @@ by container id, so the next run gets a fresh directory and builds both together
 
 === A full local loop, in order
 
-. `mill mcp.dev` — starts rqlite-dev, LocalStack, and the backoffice.
+. `mill mcp.dev` — LocalStack, the local configuration, and the backoffice.
 . Point an MCP client at it (the printed config block) and create a location, its identification
 surveys, a video, an advertiser and its question, and a locale bundle — see
 xref:mcp.adoc[MCP backoffice] for the tool catalogue.
-. `mill api.dev --slug <that location's slug>` — serves the portal against the same database.
+. Either `deploy_location`, and open `https://<id>.cloudfront.localhost.localstack.cloud:4567/<slug>/`
+— the portal as production serves it — or `mill api.dev --slug <slug>` for the faster loop on
+`localhost:8080`, against the same database.
 
 == Images
 

@@ -1,19 +1,23 @@
 ---
 name: run-locally
-description: Use to spin up the captal stack on your dev machine — rqlite, the MCP backoffice, the guest API, and the client bundle. Triggers on "run locally", "local dev", "start dev", "correr en local", "levantar local".
-version: 2.1.0
+description: Use to spin up the captal stack on your dev machine — the local configuration in LocalStack, the MCP backoffice, a deployed portal, the guest API, and the client bundle. Triggers on "run locally", "local dev", "start dev", "correr en local", "levantar local".
+version: 3.0.0
 ---
 
 # Run the stack locally
 
 ## What you need running
 
-1. **rqlite** — one Docker container, started automatically.
-2. **MCP backoffice** (`mill mcp.dev`) — the only writer of content. Starts rqlite, runs both
-   schema's migrations, ensures LocalStack, and serves the backoffice on `:8081`.
-3. **Guest API** (`mill api.dev --slug <slug>`) — reads what the backoffice wrote, serves the
-   portal on `:8080`. Needs a location row to already exist.
-4. **Client bundle** — built and served from disk in dev mode.
+1. **The local configuration** — the same OpenTofu configuration production uses, applied to
+   LocalStack by `mcp.dev`: rqlite, the assets bucket and distribution, and the cluster a deploy
+   attaches to. Needs a LocalStack licence (`LOCALSTACK_AUTH_TOKEN` in `.env`).
+2. **MCP backoffice** (`mill mcp.dev`) — the only writer of content. Applies the configuration,
+   migrates its rqlite, publishes the portal, the MCP App scripts and the API image, and serves the
+   backoffice on `:8081`.
+3. **The portal** — `deploy_location` stands a location up in LocalStack as production does, at
+   `https://<id>.cloudfront.localhost.localstack.cloud:4567/<slug>/`. Or `mill api.dev --slug
+   <slug>` for the faster loop on `:8080`. Either needs a location row to already exist.
+4. **Client bundle** — built and served from disk in `api.dev`'s dev mode.
 
 There is no provisioning directory any more. A fresh database has no locations, no surveys, no
 videos — everything is created by calling MCP tools, not by pointing the server at a folder of
@@ -28,15 +32,15 @@ mill mcp.dev --tunnel   # also public, through Cloudflare quick tunnels
 
 Six steps, in order:
 
-1. Ensures the `rqlite-dev` container on port 4001 (image pinned to `rqlite/rqlite:10.6.1` — the
-   build recreates the container if an old one is on the wrong image).
-2. Runs `platform.Migrate` against it.
-3. Ensures a `localstack-dev` container and the `captal-assets-dev` bucket, and publishes the MCP
-   App pages' scripts (`upload.js`, `unifi.js`, `run.js` and their chunks) to it.
-4. **Applies the `local` terraform environment** against LocalStack when a `LOCALSTACK_TOKEN` /
-   `LOCALSTACK_AUTH_TOKEN` is configured. This also builds and pushes the rqlite image. On a fresh
-   container it is **minutes, not seconds** — it is not hung. Without a token the step is skipped and
-   the deploy tools are simply not registered.
+1. Ensures a `localstack-dev` container on port 4567.
+2. **Applies the `local` terraform environment** against it: builds and pushes the rqlite image,
+   then the rqlite service (three nodes), the assets bucket with its CORS rule, the distribution,
+   and the cluster, subnets, listener and roles. On a fresh container it is **minutes, not
+   seconds** — it is not hung. Without a LocalStack licence it stops here and says so.
+3. Waits for that rqlite to have a leader on `localhost:5001`, then runs `platform.Migrate`.
+4. Publishes the portal's bundle under `bundle/` and the MCP App pages' scripts under `ui/` in the
+   configuration's bucket, and builds and pushes the API image into its repository — so a deploy
+   from here runs the real API.
 5. With `--tunnel`, opens two Cloudflare quick tunnels, to `:8081` and to LocalStack on `:4567`,
    and waits for their `https://<random>.trycloudflare.com` URLs, which change every run. No
    account or token is needed. The MCP App pages load their scripts and PUT uploads through
@@ -54,10 +58,11 @@ above didn't run.
 Every token the task reads lives in `.env`, which `.envrc` sources and `.gitignore` ignores.
 `.env.example` lists the names. Nothing is read from a tracked file.
 
-Step 4 stands up a three-node rqlite cluster inside LocalStack on ports **5001/5002**, deliberately
-off 4001 so it never competes with the `rqlite-dev` container the backoffice and the migrations
-actually use. That cluster is there to exercise Raft locally; nothing connects to it, because it is
-only addressable as `rqlite.captal.local` through service discovery.
+The database is the configuration's three-node rqlite in LocalStack. The backoffice and `api.dev`
+reach it on `localhost:5001`, the port one of its tasks publishes; a deployed location's task
+reaches it as `rqlite.captal.local:5001`, by service discovery as in production, which `mcp.dev`
+passes the server as `TASK_DB_URL`. It lives in LocalStack's tasks, so recreating the container
+empties it.
 
 It prints a ready-to-paste MCP client config:
 
@@ -80,16 +85,23 @@ the guest journey has something to serve. See `docs/mcp.adoc` for the tool catal
 `onboard-location` MCP prompt, which reads the database and tells you exactly what's missing for a
 given slug.
 
-## Step 3 — Run the guest API
+## Step 3 — Serve the portal
+
+As production does: call `deploy_location` and open
+`https://<id>.cloudfront.localhost.localstack.cloud:4567/<slug>/` with the query string below. The
+`<id>` is the distribution's, which `PUBLIC_BASE_URL` carries.
+
+Or, for the faster loop, run the guest API on this machine:
 
 ```bash
-mill api.dev --slug <that location's slug>
+MILL_OUTPUT_DIR=/tmp/captal-api-out mill api.dev --slug <that location's slug>
 ```
 
-In order: ensures `rqlite-dev` (shared with step 1 — the backoffice writes what this reads, so
-running them against two different databases defeats the point); renders `client/index.html` from
-the template; builds the client (`fastLinkJS` by default, or the Vite-processed `bundle` when
-`CLIENT_LINKER=full`); then forks the server with `LOCATION_SLUG` set to `--slug`.
+Its own output directory because `mcp.dev` holds Mill's lock on `out/`. In order: waits for the
+configuration's rqlite (shared with step 1 — the backoffice writes what this reads); runs the
+migrations; renders `client/index.html` from the template; builds the client (`fastLinkJS` by
+default, or the Vite-processed `bundle` when `CLIENT_LINKER=full`); then forks the server with
+`LOCATION_SLUG` set to `--slug` and `DB_URL` at that rqlite.
 
 **The location must already exist** — `ServerSettings`/`AppLayers` resolve `LOCATION_SLUG` against
 the `locations` table during layer construction, and fail the whole process with `LocationNotFound`
@@ -98,9 +110,9 @@ if it's absent. There is nothing in `api.dev` that creates it; that's step 2.
 Equivalent by hand, if you want the pieces separately:
 
 ```bash
-export DB_URL="jdbc:rqlite:http://localhost:4001"
+export DB_URL="jdbc:rqlite:http://localhost:5001"
 export LOCATION_SLUG=cafe-centro
-mill api.dev
+mill api.run
 ```
 
 `PROVISION_DIR` and `SHARED_DIR` still exist as settings but are read and ignored — don't set them
@@ -120,8 +132,11 @@ bundle, `assets/styles.css` and `brand-icon.svg` from disk — that's the dev lo
 ## Step 4 — Browse
 
 ```
+https://<id>.cloudfront.localhost.localstack.cloud:4567/<slug>/?id=AA:BB:CC:DD:EE:FF&ap=AA:BB:CC:DD:EE:01&ssid=Dev&url=http%3A%2F%2Fexample.com&click_id=local-dev-001
 http://localhost:8080/<slug>/?id=AA:BB:CC:DD:EE:FF&ap=AA:BB:CC:DD:EE:01&ssid=Dev&url=http%3A%2F%2Fexample.com&click_id=local-dev-001
 ```
+
+The first is a deployed location through the distribution; the second is `api.dev`.
 
 Required params: `id` (→ `X-Client-Mac`), `click_id` (→ `X-Click-Id`). Missing either on a fresh
 session → `ApiError.SessionMissing` → the SPA shows the error page.
@@ -139,7 +154,7 @@ mill client.compile   # Scala.js compile check; there is no JS test runner
 
 Each Docker-backed test task checks and restarts its own container on every invocation — an
 operator removing a container between runs is caught, not silently misread as a schema problem.
-Make sure your dev rqlite stays on its own port if you're also running the test containers.
+The suites never touch the configuration's rqlite on 5001, which holds your local content.
 
 ## Hot-reload tips
 
@@ -154,13 +169,14 @@ Make sure your dev rqlite stays on its own port if you're also running the test 
 
 | Symptom | Fix |
 |---|---|
-| `Connection refused` on `localhost:4001` | The `rqlite-dev` container isn't running. `docker ps` to check; `mill api.rqliteSetup` or `mill mcp.dev` ensures it. |
-| `Port 4001 is already in use by another container` | Something else took it — most likely a leftover ECS task container LocalStack spawned. `mill mcp.destroyLocal`. |
+| `nothing ready at http://localhost:5001/readyz` | The configuration's rqlite isn't up. `mill mcp.dev` applies it; for `api.dev`, start `mcp.dev` first. If LocalStack is up and the service is not, `mill mcp.destroyLocal` and start again. |
+| `mcp.dev runs against the local configuration … LocalStack runs most of that only with a licence` | No `LOCALSTACK_AUTH_TOKEN` in `.env`. There is no unlicensed mode. |
 | `AlreadyExists` / `EntityAlreadyExists` from the terraform apply | LocalStack holds resources the state doesn't know about; the two came apart. `mill mcp.test.resetLocalStack` recreates the container *with its volume*, which `stopLocalStack` does not. |
-| The backoffice's upload, UniFi or run page is blank | `mcp.dev` publishes the page scripts at step 3, so check that they answer: `curl -I http://localhost:4567/captal-assets-dev/ui/upload.js` should give 200 with `Access-Control-Allow-Origin: *`. If they do, the browser did not load them. Without `--tunnel` they are served from `localhost:4567`, and a page rendered by a hosted client such as claude.ai may not be allowed to reach localhost; the browser console says so. Run with `--tunnel`. |
+| The backoffice's upload, UniFi or run page is blank | `mcp.dev` publishes the page scripts at step 4, so check that they answer: `curl -I -H "Origin: https://x" http://localhost:4567/captal-local-assets/ui/upload.js` should give 200 with `Access-Control-Allow-Origin: *`. If they do, the browser did not load them. Without `--tunnel` they are served from `localhost:4567`, and a page rendered by a hosted client such as claude.ai may not be allowed to reach localhost; the browser console says so. Run with `--tunnel`. |
+| A deployed location's page loads but its API calls fail | Its task may not be running yet, or failing to start: `get_deploy_status` names the step, and `/ecs/captal-<slug>` in LocalStack's logs says why. |
 | Anything local is wedged and you want a clean slate | `mill mcp.destroyLocal` — every container this build starts, LocalStack's volume, the ECS task containers it spawned, and the images built here. Nothing to clean afterwards: the tofu state is keyed by container id, so the next run builds both together. |
 | `LocationNotFound` and the process exits immediately | The slug doesn't exist in `locations` yet. Create it through the backoffice first (step 2). |
-| `No result set returned` after a restart | rqlite's data was wiped — the dev container has no volume by default. Re-create the content through the backoffice, or mount a volume yourself. |
+| `No result set returned` after a restart | rqlite's data was wiped — it lives in LocalStack's tasks, and a recreated LocalStack starts it empty. Re-create the content through the backoffice. |
 | Reset button doesn't appear on the Ready page | `ENVIRONMENT=dev` wasn't set when building the client, or Mill cached the old `BuildInfo`. `mill clean client.generatedSources && ENVIRONMENT=dev mill client.bundle`. |
 | `[welcome.title]` literal shown in the SPA | The location's `localized_texts` don't cover that key yet. Check with the backoffice's `get_i18n_status`, write it with `set_translations` — see skill `add-i18n-key`. |
 | `SessionMissing` on every request | Missing `id=`/`click_id=` query params on the first visit (or `X-Client-Mac`/`X-Click-Id` headers in a curl test). |
@@ -172,8 +188,8 @@ Make sure your dev rqlite stays on its own port if you're also running the test 
   content — none of that exists. Everything is MCP tool calls against the backoffice.
 - ❌ Running `api.dev` against a slug with no location row and expecting it to create one — it
   fails fast with `LocationNotFound` instead.
-- ❌ Sharing the local `rqlite-dev` container with a test run — the test suites clear and reseed
-  their own schema and will wipe your dev data if pointed at the same container.
+- ❌ Pointing a test run at the configuration's rqlite on 5001 — the test suites clear and reseed
+  their own schema and will wipe your local content if pointed at it.
 - ❌ Running `mill client.bundle` without `ENVIRONMENT=dev` when testing a dev-only feature — you'll
   be debugging a production-build bug that doesn't exist in dev.
 - ❌ Editing `out/client/bundle.dest/*` or `out/client/fastLinkJS.dest/*` directly — Mill regenerates

@@ -59,8 +59,10 @@ import zio.*
   * subnets they run in, the listener they hang a rule off, the image they all run. Read once at
   * startup, so a deploy names only a slug.
   *
-  * `DB_URL` is this server's own, injected into every task definition. The database therefore sits
-  * outside what a deploy creates and outside what a teardown destroys.
+  * `dbUrl` is injected into every task definition: this server's own `DB_URL`, or `TASK_DB_URL`
+  * when the tasks reach the database by another name than this server does — a server running on a
+  * developer's machine, outside the network its tasks run in. The database sits outside what a
+  * deploy creates and outside what a teardown destroys.
   *
   * `unifiProxyUrl` is forwarded the same way, as `UNIFI_PROXY_URL`: the HTTP proxy a location's API
   * reaches its venue's gateway through. `None` means the API calls the gateway directly.
@@ -131,10 +133,13 @@ object DeployTargets:
             execRole <- required("TASK_EXECUTION_ROLE_ARN")
             taskRole <- required("TASK_ROLE_ARN")
             image    <- required("API_IMAGE")
-            dbUrl    <- required("DB_URL")
-            region   <- System.env("AWS_REGION").orDie.map(_.getOrElse("us-east-1"))
-            proxy    <- System.env("UNIFI_PROXY_URL").orDie.map(_.map(_.trim).filter(_.nonEmpty))
-            _        <-
+            dbUrl    <- System
+              .env("TASK_DB_URL")
+              .orDie
+              .flatMap(_.map(_.trim).filter(_.nonEmpty).fold(required("DB_URL"))(ZIO.succeed(_)))
+            region <- System.env("AWS_REGION").orDie.map(_.getOrElse("us-east-1"))
+            proxy  <- System.env("UNIFI_PROXY_URL").orDie.map(_.map(_.trim).filter(_.nonEmpty))
+            _      <-
               ZIO.when(proxy.isEmpty)(
                 ZIO.logWarning(
                   "UNIFI_PROXY_URL is unset: locations deployed from here call their UniFi gateway directly, which works only if the gateway is reachable from where the task runs."))
