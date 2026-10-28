@@ -9,12 +9,12 @@ version: 1.0.0
 `terraform/`, in OpenTofu — not Terraform. Both are in the devenv shell; the state a Terraform 1.15
 binary writes is refused by OpenTofu 1.12 for being from a newer version, so always run `tofu`.
 
-## Two environments, and only one is applied by hand
+## Two environments
 
 | Environment | State | Applied by |
 |---|---|---|
-| `local` | a plain state file under `out/mcp/test/localStackInfra.dest/<container-id>/` | `mill mcp.test` and `mill mcp.dev`, automatically |
-| `prod` | S3, via `backend.tf` and `environments/prod/backend.tfvars` | by hand |
+| `local` | a plain state file under `out/localstack/<container-id>/` | `mill mcp.test`, `mill mcp.dev`, and `mill ci.run` pointed at LocalStack |
+| `prod` | S3, via `backend.tf` and `environments/prod/backend.tfvars` | `mill ci.run` in CodeBuild, or by hand |
 
 There is no `dev`. It was destroyed and its directory removed — a reference to `environments/dev/`
 is a leftover.

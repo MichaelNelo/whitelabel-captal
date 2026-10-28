@@ -23,12 +23,12 @@ runs by hand.
 
 |`local`
 |A plain local state file under a directory keyed by the LocalStack container's id —
-`out/mcp/test/localStackInfra.dest/<container-id>/terraform.tfstate`
-|`mill mcp.test`, automatically, before the suite runs
+`out/localstack/<container-id>/terraform.tfstate`
+|`mill mcp.test` before the suite runs, `mill mcp.dev`, and `mill ci.run` pointed at LocalStack
 
 |`prod`
 |S3, via `backend.tf` and `environments/prod/backend.tfvars`
-|By hand
+|`mill ci.run` in CodeBuild — see xref:development.adoc#release[Releasing] — or by hand
 |===
 
 `terraform/backend.tf` declares the S3 backend with `bucket = ""`; the real bucket name comes from
@@ -146,11 +146,13 @@ Three operational facts, each costly to rediscover:
   of them — either surviving without the other is a divergence `tofu` cannot repair: it plans a
   create for something that already exists and the apply fails with `AlreadyExists` on roles,
   buckets and CloudFront policies. `mill mcp.test.resetLocalStack` recreates the container — which
-  also discards the keyed state directory — and the next run builds both together.
-* **`mill clean` breaks it.** `mcp.test.localStackInfra` is a `Task(persistent = true)` precisely so
-  a normal Mill re-evaluation does not wipe its `dest`; `mill clean` discards it anyway, leaving the
-  container holding every resource the discarded state described — exactly the divergence the keying
-  exists to prevent. Run `mill mcp.test.resetLocalStack` immediately after a `mill clean`.
+  also discards the keyed state directory — and the next run builds both together. Every apply
+  against LocalStack uses that one directory, `out/localstack/<container-id>/`: the suite's fixture,
+  `mcp.dev` and `ci.run`. It belongs to no task, so a task re-evaluating does not wipe it, and it is
+  under the workspace's `out/` whatever `MILL_OUTPUT_DIR` says.
+* **`mill clean` breaks it.** It empties `out/`, state included, leaving the container holding every
+  resource the discarded state described — exactly the divergence the keying exists to prevent. Run
+  `mill mcp.test.resetLocalStack` immediately after a `mill clean`.
 * **Mill polices reads of this directory, which it did not while `terraform/` was a sibling
   repository.** `mcp.test.tofuSources` is the `Task.Sources` declaration that permits the apply to
   read this tree; without it the apply fails with `Reading from terraform not allowed`, a message

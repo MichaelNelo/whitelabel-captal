@@ -291,6 +291,11 @@ end ensureRqlite
   */
 private val localStackContainer = "localstack-dev"
 
+/** LocalStack's port, on the host and inside the container alike. Not its default 4566, which other
+  * projects' LocalStack containers take.
+  */
+private val localStackPort = 4567
+
 /** Pinned, and the same for both editions so a developer with a licence and one without are running
   * the same LocalStack rather than two.
   *
@@ -569,6 +574,23 @@ private def terraformDir(env: Map[String, String], repoRoot: os.Path): os.Path =
   .map(os.Path(_, repoRoot))
   .getOrElse(repoRoot / "terraform")
 
+/** Where the local configuration's state lives: one directory per LocalStack container, shared by
+  * everything that applies it — the suite's fixture, `mcp.dev` through it, and `ci.run` against
+  * LocalStack — so none of them applies against a state the others have not seen.
+  *
+  * Under the workspace's `out/` rather than in a task's `dest`, which moves with `MILL_OUTPUT_DIR`:
+  * another output directory is how a build runs beside `mcp.dev`, which holds the lock on `out/`,
+  * and it would otherwise start from an empty state against a LocalStack that holds everything.
+  */
+private def localStackStateDir(containerId: String): os.Path = localStackStates / containerId
+
+private def localStackStates: os.Path = mill.api.BuildCtx.workspaceRoot / "out" / "localstack"
+
+/** The id of this build's LocalStack container, if it is running. */
+private def localStackContainerId(): Option[String] =
+  Some(os.proc("docker", "ps", "-q", "-f", s"name=$localStackContainer").call().out.trim())
+    .filter(_.nonEmpty)
+
 /** The shared infrastructure a location deploy attaches to, applied from the real OpenTofu
   * configuration against LocalStack.
   *
@@ -577,13 +599,13 @@ private def terraformDir(env: Map[String, String], repoRoot: os.Path): os.Path =
   * roles, the bucket and the distribution. A fixture assembled from `awslocal` calls agrees with
   * the configuration only for as long as someone keeps it agreeing.
   *
-  * The state file lives under `stateDir`, which the caller keys by the LocalStack container id,
-  * and that pairing is the whole operational contract here: **the state and the container have to
-  * be born together.** LocalStack holds the resources and the state file holds the record of them,
-  * so either one surviving without the other is a divergence tofu cannot repair — it plans a
-  * create for something that exists and the apply fails with `AlreadyExists` on roles, buckets and
-  * CloudFront policies. That is what [[resetLocalStack]] is for, and why the error below points at
-  * it rather than trying to be clever.
+  * The state file lives under `stateDir`, which [[localStackStateDir]] keys by the LocalStack
+  * container id, and that pairing is the whole operational contract here: **the state and the
+  * container have to be born together.** LocalStack holds the resources and the state file holds
+  * the record of them, so either one surviving without the other is a divergence tofu cannot
+  * repair — it plans a create for something that exists and the apply fails with `AlreadyExists`
+  * on roles, buckets and CloudFront policies. That is what [[resetLocalStack]] is for, and why the
+  * error below points at it rather than trying to be clever.
   *
   * Planned and applied on every run, through [[applyConfiguration]]. A plan is never clean here:
   * LocalStack reports the ALB listener's port as its own edge port, so tofu sees drift back to 80
@@ -798,8 +820,9 @@ private def pushImage(local: String, remote: String): String =
   *   `CAPTAL_ENV`: the `terraform/environments/<name>` whose tfvars, and outside LocalStack whose
   *   backend, the configuration is applied with.
   * @param endpoint
-  *   `AWS_ENDPOINT_URL`. Set, it is LocalStack: every AWS call goes through `awslocal` inside its
-  *   container and the state stays on this machine. Unset, it is the account the credentials name.
+  *   `AWS_ENDPOINT_URL`. Set, it is this build's LocalStack: every AWS call goes through `awslocal`
+  *   inside its container, which needs no credentials, and the state is the one `mcp.dev` applies
+  *   with. Unset, it is the account the credentials name.
   * @param imageTag
   *   `IMAGE_TAG`, or else CodeBuild's `CODEBUILD_RESOLVED_SOURCE_VERSION`: the tag the API and
   *   backoffice images go up under, overriding the tfvars' `image_tag` and `mcp_image_tag`. Unset,
@@ -866,8 +889,8 @@ private def awsText(target: ReleaseTarget, args: String*): Option[String] =
   *
   * Staged into `workDir` rather than run in place, so `terraform/` stays read-only from here.
   * Locally `backend.tf` is left out: it declares an S3 backend whose bucket this same configuration
-  * creates, so the state is a file under `workDir` instead, which [[ensureLocalStackTofu]] keys by
-  * the LocalStack container. Elsewhere the backend is the environment's `backend.tfvars`.
+  * creates, so the state is a file under `workDir` instead, which is [[localStackStateDir]] for
+  * every caller. Elsewhere the backend is the environment's `backend.tfvars`.
   */
 private def applyConfiguration[A](
     target: ReleaseTarget,
@@ -888,11 +911,15 @@ private def applyConfiguration[A](
     os.copy.into(lock, staged)
 
   // `-chdir=path` as one argument, not two: tofu parses it itself rather than through a flag
-  // parser, and rejects the separated form.
+  // parser, and rejects the separated form. Uncoloured, because the output is read: a coloured
+  // line starts with an escape code rather than with `Plan:`.
   def tofu(args: String*): os.CommandResult = os
     .proc("tofu", s"-chdir=$staged", args)
     .call(
-      env = Map("TF_DATA_DIR" -> (workDir / ".terraform").toString, "TF_IN_AUTOMATION" -> "1"),
+      env = Map(
+        "TF_DATA_DIR"      -> (workDir / ".terraform").toString,
+        "TF_IN_AUTOMATION" -> "1",
+        "TF_CLI_ARGS"      -> "-no-color"),
       check = false,
       stdout = os.Pipe,
       stderr = os.Pipe)
@@ -906,7 +933,7 @@ private def applyConfiguration[A](
     sys.error(
       s"[tofu] $what failed:\n${output.linesIterator.toSeq.takeRight(40).mkString("\n")}" + (
         if diverged then
-          s"\n\nThat is LocalStack holding resources this state does not know about — the two have come apart. Run `mill mcp.test.resetLocalStack` to recreate the container, which also discards $workDir, and let the next run build both together."
+          s"\n\nThat is LocalStack holding resources the state in $workDir does not know about — the two have come apart. Run `mill mcp.test.resetLocalStack` to recreate the container with an empty state, and let the next run build both together."
         else
           ""
       ))
@@ -1979,10 +2006,6 @@ object mcp extends BaseModule:
     // artifact.
     super.resources() ++ Seq(PathRef(Task.dest))
 
-  /** LocalStack's port, on the host and inside the container alike. Not its default 4566, which
-    * other projects' LocalStack containers take.
-    */
-  private val localStackPort = 4567
   private val devPort = 8081
 
   def localStackSetup() = Task.Command:
@@ -1999,8 +2022,8 @@ object mcp extends BaseModule:
     * those outlive it, and a task still holding a published port is what makes the next run fail on
     * a port that looks free.
     *
-    * Nothing to clean afterwards: the tofu state is keyed by container id, so the next run reaches a
-    * directory that has never existed and builds the container and its state together.
+    * The local tofu state goes too, every container's: with LocalStack gone, none of it describes
+    * anything, and the next run builds the container and its state together.
     */
   def destroyLocal() = Task.Command:
     def docker(args: String*): String = os
@@ -2028,6 +2051,7 @@ object mcp extends BaseModule:
       docker("rm" +: "-fv" +: removedContainers*)
     if removedImages.nonEmpty then
       docker("rmi" +: "-f" +: removedImages*)
+    os.remove.all(localStackStates)
     // Image *ids*, not tags: `captal-rqlite:latest` and the registry-tagged copy of it are one id,
     // and `docker rmi` takes both away at once.
     println(
@@ -2429,15 +2453,11 @@ object mcp extends BaseModule:
     /** The cluster, network and load balancer a deploy attaches to, as the environment that names
       * them. Empty without a licence; see [[ensureLocalStackTofu]].
       *
-      * `persistent = true` is what makes the state and the container stay paired, and it is the
-      * whole reason this is not a plain `Task`. A normal task's `dest` is wiped on every
-      * re-evaluation, so editing the configuration would discard the state while LocalStack still
-      * held all seventy resources — and the next apply would plan a create for each of them and
-      * fail with `AlreadyExists`. Persistent keeps the state across re-evaluations, and the
-      * container id in the path keeps it honest: a recreated container is a new id, so it gets an
-      * empty directory and the two are built together.
+      * The state is not in this task's `dest`, which a re-evaluation wipes, but in
+      * [[localStackStateDir]], shared with `ci.run`. Writing there is what the filesystem checker
+      * is disabled for: Mill lets a task write only to its own `dest`.
       */
-    def localStackInfra: T[Map[String, String]] = Task(persistent = true):
+    def localStackInfra: T[Map[String, String]] = Task:
       val parts = localStackStamp().split(" ")
       // Read for the dependency, not the value: the hash is what makes a changed `.tf` re-apply,
       // and the sources are what let this task read them at all.
@@ -2452,12 +2472,13 @@ object mcp extends BaseModule:
       // Built under its default tag, because only the remote one matters and the push applies it.
       // Mill also forbids passing a value defined in this block to a task call.
       val built = if tag.isEmpty then "" else rqlite.image()()
-      ensureLocalStackTofu(
-        endpoint = parts(1),
-        licensed = licensed,
-        configDir = configDir,
-        stateDir = Task.dest / parts(0),
-        rqliteImage = built)
+      mill.api.BuildCtx.withFilesystemCheckerDisabled:
+        ensureLocalStackTofu(
+          endpoint = parts(1),
+          licensed = licensed,
+          configDir = configDir,
+          stateDir = localStackStateDir(parts(0)),
+          rqliteImage = built)
 
     /** Recreates LocalStack, which is what clears a state that has come apart from it.
       *
@@ -2465,12 +2486,13 @@ object mcp extends BaseModule:
       * `/var/lib/localstack`, which `docker rm -f` leaves behind — the container would come back
       * carrying every resource the last one had, which is the divergence this exists to clear.
       *
-      * The state is not deleted here and does not need to be: it is keyed by container id, so the
-      * replacement container reaches a directory that has never existed. Everything the
-      * configuration made goes with the container — the database's rows and the bucket's objects
-      * included — and the next apply makes it again, empty.
+      * The container's state goes with it. The replacement is a new id, so it would reach a
+      * directory that has never existed anyway; removing the old one is only so they do not pile up.
+      * Everything the configuration made goes with the container — the database's rows and the
+      * bucket's objects included — and the next apply makes it again, empty.
       */
     def resetLocalStack() = Task.Command:
+      localStackContainerId().foreach(id => os.remove.all(localStackStateDir(id)))
       os.proc("docker", "rm", "-fv", localStackContainer).call(check = false)
       println(
         s"[tofu] LocalStack removed with its volume; the next run builds the container and its state together")
@@ -2553,19 +2575,30 @@ object ci extends Module:
     *
     * Configured entirely through the environment, which CodeBuild injects: `CAPTAL_ENV` names the
     * environment, the credentials are the build's role, and `IMAGE_TAG` defaults to the commit
-    * CodeBuild resolved. See [[ReleaseTarget]]. `mcp.dev` runs the same operations against
-    * LocalStack. The build needs Docker (a privileged CodeBuild project), `tofu` and the `aws` CLI.
+    * CodeBuild resolved. See [[ReleaseTarget]]. The build needs Docker (a privileged CodeBuild
+    * project), `tofu` and the `aws` CLI.
+    *
+    * With `AWS_ENDPOINT_URL` at this build's LocalStack, it releases there, which is how it runs on
+    * a dev machine:
+    * {{{
+    * CAPTAL_ENV=local AWS_ENDPOINT_URL=http://localhost:4567 mill ci.run
+    * }}}
+    * No credentials: LocalStack's are fixed, and both the provider and `awslocal` use them. The
+    * container is started as `mcp.dev` starts it, the apply shares `mcp.dev`'s state, and the tags
+    * are the local tfvars' unless `IMAGE_TAG` is set. `mcp.dev` runs these same operations, without
+    * waiting for the locations to settle.
     *
     * Usage: `mill ci.run`
     */
   def run() = Task.Command:
     val target = ReleaseTarget.fromEnv(Task.env)
-    if target.local then
-      sys.error(
-        "[ci] AWS_ENDPOINT_URL is set, and ci.run releases to AWS. `mill mcp.dev` is the release to LocalStack.")
-    if target.imageTag.isEmpty then
-      sys.error("[ci] no IMAGE_TAG, and no CODEBUILD_RESOLVED_SOURCE_VERSION to default it to")
-    mcp.test.tofuSources()
+    val workDir =
+      if target.local then
+        localStackWorkDir(target, Task.env)
+      else
+        if target.imageTag.isEmpty then
+          sys.error("[ci] no IMAGE_TAG, and no CODEBUILD_RESOLVED_SOURCE_VERSION to default it to")
+        Task.dest
     val configDir = terraformDir(Task.env, moduleDir / os.up)
     val built = BuiltImages(
       rqlite = Some(rqlite.image()()),
@@ -2574,7 +2607,7 @@ object ci extends Module:
     val bundle = client.bundle().path
 
     println(s"[ci] Steps 1-2/4: Images built; applying the ${target.environment} configuration...")
-    val (outputs, published) = applyConfiguration(target, configDir, Task.dest): registries =>
+    val (outputs, published) = applyConfiguration(target, configDir, workDir): registries =>
       publishImages(target, configDir, registries, built)
     val apiImage = published.getOrElse(sys.error("[ci] the API image was not published"))
     def output(name: String) = outputs.getOrElse(
@@ -2593,6 +2626,21 @@ object ci extends Module:
       output("assets_bucket_name"),
       output("cloudfront_distribution_id"),
       locations)
+
+  /** For a release to LocalStack: starts this build's container if it is not running, and answers
+    * the state `mcp.dev` applies with, which is that container's.
+    */
+  private def localStackWorkDir(target: ReleaseTarget, env: Map[String, String]): os.Path =
+    val port = java.net.URI(target.endpoint.get).getPort
+    if port != localStackPort then
+      sys.error(
+        s"[ci] AWS_ENDPOINT_URL names port $port, and this build's LocalStack listens on $localStackPort")
+    if localStackToken(env).isEmpty then
+      sys.error(
+        "[ci] the release needs ECS, which LocalStack runs only with a licence. Set LOCALSTACK_AUTH_TOKEN in .env.")
+    ensureLocalStack(localStackContainer, localStackPort, env)
+    localStackStateDir(localStackContainerId().getOrElse(
+      sys.error(s"[ci] '$localStackContainer' is not running after starting it; `docker logs $localStackContainer` says why")))
 end ci
 
 // La página de pausa era `object maintenance`, con su propio linker run y por lo tanto con el

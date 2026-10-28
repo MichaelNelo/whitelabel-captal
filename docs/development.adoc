@@ -236,8 +236,8 @@ empties it along with the bucket, and the next apply makes both again, empty.
 anonymous volume, the ECS task containers LocalStack spawned for a service, and the images built
 here. Reach for it over `stopLocalStack` when something is wedged — a stopped LocalStack leaves its
 volume and its task containers behind, and a task still holding a published port is what makes the
-next run fail on a port that looks free. Nothing needs cleaning afterwards: the tofu state is keyed
-by container id, so the next run gets a fresh directory and builds both together.
+next run fail on a port that looks free. It removes the local tofu state too, since with LocalStack
+gone none of it describes anything, and the next run builds the container and its state together.
 
 === A full local loop, in order
 
@@ -298,18 +298,32 @@ It is configured only through the environment, which the CodeBuild project injec
 
 |`IMAGE_TAG`
 |The tag the API and backoffice images go up under. Defaults to the first twelve characters of
-`CODEBUILD_RESOLVED_SOURCE_VERSION`, the commit CodeBuild built; `ci.run` refuses to run with
-neither.
+`CODEBUILD_RESOLVED_SOURCE_VERSION`, the commit CodeBuild built; against AWS, `ci.run` refuses to
+run with neither. Against LocalStack, unset means the local tfvars' tags.
 
 |`AWS_REGION`
 |Defaults to `us-east-1`. The credentials are the build's role.
 
 |`AWS_ENDPOINT_URL`
-|Must be unset: set, it means LocalStack, which is `mcp.dev`'s release, and `ci.run` refuses.
+|Unset in CodeBuild. Set to this build's LocalStack, it releases there instead; see below.
 |===
 
 The build needs Docker, so the CodeBuild project has to be privileged, and `tofu` and the `aws`
 CLI on its PATH. Its role applies the whole configuration, so it needs what that creates.
+
+On a dev machine, the same release runs against LocalStack:
+
+[source,bash]
+----
+CAPTAL_ENV=local AWS_ENDPOINT_URL=http://localhost:4567 mill ci.run
+----
+
+It needs no credentials: LocalStack's are fixed, the provider uses them when it is given an endpoint,
+and every AWS call goes through `awslocal` inside the container. It needs the LocalStack licence
+`mcp.dev` needs, starts the container as `mcp.dev` does if it is not running, and applies with the
+same state, `out/localstack/<container-id>/` — so a release from here and an `mcp.dev` run never
+come apart. That directory is under the workspace's `out/` whatever `MILL_OUTPUT_DIR` says, which
+is what lets `ci.run` run beside a running `mcp.dev` with an output directory of its own.
 
 == Client bundle and publishing
 
