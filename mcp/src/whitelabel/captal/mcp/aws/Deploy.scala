@@ -531,11 +531,61 @@ final case class InfraStore(
   def awaitRunning(
       slug: String,
       settled: Int => Boolean,
-      within: Duration): ZIO[Any, String, Boolean] = runningCount(slug)
-    .map(_.getOrElse(0))
-    .repeatUntil(settled)
-    .timeout(within)
+      within: Duration): ZIO[Any, String, Boolean] = Poll
+    .until(runningCount(slug).map(_.getOrElse(0)), within)(settled)
     .map(_.isDefined)
+
+  /** The service's deployment of one task definition revision: how many of its tasks are running,
+    * and its rollout state, `IN_PROGRESS`, `COMPLETED` or `FAILED`. `None` when the service has no
+    * deployment of that revision.
+    *
+    * Per revision because during a redeploy the previous revision's task keeps running until the
+    * new one is healthy, and a count over the whole service would report that one.
+    */
+  def deploymentOf(
+      slug: String,
+      taskDefinitionArn: String): ZIO[Any, String, Option[(Int, String)]] = ZIO
+    .attemptBlocking:
+      import scala.jdk.CollectionConverters.*
+      ecs
+        .describeServices(
+          DescribeServicesRequest
+            .builder()
+            .cluster(targets.cluster)
+            .services(targets.serviceName(slug))
+            .build())
+        .services()
+        .asScala
+        .find(_.status() != "INACTIVE")
+        .toList
+        .flatMap(_.deployments().asScala)
+        .find(_.taskDefinition() == taskDefinitionArn)
+        .map(deployment =>
+          (
+            deployment.runningCount().intValue,
+            Option(deployment.rolloutStateAsString).getOrElse("")))
+    .mapError(e => s"Could not read the deployments of '$slug': ${e.getMessage}")
+
+  /** Waits for a task of `taskDefinitionArn` to be running, and says whether one was. */
+  def awaitRevisionRunning(
+      slug: String,
+      taskDefinitionArn: String,
+      within: Duration): ZIO[Any, String, Boolean] = Poll
+    .until(deploymentOf(slug, taskDefinitionArn), within)(_.exists((running, _) => running >= 1))
+    .map(_.isDefined)
+
+  /** Waits for the deployment of `taskDefinitionArn` to stop rolling out, and answers the state it
+    * ended in: `COMPLETED` once its task passed the load balancer's health checks and the previous
+    * revision's tasks were stopped, which on a redeploy includes the target group's deregistration
+    * delay. `None` when it was still rolling out at `within`.
+    */
+  def awaitRevisionSettled(
+      slug: String,
+      taskDefinitionArn: String,
+      within: Duration): ZIO[Any, String, Option[String]] = Poll
+    .until(deploymentOf(slug, taskDefinitionArn), within)(
+      _.exists((_, state) => state == "COMPLETED" || state == "FAILED"))
+    .map(_.flatten.map((_, state) => state))
 
   /** How many of this location's targets the load balancer considers healthy.
     *
@@ -563,8 +613,9 @@ final case class InfraStore(
   /** Waits for one healthy target, and says whether it got one: the confirmation that a request
     * would be answered by a container rather than by a 503 from the load balancer.
     */
-  def awaitHealthyTarget(slug: String, within: Duration): ZIO[Any, String, Boolean] =
-    healthyTargets(slug).repeatUntil(_ > 0).timeout(within).map(_.isDefined)
+  def awaitHealthyTarget(slug: String, within: Duration): ZIO[Any, String, Boolean] = Poll
+    .until(healthyTargets(slug), within)(_ > 0)
+    .map(_.isDefined)
 
   /** Whether this location's rule is answering with the paused body. Read from the rule's own
     * action, which is where the state lives: a pause writes nothing to the database.

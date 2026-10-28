@@ -3,14 +3,8 @@ package whitelabel.captal.mcp
 import scala.io.Source
 import scala.jdk.CollectionConverters.*
 
-import com.jamesward.ziohttp.mcp.client.{
-  McpClient,
-  McpClientConfig,
-  McpClientExtension,
-  McpClientExtensions,
-  ToolCallOutcome
-}
-import com.jamesward.ziohttp.mcp.{McpApps, McpAppsClientSettings, McpTasks, TaskStatus}
+import com.jamesward.ziohttp.mcp.client.{McpClient, McpClientConfig, McpClientExtensions}
+import com.jamesward.ziohttp.mcp.{McpApps, McpAppsClientSettings}
 import io.getquill.*
 import io.getquill.jdbczio.Quill
 import software.amazon.awssdk.core.sync.RequestBody
@@ -63,7 +57,6 @@ import whitelabel.captal.platform.{
 }
 import zio.*
 import zio.http.{Client, Header, Headers, TestClient}
-import zio.json.*
 import zio.json.ast.Json
 import zio.schema.Schema
 import zio.schema.codec.JsonCodec
@@ -81,9 +74,9 @@ import QuillArrow.->
   * It speaks the protocol rather than calling handlers. `TestClient` serves this server's own
   * `statelessRoutes` to a real [[McpClient]] with no socket between them, which is what brings the
   * layers a handler call skips into scope: JSON-RPC dispatch, the auth middleware and its scopes,
-  * decoding from the raw JSON a client actually sends rather than from a codec round trip, and —
-  * the one that cannot be reached any other way — a tool whose `TaskExecution` makes the server
-  * answer with a task handle the client then polls.
+  * decoding from the raw JSON a client actually sends rather than from a codec round trip, and the
+  * deploy tools' runs, which answer at once and are then followed through `get_deploy_status` the
+  * way a model follows them.
   *
   * The database is created and migrated outside this test, by the build, which is the arrangement
   * production has: a location does not provision its own database, and `DB_URL` is a value the
@@ -103,9 +96,9 @@ import QuillArrow.->
   *     empty. `AssetStore.layer` and `DeployTargets.layer` read `System.env`, so without it they
   *     fail with "ASSETS_BUCKET is not set" however carefully the build sets it. The other specs
   *     avoid this by building their stores by hand; this one wants the layers.
-  *   - `withLiveClock`, because the client polls a task with `ZIO.sleep` and `TestClock` does not
-  *     advance unless a test tells it to. Without it `awaitTask` waits for a clock that will never
-  *     move, and the symptom is not a failure but a run that never ends.
+  *   - `withLiveClock`, because both this client and the server's runs wait between polls, and
+  *     `TestClock` does not advance unless a test tells it to. Without it a run waits for a clock
+  *     that will never move, and the symptom is not a failure but a run that never ends.
   *
   * The timeout is there because that is the second time a wait in here hung rather than failed, and
   * a spec that polls should say so itself rather than take the suite's wall clock with it.
@@ -169,6 +162,31 @@ object DeployE2ESpec extends ZIOSpecDefault:
     private def tool[A: Schema, B: Schema](name: String, in: A): ZIO[Any, Throwable, B] = client
       .callToolAs[B](name, args(in))
       .mapError(error => new AssertionError(s"$name: $error"))
+
+    /** Follows a run through `get_deploy_status` until it is no longer running, as a model would.
+      */
+    private def awaitRun(started: DeployTools.RunView): ZIO[Any, Throwable, DeployTools.RunView] =
+      client
+        .tool[DeployTools.StatusRequest, DeployTools.RunView](
+          "get_deploy_status",
+          DeployTools.StatusRequest(Some(started.runId), None))
+        .repeat(Schedule.spaced(2.seconds) *> Schedule.recurWhile(_.status == "running"))
+        .timeoutFail(
+          new AssertionError(
+            s"The ${started.operation} of ${started.slug} was still running after 10 minutes"))(
+          10.minutes)
+  end extension
+
+  /** The operation's own result from a finished run, or a failure saying where it stopped. */
+  private def resultOf[A](run: DeployTools.RunView)(pick: DeployTools.RunView => Option[A]): A =
+    pick(run).getOrElse(
+      throw new AssertionError(
+        s"The ${run.operation} of ${run.slug} ended ${run.status}: ${run
+            .error
+            .getOrElse("no error recorded")}. Steps: ${run
+            .steps
+            .map(step => s"${step.name}=${step.state}")
+            .mkString(", ")}"))
 
   private def text(value: String) = LocalizedText(Locale, value)
 
@@ -283,10 +301,9 @@ object DeployE2ESpec extends ZIOSpecDefault:
 
   /** This server's own routes, served to a client with nothing between them.
     *
-    * Declares both extensions the server does, which is not decoration: without
-    * `io.modelcontextprotocol/tasks` on the request the server answers `deploy_location`
-    * synchronously — that is exactly what `TaskExecution.WhenSupported` means — and the task path
-    * would go untested while appearing to work.
+    * Declares Apps and not Tasks, which is what Claude declares. The deploy tools have to work for
+    * a host that cannot follow a task, and a client declaring it would let them depend on it
+    * unseen.
     */
   private def connect(infra: Option[InfraStore])
       : ZIO[QuillSqlite & AssetStore & TestClient & Client & Scope, Throwable, McpClient] =
@@ -308,10 +325,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
         .provideEnvironment(env)
       _        <- TestClient.addRoutes(routes)
       declared <- ZIO
-        .fromEither(
-          McpClientExtensions(
-            McpClientExtension(McpTasks.Id, Json.Obj()),
-            McpApps.clientExtension(McpAppsClientSettings.Html)))
+        .fromEither(McpClientExtensions(McpApps.clientExtension(McpAppsClientSettings.Html)))
         .mapError(error => new IllegalStateException(s"Client extensions: $error"))
       // How this client answers an `elicitation/create`, which `destroy_location` uses to ask about
       // the one irreversible step. Declines the first and accepts every one after, so a single run
@@ -462,41 +476,22 @@ object DeployE2ESpec extends ZIOSpecDefault:
         "get_location_readiness",
         Readiness.ReadinessRequest(Slug))
 
-      // Server-directed, and the client declared the extension, so this must come back
-      // as a task rather than a result. Observed rather than assumed: `callTool` would
-      // follow a task transparently and this would pass either way.
-      outcome <- client
-        .startTool("deploy_location", args(DeployTools.DeployRequest(Slug)))
-        .mapError(error => new AssertionError(s"deploy_location: $error"))
-      task =
-        outcome match
-          case ToolCallOutcome.Started(value) =>
-            value
-          case ToolCallOutcome.Completed(_) =>
-            throw new AssertionError(
-              "deploy_location answered synchronously, so the Tasks extension is not in force: either the registry lost McpTasks or the tool's TaskExecution was dropped by a wrapper.")
-      finished <- client
-        .awaitTask(task.taskId)
-        .mapError(error => new AssertionError(s"awaitTask: $error"))
-      // Asked again afterwards, because the result and the lifecycle are separate
-      // claims: a task can carry a result and still be left `working`, and 0.8.3 could
-      // never report `failed` at all because nothing set it.
-      settled <- client
-        .getTask(task.taskId)
-        .mapError(error => new AssertionError(s"tasks/get: $error"))
-      deployed = finished
-        .structuredContent
-        .map(_.toJson)
-        .toRight("the finished task carried no structured content")
-        .flatMap(JsonCodec.jsonDecoder(summon[Schema[DeployTools.DeployResponse]]).decodeJson)
-        .fold(error => throw new AssertionError(s"deploy result: $error"), identity)
+      // Answered at once with a run that is still going, which is what lets a host with no
+      // Tasks extension and a cap on how long it holds a call deploy at all.
+      deployRun <- client.tool[DeployTools.DeployRequest, DeployTools.RunView](
+        "deploy_location",
+        DeployTools.DeployRequest(Slug))
+      deployDone <- client.awaitRun(deployRun)
+      deployed = resultOf(deployDone)(_.deployed)
 
       // Again, which is both what a redeploy does and the only history-independent way
       // to observe `created`. The first call's value depends on whether a previous run
-      // left the service behind — asserting it was true passed once and never again.
-      redeployed <- client.tool[DeployTools.DeployRequest, DeployTools.DeployResponse](
+      // left the service behind — asserting it was true passed once and never again. It
+      // also waits for the new revision to settle while the previous one still runs.
+      redeployRun <- client.tool[DeployTools.DeployRequest, DeployTools.RunView](
         "deploy_location",
         DeployTools.DeployRequest(Slug))
+      redeployed <- client.awaitRun(redeployRun).map(resultOf(_)(_.deployed))
 
       // What AWS actually has, asked of AWS rather than read back from the response
       // that claimed to have created it.
@@ -552,26 +547,11 @@ object DeployE2ESpec extends ZIOSpecDefault:
       // The page the edge serves before any of this, so the swap can be told apart
       // from a location that was always serving maintenance.
       liveBefore <- objectText(AssetStore.indexKey(Slug))
-      // Pause declares `TaskExecution.Required`, so it must come back as a task: it
-      // waits out a CloudFront invalidation and has no synchronous form.
-      pauseOutcome <- client
-        .startTool("pause_location", args(DeployTools.PauseRequest(Slug)))
-        .mapError(error => new AssertionError(s"pause_location: $error"))
-      pauseTask =
-        pauseOutcome match
-          case ToolCallOutcome.Started(value) =>
-            value
-          case ToolCallOutcome.Completed(_) =>
-            throw new AssertionError(
-              "pause_location answered synchronously, but it declares TaskExecution.Required — a client that cannot poll should get -32021 and one that can should get a task.")
-      paused <- client
-        .awaitTask(pauseTask.taskId)
-        .mapError(error => new AssertionError(s"awaitTask(pause): $error"))
-        .map(result =>
-          JsonCodec
-            .jsonDecoder(summon[Schema[DeployTools.PauseResponse]])
-            .decodeJson(result.structuredContent.map(_.toJson).getOrElse(""))
-            .fold(error => throw new AssertionError(s"pause result: $error"), identity))
+      // A run as well: it waits out a CloudFront invalidation before it stops the API.
+      pauseRun <- client.tool[DeployTools.PauseRequest, DeployTools.RunView](
+        "pause_location",
+        DeployTools.PauseRequest(Slug))
+      paused <- client.awaitRun(pauseRun).map(resultOf(_)(_.paused))
       // What the edge now serves for this location, and what it does not.
       pausedIndex        <- objectText(AssetStore.indexKey(Slug))
       savedPage          <- objectText(AssetStore.savedPageKey(Slug))
@@ -605,23 +585,10 @@ object DeployE2ESpec extends ZIOSpecDefault:
         quill.run(query[LocationRow]).map(_.filter(_.slug == Slug))
 
       // ── Resumed ──────────────────────────────────────────────────────────────────
-      resumeOutcome <- client
-        .startTool("resume_location", args(DeployTools.PauseRequest(Slug)))
-        .mapError(error => new AssertionError(s"resume_location: $error"))
-      resumeTask =
-        resumeOutcome match
-          case ToolCallOutcome.Started(value) =>
-            value
-          case ToolCallOutcome.Completed(_) =>
-            throw new AssertionError("resume_location answered synchronously")
-      resumed <- client
-        .awaitTask(resumeTask.taskId)
-        .mapError(error => new AssertionError(s"awaitTask(resume): $error"))
-        .map(result =>
-          JsonCodec
-            .jsonDecoder(summon[Schema[DeployTools.ResumeResponse]])
-            .decodeJson(result.structuredContent.map(_.toJson).getOrElse(""))
-            .fold(error => throw new AssertionError(s"resume result: $error"), identity))
+      resumeRun <- client.tool[DeployTools.PauseRequest, DeployTools.RunView](
+        "resume_location",
+        DeployTools.PauseRequest(Slug))
+      resumed      <- client.awaitRun(resumeRun).map(resultOf(_)(_.resumed))
       resumedIndex <- objectText(AssetStore.indexKey(Slug))
       savedGone    <- ZIO
         .serviceWithZIO[AssetStore](_.exists(AssetStore.savedPageKey(Slug)))
@@ -634,22 +601,25 @@ object DeployE2ESpec extends ZIOSpecDefault:
       // typo and a teardown.
       refused <-
         client
-          .callToolAs[DeployTools.DestroyResponse](
+          .callToolAs[DeployTools.RunView](
             "destroy_location",
             args(DeployTools.DestroyRequest(Slug, "not-the-slug")))
           .either
       // Twice, because the question about the S3 objects is answered differently each time — see
       // `answerElicitations`. The first run proves the safe default and the second proves the
-      // delete, and together they prove a teardown can follow a teardown.
-      declined <- client.tool[DeployTools.DestroyRequest, DeployTools.DestroyResponse](
+      // delete, and together they prove a teardown can follow a teardown. The question is asked in
+      // the call; only the teardown is a run.
+      declinedRun <- client.tool[DeployTools.DestroyRequest, DeployTools.RunView](
         "destroy_location",
         DeployTools.DestroyRequest(Slug, Slug))
+      declined <- client.awaitRun(declinedRun).map(resultOf(_)(_.destroyed))
       iconKept <- ZIO
         .serviceWithZIO[AssetStore](_.get(Slug, Asset.BrandIcon))
         .mapError(new AssertionError(_))
-      destroyed <- client.tool[DeployTools.DestroyRequest, DeployTools.DestroyResponse](
+      destroyedRun <- client.tool[DeployTools.DestroyRequest, DeployTools.RunView](
         "destroy_location",
         DeployTools.DestroyRequest(Slug, Slug))
+      destroyed <- client.awaitRun(destroyedRun).map(resultOf(_)(_.destroyed))
       // A deleted service lingers as INACTIVE rather than vanishing, which is the state
       // `upsertService` already knows to create over.
       servicesAfter <- ZIO.attemptBlocking:
@@ -738,10 +708,11 @@ object DeployE2ESpec extends ZIOSpecDefault:
         ready.locales.exists(gap => gap.locale == Locale && gap.missing == 0)
       ) &&
       assertTrue(
-        // The task reached a terminal state, and the result is the deploy's own.
-        finished.isError.forall(_ == false),
-        settled.status == TaskStatus.Completed,
-        settled.isTerminal,
+        // Answered while still going, and finished with every step done.
+        deployRun.status == "running",
+        deployRun.steps.forall(_.state == "pending"),
+        deployDone.steps.forall(_.state == "done"),
+        deployDone.finishedAt.isDefined,
         // The bundle copy, which is what makes the portal's own page exist. Two of the
         // Three of the five published: the bundle's default icon is skipped because
         // this location set one, and `maintenance.html` is never copied per location —
@@ -986,5 +957,5 @@ object DeployE2ESpec extends ZIOSpecDefault:
       DeployTargets.layer,
       InfraStore.layer,
       TestClient.layer) @@ TestAspect.sequential @@ TestAspect.withLiveSystem @@
-      TestAspect.withLiveClock @@ TestAspect.timeout(3.minutes)
+      TestAspect.withLiveClock @@ TestAspect.timeout(15.minutes)
 end DeployE2ESpec

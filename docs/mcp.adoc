@@ -563,6 +563,7 @@ rather than one tool per skill. See <<Skills>>.
 
 `get_location_readiness`, read-only. See <<Onboarding>> and <<Resources>>.
 
+[[DeployTools]]
 === Deploy, pause, resume, destroy
 
 Registered only when `ECS_CLUSTER` is configured. The AWS-side mechanics — what each one actually
@@ -570,44 +571,50 @@ calls, in what order, and why — are covered in full by the "What the deploy to
 does not" section of xref:infrastructure.adoc[Infrastructure]; this is the tool-level contract
 alone.
 
-[cols="2,1,2,4"]
+[cols="2,1,4"]
 |===
-|Tool |Scope |Task policy |
+|Tool |Scope |
 
 |`deploy_location`
 |`infra:deploy`
-|`TaskExecution.Required`, ttl 15 min
-|Idempotent — an already-deployed location gets its service updated to a fresh task definition
-rather than a second one created. Waits up to three minutes for a running task and three more for a
-healthy target, and reports how far it got in `running` and `healthy`.
+|Idempotent — an already-deployed location gets its service rolled onto a fresh task definition
+rather than a second one created. The run waits for a task of the new revision to be running, then
+for the service's deployment of that revision to reach `COMPLETED`.
 
 |`pause_location`
 |`infra:deploy`
-|`TaskExecution.Required`, ttl 15 min
 |Swaps the edge to the maintenance page and waits out the CloudFront invalidation *before* touching
 the API. Writes nothing to the database.
 
 |`resume_location`
 |`infra:deploy`
-|`TaskExecution.Required`, ttl 15 min
 |The reverse order of pause. Does not re-copy the bundle — run `deploy_location` for that.
 
 |`destroy_location`
 |`infra:destroy`, `destructive = true`, `idempotent = true`
-|none declared — runs synchronously
 |Requires the slug typed back as confirmation. Elicits whether to also delete the location's S3
-objects (declining is the default for any client that cannot ask, or does not answer); keeps the log
-group and the database rows regardless.
+objects in the call, before the run starts (declining is the default for any client that cannot
+ask, or does not answer); keeps the log group and the database rows regardless.
+
+|`get_deploy_status`
+|none, read-only
+|A run by `runId`, or a location's latest by `slug`: every step and its state, and the operation's
+result once it succeeded.
 |===
 
-`TaskExecution.Required` is what lets a client that supports the `tasks` extension poll a handle
-instead of holding a connection open across a multi-minute deploy. A client that does not declare
-that extension is refused with `-32021` before the tool runs, so it cannot deploy, pause or resume
-at all. `DeployTools.taskNote` only speaks when a deploy answers in the call itself, which under this
-policy happens only on a server built without a task runtime.
+None of the four is a task. Each waits minutes on AWS, and a host caps how long it holds one call
+open — Claude's proxy closes the stream at about five minutes, keepalives or not — so each answers
+at once with a run and does the work on a daemon fiber. `Runs` records the run in `mcp_deploy_runs`:
+its steps, fixed when it starts and marked as the work reaches them, the result or the error, and a
+heartbeat the work rewrites every ten seconds. A `running` row whose heartbeat is more than a minute
+old is reported as `interrupted`: its process is gone, and calling the same tool again finishes it,
+since every step is idempotent. One run per location at a time; a call while one is going starts
+nothing and answers with that one.
+
+Inside a run every wait polls AWS every five seconds and gives up after 15 minutes.
 
 The `deploy-location` skill is the operator's guide to all four: which one fits, what each leaves
-behind, and what to say when a client is refused.
+behind, and how to follow a run.
 
 [[Onboarding]]
 == The onboarding prompt
@@ -725,10 +732,10 @@ startup for unique ids and no shadowing of a core JSON-RPC method:
 are core methods the extension only enables.
 |===
 
-The task store is `McpTasks.inMemory`: tasks live inside this one process, so a poll only answers on
-the replica that started the work. The backoffice runs as exactly one task today
-(`mcp_desired_count = 1`; see xref:infrastructure.adoc[Infrastructure]), which is what makes that an
-acceptable constraint rather than a live gap.
+No tool declares a task policy, so the extension is declared but nothing runs as a task. The deploy
+tools, the only long-running ones, answer with runs instead, because Claude declares no Tasks
+extension; see <<DeployTools>>. The task store is `McpTasks.inMemory`: were a
+tool to run as a task, a poll would only answer on the replica that started it.
 
 == The MCP Apps
 

@@ -10,7 +10,6 @@ import whitelabel.captal.mcp.tools.{
   SurveyTools,
   VideoTools
 }
-import zio.json.ast.Json
 import zio.test.*
 import zio.{Chunk, ZIO}
 
@@ -98,9 +97,11 @@ object ExtensionsSpec extends ZIOSpecDefault:
           end for
       ),
       suite("task policy")(
-        test("deploy_location requires a task, because it waits"):
+        // Not a task: it answers at once with a run, and the waiting happens in the background,
+        // which a host without the Tasks extension can follow as well as one with it.
+        test("deploy_location answers at once rather than as a task"):
           assertTrue(
-            DeployTools.declaration.toolTaskPolicy.execution == TaskExecution.Required,
+            DeployTools.declaration.toolTaskPolicy.execution == TaskExecution.Never,
             DeployTools.declaration.toolRequiredScopes == Set(Auth.InfraDeploy),
             // No store configured, no tool.
             DeployTools.all(None).isEmpty
@@ -118,18 +119,6 @@ object ExtensionsSpec extends ZIOSpecDefault:
             declared.visibleTo(McpAppsVisibility.Model).taskPolicy.execution ==
               TaskExecution.Required,
             declared.visibleTo(McpAppsVisibility.Model).name == declared.name
-          )
-        ,
-        test("a synchronous caller is told what a timeout would and would not mean"):
-          // Measured off the request: silent when called as a task, one note when synchronous.
-          val synchronous = DeployTools.taskNote(Map.empty)
-          val asTask = DeployTools.taskNote(Map(McpTasks.Id -> Json.Obj()))
-          assertTrue(
-            asTask.isEmpty,
-            synchronous.size == 1,
-            // A lost reply is not a failed deploy, and the call is safe to repeat.
-            synchronous.head.contains("deploy_location again"),
-            synchronous.head.contains("idempotent")
           )
         ,
         test("a tool that declares nothing never becomes a task"):

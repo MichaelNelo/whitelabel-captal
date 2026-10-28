@@ -1,7 +1,7 @@
 ---
 name: deploy-location
-description: Use this skill for anything that changes whether a location's portal is serving — deploying it, giving it a newer bundle, closing it for a while, bringing it back, or removing it for good. It says which of deploy_location, pause_location, resume_location and destroy_location fits, what each one leaves behind, and when this client cannot call them at all. Triggers on "deploy location", "push location", "deploy", "publicar location", "provision location", "publish bundle", "subir el bundle", "go live", "pause location", "pausar", "mantenimiento", "maintenance page", "cerrar temporalmente", "resume location", "reanudar", "reactivar", "destroy location", "eliminar location", "borrar location", "dar de baja", "tear down".
-version: 4.0.0
+description: Use this skill for anything that changes whether a location's portal is serving — deploying it, giving it a newer bundle, closing it for a while, bringing it back, or removing it for good. It says which of deploy_location, pause_location, resume_location and destroy_location fits, what each one leaves behind, and how to follow the run each one starts with get_deploy_status. Triggers on "deploy location", "push location", "deploy", "publicar location", "provision location", "publish bundle", "subir el bundle", "go live", "pause location", "pausar", "mantenimiento", "maintenance page", "cerrar temporalmente", "resume location", "reanudar", "reactivar", "destroy location", "eliminar location", "borrar location", "dar de baja", "tear down".
+version: 5.0.0
 ---
 
 # A location's portal: deploying, pausing, removing
@@ -13,9 +13,8 @@ version: 4.0.0
 | The portal closed for a while, nothing lost | `pause_location`, later `resume_location` — section 4 |
 | The location gone from AWS for good | `destroy_location` — section 5 |
 
-`deploy_location`, `pause_location` and `resume_location` run only as tasks. Read "How the calls
-come back" in section 3 before the first one: a client that cannot run tasks is refused, and nothing
-in AWS changes.
+All four answer at once with a run and keep working in the background, for minutes. Read "Following
+a run" in section 3 before the first one: the answer you get back is the start, not the result.
 
 Three different things get called "deploy" here, and they have three different answers. Work out
 which one is meant before doing anything: one needs nothing at all, one is a Mill task, and one is
@@ -79,10 +78,12 @@ It is idempotent. Run on a location that is already deployed it registers a fres
 and rolls the service onto it rather than creating a second one — so it is also how a redeploy is
 done, and re-running it after a failure part way through is safe.
 
-It waits, within limits: up to three minutes for a task to be running, then up to three more for the
-load balancer to report a healthy target. `running` and `healthy` say how far it got. Either one
-false is not a failed deploy — the resources exist and ECS keeps trying — but until `healthy` is true
-a guest gets a 503. The log group it reports says why a container is not coming up.
+The run then waits for the new revision: first for one of its tasks to be running, then for the
+service to settle on it, which means its task passed the load balancer's health checks and, on a
+redeploy, the previous revision's task was stopped. A redeploy therefore takes several minutes even
+when nothing is wrong, because the previous task drains first. Each wait gives up after 15 minutes
+and fails the run, naming the log group that says why the container is not coming up; the resources
+exist and ECS keeps trying in the meantime. A deploy that succeeded is serving the new revision.
 
 ### The bundle copy, which it does first
 
@@ -109,27 +110,30 @@ set is left alone. Nothing to do about it either way — just do not read `iconP
 lost icon, it is the ordinary answer for a location with no branding of its own.
 `custom-styles.css.gz` is not in the bundle and is never touched.
 
-### How the calls come back, and when they cannot be made at all
+### Following a run
 
-`deploy_location`, `pause_location` and `resume_location` run **only as tasks**: the call returns a
-handle at once, the client polls `tasks/get` until a terminal status and then reads the result, and
-the work survives a disconnect. Each one waits minutes — for a container, a health check or a
-CloudFront invalidation — so none has a form that answers within one request.
+`deploy_location`, `pause_location`, `resume_location` and `destroy_location` each wait minutes on
+AWS — for a container, a health check or a CloudFront invalidation — which is longer than a host
+keeps one call open. So each one answers at once with a **run**: its `runId`, `status: running`, and
+every step it is going to take, all `pending`. The work goes on in the server, and it does not need
+this conversation to stay open.
 
-A task needs the request to declare the `io.modelcontextprotocol/tasks` extension. That declaration
-is written by the application the conversation is happening in, when it builds the request. It is not
-a setting on this server, not an argument to pass, and not something an operator can toggle.
+Follow it with `get_deploy_status(runId)` about every 30 seconds until `status` is no longer
+`running`. Tell the operator which step it is on rather than going quiet; the step names are written
+to be shown. Without the `runId`, `get_deploy_status(slug)` gives that location's latest run.
 
-A client that does not declare it gets error `-32021`, naming the missing extension, before the tool
-runs — so **nothing in AWS has changed**. Say so plainly: this client cannot deploy, pause or resume,
-and the operator has to do it from a client that supports tasks. Do not retry it, and do not rebuild
-the change out of individual AWS calls; section 5 says what a half-done change leaves behind.
+How a run ends:
 
-`destroy_location` is not a task. It answers in the call itself, from any client.
+- **`succeeded`**: the operation's own result is in `deployed`, `paused`, `resumed` or `destroyed`,
+  with its own `nextSteps`. Sections 3 to 5 say how to read each one.
+- **`failed`**: `error` says why, and the failed step is marked. Every step is idempotent, so once the
+  cause is dealt with, calling the same tool again redoes what was done in moments and carries on.
+- **`interrupted`**: the server doing the work stopped before it finished, typically a restart.
+  Calling the same tool again finishes it.
 
-A task's result can still be lost: the client stops polling, the connection drops. That is not
-evidence the work failed. All three are idempotent, so call again and compare what comes back; from
-`deploy_location`, `created: false` means the service was already there.
+Only one run per location goes at a time. Calling any of the four while one is running starts
+nothing and answers with the run already going; follow that one. Do not rebuild a change out of
+individual AWS calls; section 5 says what a half-done change leaves behind.
 
 ## 4. Closing a portal for a while: `pause_location` and `resume_location`
 
@@ -155,11 +159,11 @@ stylesheet and the icon can all be edited, and guests see the result once it is 
 `resume_location(slug)` is the reverse: one task again, wait for it to run, forward again, wait for a
 healthy target, and only then put the saved page back at the edge. What it can answer:
 
-- **An error**, when no task is running after three minutes. The location stays paused, with the rule
-  still answering `paused` and the edge still serving the maintenance page, because that is the safe
-  place for a container that will not start. Read the log group, then call it again.
-- **`healthy: false`**: the task runs but the load balancer has not finished checking it. Guests get
-  a 503 for that short while, and nothing is wrong.
+- **A failed run**, when no task is running after 15 minutes. The location stays paused, with the
+  rule still answering `paused` and the edge still serving the maintenance page, because that is the
+  safe place for a container that will not start. Read the log group, then call it again.
+- **`healthy: false`**: the task runs but the load balancer had not finished checking it when the
+  wait ran out. Guests get a 503 until it does.
 - **`pageRestored: false`**: no saved page was found. Expected for a location that was never paused,
   and harmless, since resuming one is safe.
 
@@ -177,11 +181,11 @@ before it does anything. It needs the `infra:destroy` scope, which `infra:deploy
 
 Before tearing anything down it asks the operator whether to also delete the location's S3 objects:
 its bundle copy, stylesheet, icon and every uploaded video file, saying how many objects and how many
-of them are videos. **If no
-answer comes back, they are kept**, and that includes a client that cannot ask the question at all.
-Then it scales the service to zero, waits for the drain, and deletes the service, the listener rules,
-the target group and the task definition revisions. `drained: false` means the teardown went ahead
-while a container was still stopping.
+of them are videos. The question comes in the call itself, before any run starts. **If no answer
+comes back, they are kept**, and that includes a client that cannot ask the question at all. Then
+the run scales the service to zero, waits for the drain, and deletes the service, the listener
+rules, the target group and the task definition revisions. `drained: false` means the teardown went
+ahead while a container was still stopping.
 
 What survives, every time:
 

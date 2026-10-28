@@ -2,25 +2,33 @@ package whitelabel.captal.mcp.tools
 
 import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
-import whitelabel.captal.mcp.Writes
 import whitelabel.captal.mcp.access.Auth
-import whitelabel.captal.mcp.aws.{AssetStore, BundleCopy, InfraStore}
-import whitelabel.captal.mcp.protocol.McpSchema
+import whitelabel.captal.mcp.aws.{AssetStore, BundleCopy, InfraStore, Runs}
+import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
 import whitelabel.captal.platform.LocationRow
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
 import zio.*
 import zio.json.ast.Json
 import zio.schema.annotation.description
+import zio.schema.codec.JsonCodec as SchemaJsonCodec
 import zio.schema.{DeriveSchema, Schema}
 
 import McpSchema.given
+import ToolSchema.readOnly
 
-/** Four tools: create, pause, resume, destroy a location's AWS infrastructure. */
+/** Deploy, pause, resume and destroy a location's AWS infrastructure, and follow them.
+  *
+  * The four wait minutes on AWS, longer than a host keeps one tool call open, so each answers at
+  * once with a run and leaves the work going in the background; `get_deploy_status` reads it back.
+  */
 object DeployTools:
 
-  /** Health check timeout: 3 minutes (ECS health-check grace period is 180 seconds). */
-  private val HealthTimeout: Duration = 3.minutes
+  /** The longest any one wait inside a run is given. Nothing holds a connection open for it, so it
+    * only has to be long enough for AWS, and short enough that a container which never starts ends
+    * its run as failed rather than leaving it running for ever.
+    */
+  private val WaitAtMost: Duration = 15.minutes
 
   final case class DeployRequest(
       @description(
@@ -40,14 +48,8 @@ object DeployTools:
       taskDefinitionArn: String,
       @description("The ECS service running the portal.")
       serviceArn: String,
-      @description("True when the service was created by this call, false when it was updated.")
+      @description("True when the service was created by this deploy, false when it was updated.")
       created: Boolean,
-      @description(
-        "True when a task was running before this returned. False means ECS accepted everything and no container came up inside the timeout — the resources are correct and the portal is not serving; the log group is where to look.")
-      running: Boolean,
-      @description(
-        "True when the load balancer reported a healthy target, which is the first thing here that means a guest would be answered by the portal rather than by a 503.")
-      healthy: Boolean,
       @description(
         "How many bundle objects were copied under this location's prefix. Zero means the shared bundle has never been published, and the portal page itself will 404 — publish it with the client.publishS3 Mill task.")
       bundleObjects: Int,
@@ -59,8 +61,7 @@ object DeployTools:
       @description(
         "The path CloudFront forwards to the ALB and the API answers on. The slug is baked into the routes at boot, so one service serves exactly this prefix.")
       pathPattern: String,
-      @description(
-        "What is left. A guest is answered by the portal only once healthy is true; until then the load balancer answers 503.")
+      @description("What is left.")
       nextSteps: List[String])
 
   given Schema[DeployRequest] = DeriveSchema.gen
@@ -79,71 +80,118 @@ object DeployTools:
         .someOrFail(
           s"No location with slug '$slug'. Call create_location first — every resource this creates is named after the slug.")
 
+  /** The token behind the call, which a run records as the one that started it. */
+  private def callerOf(ctx: McpToolContext): IO[String, String] = ZIO
+    .fromOption(Auth.callerId(ctx.principal))
+    .orElseFail("Could not tell which token made this call.")
+
   /** Tool declaration without store (for testing). */
   private[mcp] val declaration: McpTool = McpTool("deploy_location")
     .description(
-      "Stand up a location's portal in AWS: log group, target group, ALB listener rule, task definition and ECS service. Idempotent — a location already deployed has its service updated to a fresh task definition rather than a second one created. Waits up to three minutes for a running task and three more for a healthy target; running and healthy say how far it got. Call read_skill('deploy-location') first.")
+      "Stand up a location's portal in AWS: log group, target group, ALB listener rule, task definition and ECS service, then wait for the new revision to be serving. Idempotent — a location already deployed has its service rolled onto a fresh task definition rather than a second one created. Answers at once with a run and keeps working in the background; get_deploy_status follows it. Call read_skill('deploy-location') first.")
     .requireScopes(Auth.InfraDeploy)
-    // TaskExecution.Required: waits up to 3 minutes for health checks (not synchronous).
-    .taskExecution(TaskExecution.Required, ttl = Some(15.minutes))
 
-  /** Note for synchronous callers (silent when using tasks extension). */
-  private[mcp] def taskNote(capabilities: Map[McpExtensionId, Json]): List[String] =
-    if capabilities.contains(McpTasks.Id) then
-      Nil
-    else
-      List(
-        "This answered in the call itself, because your client did not declare the tasks extension. If a deploy ever ends in a transport timeout rather than an error, that is not evidence it failed: call deploy_location again — every step is idempotent — and compare what it reports.")
+  private object DeploySteps:
+    val Bundle = "Copy the shared bundle under the location's prefix"
+    val Edge = "Invalidate the location's prefix at the edge"
+    val LogGroup = "Log group"
+    val TargetGroup = "Target group"
+    val Rule = "Listener rule"
+    val TaskDefinition = "Task definition revision"
+    val Service = "ECS service"
+    val Running = "A task of the new revision running"
+    val Settled = "The service settled on the new revision"
+    val all = List(
+      Bundle,
+      Edge,
+      LogGroup,
+      TargetGroup,
+      Rule,
+      TaskDefinition,
+      Service,
+      Running,
+      Settled)
+  end DeploySteps
 
-  /** Takes store by value (not from environment) to keep server type as QuillSqlite & AssetStore.
-    */
   private def deployWith(store: InfraStore): McpToolHandlerR[QuillSqlite & AssetStore] = declaration
     .handleWithContext: (in: DeployRequest, ctx: McpToolContext) =>
       for
         location <- requireLocation(in.slug)
-        assets   <- ZIO.service[AssetStore]
-        // Copy bundle first (before AWS resources exist).
-        bundle       <- assets.copyBundle(in.slug)
-        invalidation <- assets.invalidatePrefix(in.slug)
-        // Log group, target group, rule, task def, service (sequential order).
-        logGroup    <- store.ensureLogGroup(in.slug)
-        targetGroup <- store.ensureTargetGroup(in.slug)
-        rule        <- store.ensureRule(in.slug, targetGroup)
-        taskDef     <- store.registerTaskDefinition(in.slug)
-        result      <- store.upsertService(in.slug, taskDef, targetGroup)
-        (serviceArn, created) = result
-        // Wait for task to be running (not just resources created).
-        running <- store.awaitRunning(in.slug, _ >= 1, HealthTimeout)
-        healthy <- store.awaitHealthyTarget(in.slug, HealthTimeout)
-      yield DeployResponse(
-        slug = in.slug,
-        logGroup = logGroup,
-        targetGroupArn = targetGroup,
-        ruleArn = rule,
-        taskDefinitionArn = taskDef,
-        serviceArn = serviceArn,
-        created = created,
-        running = running,
-        healthy = healthy,
-        bundleObjects = bundle.objects,
-        iconPreserved = bundle.iconPreserved,
-        invalidation = invalidation,
-        pathPattern = store.targets.pathPattern(in.slug),
-        nextSteps =
-          List(
-            s"The service is ${
-                if created then
-                  "starting for the first time"
-                else
-                  "rolling to the new revision"
-              }; health checks have a 180s grace period. Watch $logGroup if it does not come up.",
-            "Call get_location_readiness to see whether the content is complete — this call created infrastructure and wrote nothing to the database.",
-            if location.isActive == 1 then
-              "The location is active, so it will serve as soon as the container is healthy."
-            else
-              "The location is retired in the database, so the portal will serve nothing even once the container is healthy. Bring it back with update_location."
-          ) ++ bundleNote(bundle) ++ taskNote(ctx.extensionCapabilities)
-      )
+        caller   <- callerOf(ctx)
+        launched <-
+          Runs.launch(in.slug, "deploy", DeploySteps.all, caller)(run =>
+            deploy(store, location, run).map(encode(_)))
+        view <- viewOf(launched)
+      yield view
+
+  private def deploy(
+      store: InfraStore,
+      location: LocationRow,
+      run: Runs.Progress): ZIO[QuillSqlite & AssetStore, String, DeployResponse] =
+    val slug = location.slug
+    for
+      assets <- ZIO.service[AssetStore]
+      // Copy bundle first (before AWS resources exist).
+      bundle <-
+        run.noting(DeploySteps.Bundle)(assets.copyBundle(slug))(copy =>
+          Some(s"${copy.objects} objects"))
+      invalidation <- run.step(DeploySteps.Edge)(assets.invalidatePrefix(slug))
+      logGroup     <- run.step(DeploySteps.LogGroup)(store.ensureLogGroup(slug))
+      targetGroup  <- run.step(DeploySteps.TargetGroup)(store.ensureTargetGroup(slug))
+      rule         <- run.step(DeploySteps.Rule)(store.ensureRule(slug, targetGroup))
+      taskDef      <-
+        run.noting(DeploySteps.TaskDefinition)(store.registerTaskDefinition(slug))(arn =>
+          Some(revisionOf(arn)))
+      service <- run.step(DeploySteps.Service)(store.upsertService(slug, taskDef, targetGroup))
+      (serviceArn, created) = service
+      revision              = revisionOf(taskDef)
+      _ <-
+        run.step(DeploySteps.Running)(
+          store
+            .awaitRevisionRunning(slug, taskDef, WaitAtMost)
+            .filterOrFail(identity)(
+              s"No task of $revision was running after ${WaitAtMost
+                  .toMinutes} minutes. ECS is still trying; $logGroup says why the container does not start."))
+      _ <-
+        run.step(DeploySteps.Settled)(
+          store
+            .awaitRevisionSettled(slug, taskDef, WaitAtMost)
+            .flatMap:
+              case Some("COMPLETED") =>
+                ZIO.unit
+              case Some(state) =>
+                ZIO.fail(s"ECS ended the rollout of $revision as $state. $logGroup says why.")
+              case None =>
+                ZIO.fail(
+                  s"$revision was still rolling out after ${WaitAtMost
+                      .toMinutes} minutes: its task runs but has not passed the load balancer's health checks. ECS is still trying; $logGroup says why."))
+    yield DeployResponse(
+      slug = slug,
+      logGroup = logGroup,
+      targetGroupArn = targetGroup,
+      ruleArn = rule,
+      taskDefinitionArn = taskDef,
+      serviceArn = serviceArn,
+      created = created,
+      bundleObjects = bundle.objects,
+      iconPreserved = bundle.iconPreserved,
+      invalidation = invalidation,
+      pathPattern = store.targets.pathPattern(slug),
+      nextSteps =
+        List(
+          s"The service is serving $revision.",
+          "Call get_location_readiness to see whether the content is complete — this deploy created infrastructure and wrote nothing to the database.",
+          if location.isActive == 1 then
+            "The location is active, so guests are being served."
+          else
+            "The location is retired in the database, so the portal serves nothing even though its container is healthy."
+        ) ++ bundleNote(bundle)
+    )
+    end for
+  end deploy
+
+  /** `captal-<slug>:<n>`, the part of a task definition ARN a person reads. */
+  private def revisionOf(taskDefinitionArn: String): String = taskDefinitionArn.split('/').last
 
   /** Note when bundle objects are zero (portal page 404s). */
   private def bundleNote(bundle: BundleCopy): List[String] =
@@ -151,7 +199,7 @@ object DeployTools:
       Nil
     else
       List(
-        "No bundle objects were copied, because the shared bundle prefix is empty. The portal page itself will 404 until the SPA is published with the client.publishS3 Mill task; re-run deploy_location afterwards to copy it under this slug.")
+        "No bundle objects were copied, because the shared bundle prefix is empty. The portal page itself will 404 until the SPA is published with the client.publishS3 Mill task; deploy again afterwards to copy it under this slug.")
 
   final case class PauseRequest(
       @description("Which location to take out of service. It stays deployed and keeps its data.")
@@ -164,7 +212,7 @@ object DeployTools:
         "True once the service is asked for no tasks. The running ones stop; nothing else about the service changes.")
       scaledToZero: Boolean,
       @description(
-        "True when every task had actually stopped before this returned. False means the drain was still going at the timeout, which does not affect the pause — the rule stopped forwarding before any of this — but does mean a container may still be running against whatever you were about to change.")
+        "True when every task had actually stopped. False means the drain was still going when the wait ran out, which does not affect the pause — the rule stopped forwarding before any of this — but does mean a container may still be running against whatever you were about to change.")
       drained: Boolean,
       @description(
         "The listener rule now answering a fixed response instead of forwarding to the target group.")
@@ -189,7 +237,7 @@ object DeployTools:
         "True when the page the pause saved was put back. False means none was found, which is the ordinary answer for a location that was not paused.")
       pageRestored: Boolean,
       @description(
-        "True when the load balancer reported a healthy target before this returned. False means the task is running but the ALB has not finished health-checking it yet — the portal answers 503 until it does, and nothing is wrong.")
+        "True when the load balancer reported a healthy target. False means the task is running but the ALB had not finished health-checking it when the wait ran out — the portal answers 503 until it does.")
       healthy: Boolean,
       @description("The CloudFront invalidation that was waited out.")
       invalidation: String,
@@ -207,7 +255,7 @@ object DeployTools:
       @description("The location torn down.")
       slug: String,
       @description(
-        "True when every task had stopped before anything was deleted. False means the drain was still going at the timeout and the teardown went ahead anyway — which is the right call for a teardown, but worth knowing if something was reading what those containers were writing.")
+        "True when every task had stopped before anything was deleted. False means the drain was still going when the wait ran out and the teardown went ahead anyway — which is the right call for a teardown, but worth knowing if something was reading what those containers were writing.")
       drained: Boolean,
       @description("True when a live ECS service was deleted, false when there was none left.")
       serviceDeleted: Boolean,
@@ -227,7 +275,7 @@ object DeployTools:
         "True when the S3 objects were left in place, because deleting them was declined or no answer came back. The infrastructure is gone either way; a deploy_location puts the portal back on top of whatever survived.")
       assetsKept: Boolean,
       @description(
-        "What survives, and what to do next. Nothing in the database or in S3 was touched, so this location can be deployed again.")
+        "What survives, and what to do next. Nothing in the database was touched, so this location can be deployed again.")
       nextSteps: List[String])
 
   given Schema[PauseRequest] = DeriveSchema.gen
@@ -236,93 +284,143 @@ object DeployTools:
   given Schema[DestroyRequest] = DeriveSchema.gen
   given Schema[DestroyResponse] = DeriveSchema.gen
 
+  private object PauseSteps:
+    val Page = "Swap the location's page for the maintenance page"
+    val Edge = "Wait for the edge to drop the location's page"
+    val Rule = "Answer 'paused' from the load balancer"
+    val Scale = "Scale the service to zero"
+    val Drain = "Wait for the running tasks to stop"
+    val all = List(Page, Edge, Rule, Scale, Drain)
+
   /** Pause: scale service to zero and repoint rule to fixed response. Database untouched. */
   private def pauseWith(store: InfraStore): McpToolHandlerR[QuillSqlite & AssetStore] = McpTool(
     "pause_location")
     .description(
-      "Take a location's portal out of service without dismantling it. In order: the maintenance page replaces the location's index.html at the edge, the CloudFront invalidation is waited out, and only then is the API stopped — the ALB rule answers a fixed 'paused' JSON and the ECS service is scaled to zero. Writes nothing to the database. resume_location puts every part of it back. Call read_skill('deploy-location') first.")
+      "Take a location's portal out of service without dismantling it. In order: the maintenance page replaces the location's index.html at the edge, the CloudFront invalidation is waited out, and only then is the API stopped — the ALB rule answers a fixed 'paused' JSON and the ECS service is scaled to zero. Writes nothing to the database. resume_location puts every part of it back. Answers at once with a run and keeps working in the background; get_deploy_status follows it. Call read_skill('deploy-location') first.")
     .requireScopes(Auth.InfraDeploy)
-    // TaskExecution.Required: waits for CloudFront invalidation (minutes).
-    .taskExecution(TaskExecution.Required, ttl = Some(15.minutes))
-    .handle: (in: PauseRequest) =>
+    .handleWithContext: (in: PauseRequest, ctx: McpToolContext) =>
       for
-        _      <- requireLocation(in.slug)
-        assets <- ZIO.service[AssetStore]
-        // Update edge before API: ensures guest sees maintenance page before paused response.
-        _            <- assets.pausePage(in.slug)
-        invalidation <- assets.invalidateAndWait(in.slug)
-        // API: rule (to fixed response) before scale-down (avoid empty 503).
-        rule <- store.pauseRule(in.slug)
-        _    <- store.scaleService(in.slug, 0)
-        // Wait for tasks to actually stop (not just requested).
-        drained <- store.awaitRunning(in.slug, _ == 0, HealthTimeout)
-      yield PauseResponse(
-        slug = in.slug,
-        scaledToZero = true,
-        drained = drained,
-        ruleArn = rule,
-        invalidation = invalidation,
-        answersWith = InfraStore.PausedBody,
-        nextSteps = List(
-          "The edge serves the maintenance page for this location, and the API answers the paused JSON. A guest already inside the SPA reads it on their next call and redirects themselves.",
-          "Running tasks stop as the service drains. The rule answers from the load balancer, so the response does not depend on one being alive.",
-          "Nothing was written to the database, and nothing the operator authored was touched in S3 — the stylesheet, the icon and the videos are as they were. resume_location puts the page and the API back; deploy_location does too, and also refreshes the bundle."
-        )
+        _        <- requireLocation(in.slug)
+        caller   <- callerOf(ctx)
+        launched <-
+          Runs.launch(in.slug, "pause", PauseSteps.all, caller)(run =>
+            pause(store, in.slug, run).map(encode(_)))
+        view <- viewOf(launched)
+      yield view
+
+  private def pause(
+      store: InfraStore,
+      slug: String,
+      run: Runs.Progress): ZIO[QuillSqlite & AssetStore, String, PauseResponse] =
+    for
+      assets <- ZIO.service[AssetStore]
+      // Update edge before API: ensures guest sees maintenance page before paused response.
+      _            <- run.step(PauseSteps.Page)(assets.pausePage(slug))
+      invalidation <- run.step(PauseSteps.Edge)(assets.invalidateAndWait(slug, WaitAtMost))
+      // API: rule (to fixed response) before scale-down (avoid empty 503).
+      rule    <- run.step(PauseSteps.Rule)(store.pauseRule(slug))
+      _       <- run.step(PauseSteps.Scale)(store.scaleService(slug, 0))
+      drained <-
+        run.noting(PauseSteps.Drain)(store.awaitRunning(slug, _ == 0, WaitAtMost))(done =>
+          Option.unless(done)("still stopping when the wait ran out"))
+    yield PauseResponse(
+      slug = slug,
+      scaledToZero = true,
+      drained = drained,
+      ruleArn = rule,
+      invalidation = invalidation,
+      answersWith = InfraStore.PausedBody,
+      nextSteps = List(
+        "The edge serves the maintenance page for this location, and the API answers the paused JSON. A guest already inside the SPA reads it on their next call and redirects themselves.",
+        "Running tasks stop as the service drains. The rule answers from the load balancer, so the response does not depend on one being alive.",
+        "Nothing was written to the database, and nothing the operator authored was touched in S3 — the stylesheet, the icon and the videos are as they were. resume_location puts the page and the API back; deploy_location does too, and also refreshes the bundle."
       )
+    )
+
+  private object ResumeSteps:
+    val TargetGroup = "Target group"
+    val Scale = "Scale the service to one task"
+    val Running = "Wait for a task to run"
+    val Rule = "Forward to the target group again"
+    val Healthy = "Wait for a healthy target"
+    val Page = "Put the location's page back"
+    val Edge = "Wait for the edge to drop the maintenance page"
+    val all = List(TargetGroup, Scale, Running, Rule, Healthy, Page, Edge)
 
   /** Resume: inverse of pause, using deploy's idempotent steps. */
   private def resumeWith(store: InfraStore): McpToolHandlerR[QuillSqlite & AssetStore] = McpTool(
     "resume_location")
     .description(
-      "Put a paused location back in service, in the reverse order of the pause: the ALB rule forwards again and the service is scaled back to one task, then the location's own page replaces the maintenance one at the edge. Restores the page that was live rather than the current bundle — deploy_location is how a location takes a newer one. Idempotent, and safe on a location that was never paused. Call read_skill('deploy-location') first.")
+      "Put a paused location back in service, in the reverse order of the pause: the service is scaled back to one task and the ALB rule forwards again, then the location's own page replaces the maintenance one at the edge. Restores the page that was live rather than the current bundle — deploy_location is how a location takes a newer one. Idempotent, and safe on a location that was never paused. Answers at once with a run and keeps working in the background; get_deploy_status follows it. Call read_skill('deploy-location') first.")
     .requireScopes(Auth.InfraDeploy)
-    // TaskExecution.Required: waits for CloudFront invalidation (mirror of pause).
-    .taskExecution(TaskExecution.Required, ttl = Some(15.minutes))
-    .handle: (in: PauseRequest) =>
+    .handleWithContext: (in: PauseRequest, ctx: McpToolContext) =>
       for
-        _      <- requireLocation(in.slug)
-        assets <- ZIO.service[AssetStore]
-        // API first (inverse of pause): ensure it's answering before changing page.
-        targetGroup <- store.ensureTargetGroup(in.slug)
-        _           <- store.scaleService(in.slug, 1)
-        // Wait for healthy target (avoid empty 503 on empty target group).
-        running <- store.awaitRunning(in.slug, _ >= 1, HealthTimeout)
-        // Fail if task won't start (keep location paused, not in broken state).
-        _ <-
-          ZIO.unless(running):
-            ZIO.fail(
-              s"Scaled the service back up, but no task was running after ${HealthTimeout
-                  .toSeconds}s — so the rule still answers 'paused' and the edge still serves the maintenance page, which is the safe end of a container that will not start. Check ${store
+        _        <- requireLocation(in.slug)
+        caller   <- callerOf(ctx)
+        launched <-
+          Runs.launch(in.slug, "resume", ResumeSteps.all, caller)(run =>
+            resume(store, in.slug, run).map(encode(_)))
+        view <- viewOf(launched)
+      yield view
+
+  private def resume(
+      store: InfraStore,
+      slug: String,
+      run: Runs.Progress): ZIO[QuillSqlite & AssetStore, String, ResumeResponse] =
+    for
+      assets <- ZIO.service[AssetStore]
+      // API first (inverse of pause): ensure it's answering before changing page.
+      targetGroup <- run.step(ResumeSteps.TargetGroup)(store.ensureTargetGroup(slug))
+      _           <- run.step(ResumeSteps.Scale)(store.scaleService(slug, 1))
+      // Fail if task won't start (keep location paused, not in broken state).
+      _ <-
+        run.step(ResumeSteps.Running)(
+          store
+            .awaitRunning(slug, _ >= 1, WaitAtMost)
+            .filterOrFail(identity)(
+              s"Scaled the service back up, but no task was running after ${WaitAtMost
+                  .toMinutes} minutes — so the rule still answers 'paused' and the edge still serves the maintenance page, which is the safe end of a container that will not start. Check ${store
                   .targets
-                  .logGroup(in.slug)} and run resume_location again.")
-        // Order: running task, then rule (AWS requires active target before forwarding).
-        rule         <- store.ensureRule(in.slug, targetGroup)
-        healthy      <- store.awaitHealthyTarget(in.slug, HealthTimeout)
-        restored     <- assets.resumePage(in.slug)
-        invalidation <- assets.invalidateAndWait(in.slug)
-      yield ResumeResponse(
-        slug = in.slug,
-        ruleArn = rule,
-        targetGroupArn = targetGroup,
-        pageRestored = restored,
-        invalidation = invalidation,
-        healthy = healthy,
-        nextSteps = List(
-          "The service is starting a task again; health checks have a 180s grace period, and the rule forwards as soon as one target is healthy.",
-          if restored then
-            "The location's own page is back at the edge, exactly as it was before the pause."
-          else
-            "No saved page was found, so the edge is serving whatever was already at this location's index.html. That is the expected answer for a location that was not paused; if it *was* paused, run deploy_location to put the bundle's page back."
-          ,
-          "This did not re-copy the bundle. Use deploy_location if the shared SPA has been published since."
-        )
+                  .logGroup(slug)} and run resume_location again."))
+      // Order: running task, then rule (AWS requires active target before forwarding).
+      rule    <- run.step(ResumeSteps.Rule)(store.ensureRule(slug, targetGroup))
+      healthy <-
+        run.noting(ResumeSteps.Healthy)(store.awaitHealthyTarget(slug, WaitAtMost))(ok =>
+          Option.unless(ok)("not yet healthy when the wait ran out"))
+      restored <-
+        run.noting(ResumeSteps.Page)(assets.resumePage(slug))(found =>
+          Option.unless(found)("no saved page was found"))
+      invalidation <- run.step(ResumeSteps.Edge)(assets.invalidateAndWait(slug, WaitAtMost))
+    yield ResumeResponse(
+      slug = slug,
+      ruleArn = rule,
+      targetGroupArn = targetGroup,
+      pageRestored = restored,
+      invalidation = invalidation,
+      healthy = healthy,
+      nextSteps = List(
+        "The service has a task again, and the rule forwards to it.",
+        if restored then
+          "The location's own page is back at the edge, exactly as it was before the pause."
+        else
+          "No saved page was found, so the edge is serving whatever was already at this location's index.html. That is the expected answer for a location that was not paused; if it *was* paused, run deploy_location to put the bundle's page back."
+        ,
+        "This did not re-copy the bundle. Use deploy_location if the shared SPA has been published since."
       )
+    )
+
+  private object DestroySteps:
+    val Scale = "Scale the service to zero"
+    val Drain = "Wait for the running tasks to stop"
+    val Teardown = "Remove the service, its rules, target group and task definitions"
+    val Delete = "Delete the location's S3 objects"
+    val Keep = "Keep the location's S3 objects"
 
   /** Remove AWS resources but keep database and log group. Requires slug confirmation. */
   private def destroyWith(store: InfraStore): McpToolHandlerR[QuillSqlite & AssetStore] = McpTool(
     "destroy_location")
     .description(
-      "Remove everything a location has in AWS: the ECS service, its listener rule, its target group, its task definition revisions, and its entire S3 prefix — the bundle copy, the stylesheet, the icon and the uploaded video files. Requires the slug typed again as confirmation. Keeps the log group and touches nothing in the database, so the location, its translations and its survey definitions survive and deploy_location can stand the portal up again — but the video files are gone and their rows will point at nothing. For temporary downtime use pause_location, which deletes nothing. Call read_skill('deploy-location') first.")
+      "Remove everything a location has in AWS: the ECS service, its listener rule, its target group, its task definition revisions, and its entire S3 prefix — the bundle copy, the stylesheet, the icon and the uploaded video files. Requires the slug typed again as confirmation. Keeps the log group and touches nothing in the database, so the location, its translations and its survey definitions survive and deploy_location can stand the portal up again — but the video files are gone and their rows will point at nothing. For temporary downtime use pause_location, which deletes nothing. Asks about the S3 objects in the call, then answers with a run and keeps working in the background; get_deploy_status follows it. Call read_skill('deploy-location') first.")
     .requireScopes(Auth.InfraDestroy)
     .annotations(destructive = OptBool.True, idempotent = OptBool.True)
     .handleWithContext: (in: DestroyRequest, ctx: McpToolContext) =>
@@ -333,6 +431,7 @@ object DeployTools:
             ZIO.fail(
               s"Refused: `confirm` has to be '${in.slug}' exactly, and it was '${in
                   .confirm}'. This removes the service, the rule, the target group and every task definition revision for the location.")
+        caller <- callerOf(ctx)
         // Elicit assets deletion before teardown (handler re-runs on retry).
         assets <- ZIO.service[AssetStore]
         keys   <- assets.listPrefix(s"${in.slug}/")
@@ -368,40 +467,190 @@ object DeployTools:
         wanted =
           answer.action == "accept" &&
             !answer.content.flatMap(_.get("deleteAssets")).flatMap(_.asBoolean).contains(false)
-        // Run effects only on answered pass (after elicit).
-        // Drain tasks before deleting resources.
-        _       <- store.scaleService(in.slug, 0).either
-        drained <- store.awaitRunning(in.slug, _ == 0, HealthTimeout)
-        report  <- store.destroy(in.slug)
-        objects <-
+        steps = List(
+          DestroySteps.Scale,
+          DestroySteps.Drain,
+          DestroySteps.Teardown,
           if wanted then
-            assets.deletePrefix(s"${in.slug}/") <*
-              assets.deletePrefix(AssetStore.savedPageKey(in.slug))
+            DestroySteps.Delete
           else
-            ZIO.succeed(0)
-      yield DestroyResponse(
-        slug = in.slug,
-        drained = drained,
-        serviceDeleted = report.serviceDeleted,
-        rulesDeleted = report.rulesDeleted,
-        targetGroupDeleted = report.targetGroupDeleted,
-        taskDefinitionsDeregistered = report.taskDefinitionsDeregistered,
-        logGroupKept = report.logGroup,
-        objectsDeleted = objects,
-        assetsKept = !wanted,
-        nextSteps = List(
-          s"${report
-              .logGroup} was kept, because it holds why this was torn down. Delete it by hand if it is not wanted.",
-          "The database is untouched: the location row, its translations, surveys, videos and tokens are all still there, and list_locations still reports it.",
-          s"$objects objects were deleted from S3 — the bundle copy, the stylesheet, the icon and the uploaded video files. **The video rows survive and now point at files that are gone**, so a redeploy restores the portal but every video needs uploading again: list_pending_uploads will not find them, because they are still marked active. Retire them with set_video_active or re-create them.",
-          "deploy_location rebuilds the infrastructure and copies the bundle back, so the portal itself returns with no further steps.",
-          "Anything already false here was already gone — a teardown that follows a failed one reports what it found rather than failing."
-        )
+            DestroySteps.Keep)
+        launched <-
+          Runs.launch(in.slug, "destroy", steps, caller)(run =>
+            destroy(store, in.slug, wanted, run).map(encode(_)))
+        view <- viewOf(launched)
+      yield view
+
+  private def destroy(
+      store: InfraStore,
+      slug: String,
+      wanted: Boolean,
+      run: Runs.Progress): ZIO[QuillSqlite & AssetStore, String, DestroyResponse] =
+    for
+      assets <- ZIO.service[AssetStore]
+      // Drain tasks before deleting resources. No live service is not a failure here.
+      _       <- run.step(DestroySteps.Scale)(store.scaleService(slug, 0).either.unit)
+      drained <-
+        run.noting(DestroySteps.Drain)(store.awaitRunning(slug, _ == 0, WaitAtMost))(done =>
+          Option.unless(done)("still stopping when the wait ran out; torn down anyway"))
+      report  <- run.step(DestroySteps.Teardown)(store.destroy(slug))
+      objects <-
+        if wanted then
+          run.noting(DestroySteps.Delete)(
+            assets.deletePrefix(s"$slug/") <* assets.deletePrefix(AssetStore.savedPageKey(slug)))(
+            count => Some(s"$count objects"))
+        else
+          run.step(DestroySteps.Keep)(ZIO.succeed(0))
+    yield DestroyResponse(
+      slug = slug,
+      drained = drained,
+      serviceDeleted = report.serviceDeleted,
+      rulesDeleted = report.rulesDeleted,
+      targetGroupDeleted = report.targetGroupDeleted,
+      taskDefinitionsDeregistered = report.taskDefinitionsDeregistered,
+      logGroupKept = report.logGroup,
+      objectsDeleted = objects,
+      assetsKept = !wanted,
+      nextSteps = List(
+        s"${report
+            .logGroup} was kept, because it holds why this was torn down. Delete it by hand if it is not wanted.",
+        "The database is untouched: the location row, its translations, surveys, videos and tokens are all still there, and list_locations still reports it.",
+        s"$objects objects were deleted from S3 — the bundle copy, the stylesheet, the icon and the uploaded video files. **The video rows survive and now point at files that are gone**, so a redeploy restores the portal but every video needs uploading again: list_pending_uploads will not find them, because they are still marked active. Retire them with set_video_active or re-create them.",
+        "deploy_location rebuilds the infrastructure and copies the bundle back, so the portal itself returns with no further steps.",
+        "Anything already false here was already gone — a teardown that follows a failed one reports what it found rather than failing."
+      )
+    )
+
+  final case class StatusRequest(
+      @description("The runId a deploy, pause, resume or destroy answered with.")
+      runId: Option[String],
+      @description("A location's slug, for its latest run when the runId is not at hand.")
+      slug: Option[String])
+
+  final case class RunStep(
+      @description("What the step does.")
+      name: String,
+      @description("pending, running, done or failed.")
+      state: String,
+      @description("What it found or why it failed, when there is something to say.")
+      detail: Option[String])
+
+  final case class RunView(
+      @description("Identifies this run; get_deploy_status takes it.")
+      runId: String,
+      slug: String,
+      @description("deploy, pause, resume or destroy.")
+      operation: String,
+      @description(
+        "running, succeeded or failed — or interrupted, when the server doing the work stopped before it finished.")
+      status: String,
+      @description("Every step in order. Their names are what to show an operator.")
+      steps: List[RunStep],
+      startedAt: String,
+      @description("When the work last reported in.")
+      updatedAt: String,
+      finishedAt: Option[String],
+      @description("Why it failed, once it did.")
+      error: Option[String],
+      @description("A deploy's result, once it succeeded.")
+      deployed: Option[DeployResponse],
+      @description("A pause's result, once it succeeded.")
+      paused: Option[PauseResponse],
+      @description("A resume's result, once it succeeded.")
+      resumed: Option[ResumeResponse],
+      @description("A destroy's result, once it succeeded.")
+      destroyed: Option[DestroyResponse],
+      @description("What to do now.")
+      nextSteps: List[String])
+
+  given Schema[StatusRequest] = DeriveSchema.gen
+  given Schema[RunStep] = DeriveSchema.gen
+  given Schema[RunView] = DeriveSchema.gen
+
+  private def encode[A](value: A)(using schema: Schema[A]): String =
+    SchemaJsonCodec.jsonEncoder(schema).encodeJson(value, None).toString
+
+  private def decode[A](row: Runs.Row, operation: String)(using schema: Schema[A]): Option[A] = row
+    .result
+    .filter(_ => row.operation == operation)
+    .flatMap(SchemaJsonCodec.jsonDecoder(schema).decodeJson(_).toOption)
+
+  private def toolFor(operation: String): String = s"${operation}_location"
+
+  /** A run as a caller sees it. `Left` from [[Runs.launch]] is a run that was already going, which
+    * this call did not start.
+    */
+  private def viewOf(launched: Either[Runs.Row, Runs.Row]): UIO[RunView] = launched.fold(
+    going => viewOf(going, alreadyGoing = true),
+    started => viewOf(started, alreadyGoing = false))
+
+  private def viewOf(row: Runs.Row, alreadyGoing: Boolean): UIO[RunView] = Clock
+    .instant
+    .map: now =>
+      val status = Runs.statusOf(row, now)
+      val steps = Runs.steps(row)
+      val stoppedAt = steps
+        .find(step => step.state == Runs.StepFailed || step.state == Runs.StepRunning)
+        .map(_.name)
+      val at = stoppedAt.fold("")(name => s" at '$name'")
+      val next =
+        status match
+          case Runs.Running if alreadyGoing =>
+            List(
+              s"A ${row.operation} of '${row
+                  .slug}' was already running, so this call started nothing; this is that run. Follow it with get_deploy_status.")
+          case Runs.Running =>
+            List(
+              "Running in the background, and it does not need this conversation to stay open. Call get_deploy_status with this runId about every 30 seconds until status is no longer running.")
+          case Runs.Succeeded =>
+            List(s"Done. What is left is in the ${row.operation} result's own nextSteps.")
+          case Runs.Interrupted =>
+            List(
+              s"The server doing this stopped before it finished$at. Every step is idempotent, so calling ${toolFor(
+                  row.operation)} again finishes it.")
+          case _ =>
+            List(
+              s"Failed$at. Every step is idempotent, so once the cause is dealt with, calling ${toolFor(
+                  row.operation)} again redoes what was done in moments and carries on from there.")
+      RunView(
+        runId = row.id,
+        slug = row.slug,
+        operation = row.operation,
+        status = status,
+        steps = steps.map(step => RunStep(step.name, step.state, step.detail)),
+        startedAt = row.startedAt,
+        updatedAt = row.heartbeatAt,
+        finishedAt = row.finishedAt,
+        error = row.error,
+        deployed = decode[DeployResponse](row, "deploy"),
+        paused = decode[PauseResponse](row, "pause"),
+        resumed = decode[ResumeResponse](row, "resume"),
+        destroyed = decode[DestroyResponse](row, "destroy"),
+        nextSteps = next
       )
 
-  /** All four tools, or none. Registered only when deploy configuration exists. */
+  private val status: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("get_deploy_status")
+    .description(
+      "Where a deploy, pause, resume or destroy of a location's portal stands: every step and its state, and the operation's result once it has one. Those four answer at once and leave the work running in the background, so call this about every 30 seconds until status is no longer running. Pass the runId they answered with, or a slug for that location's latest run. Call read_skill('deploy-location') first.")
+    .readOnly
+    .handle: (in: StatusRequest) =>
+      for
+        row <-
+          (in.runId, in.slug) match
+            case (Some(id), _) =>
+              Runs.get(id).someOrFail(s"No run with id '$id'.")
+            case (None, Some(slug)) =>
+              Runs
+                .latest(slug)
+                .someOrFail(s"No deploy, pause, resume or destroy has run for '$slug'.")
+            case (None, None) =>
+              ZIO.fail("Pass a runId, or a slug for its latest run.")
+        view <- viewOf(row, alreadyGoing = false)
+      yield view
+
+  /** All five tools, or none. Registered only when deploy configuration exists. */
   def all(store: Option[InfraStore]): List[McpToolHandlerR[QuillSqlite & AssetStore]] = store
     .toList
     .flatMap(value =>
-      List(deployWith(value), pauseWith(value), resumeWith(value), destroyWith(value)))
+      List(deployWith(value), pauseWith(value), resumeWith(value), destroyWith(value), status))
 end DeployTools

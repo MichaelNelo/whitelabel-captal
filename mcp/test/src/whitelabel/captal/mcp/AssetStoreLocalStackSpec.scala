@@ -180,7 +180,7 @@ object AssetStoreLocalStackSpec extends ZIOSpecDefault:
               _    <- ensureBucket(cdn)
               _    <- cdn.put("demo", Asset.Styles, "body{}").mapError(new RuntimeException(_))
               one  <- cdn.invalidate("demo", Asset.Styles).mapError(new RuntimeException(_))
-              many <- cdn.invalidateAndWait("demo").mapError(new RuntimeException(_))
+              many <- cdn.invalidateAndWait("demo", 5.minutes).mapError(new RuntimeException(_))
             yield assertTrue(
               // A real id rather than a sentinel, which is what the old assertion checked for.
               one.nonEmpty,

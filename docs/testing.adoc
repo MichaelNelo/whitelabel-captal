@@ -221,8 +221,9 @@ under test.
 The large one: one location taken from an empty database to a portal standing up in AWS, driven as
 a client rather than by calling handlers — `TestClient` serves this server's own `statelessRoutes`
 to a real `McpClient` with no socket between them, which is what brings JSON-RPC dispatch, the auth
-middleware and its scopes, decoding from raw JSON rather than a codec round trip, and `TaskExecution`
-polling into scope at all; no single-tool test reaches any of that. It runs content creation, the
+middleware and its scopes, decoding from raw JSON rather than a codec round trip, and the deploy
+tools' runs, followed through `get_deploy_status` by a client that declares no Tasks extension, as
+Claude does not, into scope at all; no single-tool test reaches any of that. It runs content creation, the
 AWS-side deploy, a pause, a resume, and a teardown in sequence, and asserts the content a dozen
 earlier calls wrote is what `get_location_readiness` reads as finished and that the infrastructure
 `deploy_location` created is attached to the location those calls described — the join between the

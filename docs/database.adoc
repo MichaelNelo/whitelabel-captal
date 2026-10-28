@@ -66,8 +66,8 @@ code rather than by matching its text.
 == The schema
 
 Two independent schemas live in one database. The portal schema is created and owned by the API
-(`platform/resources/db/migration`, `V1` … `V23`); the backoffice's own table is created and owned by
-the MCP server (`mcp/resources/db/migration-mcp`, `V1`).
+(`platform/resources/db/migration`, `V1` … `V23`); the backoffice's own tables are created and owned
+by the MCP server (`mcp/resources/db/migration-mcp`, `V1` and `V2`).
 
 === Portal tables
 
@@ -147,13 +147,16 @@ the MCP server (`mcp/resources/db/migration-mcp`, `V1`).
 | Global
 |===
 
-=== Backoffice table
+=== Backoffice tables
 
 |===
 | Table | Holds
 
 | `mcp_tokens`
 | One row per operator token: `token_sha256` (UNIQUE — the hash, never the token), `name`, `scopes` as a comma-separated list, `created_by` referencing the token that minted it (NULL for the seeded admin), `created_at`, and `revoked_at` for soft revocation. Indexed on the hash, which is the only lookup path, and on `created_by`.
+
+| `mcp_deploy_runs`
+| One row per deploy, pause, resume or destroy of a location's portal: `slug`, `operation`, `status` (`running`, `succeeded`, `failed`), `steps` as JSON (each step's name, state and detail), the operation's `result` as JSON or its `error`, `started_by` referencing the token that started it, `started_at`, `heartbeat_at` and `finished_at`. A `running` row whose heartbeat is more than a minute old is read as interrupted. Indexed on `(slug, started_at)`.
 
 | `flyway_schema_history_mcp`
 | Flyway's own history for the backoffice schema.
@@ -229,7 +232,7 @@ side would let deactivating an answered question close a survey that still has u
 | MCP server (`mcp`)
 | `mcp/resources/db/migration-mcp`
 | `flyway_schema_history_mcp`
-| `V1__mcp_tokens.sql` — operator tokens, which nothing in the portal reads
+| `V1__mcp_tokens.sql` — operator tokens; `V2__mcp_deploy_runs.sql` — the deploy tools' runs. Nothing in the portal reads either
 |===
 
 Both run through `Migrate.migrateTo(url, location, historyTable)` (see

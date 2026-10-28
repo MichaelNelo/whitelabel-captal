@@ -226,12 +226,12 @@ final case class AssetStore(
     yield present
 
   /** Invalidates everything under `/<slug>` and polls until CloudFront reports `Completed`, which
-    * takes seconds to minutes. Fails after 5 minutes. A pause needs the wait: until the edge drops
+    * takes seconds to minutes. Fails after `within`. A pause needs the wait: until the edge drops
     * the portal's cached `index.html`, a guest still gets the SPA and an API that now refuses.
     */
-  def invalidateAndWait(slug: String): ZIO[Any, String, String] = invalidatePrefix(slug).flatMap:
-    id =>
-      val poll = ZIO
+  def invalidateAndWait(slug: String, within: Duration): ZIO[Any, String, String] =
+    invalidatePrefix(slug).flatMap: id =>
+      val status = ZIO
         .attemptBlocking(
           cdn
             .getInvalidation(
@@ -239,11 +239,11 @@ final case class AssetStore(
             .invalidation()
             .status())
         .mapError(e => s"Could not read invalidation $id: ${e.getMessage}")
-      poll
-        .repeatUntil(_ == "Completed")
-        .timeoutFail(
-          s"Invalidation $id was still running after 5 minutes. The edge may still be serving this location's portal, so nothing has been told it is paused yet; check the distribution.")(
-          5.minutes)
+      Poll
+        .until(status, within)(_ == "Completed")
+        .someOrFail(
+          s"Invalidation $id was still running after ${within
+              .toMinutes} minutes. The edge may still be serving the page it was meant to replace; check the distribution.")
         .as(id)
 
   /** Every object under a prefix, removed. Returns how many went.
