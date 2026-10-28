@@ -286,15 +286,27 @@ the first four against LocalStack:
   over as the last deploy registered them, so a change to those is still a `deploy_location`. The
   service keeps its task count: a paused location stays paused and runs the new image when it is
   resumed. `ci.run` waits for every moved service to settle and fails naming the ones that did not.
-. **The client.** The portal's bundle under `bundle/` and the MCP App pages' scripts under `ui/`,
-  the bundle copied server-side under every deployed location's prefix — keeping a location's own
-  brand icon, leaving `maintenance.html` shared, and for a paused location replacing the page its
-  resume puts back rather than the maintenance page — then one invalidation of everything.
+. **The client.** Under its version, published once, as the images are: if the bucket keeps it
+  already, every location has it and nothing is done. Otherwise the portal's bundle goes up under
+  `bundle/` and is kept under `releases/client/<version>/`, the MCP App pages' scripts under `ui/`,
+  and the bundle is copied server-side under every deployed location's prefix — keeping a
+  location's own brand icon, leaving `maintenance.html` shared, and for a paused location replacing
+  the page its resume puts back rather than the maintenance page — then one invalidation of
+  everything.
 . **Tags.** Every version that moved is tagged on the commit released, and the tag pushed, which
   is where the next release counts from.
 
-The configuration and the client go out on every run, versions moved or not: neither is versioned,
-and `ci.run` is what applies them.
+The configuration goes out on every run, versions moved or not: it is not versioned, and `ci.run`
+is what applies it.
+
+Putting an earlier client back is the same copy from its release, by hand, then a release of the
+locations as `ci.run` makes it — the next release that moves the client's version replaces it:
+
+[source,bash]
+----
+aws s3 cp --recursive s3://<bucket>/releases/client/<version>/ s3://<bucket>/bundle/
+# then, per location, the copy step 4 makes, and one invalidation
+----
 
 It is configured only through the environment, which the CodeBuild project injects:
 
@@ -337,23 +349,27 @@ hold. It tags nothing: a release to LocalStack is not a release.
 [[versions]]
 === Versions
 
-The API and the backoffice are versioned apart, each by its git tags — `api/v1.3.0`, `mcp/v0.4.0`
-— and its next version is computed, not chosen: https://git-cliff.org[git-cliff] reads the
-conventional commits since the module's last tag and bumps it. `feat:` bumps the minor, `fix:` and
-`perf:` the patch, `!` after the type the major, and the rest (`docs`, `refactor`, `tests`,
-`chore`, `build`, `lint`) nothing. `mill show api.releaseVersion` prints the tag the next release
-goes out under and the last one, which are the same when nothing since moves it.
+The API, the backoffice and the client are versioned apart, each by its git tags — `api/v1.3.0`,
+`mcp/v0.4.0`, `client/v2.1.0` — and its next version is computed, not chosen:
+https://git-cliff.org[git-cliff] reads the conventional commits since the module's last tag and
+bumps it. `feat:` bumps the minor, `fix:` and `perf:` the patch, `!` after the type the major, and
+the rest (`docs`, `refactor`, `tests`, `chore`, `build`, `lint`) nothing. `mill show
+api.releaseVersion` prints the tag the next release goes out under and the last one, which are the
+same when nothing since moves it. The client carries its own as `BuildInfo.version`.
 
-Only commits touching the module count: its own folder, those of the modules it depends on
-(`core`, `messages` and `platform` for the API), and the files it lists as `versionFiles` — its
-Dockerfile, and the portal stylesheet the backoffice carries. The build passes those paths from its
-own module graph, so a module that starts depending on another counts that one's commits without
-anyone listing it. `build.mill` is not among them: most commits touching it change other modules,
-so a change there that only alters how an image is built needs a `fix:` in the module itself, or
-it is not released.
+Only commits touching the module count: its own folder and its source folders, those of the
+modules it depends on (`core`, `messages` and `platform` for the API; `core` and `messages`, through
+`core-js` and `messages-js`, for the client), and the files it lists as `versionFiles` — the
+Dockerfile of an image, and the portal stylesheet the backoffice carries. Source folders as well as
+module folders because `core-js` and `messages-js` have none of their own: their sources are
+`core`'s and `messages`'. The build passes those paths from its own module graph, so a module that
+starts depending on another counts that one's commits without anyone listing it. `build.mill` is
+not among them: most commits touching it change other modules, so a change there that only alters
+how a module is built needs a `fix:` in the module itself, or it is not released.
 
-The rules are each module's `cliff.toml` — `api/cliff.toml`, `mcp/cliff.toml` — including its tag
-pattern and the `initial_tag` released before any tag exists. Two things there are written around
+The rules are each module's `cliff.toml` — `api/cliff.toml`, `mcp/cliff.toml`,
+`client/cliff.toml` — including its tag pattern and the `initial_tag` released before any tag
+exists. Two things there are written around
 git-cliff rather than with it, both checked on 2.13 (what devenv installs) and 2.14:
 
 * the types that do not bump are *skipped* commit parsers, not `[bump] no_increment_regex`, which

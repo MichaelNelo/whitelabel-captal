@@ -39,6 +39,11 @@ mill show mcp.releaseVersion
 
 `tag` equal to `previousTag` means nothing since the last release moves the version.
 
+The client follows the same rules with `client/v*` tags and `client/cliff.toml`, counting `core`
+and `messages` too. Its release publishes the bundle once, keeps it under
+`releases/client/<version>/`, and copies it to every location; the version is in the bundle as
+`BuildInfo.version`.
+
 ## Release
 
 `mill ci.run` is the release, the one CodeBuild runs with `CAPTAL_ENV=<env>`:

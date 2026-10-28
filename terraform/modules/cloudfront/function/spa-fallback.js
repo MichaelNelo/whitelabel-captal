@@ -5,13 +5,14 @@ function handler(event) {
   //
   // `_paused/<slug>/site.html` holds a paused location's real portal while the edge serves the
   // maintenance page in its place; `bundle/` is the master copy every `<slug>/` prefix is copied
-  // from. Neither is addressable by design.
+  // from; `releases/` keeps every published client, to put an earlier one back. None is
+  // addressable by design.
   //
   // First in the function, because the extension check below would pass them straight through: the
   // bucket policy grants CloudFront the whole bucket, so `/_paused/<slug>/site.html` answered 200
   // to anyone who knew a slug. Measured against LocalStack, which does run viewer-request
   // functions: 200 before this, 403 after, with `/<slug>/index.html` still 200.
-  if (uri.indexOf('/_paused/') === 0 || uri.indexOf('/bundle/') === 0) {
+  if (uri.indexOf('/_paused/') === 0 || uri.indexOf('/bundle/') === 0 || uri.indexOf('/releases/') === 0) {
     return {
       statusCode: 403,
       statusDescription: 'Forbidden',

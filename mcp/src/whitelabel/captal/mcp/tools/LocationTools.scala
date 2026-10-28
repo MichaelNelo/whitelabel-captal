@@ -28,10 +28,10 @@ object LocationTools:
   private val SlugPattern = "[a-z0-9]+(-[a-z0-9]+)*".r
 
   /** Top-level prefixes the bucket and the distribution already give a meaning: the shared bundle,
-    * and the MCP App pages' scripts with their own edge behavior. A location there would share its
-    * prefix with them.
+    * the MCP App pages' scripts with their own edge behavior, and the client's published releases.
+    * A location there would share its prefix with them.
     */
-  private val ReservedSlugs = Set("bundle", "ui")
+  private val ReservedSlugs = Set("bundle", "ui", "releases")
 
   final case class LocationView(
       @description("What every other tool here takes to address this location.")

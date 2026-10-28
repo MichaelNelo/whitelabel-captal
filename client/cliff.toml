@@ -1,0 +1,21 @@
+# The client's version: git-cliff's next version from the conventional commits since the last
+# `client/v*` tag that touch this module or the sources of the modules it depends on (`core` and
+# `messages`, through `core-js` and `messages-js`). `mill client.releaseVersion` passes those paths,
+# from the build's own module graph; `mill ci.run` publishes the bundle under it and tags the commit.
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+tag_pattern = "^client/v[0-9]"
+# Types that change nothing a guest is served, skipped so they do not bump. `fix` and `perf` bump
+# the patch, `feat` the minor, and `!` the major, on any type. Skipped rather than listed in
+# `[bump] no_increment_regex`, which the git-cliff devenv installs (2.13) does not honour.
+commit_parsers = [
+  { message = "^(docs|refactor|tests?|chore|build|lint|style|ci|release)(\\(.*\\))?:", skip = true },
+]
+
+[bump]
+features_always_bump_minor = true
+breaking_always_bump_major = true
+# The version released before any tag exists.
+initial_tag = "client/v1.0.0"

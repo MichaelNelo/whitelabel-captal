@@ -1184,9 +1184,27 @@ private def rollLocations(
     println(s"[release] ${moved.size} location(s) settled on ${api.image.split('/').last}")
 end rollLocations
 
-/** Publishes the client and gives every location its copy: the bundle under `bundle/` and the MCP
-  * App pages' scripts under `ui/`, then `bundle/` copied server-side under each location's prefix,
-  * then one invalidation of everything.
+/** Where a client release is kept: its bundle exactly as it was published, which is what putting
+  * an earlier release back copies over `bundle/`.
+  */
+private def clientRelease(version: String): String = s"releases/client/$version"
+
+/** Whether `version` of the client is in the bucket already, by its archived `index.html`. */
+private def clientPublished(target: ReleaseTarget, bucket: String, version: String): Boolean =
+  awsText(
+    target,
+    "s3api",
+    "head-object",
+    "--bucket",
+    bucket,
+    "--key",
+    s"${clientRelease(version)}/index.html",
+    "--query",
+    "ETag").isDefined
+
+/** Publishes `version` of the client and gives every location its copy: the bundle under `bundle/`
+  * and kept under [[clientRelease]], the MCP App pages' scripts under `ui/`, then `bundle/` copied
+  * server-side under each location's prefix, then one invalidation of everything.
   *
   * The copy is the one `deploy_location` makes, with its two exceptions: `maintenance.html` stays
   * shared, and a location that set its own brand icon keeps it — the bundle ships a default under
@@ -1197,12 +1215,10 @@ end rollLocations
 private def publishClient(
     target: ReleaseTarget,
     bundle: os.Path,
+    version: String,
     bucket: String,
     distributionId: String,
     locations: Seq[LocationService]): Unit =
-  client.publishBundle(bundle, bucket, "bundle", target.region, target.local)
-  publishUiScripts(bundle, bucket, target.region, target.local)
-
   def etag(key: String): Option[String] = awsText(
     target,
     "s3api",
@@ -1217,6 +1233,13 @@ private def publishClient(
     val result = awsCall(target, (Seq("s3", "cp") ++ args :+ "--only-show-errors")*)
     if result.exitCode != 0 then
       sys.error(s"[release] s3 cp ${args.take(2).mkString(" ")} failed: ${result.err.trim()}")
+
+  // Up once, under its release, and copied from there: `bundle/` is whichever release is out, and
+  // the same copy from an earlier release is what puts that one back. The copy keeps each object's
+  // `Cache-Control` and `Content-Type`.
+  client.publishBundle(bundle, bucket, clientRelease(version), target.region, target.local)
+  copy(s"s3://$bucket/${clientRelease(version)}/", s"s3://$bucket/bundle/", "--recursive")
+  publishUiScripts(bundle, bucket, target.region, target.local)
 
   val bundleIcon = etag("bundle/brand-icon.svg")
   locations.foreach: location =>
@@ -1280,23 +1303,27 @@ final case class ReleaseVersion(tag: String, previousTag: Option[String])
 
 /** A module released under its own version, tagged `<module>/v<version>`, which git-cliff computes
   * from the conventional commits since the module's last tag. The rules are the module's
-  * `cliff.toml`; the paths whose commits count are the build's: the folders of the module and of
-  * every module it depends on, plus [[versionFiles]]. A commit touching only other modules does not
-  * move this one's version.
+  * `cliff.toml`; the paths whose commits count are the build's: the folders and the source folders
+  * of the module and of every module it depends on, plus [[versionFiles]]. A commit touching only
+  * other modules does not move this one's version.
+  *
+  * The source folders as well as the module folders, because a Scala.js module such as `core-js`
+  * has no folder of its own: its sources are `core`'s.
   */
 trait Released extends JavaModule:
-  def dockerfile: T[PathRef]
 
-  /** Files outside those folders that go into the release, such as its Dockerfile. */
-  def versionFiles: T[Seq[PathRef]] = Task(Seq(dockerfile()))
+  /** Files outside those folders that go into the release, such as an image's Dockerfile. */
+  def versionFiles: T[Seq[PathRef]] = Task(Seq.empty[PathRef])
 
   /** `--bump --unreleased --context` and not `--bumped-version`: git-cliff (2.13 and 2.14) computes
     * the latter from every commit, ignoring `--include-path`, while the context's version honours it.
     */
   def releaseVersion: T[ReleaseVersion] = Task.Uncached:
     val workspace = mill.api.BuildCtx.workspaceRoot
+    val folders = transitiveModuleDeps.map(_.moduleDir) ++
+      Task.traverse(transitiveModuleDeps)(_.sources)().flatten.map(_.path)
     val paths =
-      transitiveModuleDeps.map(module => s"${module.moduleDir.relativeTo(workspace)}/**").distinct ++
+      folders.map(folder => s"${folder.relativeTo(workspace)}/**").distinct ++
         versionFiles().map(_.path.relativeTo(workspace).toString)
     val result =
       try
@@ -1451,6 +1478,8 @@ object api extends BaseModule with Released:
   def moduleDeps = Seq(core, messages, platform)
 
   def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "docker" / "api.Dockerfile")
+
+  override def versionFiles: T[Seq[PathRef]] = Task(Seq(dockerfile()))
 
   /** Build the API image. Usage: `mill api.image` or `mill api.image --tag v1.2.3`
     *
@@ -1612,7 +1641,7 @@ end api
 /** One linker run, four public entry points: sources under `client/src`, stubs under
   * `client/entries`.
   */
-object client extends BaseJSModule:
+object client extends BaseJSModule with Released:
   // `core-js` alone now. The request and response types this reads are `core.codecs`, which
   // `core-js` cross-compiles; `endpoints-js` existed only to share a module with the tapir
   // descriptions, and brought tapir into this build to typecheck them.
@@ -1654,7 +1683,7 @@ object client extends BaseJSModule:
     mvn"org.scala-js::scalajs-dom::2.8.0",
     mvn"io.github.cquiroz::scala-java-time::2.6.0")
 
-  // Generate BuildInfo with environment at build time
+  // Generate BuildInfo with environment and version at build time
   def generatedSources: T[Seq[PathRef]] = Task:
     val env = Task.env.getOrElse("ENVIRONMENT", "production")
     val isDevMode = env == "dev"
@@ -1666,6 +1695,7 @@ object client extends BaseJSModule:
          |object BuildInfo:
          |  val environment: String = "$env"
          |  val isDevMode: Boolean = $isDevMode
+         |  val version: String = "${releaseVersion().version}"
          |""".stripMargin
     )
     Seq(PathRef(Task.dest))
@@ -2045,8 +2075,10 @@ object mcp extends BaseModule with Released:
   def defaultStyles: T[PathRef] = Task.Source(
     moduleDir / os.up / "client" / "assets" / "styles.css")
 
-  /** The stylesheet too: it goes into the jar, so a change to it is a change to the backoffice. */
-  override def versionFiles: T[Seq[PathRef]] = Task(super.versionFiles() :+ defaultStyles())
+  /** The Dockerfile, and the stylesheet: it goes into the jar, so a change to it is a change to the
+    * backoffice.
+    */
+  override def versionFiles: T[Seq[PathRef]] = Task(Seq(dockerfile(), defaultStyles()))
 
   def resources: T[Seq[PathRef]] = Task:
     // Only the index is generated. The skills themselves are already on the classpath through
@@ -2192,6 +2224,7 @@ object mcp extends BaseModule with Released:
     publishClient(
       release,
       client.bundle().path,
+      client.releaseVersion().version,
       bucket,
       infra("CLOUDFRONT_DISTRIBUTION_ID"),
       locations)
@@ -2639,12 +2672,13 @@ object ci extends Module:
     *      versions, which git-cliff computes from the commits since each one's last tag (see
     *      [[Released]]);
     *   3. moves every deployed location onto the API image, and waits for them to settle;
-    *   4. publishes the client, copies it under every location's prefix, and invalidates;
+    *   4. publishes the client under its version, copies it under every location's prefix, and
+    *      invalidates;
     *   5. tags the commit with every version that moved, and pushes those tags.
     *
     * A module whose version did not move goes out as it was: its image is in the registry under
-    * that version already, so nothing is pushed, and the locations run it already. The
-    * configuration and the client go out either way; neither is versioned.
+    * that version already, or its client kept in the bucket, so nothing is published, and the
+    * locations run it already. The configuration goes out either way; it is not versioned.
     *
     * Configured entirely through the environment, which CodeBuild injects: `CAPTAL_ENV` names the
     * environment and the credentials are the build's role. See [[ReleaseTarget]]. The build needs
@@ -2672,8 +2706,9 @@ object ci extends Module:
         Task.dest
     val workspace = moduleDir / os.up
     val configDir = terraformDir(Task.env, workspace)
-    val versions = Seq(api.releaseVersion(), mcp.releaseVersion())
+    val versions = Seq(api.releaseVersion(), mcp.releaseVersion(), client.releaseVersion())
     val tags = ImageTags(api = versions(0).version, mcp = versions(1).version)
+    val clientVersion = versions(2).version
     val built = BuiltImages(
       rqlite = Some(rqlite.image()()),
       api = Some(api.image()()),
@@ -2699,13 +2734,20 @@ object ci extends Module:
     val locations = locationServices(target, cluster)
     rollLocations(target, cluster, locations, apiImage, await = true)
 
-    println("[ci] Step 4/5: Publishing the client to every location...")
-    publishClient(
-      target,
-      bundle,
-      output("assets_bucket_name"),
-      output("cloudfront_distribution_id"),
-      locations)
+    // Published once, as the images are: a version already kept in the bucket is out, and every
+    // location has it. Locally every run publishes, the version being the one worked towards.
+    val bucket = output("assets_bucket_name")
+    if !target.local && clientPublished(target, bucket, clientVersion) then
+      println(s"[ci] Step 4/5: The client's $clientVersion is published already")
+    else
+      println(s"[ci] Step 4/5: Publishing the client's $clientVersion to every location...")
+      publishClient(
+        target,
+        bundle,
+        clientVersion,
+        bucket,
+        output("cloudfront_distribution_id"),
+        locations)
 
     val moved = versions.filter(_.changed).map(_.tag)
     if moved.isEmpty then

@@ -283,8 +283,9 @@ rather than as a deployed topology.
 
 === CloudFront
 
-`modules/cloudfront` owns the assets bucket (`<project>-<env>-assets`, holding `bundle/` and every
-location's own `<slug>/` prefix) behind an Origin Access Control, and the distribution itself:
+`modules/cloudfront` owns the assets bucket (`<project>-<env>-assets`, holding `bundle/`, every
+location's own `<slug>/` prefix, the MCP App scripts under `ui/` and every published client under
+`releases/client/<version>/`) behind an Origin Access Control, and the distribution itself:
 two origins (the S3 bucket through the OAC, and the ALB as a custom HTTPS-only origin), a default
 behavior serving the S3 origin with one CloudFront Function attached, an `ordered_cache_behavior`
 on `/ui/*` serving the MCP App pages' scripts from S3 with `Access-Control-Allow-Origin: *` added by
@@ -294,9 +295,10 @@ any origin, for the upload page's presigned `PUT`. See xref:mcp-iam.adoc[MCP IAM
 
 One function, `function/spa-fallback.js`, does two jobs, the first ahead of the second on purpose:
 
-* **Refuses two internal prefixes outright** — `/_paused/*` (where a paused location's real page is
-  kept while the edge serves maintenance in its place) and `/bundle/*` (the master copy every
-  location's prefix is copied from) — with a `403` before the extension check below would otherwise
+* **Refuses three internal prefixes outright** — `/_paused/*` (where a paused location's real page
+  is kept while the edge serves maintenance in its place), `/bundle/*` (the master copy every
+  location's prefix is copied from) and `/releases/*` (every published client, kept to put an
+  earlier one back) — with a `403` before the extension check below would otherwise
   let a direct request straight through to a 200, since the bucket policy grants CloudFront the
   whole bucket.
 * **SPA fallback and the slug redirect.** A request with a file extension passes through unchanged;
@@ -517,9 +519,8 @@ environment's tfvars names, since the engine changes deliberately rather than pe
 The SPA bundle and the MCP-UI apps are not released through Tofu or through ECR: `client.bundle`,
 `client.publishS3` and `client.publish` (Mill tasks, detailed in xref:client.adoc[Client]) write
 straight into the same assets bucket `modules/cloudfront` creates, under `bundle/` and `ui/`
-respectively. There is no separate "releases" bucket any more — `cli_releases`, which held versioned
-CLI artifacts for operators to download, was removed along with the CLI itself; see
-xref:context/history.adoc[History].
+respectively, and `ci.run` keeps each published client under `releases/client/<version>/` — see
+xref:development.adoc#release[Releasing].
 
 == See also
 
