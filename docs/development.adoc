@@ -135,8 +135,8 @@ defeat the point of running both. Migrations run `McpMigrate` (its own history t
 container, creates the `captal-assets-dev` bucket with permissive CORS for the upload flow, and
 creates a real CloudFront distribution over it once (`ensureDistribution`), so an asset write's
 invalidation has a real distribution to invalidate. It then publishes the MCP App pages' scripts to
-that bucket the way `client.publish` does, on every run, so the upload and UniFi pages always load
-the scripts of the bundle being run.
+that bucket the way `client.publish` does, on every run, so the upload, UniFi and run pages always
+load the scripts of the bundle being run.
 
 LocalStack runs on port **4567**, not its default 4566, so it coexists with other projects' LocalStack
 containers. It is the same port inside the container and out: `GATEWAY_LISTEN` moves the listener and

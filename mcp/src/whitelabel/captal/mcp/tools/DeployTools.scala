@@ -2,7 +2,8 @@ package whitelabel.captal.mcp.tools
 
 import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
-import whitelabel.captal.mcp.access.Auth
+import whitelabel.captal.mcp.access.{Auth, Tokens}
+import whitelabel.captal.mcp.apps.{RunRoutes, RunTicket, RunUi}
 import whitelabel.captal.mcp.aws.{AssetStore, BundleCopy, InfraStore, Runs}
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
 import whitelabel.captal.platform.LocationRow
@@ -15,7 +16,7 @@ import zio.schema.codec.JsonCodec as SchemaJsonCodec
 import zio.schema.{DeriveSchema, Schema}
 
 import McpSchema.given
-import ToolSchema.readOnly
+import ToolSchema.{readOnly, withUi}
 
 /** Deploy, pause, resume and destroy a location's AWS infrastructure, and follow them.
   *
@@ -113,7 +114,9 @@ object DeployTools:
       Settled)
   end DeploySteps
 
-  private def deployWith(store: InfraStore): McpToolHandlerR[QuillSqlite & AssetStore] = declaration
+  private def deployWith(
+      store: InfraStore,
+      uiOrigin: String): McpToolHandlerR[QuillSqlite & AssetStore] = declaration
     .handleWithContext: (in: DeployRequest, ctx: McpToolContext) =>
       for
         location <- requireLocation(in.slug)
@@ -121,8 +124,9 @@ object DeployTools:
         launched <-
           Runs.launch(in.slug, "deploy", DeploySteps.all, caller)(run =>
             deploy(store, location, run).map(encode(_)))
-        view <- viewOf(launched)
+        view <- started(launched, caller, uiOrigin)
       yield view
+    .withUi(RunUi.AppUri)
 
   private def deploy(
       store: InfraStore,
@@ -293,8 +297,9 @@ object DeployTools:
     val all = List(Page, Edge, Rule, Scale, Drain)
 
   /** Pause: scale service to zero and repoint rule to fixed response. Database untouched. */
-  private def pauseWith(store: InfraStore): McpToolHandlerR[QuillSqlite & AssetStore] = McpTool(
-    "pause_location")
+  private def pauseWith(
+      store: InfraStore,
+      uiOrigin: String): McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("pause_location")
     .description(
       "Take a location's portal out of service without dismantling it. In order: the maintenance page replaces the location's index.html at the edge, the CloudFront invalidation is waited out, and only then is the API stopped — the ALB rule answers a fixed 'paused' JSON and the ECS service is scaled to zero. Writes nothing to the database. resume_location puts every part of it back. Answers at once with a run and keeps working in the background; get_deploy_status follows it. Call read_skill('deploy-location') first.")
     .requireScopes(Auth.InfraDeploy)
@@ -305,8 +310,9 @@ object DeployTools:
         launched <-
           Runs.launch(in.slug, "pause", PauseSteps.all, caller)(run =>
             pause(store, in.slug, run).map(encode(_)))
-        view <- viewOf(launched)
+        view <- started(launched, caller, uiOrigin)
       yield view
+    .withUi(RunUi.AppUri)
 
   private def pause(
       store: InfraStore,
@@ -348,8 +354,9 @@ object DeployTools:
     val all = List(TargetGroup, Scale, Running, Rule, Healthy, Page, Edge)
 
   /** Resume: inverse of pause, using deploy's idempotent steps. */
-  private def resumeWith(store: InfraStore): McpToolHandlerR[QuillSqlite & AssetStore] = McpTool(
-    "resume_location")
+  private def resumeWith(
+      store: InfraStore,
+      uiOrigin: String): McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("resume_location")
     .description(
       "Put a paused location back in service, in the reverse order of the pause: the service is scaled back to one task and the ALB rule forwards again, then the location's own page replaces the maintenance one at the edge. Restores the page that was live rather than the current bundle — deploy_location is how a location takes a newer one. Idempotent, and safe on a location that was never paused. Answers at once with a run and keeps working in the background; get_deploy_status follows it. Call read_skill('deploy-location') first.")
     .requireScopes(Auth.InfraDeploy)
@@ -360,8 +367,9 @@ object DeployTools:
         launched <-
           Runs.launch(in.slug, "resume", ResumeSteps.all, caller)(run =>
             resume(store, in.slug, run).map(encode(_)))
-        view <- viewOf(launched)
+        view <- started(launched, caller, uiOrigin)
       yield view
+    .withUi(RunUi.AppUri)
 
   private def resume(
       store: InfraStore,
@@ -417,8 +425,9 @@ object DeployTools:
     val Keep = "Keep the location's S3 objects"
 
   /** Remove AWS resources but keep database and log group. Requires slug confirmation. */
-  private def destroyWith(store: InfraStore): McpToolHandlerR[QuillSqlite & AssetStore] = McpTool(
-    "destroy_location")
+  private def destroyWith(
+      store: InfraStore,
+      uiOrigin: String): McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("destroy_location")
     .description(
       "Remove everything a location has in AWS: the ECS service, its listener rule, its target group, its task definition revisions, and its entire S3 prefix — the bundle copy, the stylesheet, the icon and the uploaded video files. Requires the slug typed again as confirmation. Keeps the log group and touches nothing in the database, so the location, its translations and its survey definitions survive and deploy_location can stand the portal up again — but the video files are gone and their rows will point at nothing. For temporary downtime use pause_location, which deletes nothing. Asks about the S3 objects in the call, then answers with a run and keeps working in the background; get_deploy_status follows it. Call read_skill('deploy-location') first.")
     .requireScopes(Auth.InfraDestroy)
@@ -478,8 +487,9 @@ object DeployTools:
         launched <-
           Runs.launch(in.slug, "destroy", steps, caller)(run =>
             destroy(store, in.slug, wanted, run).map(encode(_)))
-        view <- viewOf(launched)
+        view <- started(launched, caller, uiOrigin)
       yield view
+    .withUi(RunUi.AppUri)
 
   private def destroy(
       store: InfraStore,
@@ -535,6 +545,12 @@ object DeployTools:
       @description("What it found or why it failed, when there is something to say.")
       detail: Option[String])
 
+  final case class RunWatch(
+      @description("Authorises reading this run's progress, and nothing else.")
+      ticket: String,
+      @description("Where the page posts the ticket to receive the run as Server-Sent Events.")
+      streamUrl: String)
+
   final case class RunView(
       @description("Identifies this run; get_deploy_status takes it.")
       runId: String,
@@ -561,10 +577,14 @@ object DeployTools:
       @description("A destroy's result, once it succeeded.")
       destroyed: Option[DestroyResponse],
       @description("What to do now.")
-      nextSteps: List[String])
+      nextSteps: List[String],
+      @description(
+        "For the page that shows this run, on the answer of the call that started it. Not for the model to use.")
+      watch: Option[RunWatch])
 
   given Schema[StatusRequest] = DeriveSchema.gen
   given Schema[RunStep] = DeriveSchema.gen
+  given Schema[RunWatch] = DeriveSchema.gen
   given Schema[RunView] = DeriveSchema.gen
 
   private def encode[A](value: A)(using schema: Schema[A]): String =
@@ -577,14 +597,26 @@ object DeployTools:
 
   private def toolFor(operation: String): String = s"${operation}_location"
 
-  /** A run as a caller sees it. `Left` from [[Runs.launch]] is a run that was already going, which
-    * this call did not start.
+  /** The answer of a call that launched a run, or found one going: the run, and what the page in
+    * [[RunUi]] needs to follow it. `Left` from [[Runs.launch]] is a run this call did not start.
     */
-  private def viewOf(launched: Either[Runs.Row, Runs.Row]): UIO[RunView] = launched.fold(
-    going => viewOf(going, alreadyGoing = true),
-    started => viewOf(started, alreadyGoing = false))
+  private def started(
+      launched: Either[Runs.Row, Runs.Row],
+      caller: String,
+      uiOrigin: String): ZIO[QuillSqlite, String, RunView] =
+    for
+      view <- launched.fold(
+        going => viewOf(going, alreadyGoing = true),
+        started => viewOf(started, alreadyGoing = false))
+      token <- Tokens
+        .byIdentifier(caller)
+        .someOrFail("The token that made this call no longer exists.")
+    yield view.copy(watch = Some(
+      RunWatch(
+        ticket = RunTicket.mint(token.tokenSha256, caller, view.runId),
+        streamUrl = s"$uiOrigin${RunRoutes.EventsPath}")))
 
-  private def viewOf(row: Runs.Row, alreadyGoing: Boolean): UIO[RunView] = Clock
+  private[mcp] def viewOf(row: Runs.Row, alreadyGoing: Boolean): UIO[RunView] = Clock
     .instant
     .map: now =>
       val status = Runs.statusOf(row, now)
@@ -626,7 +658,8 @@ object DeployTools:
         paused = decode[PauseResponse](row, "pause"),
         resumed = decode[ResumeResponse](row, "resume"),
         destroyed = decode[DestroyResponse](row, "destroy"),
-        nextSteps = next
+        nextSteps = next,
+        watch = None
       )
 
   private val status: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("get_deploy_status")
@@ -648,9 +681,20 @@ object DeployTools:
         view <- viewOf(row, alreadyGoing = false)
       yield view
 
-  /** All five tools, or none. Registered only when deploy configuration exists. */
-  def all(store: Option[InfraStore]): List[McpToolHandlerR[QuillSqlite & AssetStore]] = store
+  /** All five tools, or none. Registered only when deploy configuration exists.
+    *
+    * @param uiOrigin
+    *   where this server is reached, which the run page streams from.
+    */
+  def all(
+      store: Option[InfraStore],
+      uiOrigin: String): List[McpToolHandlerR[QuillSqlite & AssetStore]] = store
     .toList
     .flatMap(value =>
-      List(deployWith(value), pauseWith(value), resumeWith(value), destroyWith(value), status))
+      List(
+        deployWith(value, uiOrigin),
+        pauseWith(value, uiOrigin),
+        resumeWith(value, uiOrigin),
+        destroyWith(value, uiOrigin),
+        status))
 end DeployTools

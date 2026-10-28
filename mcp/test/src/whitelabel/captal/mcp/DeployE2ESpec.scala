@@ -26,6 +26,7 @@ import software.amazon.awssdk.services.s3.model.{
 }
 import whitelabel.captal.core.i18n.{I18n, I18nSchema}
 import whitelabel.captal.mcp.access.{Auth, Tokens}
+import whitelabel.captal.mcp.apps.RunRoutes
 import whitelabel.captal.mcp.aws.{Asset, AssetStore, DeployTargets, InfraStore}
 import whitelabel.captal.mcp.resources.Readiness
 import whitelabel.captal.mcp.tools.{
@@ -56,7 +57,7 @@ import whitelabel.captal.platform.{
   VideoStatus
 }
 import zio.*
-import zio.http.{Client, Header, Headers, TestClient}
+import zio.http.{Body, Client, Form, FormField, Header, Headers, Request, Status, TestClient, URL}
 import zio.json.ast.Json
 import zio.schema.Schema
 import zio.schema.codec.JsonCodec
@@ -176,6 +177,20 @@ object DeployE2ESpec extends ZIOSpecDefault:
             s"The ${started.operation} of ${started.slug} was still running after 10 minutes"))(
           10.minutes)
   end extension
+
+  /** A run's stream, read the way the run page reads it: the ticket posted urlencoded, the run back
+    * as events. Collected whole, which ends because the stream does once the run has finished.
+    */
+  private def readStream(url: String, ticket: String): ZIO[Client, Throwable, (Status, String)] =
+    for
+      target   <- ZIO.fromEither(URL.decode(url))
+      response <- ZIO.serviceWithZIO[Client](
+        _.batched(
+          Request.post(
+            target,
+            Body.fromURLEncodedForm(Form(FormField.simpleField("ticket", ticket))))))
+      body <- response.body.asString
+    yield (response.status, body)
 
   /** The operation's own result from a finished run, or a failure saying where it stopped. */
   private def resultOf[A](run: DeployTools.RunView)(pick: DeployTools.RunView => Option[A]): A =
@@ -323,7 +338,9 @@ object DeployE2ESpec extends ZIOSpecDefault:
           extensions)
         .statelessRoutes
         .provideEnvironment(env)
-      _        <- TestClient.addRoutes(routes)
+      _ <- TestClient.addRoutes(routes)
+      // The run page's stream, which lives beside the protocol rather than inside it.
+      _        <- TestClient.addRoutes(RunRoutes.routes.provideEnvironment(env))
       declared <- ZIO
         .fromEither(McpClientExtensions(McpApps.clientExtension(McpAppsClientSettings.Html)))
         .mapError(error => new IllegalStateException(s"Client extensions: $error"))
@@ -483,6 +500,13 @@ object DeployE2ESpec extends ZIOSpecDefault:
         DeployTools.DeployRequest(Slug))
       deployDone <- client.awaitRun(deployRun)
       deployed = resultOf(deployDone)(_.deployed)
+      // What the run page does with the same answer: follow the run through its own stream, which
+      // a ticket for another run, or for nothing, does not open.
+      watch <- ZIO
+        .fromOption(deployRun.watch)
+        .orElseFail(new AssertionError("deploy_location answered without what the run page needs"))
+      streamed <- readStream(watch.streamUrl, watch.ticket)
+      forged   <- readStream(watch.streamUrl, watch.ticket + "x")
 
       // Again, which is both what a redeploy does and the only history-independent way
       // to observe `created`. The first call's value depends on whether a previous run
@@ -713,6 +737,11 @@ object DeployE2ESpec extends ZIOSpecDefault:
         deployRun.steps.forall(_.state == "pending"),
         deployDone.steps.forall(_.state == "done"),
         deployDone.finishedAt.isDefined,
+        // The stream of a finished run is one event, the finished run, and then it ends.
+        streamed._1 == Status.Ok,
+        streamed._2.startsWith("data: "),
+        streamed._2.contains("\"status\":\"succeeded\""),
+        forged._1 == Status.Forbidden,
         // The bundle copy, which is what makes the portal's own page exist. Two of the
         // Three of the five published: the bundle's default icon is skipped because
         // this location set one, and `maintenance.html` is never copied per location —

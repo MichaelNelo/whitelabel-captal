@@ -739,11 +739,11 @@ tool to run as a task, a poll would only answer on the replica that started it.
 
 == The MCP Apps
 
-Two server-rendered pages exist for the two things the JSON-RPC protocol itself cannot carry:
-"JSON-RPC cannot carry an mp4 and a tool call cannot carry a secret." Every `tools/call` a host
-makes is recorded and replayed into the model's context on later turns — not where a UniFi
-controller token belongs — and an upload needs to `PUT` a file somewhere no tool argument can
-reach.
+Three server-rendered pages exist for what the JSON-RPC protocol itself cannot carry: "JSON-RPC
+cannot carry an mp4 and a tool call cannot carry a secret." Every `tools/call` a host makes is
+recorded and replayed into the model's context on later turns — not where a UniFi controller token
+belongs — and an upload needs to `PUT` a file somewhere no tool argument can reach. The third is
+for a run that lasts minutes, which a tool call cannot show moving.
 
 [cols="1,3"]
 |===
@@ -754,18 +754,30 @@ reach.
 
 |`ui://upload-video` (`UploadUi`/`UploadUiSource`)
 |`create_advertiser_video`, `resume_video_upload`
+
+|`ui://deploy-run` (`RunUi`)
+|`deploy_location`, `pause_location`, `resume_location`, `destroy_location`
 |===
 
-Both pages are scalatags HTML, rendered server-side, and **static at definition time**: the
+The run page follows its run through `RunRoutes`: a `POST /ui/runs/events` with a `RunTicket` in a
+urlencoded body, answered as Server-Sent Events, each the whole `RunView` again, read off the run's
+row every second and sent when it changes. The heartbeat changes the row every ten seconds, so a
+running run is never silent long enough for the ALB or a tunnel to cut it, and the stream ends
+after the event that shows the run finished. A run ticket is `<tokenId>.<runId>.<signature>`,
+signed with the calling token's stored hash over a `run.` prefix: bound to one run, read-only, with
+no expiry, and dead once that token is revoked. The page declares this server's origin in
+`connectDomains`.
+
+All three are scalatags HTML, rendered server-side, and **static at definition time**: the
 `_meta.ui.resourceUri` a tool declares is fixed when the tool is registered, before any slug or
 video exists, and a `CallToolResult` carries no `_meta` a host could use to correct that afterward
 — "a template here is read literally and resolves to nothing." Each page instead learns its subject
-after opening, either from the `ui/notifications/tool-result` notification it listens for (both
-pages), or, for the upload page specifically, from a `data-video` attribute already in its own
+after opening, either from the `ui/notifications/tool-result` notification it listens for (all
+three), or, for the upload page specifically, from a `data-video` attribute already in its own
 markup when it is addressed by a specific pending video rather than opened bare.
 
 `UiHints` emits the `<link rel="preconnect">` and one `<link rel="modulepreload" crossorigin>` per
-script both pages need — `crossorigin` because a module script fetches in CORS mode, and a
+script each page needs — `crossorigin` because a module script fetches in CORS mode, and a
 preconnect or preload hint made without it "fills a cache entry the real request cannot use." Both
 degrade to nothing when there is no origin or no preload to name.
 

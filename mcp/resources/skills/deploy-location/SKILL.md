@@ -1,7 +1,7 @@
 ---
 name: deploy-location
 description: Use this skill for anything that changes whether a location's portal is serving — deploying it, giving it a newer bundle, closing it for a while, bringing it back, or removing it for good. It says which of deploy_location, pause_location, resume_location and destroy_location fits, what each one leaves behind, and how to follow the run each one starts with get_deploy_status. Triggers on "deploy location", "push location", "deploy", "publicar location", "provision location", "publish bundle", "subir el bundle", "go live", "pause location", "pausar", "mantenimiento", "maintenance page", "cerrar temporalmente", "resume location", "reanudar", "reactivar", "destroy location", "eliminar location", "borrar location", "dar de baja", "tear down".
-version: 5.0.0
+version: 5.1.0
 ---
 
 # A location's portal: deploying, pausing, removing
@@ -118,9 +118,14 @@ keeps one call open. So each one answers at once with a **run**: its `runId`, `s
 every step it is going to take, all `pending`. The work goes on in the server, and it does not need
 this conversation to stay open.
 
-Follow it with `get_deploy_status(runId)` about every 30 seconds until `status` is no longer
-`running`. Tell the operator which step it is on rather than going quiet; the step names are written
-to be shown. Without the `runId`, `get_deploy_status(slug)` gives that location's latest run.
+A host that renders MCP Apps also shows the run as a page, `ui://deploy-run`, that ticks each step
+over as it happens and tells you, in a message, how the run ended. The operator is watching that;
+you do not need to narrate it.
+
+Without the page, follow it yourself with `get_deploy_status(runId)` about every 30 seconds until
+`status` is no longer `running`, and tell the operator which step it is on rather than going quiet;
+the step names are written to be shown. Without the `runId`, `get_deploy_status(slug)` gives that
+location's latest run. The `watch` field of the first answer belongs to the page; leave it alone.
 
 How a run ends:
 

@@ -81,15 +81,15 @@ private def preloadLinks(dir: os.Path, entry: String): String =
   */
 private val uiPrefix = "ui"
 
-/** The two entries the MCP App pages load, and nothing else. */
-private val uiEntries = Seq("upload.js", "unifi.js")
+/** The entries the MCP App pages load, and nothing else. */
+private val uiEntries = Seq("upload.js", "unifi.js", "run.js")
 
 /** Every local module reachable from `roots`, by reading the `import`s Rollup wrote.
   *
   * This exists because of the merge. While the MCP App pages were their own linker run, every chunk
   * in their bundle belonged to them and `publish` could take the whole directory. Sharing a run
   * with the portal means the directory now also holds `main.js`, `maintenance.js` and the portal's
-  * route chunks, none of which belong under `ui/` — and the chunks the two pages *do* import are
+  * route chunks, none of which belong under `ui/` — and the chunks the pages *do* import are
   * shared with the portal, so they cannot be told apart by name either. The only honest selector
   * left is the import graph.
   */
@@ -104,7 +104,7 @@ private def moduleClosure(dir: os.Path, roots: Seq[String]): Set[String] =
         .foldLeft(seen + name)((acc, next) => walk(next, acc))
   roots.foldLeft(Set.empty[String])((acc, root) => walk(root, acc))
 
-/** Publishes the two MCP App pages' scripts from the bundle in `src` to `<bucket>/ui/`.
+/** Publishes the MCP App pages' scripts from the bundle in `src` to `<bucket>/ui/`.
   *
   * Three rules, and each one is load-bearing:
   *

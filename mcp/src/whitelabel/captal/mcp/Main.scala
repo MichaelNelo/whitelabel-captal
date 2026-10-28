@@ -2,7 +2,7 @@ package whitelabel.captal.mcp
 
 import io.getquill.jdbczio.Quill
 import whitelabel.captal.mcp.access.{Auth, OauthMetadata, Tokens}
-import whitelabel.captal.mcp.apps.UiRoutes
+import whitelabel.captal.mcp.apps.{RunRoutes, UiRoutes}
 import whitelabel.captal.mcp.aws.{AssetStore, DeployTargets, InfraStore}
 import whitelabel.captal.mcp.protocol.{Skills, SkillsExtension}
 import whitelabel.captal.mcp.resources.Readiness
@@ -120,7 +120,7 @@ object Main extends ZIOAppDefault:
               // cannot disagree.
               val scriptOrigin = env.get[AssetStore].scriptOrigin
               Server.serve(
-                UiRoutes.routes ++ OauthMetadata.routes(uiOrigin) ++
+                UiRoutes.routes ++ RunRoutes.routes ++ OauthMetadata.routes(uiOrigin) ++
                   CaptalMcp
                     .server(
                       Auth.mcpAuth(resource),
@@ -133,7 +133,7 @@ object Main extends ZIOAppDefault:
                     .statelessRoutes)
           // Added here rather than to `tools` above because whether the deploy tools exist depends
           // on `infra`, which is only known inside this block.
-          val registered = tools + DeployTools.all(infra).size
+          val registered = tools + DeployTools.all(infra, uiOrigin).size
           seeded *> checkScript *>
             ZIO.logInfo(
               s"MCP backoffice on :$p as $resource — ${Skills.all.size} skills, ${CaptalMcp

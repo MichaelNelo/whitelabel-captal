@@ -104,7 +104,7 @@ object ExtensionsSpec extends ZIOSpecDefault:
             DeployTools.declaration.toolTaskPolicy.execution == TaskExecution.Never,
             DeployTools.declaration.toolRequiredScopes == Set(Auth.InfraDeploy),
             // No store configured, no tool.
-            DeployTools.all(None).isEmpty
+            DeployTools.all(None, "https://backoffice.test").isEmpty
           )
         ,
         test("the visibility wrapper does not drop the policy"):

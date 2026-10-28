@@ -2,7 +2,7 @@ package whitelabel.captal.mcp.resources
 
 import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
-import whitelabel.captal.mcp.apps.{UnifiUi, UploadUi, UploadUiSource}
+import whitelabel.captal.mcp.apps.{RunUi, UnifiUi, UploadUi, UploadUiSource}
 import whitelabel.captal.mcp.aws.{Asset, AssetStore}
 import whitelabel.captal.mcp.tools.{AdvertiserTools, SurveyTools, VideoTools}
 import whitelabel.captal.platform.schema.QuillSqlite
@@ -48,6 +48,16 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
     * the server for the POST, the CDN for the script.
     */
   private val unifiMeta = McpAppsResourceMeta(
+    csp = Some(
+      McpAppsCsp(
+        connectDomains = Chunk(uiOrigin),
+        resourceDomains = Chunk(scriptOrigin, "https://assets.claude.ai"))),
+    prefersBorder = Some(false))
+
+  /** The run page reads its stream from this server, which is the origin it has to reach; the same
+    * split as [[unifiMeta]] between where it connects and where its module comes from.
+    */
+  private val runMeta = McpAppsResourceMeta(
     csp = Some(
       McpAppsCsp(
         connectDomains = Chunk(uiOrigin),
@@ -144,6 +154,12 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
               "Configurar UniFi",
               unifiMeta,
               Some("The credentials form. Opened by configure_unifi, which is what supplies the location and the ticket.")
+            ),
+            McpApps.resource(
+              RunUi.AppUri,
+              "Progreso",
+              runMeta,
+              Some("A deploy, pause, resume or destroy as it moves. Opened by those four tools, which supply the run and its ticket.")
             )
           ))
 
@@ -188,6 +204,16 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
                 UnifiUi.AppUri,
                 UnifiUi.app(store.scriptUrl, store.scriptOrigin, preloads),
                 unifiMeta))))
+    else if uri == RunUi.Uri then
+      ZIO.serviceWithZIO[AssetStore](store =>
+        store
+          .scriptPreloads(RunUi.EntryScript)
+          .map(preloads =>
+            Chunk(
+              McpApps.contents(
+                RunUi.AppUri,
+                RunUi.app(store.scriptUrl, store.scriptOrigin, preloads),
+                runMeta))))
     else if uri.startsWith(UploadUi.Uri) then
       upload.readResource(uri, ctx)
     else

@@ -5,14 +5,14 @@ import { defineConfig } from 'vite'
 // minifier. Both are reached through one invocation instead of two tools and a loop.
 //
 // `entryFileNames` is pinned for every entry, not just the portal's: `index.html` and
-// `maintenance.html` are static templates naming `./main.js` and `./maintenance.js`, and the two
+// `maintenance.html` are static templates naming `./main.js` and `./maintenance.js`, and the three
 // MCP App pages carry a `<script src>` the server renders as a constant from a base URL, so it
 // cannot discover a hash at render time either. The chunks keep theirs: they are referenced by an
 // entry and never by hand, and the hash is what lets them be cached past a deploy that did not
 // touch them.
 //
-// Four entries out of one linker run. `main` is the linker's own main module and starts itself;
-// the other three are the stubs in `client/entries/`, which exist because one run yields one
+// Five entries out of one linker run. `main` is the linker's own main module and starts itself;
+// the other four are the stubs in `client/entries/`, which exist because one run yields one
 // module initializer and the portal has it.
 export default defineConfig({
   build: {
@@ -28,6 +28,7 @@ export default defineConfig({
         main: 'src/main.js',
         upload: 'src/upload.js',
         unifi: 'src/unifi.js',
+        run: 'src/run.js',
         maintenance: 'src/maintenance.js',
       },
       output: {

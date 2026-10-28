@@ -149,9 +149,10 @@ object CaptalMcp:
     ).map(restrictToApps).foldLeft[McpServer[QuillSqlite]](withPrompts)(_.tool(_))
     // `deploy_location` is here rather than above because it copies the shared bundle under the new
     // slug, which is S3 and therefore `AssetStore`.
-    val withAssets = (AssetTools.all ++ VideoTools.all ++ Readiness.all ++ DeployTools.all(infra))
-      .map(restrictToApps)
-      .foldLeft[McpServer[QuillSqlite & AssetStore]](withData)(_.tool(_))
+    val withAssets =
+      (AssetTools.all ++ VideoTools.all ++ Readiness.all ++ DeployTools.all(infra, uiOrigin))
+        .map(restrictToApps)
+        .foldLeft[McpServer[QuillSqlite & AssetStore]](withData)(_.tool(_))
     // One source for everything: `McpServer` holds a single `resourceSrc`, so the upload page and
     // the entity tree cannot be registered separately.
     val withSource = withAssets.resourceSource(

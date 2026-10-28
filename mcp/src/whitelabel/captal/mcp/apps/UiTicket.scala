@@ -22,7 +22,7 @@ object UiTicket:
 
   private val Algorithm = "HmacSHA256"
 
-  private def sign(key: String, payload: String): String =
+  private[apps] def sign(key: String, payload: String): String =
     val mac = Mac.getInstance(Algorithm)
     mac.init(new SecretKeySpec(key.getBytes(UTF_8), Algorithm))
     Base64.getUrlEncoder.withoutPadding.encodeToString(mac.doFinal(payload.getBytes(UTF_8)))

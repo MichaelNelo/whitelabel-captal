@@ -86,6 +86,13 @@ their content hash (`chunkFileNames: '[name]-[hash].js'`).
 | `client/entries/unifi.js`
 | `unifi.js`
 | server-rendered, addressed as `ui://configure-unifi`
+
+| `client/src/whitelabel/captal/mcpui/run/RunApp.scala`
+| `run-app`
+| `run-app.js`
+| `client/entries/run.js`
+| `run.js`
+| server-rendered, addressed as `ui://deploy-run`
 |===
 
 IMPORTANT: An entry stub must never be named like a module the linker emits. `client.bundle` stages
@@ -139,8 +146,8 @@ git-ignored.
   subtracted by import graph, not by name.
 
 | `client.publish --bucket …`
-| Uploads `upload.js`, `unifi.js` and the chunks they reach to `<bucket>/ui/`: chunks first and
-  immutable, entries afterwards and revalidating.
+| Uploads `upload.js`, `unifi.js`, `run.js` and the chunks they reach to `<bucket>/ui/`: chunks
+  first and immutable, entries afterwards and revalidating.
 |===
 
 See xref:infrastructure.adoc[Infrastructure] for what the edge does with those objects.
@@ -692,7 +699,7 @@ Two properties are shared by both:
 
 == The MCP-UI apps
 
-Two pages the backoffice opens inside an MCP host. In both cases the *markup is the server's* —
+Three pages the backoffice opens inside an MCP host. In every case the *markup is the server's* —
 rendered by scalatags in `mcp` — and the Scala.js module only supplies behaviour, reaching into the
 DOM by element id. The server half is in xref:mcp.adoc[MCP backoffice].
 
@@ -790,14 +797,32 @@ and talks to the server directly. On success the token field is cleared and `tel
 the configured slug. The token goes to the server and nowhere else — never into a message to the
 host, never read back.
 
+=== `mcpui/run/RunApp.scala`
+
+Behind `ui://deploy-run`, which `deploy_location`, `pause_location`, `resume_location` and
+`destroy_location` all open. Like the UniFi page it carries no data: the run arrives on the
+tool-result notification, `Run` mirroring `DeployTools.RunView` — its steps, all pending, and a
+`watch` holding a run ticket and the stream URL.
+
+The page draws the steps and then POSTs the ticket, urlencoded so there is no preflight, to the
+stream URL. The response is Server-Sent Events, each `data:` the whole run again, read off
+`response.body` in chunks and stitched back into events; comment lines are skipped. Every event
+redraws `#steps`, `#title`, `#lede` and `#status`. When the stream ends before the run did — a
+restart, a proxy, a dropped connection — it posts again after three seconds; a refused ticket shows
+the server's message and stops.
+
+When a run the page saw running finishes, `tellTheModel` says how it ended, once. A page reopened
+on a run that had already finished says nothing: the model knows how that one ended.
+
 === Addressing and delivery
 
-`ui://upload-video` and `ui://configure-unifi` are MCP App resource URIs; a tool points at one
+`ui://upload-video`, `ui://configure-unifi` and `ui://deploy-run` are MCP App resource URIs; a tool
+points at one
 through `_meta.ui`, the host reads that resource and renders the HTML in a sandboxed iframe.
 `captal://` is the separate entity-resource hierarchy the upload page reads its ticket from.
 
-The scripts themselves are not carried by the MCP server. `mill client.publish` puts `upload.js`
-and `unifi.js` at `<bucket>/ui/<name>.js` under stable, revalidating names, with their hashed chunks
+The scripts themselves are not carried by the MCP server. `mill client.publish` puts `upload.js`,
+`unifi.js` and `run.js` at `<bucket>/ui/<name>.js` under stable, revalidating names, with their hashed chunks
 beside them as immutable objects, and the server names them through `AssetStore.scriptUrl`. Locally,
 `mcp.dev` does the same against the LocalStack bucket on every run.
 
