@@ -38,10 +38,11 @@ Six steps, in order:
    and the cluster, subnets, listener and roles. On a fresh container it is **minutes, not
    seconds** — it is not hung. Without a LocalStack licence it stops here and says so.
 3. Waits for that rqlite to have a leader on `localhost:5001`, then runs `platform.Migrate`.
-4. Publishes the portal's bundle under `bundle/` and the MCP App pages' scripts under `ui/` in the
-   configuration's bucket, and builds and pushes the API and backoffice images into its
-   repositories under the tags the local tfvars name — so a deploy from here runs the real API, and
-   every service the configuration declares has its image.
+4. Runs the release `mill ci.run` makes, with LocalStack's variables: builds and pushes the API and
+   backoffice images under the tags the local tfvars name, moves every deployed location onto the
+   new API image, and publishes the client — `bundle/` and `ui/` — and copies it under every
+   deployed location's prefix. So a deploy from here runs the real API, and what is already
+   deployed runs the build being run.
 5. With `--tunnel`, opens two Cloudflare quick tunnels, to `:8081` and to LocalStack on `:4567`,
    and waits for their `https://<random>.trycloudflare.com` URLs, which change every run. No
    account or token is needed. The MCP App pages load their scripts and PUT uploads through

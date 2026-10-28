@@ -135,29 +135,36 @@ Everything the backoffice runs against is the local configuration's, applied to 
 same OpenTofu configuration production uses, so nothing here is a resource the build made on the
 side. That needs a LocalStack licence, and `mcp.dev` stops at step 2 without one.
 
+Steps 2 and 4 are the release `ci.run` makes (see <<release>>), run with the
+variables of this machine's LocalStack instead of CodeBuild's: `CAPTAL_ENV=local` and
+`AWS_ENDPOINT_URL` at the container, which turns every AWS call into `awslocal` inside it.
+
 Step 1 starts (or reuses) the `localstack-dev` container. Step 2 applies `environments/local`,
-sharing `mcp.test.localStackInfra`'s state so the two cannot come apart. It builds and pushes the
-rqlite image first, then creates the rqlite service, the assets bucket with its CORS rule, the
-distribution, and the cluster, subnets, listener and roles a deploy attaches to. On a fresh
-container this is minutes, not seconds. The MCP service is declared too, with no tasks
-(`mcp_desired_count = 0`): the backoffice is the one running here.
+sharing `mcp.test.localStackInfra`'s state so the two cannot come apart: `init`, the image
+registries alone, the rqlite image pushed into its own, then a plan of everything and that plan
+applied — the rqlite service, the assets bucket with its CORS rule, the distribution, and the
+cluster, subnets, listener and roles a deploy attaches to. On a fresh container this is minutes,
+not seconds. The MCP service is declared too, with no tasks (`mcp_desired_count = 0`): the
+backoffice is the one running here.
 
 Step 3 waits for that rqlite service to have a leader, on the host port the local tfvars give it
 (`rqlite_http_port`, 5001), then runs `whitelabel.captal.platform.Migrate` against it. The
 backoffice's own `Main` runs `McpMigrate` itself as part of its boot. `api.dev` uses the same
 database — deliberately, since the backoffice writes the content a location's API later reads.
 
-Step 4 publishes, on every run, so all three are the build being run:
+Step 4 releases the build being run, on every run:
 
-* the portal's bundle under `bundle/` in the configuration's bucket, the way `client.publishS3`
-  does, which is what `deploy_location` copies under a location's prefix;
-* the MCP App pages' scripts under `ui/`, the way `client.publish` does;
 * the API and backoffice images, built by `api.image` and `mcp.image` and pushed into the
   configuration's repositories under the tags the local tfvars name (`image_tag`, `mcp_image_tag`)
   — the same tags its task definitions pull, as in production. The API's is what the server is
-  given as `API_IMAGE`, so a location deployed from here runs the real API. The backoffice's is
-  there for the MCP service the configuration declares with no tasks. A rebuild reuses the tag and
-  the tasks still get it: they run on this machine's Docker, where the push re-points the tag.
+  given as `API_IMAGE`, so a location deployed from here runs the real API;
+* every deployed location moved onto that API image. The tag is reused locally, so when the push
+  changed what it points at, the location's service is told to start fresh tasks rather than given
+  a new task definition;
+* the client: the portal's bundle under `bundle/` and the MCP App pages' scripts under `ui/`, the
+  bundle copied under every deployed location's prefix, and one invalidation.
+
+None of it is waited for: a location taking minutes to settle should not hold up the server.
 
 The server is then given the configuration's bucket, distribution and credentials, with
 `PUBLIC_BASE_URL` set to the distribution as LocalStack serves it,
@@ -252,6 +259,57 @@ tag and push one to a registry — against LocalStack, the registry `tofu apply`
 `local` environment, which is also where `rqlite.imagePush` runs on its own as part of that apply.
 See xref:infrastructure.adoc[Infrastructure] for why these images are single-stage and why no tag
 defaults to `latest`.
+
+[[release]]
+== Releasing: `mill ci.run`
+
+What CodeBuild runs to release a build to an AWS environment, in four operations, shared with
+`mcp.dev`, which runs them against LocalStack:
+
+. **Images.** `rqlite.image`, `api.image` and `mcp.image`, built before anything else.
+. **The configuration.** `tofu init` against the environment's backend
+  (`environments/<env>/backend.tfvars`), the image registries applied alone, the three images
+  pushed into them — Docker logged in to ECR first — then a plan of everything saved and that plan
+  applied. The registries and the images go first because the task definitions name images, and an
+  image has to be in its registry before a service pulls it. The API and backoffice images go up
+  under `IMAGE_TAG`, passed to the plan as `image_tag` and `mcp_image_tag`; rqlite's under the
+  tfvars' `rqlite_image_tag`, since the engine changes deliberately rather than per commit. The
+  apply is what moves the backoffice onto its new image, and its `API_IMAGE` onto the new API, so a
+  location deployed afterwards gets it too.
+. **Locations.** Every location's service — the ones whose task runs a single container named
+  `api`, which is how `deploy_location` registers them — gets a new revision of its task
+  definition differing only in the image, and is pointed at it. Environment, roles and sizes carry
+  over as the last deploy registered them, so a change to those is still a `deploy_location`. The
+  service keeps its task count: a paused location stays paused and runs the new image when it is
+  resumed. `ci.run` waits for every moved service to settle and fails naming the ones that did not.
+. **The client.** The portal's bundle under `bundle/` and the MCP App pages' scripts under `ui/`,
+  the bundle copied server-side under every deployed location's prefix — keeping a location's own
+  brand icon, leaving `maintenance.html` shared, and for a paused location replacing the page its
+  resume puts back rather than the maintenance page — then one invalidation of everything.
+
+It is configured only through the environment, which the CodeBuild project injects:
+
+[cols="1,3"]
+|===
+|Variable |Meaning
+
+|`CAPTAL_ENV`
+|Required. The `terraform/environments/<name>` to release to, for its tfvars and its backend.
+
+|`IMAGE_TAG`
+|The tag the API and backoffice images go up under. Defaults to the first twelve characters of
+`CODEBUILD_RESOLVED_SOURCE_VERSION`, the commit CodeBuild built; `ci.run` refuses to run with
+neither.
+
+|`AWS_REGION`
+|Defaults to `us-east-1`. The credentials are the build's role.
+
+|`AWS_ENDPOINT_URL`
+|Must be unset: set, it means LocalStack, which is `mcp.dev`'s release, and `ci.run` refuses.
+|===
+
+The build needs Docker, so the CodeBuild project has to be privileged, and `tofu` and the `aws`
+CLI on its PATH. Its role applies the whole configuration, so it needs what that creates.
 
 == Client bundle and publishing
 
