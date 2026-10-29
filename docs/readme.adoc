@@ -77,6 +77,10 @@ describes, it is architecture; if it stops making sense, it was context.
 | The deployed topology, the terraform modules, the environments, the CloudFront edge, the portal
   dispatcher, the rqlite cluster, images and releases, and the operator runbook.
 
+| xref:build.adoc[Build]
+| The Mill build: the file that holds each module, the module graph, the versions, and the main
+  commands grouped by purpose.
+
 | xref:testing.adoc[Test strategy]
 | What each test layer owns, how suites are aggregated and run, the fixtures, what needs Docker or
   LocalStack, and the constraints on where a new test can go.

@@ -1,0 +1,22 @@
+package build.messages
+
+import com.goyeau.mill.scalafix.ScalafixModule
+import mill.*, scalalib.*, scalafmt.*, scalajslib.*
+import millbuild.*
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Messages: JVM + JS (shared sources) — the request and response vocabulary
+// ─────────────────────────────────────────────────────────────────────────────
+
+// The request and response types `api` answers with and `client` reads, `ApiError`, and the codecs of
+// the translation bundle. Cross-compiled, so both sides share the same types.
+
+object `package` extends BaseModule:
+  // Depends on `core`, never the reverse: `core` must not know the HTTP error vocabulary.
+  def moduleDeps = Seq(build.core)
+  // Above the default 32: circe's derivation inlines once per `ApiError` variant (32 of them).
+  def scalacOptions = super.scalacOptions() ++ Seq("-Xmax-inlines:64")
+  def mvnDeps = Seq(
+    mvn"io.circe::circe-core:0.14.10",
+    mvn"io.circe::circe-generic:0.14.10",
+    mvn"io.circe::circe-parser:0.14.10")

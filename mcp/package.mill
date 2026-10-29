@@ -1,0 +1,481 @@
+package build.mcp
+
+import com.goyeau.mill.scalafix.ScalafixModule
+import mill.*, scalalib.*, scalafmt.*, scalajslib.*
+import millbuild.*
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MCP: backoffice server. Its own deployable, not linked into `api`.
+//
+// Scala 3.10 may depend on the 3.8.0 modules, but they cannot depend on it (TASTy).
+// ─────────────────────────────────────────────────────────────────────────────
+
+object `package` extends BaseModule with Released:
+  // Pinned to what zio-http-mcp 0.10.0 is built with. Breaks Quill; see `QuillArrow`.
+  def scalaVersion = "3.10.0"
+  // Own config: scalafix refuses `removeUnused` on 3.10. `mcp.test` must set it too.
+  def scalafixConfig = Task(Some(moduleDir / ".scalafix.conf"))
+
+  /** The entry point of the assembly. Two `ZIOAppDefault`s exist (`Main`, `McpMigrate`), so it must be explicit.
+    */
+  def mainClass = Some("whitelabel.captal.mcp.Main")
+
+  /** Empty: the launcher prefix is refused above 65 535 ZIP entries, and the image runs `java -jar`.
+    */
+  def prependShellScript = ""
+  // platform's UnifiClient needs zio-http 3.0.1, not the 3.11.3 used here: align versions before using it.
+  def moduleDeps = Seq(build.core, build.platform)
+  def mvnDeps = Seq(
+    // zio-http-mcp 0.10.0: TaskExecution, McpApps, and the skills primitives.
+    mvn"com.jamesward::zio-http-mcp:0.10.0",
+    // Forced over the 3.0.9 the tree resolves; a mismatch fails at runtime, not at compile time.
+    mvn"dev.zio::izumi-reflect:3.0.10",
+    // Synchronous clients only: `netty-nio-client` is excluded from every AWS SDK dependency here.
+    mvn"software.amazon.awssdk:s3:2.29.51".exclude("software.amazon.awssdk" -> "netty-nio-client"),
+    mvn"software.amazon.awssdk:cloudfront:2.29.51".exclude(
+      "software.amazon.awssdk" -> "netty-nio-client"),
+    mvn"software.amazon.awssdk:ecs:2.29.51".exclude("software.amazon.awssdk" -> "netty-nio-client"),
+    mvn"software.amazon.awssdk:elasticloadbalancingv2:2.29.51".exclude(
+      "software.amazon.awssdk" -> "netty-nio-client"),
+    mvn"software.amazon.awssdk:cloudwatchlogs:2.29.51".exclude(
+      "software.amazon.awssdk" -> "netty-nio-client"),
+    mvn"com.lihaoyi::scalatags:0.13.1",
+    mvn"org.slf4j:slf4j-nop:1.7.36"
+  )
+
+  /** Skill sources, enumerated into `skills/index.txt`. Served from the classpath at `/skills/<slug>/SKILL.md`.
+    */
+  def skillSources: T[PathRef] = Task.Source(moduleDir / "resources" / "skills")
+
+  /** The portal's stylesheet; `get_css_schema` derives its variable list from this file.
+    */
+  def defaultStyles: T[PathRef] = Task.Source(
+    moduleDir / os.up / "client" / "assets" / "styles.css")
+
+  /** Files counted in this module's version besides its sources: the Dockerfile and the stylesheet.
+    */
+  override def versionFiles: T[Seq[PathRef]] = Task(Seq(dockerfile(), defaultStyles()))
+
+  def resources: T[Seq[PathRef]] = Task:
+    // Only the index is generated; the skills come from `super.resources()`, merged into `/skills/`.
+    val dest = Task.dest / "skills"
+    os.makeDir.all(dest)
+    val names = os.list(skillSources().path).filter(os.isDir).map(_.last).sorted
+    os.write(dest / "index.txt", names.mkString("\n"))
+    os.copy(defaultStyles().path, Task.dest / "default-styles.css")
+    super.resources() ++ Seq(PathRef(Task.dest))
+
+  private val devPort = 8081
+
+  def localStackSetup() = Task.Command:
+    ensureLocalStack(localStackContainer, localStackPort, Task.env)
+
+  /** Stops LocalStack and removes the containers it ran for ECS tasks. Its OpenTofu state is kept for
+    * nothing: the next start is a new container, which discards it.
+    */
+  def stopLocalStack() = Task.Command:
+    Processes.stop(localStackProcess)
+    removeLocalStackContainers(localStackContainer)
+    println("[localstack] stopped, with the containers it ran for ECS tasks")
+
+  /** Stops every process devenv runs for this build, and removes every local container, volume,
+    * image and OpenTofu state it creates. Usage: `mill mcp.destroyLocal`
+    */
+  def destroyLocal() = Task.Command:
+    Processes.down()
+    def docker(args: String*): String = os
+      .proc("docker" +: args)
+      .call(check = false, stderr = os.Pipe)
+      .out
+      .trim()
+
+    val containers = Seq(
+      localStackContainer,
+      "rqlite-test",
+      "rqlite-mcp-test",
+      "rqlite-mcp-e2e")
+      .flatMap(name => docker("ps", "-aq", "-f", s"name=$name").linesIterator) ++
+      // Task containers LocalStack starts for ECS services; named by cluster, so not matched above.
+      docker("ps", "-aq", "-f", "name=ls-ecs-").linesIterator
+
+    val images = docker("images", "-q", "-f", "reference=captal-*").linesIterator.toSeq ++
+      docker("images", "-q", "-f", "reference=*/captal-*").linesIterator
+
+    val removedContainers = containers.distinct.filter(_.nonEmpty)
+    val removedImages = images.distinct.filter(_.nonEmpty)
+    if removedContainers.nonEmpty then
+      docker("rm" +: "-fv" +: removedContainers*)
+    if removedImages.nonEmpty then
+      docker("rmi" +: "-f" +: removedImages*)
+    os.remove.all(localStackStates)
+    os.remove.all(Processes.state / "processes")
+    // Image ids, not tags: a tag and its registry-qualified copy share one id.
+    println(
+      s"[destroy] removed ${removedContainers.size} container(s) and ${removedImages.size} image id(s); the next run rebuilds what it needs")
+
+  /** Runs the backoffice locally against the local configuration on LocalStack, as the devenv
+    * process `mcp`, and returns once it serves. Needs a licence. A run restarts it on the current
+    * build; `mill mcp.stop` stops it, `devenv processes logs mcp` shows its log.
+    *
+    * `--tunnel` exposes the server and LocalStack through Cloudflare quick tunnels, which stay open
+    * between runs, and the admin token is then random. `--token` overrides it. Usage: mill mcp.dev,
+    * or mill mcp.dev --tunnel
+    */
+  def dev(
+      port: Int = devPort,
+      token: Option[String] = None,
+      tunnel: mainargs.Flag = mainargs.Flag()) = Task.Command:
+    val migrationCp = build.platform.runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
+    val cp = runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
+
+    println("[dev] Step 1/6: Ensuring LocalStack...")
+    val endpoint = ensureLocalStack(localStackContainer, localStackPort, Task.env)
+
+    // Shares the test suite's state (`localStackStateDir`): two states over one container diverge.
+    println("[dev] Step 2/6: Applying the local infrastructure...")
+    val infra = test.localStackInfra()
+    if infra.isEmpty then
+      sys.error(
+        "[dev] mcp.dev runs against the local configuration — its database, bucket, distribution and cluster — and LocalStack runs most of that only with a licence. Set LOCALSTACK_AUTH_TOKEN in .env.")
+
+    println("[dev] Step 3/6: Waiting for rqlite, then running migrations...")
+    test.tofuSources()
+    val configDir = terraformDir(Task.env, moduleDir / os.up)
+    val dbUrl = localDbUrl(configDir)
+    awaitLocalDb(dbUrl)
+    val migration = os
+      .proc("java", "-cp", migrationCp, "whitelabel.captal.platform.Migrate")
+      .call(env = Map("DB_URL" -> dbUrl), check = false, stdout = os.Inherit, stderr = os.Inherit)
+    if migration.exitCode != 0 then
+      sys.error("[dev] Migrations failed; the server would start against a schema-less database.")
+
+    // The release steps of `ci.run`, against LocalStack. Locations are not waited for.
+    println("[dev] Step 4/6: Releasing the images and the client into LocalStack...")
+    val release = ReleaseTarget.localStack(endpoint)
+    val bucket = infra("ASSETS_BUCKET")
+    val cluster = infra("ECS_CLUSTER")
+    val published = publishImages(
+      release,
+      configDir,
+      Map(
+        "api_image_repository_url" -> infra("API_IMAGE_REPOSITORY_URL"),
+        "mcp_image_repository_url" -> infra("MCP_IMAGE_REPOSITORY_URL")),
+      BuiltImages(rqlite = None, api = Some(build.api.image()()), mcp = Some(image()())),
+      ImageTags(build.api.releaseVersion().version, releaseVersion().version)
+    ).getOrElse(sys.error("[dev] the API image was not published"))
+    val locations = locationServices(release, cluster)
+    rollLocations(release, cluster, locations, published, await = false)
+    publishClient(
+      release,
+      build.client.bundle().path,
+      build.client.releaseVersion().version,
+      bucket,
+      infra("CLOUDFRONT_DISTRIBUTION_ID"),
+      locations)
+    val apiImage = published.image
+
+    // Two: the MCP App pages run on the host's public origin, so LocalStack needs an address too.
+    println("[dev] Step 5/6: Opening the Cloudflare tunnels...")
+    val tunnels = Option.when(tunnel.value):
+      (
+        quickTunnel(Task.env, "tunnel-mcp", port, metricsPort = 20241),
+        quickTunnel(Task.env, "tunnel-localstack", localStackPort, metricsPort = 20242))
+    val publicUrl = tunnels.map(_._1)
+    val assetsUrl = tunnels.map(_._2)
+    tunnels match
+      case Some((server, assets)) =>
+        println(s"[dev]   $server for the server")
+        println(s"[dev]   $assets for LocalStack")
+        println("[dev]   (a new one can take a few seconds to resolve)")
+      case None =>
+        tunnelProcesses.foreach(Processes.stop)
+        println("[dev]   no --tunnel, so the server answers on localhost only")
+
+    val resourceUri = s"${publicUrl.getOrElse(s"http://localhost:$port")}/mcp"
+    val adminToken = token.getOrElse:
+      if tunnel.value then
+        val bytes = new Array[Byte](32)
+        java.security.SecureRandom().nextBytes(bytes)
+        java.util.HexFormat.of().formatHex(bytes)
+      else
+        "dev-token"
+
+    println(s"[dev] Step 6/6: Starting the MCP backoffice on :$port...")
+
+    // Configuration outputs (bucket, distribution, cluster, credentials) come from `infra`.
+    val env =
+      forkEnv() ++
+        infra ++
+        Map(
+          "DB_URL" -> dbUrl,
+          // Service-discovery name, which deploy tasks use too.
+          "TASK_DB_URL" -> infra("RQLITE_URL"),
+          "API_IMAGE"   -> apiImage,
+          "MCP_PORT"    -> port.toString,
+          // The address clients reach: the tunnel when there is one.
+          "MCP_RESOURCE_URI" -> resourceUri,
+          // Seeds the admin token row; other tokens are issued from it with `create_token`.
+          "MCP_ADMIN_TOKEN" -> adminToken,
+          // The distribution's domain on LocalStack's port, as production serves assets.
+          "PUBLIC_BASE_URL" -> s"https://${infra("CLOUDFRONT_DOMAIN_NAME")}:$localStackPort",
+          // The bucket, not the distribution: LocalStack refuses distribution requests with an Origin.
+          "SCRIPT_BASE_URL" -> s"${assetsUrl.getOrElse(endpoint)}/$bucket"
+        ) ++
+        // Upload URLs go through the tunnel; not PUBLIC_BASE_URL, which is stored in video rows.
+        assetsUrl.fold(Map.empty[String, String])(assets => Map("PRESIGN_ENDPOINT_URL" -> assets))
+
+    // Probes for a location; the hint below is printed when there is none.
+    val seeded =
+      val probe = scala
+        .util
+        .Try:
+          val url =
+            java
+              .net
+              .URI
+              .create(
+                s"${dbUrl.stripPrefix("jdbc:rqlite:")}/db/query?q=SELECT+COUNT(*)+FROM+locations")
+              .toURL
+          scala.io.Source.fromInputStream(url.openStream()).mkString
+      if probe.toOption.exists(_.contains("[[0]]")) then
+        "  No locations in the database yet — call `create_location` through this server first.\n"
+      else
+        ""
+
+    // Always restarted: the classpath is the same paths whether or not the code under them changed.
+    val _ = Processes.start(
+      Task.env,
+      "mcp",
+      Processes.Spec(
+        command = Seq("java") ++ forkArgs() ++ Seq("-cp", cp, "whitelabel.captal.mcp.Main"),
+        env = env,
+        ready = Some(portOpen(port))),
+      always = true
+    )
+    Processes.await("mcp", 120, s"starting the backoffice on :$port")(listening(port))
+
+    println(s"""
+      |[dev] The backoffice serves on :$port. Point a host at it with:
+      |
+      |  "captal": {
+      |    "command": "npx",
+      |    "args": ["mcp-remote", "$resourceUri",
+      |             "--header", "Authorization: Bearer $adminToken"]
+      |  }
+      |
+      |$seeded[dev] Its log: `devenv processes logs mcp`. Stop it with `mill mcp.stop`.""".stripMargin)
+
+  /** Stops the backoffice `mcp.dev` started, and its tunnels. */
+  def stop() = Task.Command:
+    ("mcp" +: tunnelProcesses).foreach(Processes.stop)
+
+  def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "docker" / "mcp.Dockerfile")
+
+  /** Builds `captal-mcp:<tag>` from the assembly jar. Usage: `mill mcp.image` or `mill mcp.image --tag v1.2.3`
+    *
+    * The context is a staged directory holding exactly two files: `mcp.jar` and the Dockerfile.
+    */
+  def image(tag: String = "latest") = Task.Command:
+    val context = Task.dest / "context"
+    os.makeDir.all(context)
+    os.copy.over(assembly().path, context / "mcp.jar")
+    os.copy.over(dockerfile().path, context / "Dockerfile")
+
+    val name = s"captal-mcp:$tag"
+    val built = os
+      .proc("docker", "build", "-t", name, ".")
+      .call(cwd = context, check = false, stdout = os.Inherit, stderr = os.Inherit)
+    if built.exitCode != 0 then
+      sys.error("[image] docker build failed")
+    println(s"[image] built $name")
+    name
+
+  /** Pushes [[image]] to a registry that must already exist. Usage:
+    * `mill mcp.imagePush --registry 000000000000.dkr.ecr.us-east-1.localhost.localstack.cloud:4567 --repository captal-mcp-local`
+    */
+  def imagePush(registry: String, repository: String, tag: String = "latest") = Task.Command:
+    pushImage(image(tag)(), s"$registry/$repository:$tag")
+
+  object test extends ScalaTests with ScalafmtModule with ScalafixModule:
+    // zio-test 2.1.26, to match zio-http-mcp; the rest of the build stays on 2.1.14.
+    def mvnDeps = Seq(
+      mvn"dev.zio::zio-test:2.1.26",
+      mvn"dev.zio::zio-test-sbt:2.1.26",
+      // TestClient: serves this server's routes in-process, matched to the zio-http of zio-http-mcp.
+      mvn"dev.zio::zio-http-testkit:3.11.6"
+    )
+    def testFramework = "zio.test.sbt.ZTestFramework"
+    // The same exception the module itself takes; see `mcp.scalafixConfig`.
+    def scalafixConfig = build.mcp.scalafixConfig
+
+    /** The published client bundle, copied in as a test resource for `UploadUiSpec`.
+      */
+    override def resources: T[Seq[PathRef]] = Task:
+      val dest = Task.dest / "ui"
+      os.makeDir.all(dest)
+      for
+        file <- os.list(build.client.bundle().path)
+        if file.ext == "js"
+      do
+        os.copy(file, dest / file.last)
+      super.resources() ++ Seq(PathRef(Task.dest))
+
+    // Own container: suites sharing a schema clear each other's rows.
+    private val rqlitePort = 4012
+    private val rqliteContainer = "rqlite-mcp-test"
+
+    // The end-to-end spec's own container (see `migratedE2eUrl`).
+    private val e2ePort = 4013
+    private val e2eContainer = "rqlite-mcp-e2e"
+
+    /** The container's id and URL, as one `Task.Input`. The id is part of the stamp so that a recreated
+      * container invalidates [[migratedRqliteUrl]]; the URL alone is the same for both.
+      */
+    private def rqliteStamp: T[String] = Task.Input:
+      val url = ensureRqlite(rqliteContainer, rqlitePort, Task.env)
+      val id = os.proc("docker", "ps", "-q", "-f", s"name=$rqliteContainer").call().out.trim()
+      s"$id $url"
+
+    def rqliteUrl: T[String] = Task:
+      rqliteStamp().split(" ").last
+
+    /** The same URL with the schema already migrated, once per container. Flyway cannot migrate
+      * concurrently on SQLite; see [[migrateSchema]] and "Concurrent migrations" in `incidents.adoc`.
+      */
+    def migratedRqliteUrl: T[String] = Task:
+      // The stamp, not `rqliteUrl`, so a recreated container invalidates this.
+      migrateSchema(rqliteStamp().split(" ").last, build.platform.runClasspath(), runClasspath())
+
+    /** Migrates both schemas against one URL, as two processes: the API's first, then the backoffice's.
+      * Only `Migrate` and `McpMigrate` may run DDL here: outside `Migrate`'s DataSource wrapper a statement
+      * is a silent no-op that Flyway records as applied.
+      */
+    private def migrateSchema(
+        url: String,
+        apiClassPath: Seq[PathRef],
+        mcpClassPath: Seq[PathRef]): String =
+      val env = Map("DB_URL" -> url)
+      def migrate(label: String, classPath: Seq[PathRef], mainClass: String): Unit =
+        println(s"[migrate] $label ($url) ...")
+        val result = os
+          .proc("java", "-cp", classPath.map(_.path).mkString(":"), mainClass)
+          .call(env = env, check = false, stderr = os.Pipe, stdout = os.Pipe)
+        if result.exitCode != 0 then
+          sys.error(s"[migrate] $label failed:\n${result.err.text().trim}")
+      migrate("api schema", apiClassPath, "whitelabel.captal.platform.Migrate")
+      migrate("backoffice schema", mcpClassPath, "whitelabel.captal.mcp.McpMigrate")
+      url
+
+    /** The end-to-end spec's container and URL, as one `Task.Input`. Its database is isolated from
+      * the other suites' (see "The Mill build" in `incidents.adoc`).
+      */
+    private def e2eStamp: T[String] = Task.Input:
+      val url = ensureRqlite(e2eContainer, e2ePort, Task.env)
+      val id = os.proc("docker", "ps", "-q", "-f", s"name=$e2eContainer").call().out.trim()
+      s"$id $url"
+
+    def migratedE2eUrl: T[String] = Task:
+      migrateSchema(e2eStamp().split(" ").last, build.platform.runClasspath(), runClasspath())
+
+    /** LocalStack's container id, endpoint and licence state, as one `Task.Input`. The licence is part
+      * of the key: a cached read of `Task.env` would replay the first run's value.
+      */
+    private def localStackStamp: T[String] = Task.Input:
+      val licensed = localStackToken(Task.env).isDefined
+      val endpoint = ensureLocalStack(localStackContainer, localStackPort, Task.env)
+      val id = os.proc("docker", "ps", "-q", "-f", s"name=$localStackContainer").call().out.trim()
+      s"$id $endpoint $licensed"
+
+    /** The OpenTofu configuration's files, declared so that Mill permits reading them. The path is literal:
+      * a `Task.Sources` cannot read `Task.env`, which `terraformDir` needs.
+      */
+    def tofuSources: T[Seq[PathRef]] = Task.Sources(moduleDir / os.up / os.up / "terraform")
+
+    /** Hash of the OpenTofu configuration's `.tf` and `.tfvars` files, so that an edit re-applies.
+      * Cannot be derived from [[tofuSources]], which does not cover a `CAPTAL_TERRAFORM_DIR` override.
+      */
+    private def tofuConfig: T[Int] = Task.Input:
+      val dir = terraformDir(Task.env, moduleDir / os.up / os.up)
+      if !os.exists(dir) then
+        0
+      else
+        os.walk(dir)
+          .filter(p => os.isFile(p) && (p.last.endsWith(".tf") || p.last.endsWith(".tfvars")))
+          .sorted
+          .map(p => (p.relativeTo(dir).toString, os.read(p)).hashCode)
+          .sum
+
+    /** The cluster, network and load balancer a deploy attaches to, as environment variables. Empty
+      * without a licence (see [[ensureLocalStackTofu]]).
+      */
+    def localStackInfra: T[Map[String, String]] = Task:
+      val parts = localStackStamp().split(" ")
+      // Read for their side effect as dependencies: the hash re-applies on change, the sources permit the read.
+      tofuConfig()
+      tofuSources()
+      val licensed = parts(2).toBoolean
+      val configDir = terraformDir(Task.env, moduleDir / os.up / os.up)
+      // Built here and pushed inside the apply, which owns the registry. Skipped unlicensed: no ECS.
+      val tag = if licensed && os.exists(configDir) then rqliteImageTag(configDir, "local") else ""
+      // Default tag: the push retags it. Mill forbids passing a value defined here to a task call.
+      val built = if tag.isEmpty then "" else build.rqlite.image()()
+      val tags = ImageTags(build.api.releaseVersion().version, build.mcp.releaseVersion().version)
+      // The state lies outside `dest`, the only place Mill lets a task write: the checker is off for this.
+      mill.api.BuildCtx.withFilesystemCheckerDisabled:
+        ensureLocalStackTofu(
+          endpoint = parts(1),
+          licensed = licensed,
+          configDir = configDir,
+          stateDir = localStackStateDir(parts(0)),
+          rqliteImage = built,
+          tags = tags)
+
+    /** Stops LocalStack and removes its state, so the next run creates both together. */
+    def resetLocalStack() = Task.Command:
+      localStackContainerId().foreach(id => os.remove.all(localStackStateDir(id)))
+      Processes.stop(localStackProcess)
+      removeLocalStackContainers(localStackContainer)
+      println(
+        s"[tofu] LocalStack removed with its state; the next run builds the container and its state together")
+
+    /** The fallback `ASSETS_BUCKET`, which [[localStackInfra]] overrides when licensed. Not the bucket
+      * `mcp.dev` serves: the end-to-end spec clears its prefix, which must not touch a developer's assets.
+      */
+    def testBucket: T[String] = Task:
+      val name = "captal-assets-mcp-test"
+      // The stamp, so a recreated container gets the bucket again.
+      localStackStamp()
+      os.proc(
+        "docker",
+        "exec",
+        localStackContainer,
+        "awslocal",
+        "s3api",
+        "create-bucket",
+        "--bucket",
+        name)
+        .call(check = false, stderr = os.Pipe)
+      name
+
+    /** The environment the server reads at startup, so the suites run the real layers. The database
+      * is created and migrated outside any deploy.
+      */
+    override def forkEnv: T[Map[String, String]] = Task:
+      super.forkEnv() ++
+        Map(
+          "DB_URL"                     -> migratedRqliteUrl(),
+          // Read directly: every other spec resolves `DB_URL` through application.conf.
+          "E2E_DB_URL"                 -> migratedE2eUrl(),
+          "ASSETS_BUCKET"              -> testBucket(),
+          // The distribution id comes from `localStackInfra`.
+          "PUBLIC_BASE_URL"            -> "https://portal.test",
+          // Stands in for the Tailscale proxy output, which the local configuration does not have.
+          "UNIFI_PROXY_URL"            -> "http://tailscale-proxy.test:1055",
+          "LOCALSTACK_ENDPOINT"        -> localStackStamp().split(" ")(1)
+        ) ++ localStackInfra()
+
+    /** Stops the suite's two databases. Their data goes with them. */
+    def stopRqlite() = Task.Command:
+      Seq(rqliteContainer, e2eContainer).foreach(Processes.stop)
+  end test
+end `package`

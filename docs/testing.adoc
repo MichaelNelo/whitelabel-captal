@@ -165,8 +165,8 @@ for.
 Before the suite starts, the build applies the real OpenTofu configuration under
 `terraform/environments/local` against LocalStack — the cluster, the ALB, the security groups, the
 assets bucket, the distribution, everything a location deploy *attaches to*. That fixture's own
-mechanics — the state directory keyed by the LocalStack container's id, `resetLocalStack`, why
-`mill clean` breaks the pairing, `tofuSources` — are xref:infrastructure.adoc[Infrastructure]'s to
+mechanics — the state directory keyed by the LocalStack container's id, `resetLocalStack`,
+`tofuSources` — are xref:infrastructure.adoc[Infrastructure]'s to
 describe in full; what matters here is that it is a precondition of `mcp.test`, applied
 automatically, not something a spec does for itself.
 

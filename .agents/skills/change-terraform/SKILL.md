@@ -1,7 +1,7 @@
 ---
 name: change-terraform
 description: Use when changing the OpenTofu configuration under terraform/ — adding a module, threading a variable, or editing a resource. Covers the two environments, how a variable reaches a module, the for_each plan-time rule, formatting, and the drift rule. Triggers on "terraform", "tofu", "add a module", "infra change", "cambiar terraform", "infraestructura".
-version: 1.0.0
+version: 1.0.1
 ---
 
 # Change the terraform configuration
@@ -13,7 +13,7 @@ binary writes is refused by OpenTofu 1.12 for being from a newer version, so alw
 
 | Environment | State | Applied by |
 |---|---|---|
-| `local` | a plain state file under `out/localstack/<container-id>/` | `mill mcp.test`, `mill mcp.dev`, and `mill ci.run` pointed at LocalStack |
+| `local` | a plain state file under `.devenv/state/localstack/tofu/<container-id>/` | `mill mcp.test`, `mill mcp.dev`, and `mill ci.run` pointed at LocalStack |
 | `prod` | S3, via `backend.tf` and `environments/prod/backend.tfvars` | `mill ci.run` in CodeBuild, or by hand |
 
 There is no `dev`. It was destroyed and its directory removed — a reference to `environments/dev/`

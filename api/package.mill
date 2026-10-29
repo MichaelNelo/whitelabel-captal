@@ -1,0 +1,156 @@
+package build.api
+
+import com.goyeau.mill.scalafix.ScalafixModule
+import mill.*, scalalib.*, scalafmt.*, scalajslib.*
+import millbuild.*
+
+// ─────────────────────────────────────────────────────────────────────────────
+// API: JVM only (server implementation)
+// ─────────────────────────────────────────────────────────────────────────────
+
+object `package` extends BaseModule with Released:
+  def moduleDeps = Seq(build.core, build.messages, build.platform)
+
+  def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "docker" / "api.Dockerfile")
+
+  override def versionFiles: T[Seq[PathRef]] = Task(Seq(dockerfile()))
+
+  /** Builds `captal-api:<tag>` from the assembly jar. Usage: `mill api.image` or `mill api.image --tag v1.2.3`
+    */
+  def image(tag: String = "latest", devEndpoints: Boolean = false) = Task.Command:
+    val context = Task.dest / "context"
+    os.makeDir.all(context)
+    os.copy.over(assembly().path, context / "api.jar")
+    os.copy.over(dockerfile().path, context / "Dockerfile")
+
+    val name = s"captal-api:$tag"
+    val built = os
+      // Enables `/api/dev/reset-phase`, which the Dockerfile disables by default. Never for a guest-facing image.
+      .proc(
+        "docker",
+        "build",
+        "--build-arg",
+        s"SERVER_DEV_ENDPOINTS=$devEndpoints",
+        "-t",
+        name,
+        ".")
+      .call(cwd = context, check = false, stdout = os.Inherit, stderr = os.Inherit)
+    if built.exitCode != 0 then
+      sys.error("[image] docker build failed")
+    println(s"[image] built $name")
+    name
+  // zio-schema core arrives through zio-http; only the derivation module is declared.
+  def mvnDeps = Seq(
+    mvn"dev.zio::zio-schema-derivation:1.4.1",
+    mvn"dev.zio::zio-interop-cats:23.1.0.3"
+  )
+
+  // LOCATION_SLUG selects the location served. The API does not provision content.
+  override def forkEnv: T[Map[String, String]] = Task:
+    Map("LOCATION_SLUG" -> defaultLocationSlug) ++ super.forkEnv()
+
+  // Renders index.html from its template. CLIENT_LINKER=full selects the bundle, `fast` the linker output.
+  def copyIndex() = Task.Command:
+    val root = moduleDir / os.up
+    val jsPath =
+      Task.env.getOrElse("CLIENT_LINKER", "fast") match
+        case "full" =>
+          "/out/client/bundle.dest/main.js"
+        case _ =>
+          "/out/client/fastLinkJS.dest/main.js"
+    renderIndex(
+      root / "client" / "index.html.template",
+      root / "client" / "index.html",
+      jsPath = jsPath,
+      cssPath = "/assets/styles.css")
+
+  private val defaultLocationSlug = "cafe-centro"
+
+  // Compile client before running server
+  override def run(args: Task[Args] = Task.Anon(Args())) = Task.Command:
+    copyIndex()()
+    if Task.env.getOrElse("CLIENT_LINKER", "fast") == "full" then
+      build.client.bundle()
+    else
+      build.client.fastLinkJS()
+    super.run(args)()
+
+  /** Migrates the local configuration's database, then serves a location from it as the devenv process
+    * `api`, and returns once it serves. A run restarts it on the current build; `mill api.stop` stops it,
+    * `devenv processes logs api` shows its log. Usage: mill api.dev, or mill api.dev --slug basic.
+    * Requires `mcp.dev`'s local configuration to be applied first.
+    */
+  def dev(slug: String = defaultLocationSlug) = Task.Command:
+    build.mcp.test.tofuSources()
+    val dbUrl = localDbUrl(terraformDir(Task.env, moduleDir / os.up))
+    println("[dev] Step 1/3: Waiting for the local configuration's rqlite...")
+    awaitLocalDb(dbUrl)
+    println("[dev] Step 2/3: Running migrations...")
+    val migrationCp = build.platform
+      .runClasspath()
+      .map(_.path.toString)
+      .mkString(java.io.File.pathSeparator)
+    val migration = os
+      .proc("java", "-cp", migrationCp, "whitelabel.captal.platform.Migrate")
+      .call(env = Map("DB_URL" -> dbUrl), check = false, stdout = os.Inherit, stderr = os.Inherit)
+    if migration.exitCode != 0 then
+      sys.error("[dev] Migrations failed; the server would start against a schema-less database.")
+    println(s"[dev] Step 3/3: Starting server (location=$slug)...")
+    copyIndex()()
+    if Task.env.getOrElse("CLIENT_LINKER", "fast") == "full" then
+      build.client.bundle()
+    else
+      build.client.fastLinkJS()
+    val cp = runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
+    val mc = "whitelabel.captal.api.Main"
+    val env = forkEnv() ++ Map("LOCATION_SLUG" -> slug, "DB_URL" -> dbUrl)
+    val port = env.get("SERVER_PORT").flatMap(_.toIntOption).getOrElse(devPort)
+    // Always restarted: the classpath is the same paths whether or not the code under them changed.
+    val _ = Processes.start(
+      Task.env,
+      "api",
+      Processes.Spec(
+        command = Seq("java") ++ forkArgs() ++ Seq("-cp", cp, mc),
+        env = env,
+        ready = Some(portOpen(port))),
+      always = true)
+    Processes.await("api", 120, s"starting the API on :$port")(listening(port))
+    println(
+      s"[dev] The API serves '$slug' on :$port. Its log: `devenv processes logs api`. Stop it with `mill api.stop`.")
+
+  /** Stops the API `api.dev` started. */
+  def stop() = Task.Command:
+    Processes.stop("api")
+
+  /** The port the API listens on unless `SERVER_PORT` says otherwise: `port` in `application.conf`. */
+  private val devPort = 8080
+
+  object test extends ScalaTests with ScalafmtModule with ScalafixModule:
+    // sttp-client (`SttpBackendStub`), used directly by the suites.
+    def mvnDeps = Seq(
+      mvn"dev.zio::zio-test:2.1.14",
+      mvn"dev.zio::zio-test-sbt:2.1.14",
+      mvn"com.softwaremill.sttp.client3::core:3.10.2")
+    def testFramework = "zio.test.sbt.ZTestFramework"
+
+    private val rqliteTestPort = 4011
+    private val rqliteContainerName = "rqlite-test"
+
+    // `Task.Input`, not `Task`: re-checks on every run that the container is alive, and starts it if not.
+    def rqliteTestUrl: T[String] = Task.Input:
+      ensureRqlite(rqliteContainerName, rqliteTestPort, Task.env)
+
+    override def forkEnv: T[Map[String, String]] = Task:
+      super.forkEnv() ++ Map("TEST_DB_URL" -> rqliteTestUrl())
+
+    /** Stops the suite's database. Its data goes with it. */
+    def stopRqlite() = Task.Command:
+      Processes.stop(rqliteContainerName)
+  end test
+
+  /** Builds the image and pushes it; the registry needs a `docker login` first. Usage:
+    * `mill api.imagePush --registry 000000000000.dkr.ecr.us-east-1.amazonaws.com --repository captal-api --tag 1.2.3`
+    */
+  def imagePush(registry: String, repository: String, tag: String = "latest") = Task.Command:
+    pushImage(image(tag)(), s"$registry/$repository:$tag")
+end `package`

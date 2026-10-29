@@ -383,13 +383,13 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
   fixture didn't know about). `environment = "local"` is accordingly a real environment in the
   configuration, not a test-only shim.
 * **The LocalStack state directory and the LocalStack container must be born together, and this
-  is enforced, not just documented.** `mcp.test.localStackInfra` is a `Task(persistent = true)`
-  keyed on the running container's id — a normal Mill task's `dest` is wiped on every
-  re-evaluation, which would discard the Tofu state while the container still held every resource
-  it describes. `resetLocalStack` recreates the container (which also discards the keyed state
-  directory) when the two have come apart; `mill clean` discards the state but leaves the
-  container, which is precisely the divergence the keying exists to prevent — hence why `mill
-  clean` must be followed by `mill mcp.test.resetLocalStack`.
+  is enforced, not just documented.** The state lives in `.devenv/state/localstack/tofu/<container-id>/`
+  (`localStackStateDir`), keyed on the running container's id and outside every task's `dest` — a
+  Mill task's `dest` is wiped on re-evaluation, which would discard the Tofu state while the container
+  still held every resource it describes. A new container discards the state of every earlier one;
+  `resetLocalStack` stops LocalStack and removes its state when the two have come apart. It started as
+  a `Task(persistent = true)`, then moved to `out/localstack/`, where `mill clean` could still discard
+  it while the container lived; outside `out/` that divergence is gone.
 * **`backend.tf` is deliberately not staged into the LocalStack-targeted copy of the
   configuration.** It declares an S3 backend whose bucket the same configuration creates — a
   chicken-and-egg locally — so the local run falls back to Tofu's default local state file.
@@ -446,6 +446,243 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
   the repositories — "the application's own machinery, not infrastructure" — while sitting next to
   an actual infrastructure repository, which made the word mean two different things depending on
   which directory you were in.
+
+== The Mill build
+
+Build files: `build.mill` at the root, one `package.mill` per module, and the helpers in
+`mill-build/src/millbuild/`. Each entry names the definition it concerns. Failures that led to a
+rule are in `incidents.adoc`, section "The Mill build".
+
+* **One `package.mill` per module; `build.mill` keeps only what no single module owns.** It holds
+  the `rqlite` image object, the cross-compiled `core-js` and `messages-js` modules, and `ci.run`.
+  Each module's file declares its own dependencies, Scala version and tests.
+* **Only `mcp` is on Scala 3.10.0; the rest of the build stays on 3.8.0 (`BaseModule` in
+  `mill-build/src/millbuild/Modules.scala`).** Scala 3 reads TASTy only from the same or an older
+  compiler, so a 3.10 module may depend on 3.8.0 modules but not the reverse. `zio-http-mcp` 0.10.0
+  ships TASTy 28.10, which a 3.9 compiler refuses ("expected stable TASTy from 28.0 to 28.9"); its
+  predecessors needed 3.9.0 (for 0.8.3) and 3.8.4. Moving the whole build to 3.10 was rejected: it
+  breaks Quill (next entry), and `api` writes far more SQL than the backoffice does.
+* **Quill 4.8.6 on 3.10 needs `QuillArrow`.** Scala 3.10 made `->` an inline extension method, and
+  Quill's parser matches the `ArrowAssoc.->` call that no longer appears in the tree, so every
+  `update(_.column -> lift(value))` breaks. Quill 4.8.6 is the last release and predates 3.10, so
+  this is permanent. `mcp` compiles because `whitelabel.captal.mcp.QuillArrow` puts the call back.
+  Any module moved to 3.10 hits the same failure. Open gap: `pending.adoc`, "Other modules stay on
+  Scala 3.8.0".
+* **zio-http versions are split by classpath.** `mcp` takes `platform`'s zio-http 3.0.1 up to 3.11.3,
+  which `zio-http-mcp` requires; `api` still resolves 3.0.1. `platform`'s `UnifiClient` is the only
+  file compiled against zio-http, and the backoffice never loads it because it never authorizes
+  guests. Open gap: `pending.adoc`, "The backoffice cannot talk to UniFi yet".
+* **`mcp` has its own scalafix config** (`mcp/.scalafix.conf`): scalafix refuses `removeUnused` on
+  3.10. `ScalaTests` is its own `ScalafixModule` and does not inherit it, so `mcp.test` sets it too.
+* **`izumi-reflect` is forced to 3.0.10 over the 3.0.9 the tree resolves** (`mcp/package.mill`). It is
+  on Scala 3.10's pre-upgrade list. Its breakage is invisible at compile time: it supplies `Tag`, so a
+  mismatch surfaces as a `ZLayer` that cannot find a service at runtime. The rest of that list is
+  either already current (zio 2.1.26, pulled in by 0.10.0) or absent (zio-blocks, neotype).
+* **`zio-test` is 2.1.26 in `mcp.test` and 2.1.14 everywhere else.** 2.1.26 matches what
+  `zio-http-mcp` pulls in, and Scala 3.10's notes name it too, so both reasons agree.
+* **`zio-http-mcp` versions and what they bought.** 0.8.3 added MCP Apps: `ResourceContents` gained
+  the `_meta` that carries the CSP, without which the upload page's PUT is refused as `blocked:csp`;
+  `McpApps` replaced a hand-rolled `_meta` decorator. 0.10.0 added `TaskExecution`: the tool declares
+  its policy and the server decides. `Required` answers `-32021` to a client that cannot poll, instead
+  of running synchronously and being cut off by a transport timeout. It also brings `skills/list` and
+  `skills/get`; `read_skill` stays anyway, because a primitive existing is not a host handing it to the
+  model (see the "Wire format" and "MCP" entries above).
+* **`netty-nio-client` is excluded from the AWS SDK clients.** `mcp` builds only synchronous clients
+  (S3, CloudFront, ECS, ELBv2, CloudWatch Logs, S3 presigner). The async client would add a second
+  HTTP stack beside zio-http's. The failure it prevents is in `incidents.adoc`, "Auth / protocol
+  plumbing".
+* **`scalajs-dom` is declared directly in `client`.** The MCP App pages use nothing but the DOM. Left
+  to Laminar's dependency graph, a Laminar bump could move them without naming them.
+* **Vite is pinned and installed beside the task, not in the repository.** `client.jsTools` installs
+  `vite@6.0.7` and `terser@5.37.0` with `--no-save` into the task's own directory. The Rollup-over-
+  esbuild measurements (1,854 and 7,621 bytes) are in the "Client and bundle" entry above.
+* **ESModule output is required for per-route imports.** `NoModule` emits one module and refuses
+  `js.dynamicImport` outright. Scala.js runs the Closure Compiler only for a single module: under
+  CommonJS a multi-module build errors, under ESModule it skips silently. Hence the Vite bundling
+  step, which Rollup scope-hoists and terser mangles (`client/package.mill`, `moduleKind`).
+* **`get_css_schema` reads the portal's own stylesheet** (`defaultStyles` in `mcp/package.mill`,
+  `client/assets/styles.css`). A hand-kept variable list drifts silently: an operator themes a variable
+  nothing honours any more and sees no change.
+* **`read_skill`'s index is generated at build time** (`resources` in `mcp/package.mill`), from the
+  skill directories. `read_skill` advertises the catalogue in its description, so an index that
+  disagreed with the directory would name a skill the model cannot read, or hide one that exists.
+* **One constant for the rqlite engine** (`rqliteVersion` in `mill-build/src/millbuild/Rqlite.scala`).
+  Every suite container and the end-to-end task definition use it, and production runs that version,
+  so moving it means moving the driver too. The test container was 8.36.2 while production ran 10.6.1;
+  see "rqlite / JDBC driver silence" in `incidents.adoc`.
+* **The rqlite image is built by Mill** (`rqlite.image` in `build.mill`), from
+  `docker/rqlite.Dockerfile` and `docker/rqlite-entrypoint.sh`. It was pushed by hand, with its tag in
+  each `terraform.tfvars`, so a checkout could not reproduce the image its own configuration deploys.
+  `rqliteImageTag` reads the tag from `environments/<env>/terraform.tfvars`, so the tag pushed and the
+  tag pulled cannot drift apart.
+* **The driver is `rqlite-jdbc` 10.5.2.1 and must pair with the server.** Since rqlite 10.6.0 a failed
+  statement carries SQLite result codes, and only this driver decodes them. An error can therefore be
+  identified by code rather than by matching its text. Production had drifted to rqlite 10.6.1 while
+  the build said 9.1.2 and the test fixture ran 8.36.2: three combinations, none of them the one the
+  driver targets.
+* **Module versions come from git-cliff with `--context`, not `--bumped-version`**
+  (`Released.releaseVersion` in `mill-build/src/millbuild/Modules.scala`). The user-facing rules are in
+  `development.adoc`, section "Versions". The failure behind the flag is in `incidents.adoc`.
+* **The paths that count toward a version are the source folders too** (`Released`). A Scala.js
+  module such as `core-js` has no folder of its own; its sources are `core`'s. `api` and `mcp` add
+  their Dockerfiles, and `mcp` also its stylesheet, because both go into the image or the jar, so a
+  change to either is a change to the service.
+* **Outside LocalStack a version is published once** (`publishImages`). A tag already in its registry
+  is that release, built from the commit it was cut from, and is left alone. Locally every build
+  replaces the tag, because the local tag is the version being worked towards.
+* **A reused tag is invisible to ECS, so locations are restarted** (`rollLocations`). When the digest
+  behind the API tag has changed but the tag has not, services already on it are force-redeployed.
+  A paused location keeps its task count, so it runs the new image when resumed.
+* **The configuration is applied on every release and is never versioned** (`ci.run`). Only the images
+  and the client carry versions. The registries are applied first (`-target=module.ecr`, the rqlite
+  repository) because a service cannot pull an image that is not yet pushed; then a full plan.
+* **Client releases are archived, and each location gets a copy** (`publishClient`). The bundle goes to
+  `releases/client/<version>`, then to `bundle/`; rolling back is copying an earlier release back. Each
+  location receives `bundle/` except `maintenance.html`, and except its own `brand-icon.svg` when that
+  differs from the bundle's. A paused location keeps its maintenance page as `_paused/<slug>/site.html`,
+  which resume restores. One CloudFront invalidation of `/*` follows.
+* **A release to LocalStack is not a release, so nothing is tagged.** `ci.run` against LocalStack
+  skips the tags, and `mcp.dev` runs the same first four steps without waiting for locations to settle.
+* **`publishUiScripts` publishes chunks before entries, and never deletes old chunks.** An entry
+  published before its chunk is a 404 on `import`, which shows up as a page that loads and does
+  nothing. Entries are revalidated, because the server renders their URL as a constant and cannot know
+  their content, and a 304 is about 200 bytes against the 9 KB they replace. Chunks carry a content
+  hash and are cached for a year. Old chunks stay: a browser mid-session can hold an entry that imports
+  a hash this deploy replaced, and CloudFront may serve a previous entry until `s-maxage` runs out.
+  Collect them by age, never on deploy. Entries are served with `Access-Control-Allow-Origin: *`, not the
+  sandbox origin: a module script is fetched in CORS mode, these files carry no credentials, and the
+  sandbox origin is derived from the server's own URL, so pinning it would add a way to break without
+  adding protection.
+* **`fetchpriority="low"` on the preload hints** (`preloadLinks` in
+  `mill-build/src/millbuild/Bundle.scala`). Measured in a throttled browser against the built page: the
+  hints move discovery off the critical path, and the app mounts 143 ms sooner at 100 ms RTT and 315 ms
+  sooner at 300 ms. Without priority they also start 167 KB of JavaScript ahead of the brand loader,
+  which moved first paint back by 88 ms. With `fetchpriority="low"` first paint is 264 ms against 260
+  ms without hints, and the mount stays early. That holds at 10 Mbps and stops holding below about
+  2 Mbps (`pending.adoc`). The walk is transitive, because a chunk importing another chunk would only
+  move the late discovery one level down. Dynamic `import()` is excluded: `localImport` matches only
+  quoted specifiers (see the "modulepreload" entry under "Client and bundle").
+* **Local S3 copies run inside LocalStack's container** (`s3Copy`). `aws` is not on the PATH Mill
+  gives subprocesses, so a dev loop that needed it would work only on machines that happen to have it.
+  `docker exec` cannot read a host file, so the file is first copied in with `docker cp`.
+* **Cache-Control is explicit: one day, not heuristic freshness** (`publishBundle`). Left unset,
+  browsers use roughly a tenth of an object's age, so the staleness window grows the longer a location
+  goes without a deploy, and nothing bounds it. HTML is the exception: which HTML file the edge serves
+  is decided per request, so a browser that does not ask cannot be told it changed. `s-maxage` gives
+  CloudFront 24 hours, and the invalidation every deploy issues clears that copy.
+* **Build state lives beside devenv's, not in `Task.dest` or `out/`** (`localStackStateDir`). Mill
+  wipes a task's `dest` on re-evaluation and lets a task write only to its own `dest`, so the apply
+  runs with the filesystem checker disabled. Not under `out/`: `mill clean` and a second
+  `MILL_OUTPUT_DIR` would each start from an empty state against a LocalStack that holds everything.
+  It is `.devenv/state/localstack/tofu/`, next to the devenv process that runs that LocalStack.
+* **Cache keys include the thing they describe** (`rqliteStamp`, `e2eStamp`, `localStackStamp`,
+  `tofuConfig` in `mcp/package.mill`). A recreated container has the same URL, so the container id is
+  part of the key; the LocalStack licence is part of its key too, because a cached read of `Task.env`
+  replays the first run's value. The stamps are `Task.Input`, which re-runs every invocation.
+  `tofuConfig` hashes the `.tf` and `.tfvars` files, because `Task.Sources` cannot cover a
+  `CAPTAL_TERRAFORM_DIR` override.
+* **Suites that share a schema get their own container, and the end-to-end spec its own database**
+  (`api.test`, `mcp.test` in their `package.mill` files). A suite on a shared schema clears another's
+  rows. Advertisers and the three identification surveys are deployment-wide, so `get_location_readiness`
+  on a shared database counts what every other spec wrote. Migrations run once per container, through
+  `Migrate` and `McpMigrate`, never through a Flyway built in the test (see "Concurrent migrations" in
+  `incidents.adoc`).
+* **Test fixtures stand in for configuration deliberately** (`forkEnv` in `mcp/package.mill`).
+  `PUBLIC_BASE_URL` is `https://portal.test`. `UNIFI_PROXY_URL` stands in for the Tailscale proxy output
+  the local configuration does not have. The end-to-end spec asserts that a deployed task carries it,
+  and an unset value could not tell a forwarded value from a missing one. `CLOUDFRONT_DISTRIBUTION_ID`
+  comes from the real output of the applied configuration; it used to be made up, needed only because
+  `AssetStore.layer` requires the name. The database is created and migrated outside any deploy,
+  because `DB_URL` is a value the server knows in advance and injects into every task definition it
+  registers.
+* **The MCP App protocol strings are asserted against the shipped artifact** (`resources` in
+  `mcp.test`). `UploadUiSpec` checks `ui/initialize`, `tools/call` and `ui/message` against the bundle
+  carried as a test resource, not against the server's resources. A production jar holding a copy would
+  put the two out of step. These strings fail silently: a bad envelope is ignored by the host, and a
+  missing `ui/message` leaves the agent waiting for a confirmation that already happened.
+* **LocalStack is pinned to one version for both editions.** `localStackVersion` is `2026.9.1`, read as
+  `localstack/localstack-pro` with a licence and `localstack/localstack` without, so a developer with a
+  licence and one without run the same LocalStack. The version is a date now: LocalStack refuses a
+  licence on images older than the one it requires (see "The Mill build" in `incidents.adoc`).
+* **Licensed services are listed explicitly** (`licensedServices` in
+  `mill-build/src/millbuild/LocalStack.scala`). `ecs` and `elbv2` are available from the Base plan:
+  57 of 77 ECS operations and 38 of 51 ELBv2 operations, including every call this repository makes.
+  `ec2` is for the fixture, since a VPC, subnets and a security group must exist before a load
+  balancer or an awsvpc service accepts them. `efs` backs the single-node rqlite, `secretsmanager`
+  holds the admin token, `servicediscovery` is the namespace rqlite is reached through, and `ecr` is
+  where the images come from. `route53` is never called directly, but
+  `servicediscovery.CreatePrivateDnsNamespace` refuses without it, because a private namespace is a
+  hosted zone. Without a licence only `s3` is started.
+* **Local dev tooling has its own choices.** `--tunnel` uses Cloudflare quick tunnels, because they need
+  no account and no configuration (`mill-build/src/millbuild/Tunnels.scala`); a tunnel's URL is kept for
+  as long as its process runs, which is why a running tunnel is reused rather than reopened. With a
+  tunnel the admin token is random, since the server is public. Without one it is the fixed
+  `dev-token`, which is copied by hand into `.mcp.json`, and a token that changed every run would be
+  copied wrong more often than it would be secure. Two tunnels, for the server and for LocalStack,
+  because the MCP App pages render on the host's public origin and load scripts from, and upload to,
+  LocalStack directly. Scripts are read from the bucket rather than the distribution, because LocalStack's
+  gateway refuses a distribution request carrying an `Origin` it does not know, and a page in a host's
+  frame always sends one.
+* **`ReleaseTarget` is read from the environment, not from a file** (`mill-build/src/millbuild/Release.scala`).
+  `CAPTAL_ENV` names the environment; `AWS_ENDPOINT_URL` set means LocalStack, and the region falls back
+  from `AWS_REGION` to `AWS_DEFAULT_REGION` to `us-east-1`. Outside LocalStack, `ci.run` runs under the
+  CodeBuild role, which needs Docker in privileged mode, `tofu`, `git-cliff`, the `aws` CLI, a clone with
+  its tags, and permission to push tags.
+* **`messages` depends on `core`, never the reverse.** `ApiError` is an HTTP error vocabulary
+  (`{"error": …, "data": …}`), and `core` must not know one. The types lived in `core.codecs` for part
+  of the refactor, which is why the direction was checked. `-Xmax-inlines:64` is needed for the
+  derivation (see `incidents.adoc`, "The Mill build").
+* **The Scala.js entry points are a single `client` linker run** (`client/package.mill`). The portal,
+  the maintenance page and the MCP App pages share one run, which removes a Vite configuration and lets
+  the paused page reuse the portal's `Layout`. The measured cost is in the "Client and bundle" entry
+  above.
+* **The build is split by module, with its helpers in the meta-build** (2026-10-29). A `package.mill`
+  per module folder, so each module's build sits with its code; helpers and shared traits in
+  `mill-build/src/millbuild/*.scala`, which is where Mill's own repository keeps them and which Mill
+  compiles with no `mill-build/build.mill`. Rejected: helper `*.mill` files next to `build.mill` (they
+  crowd the repository root), and a helper folder with its own `package.mill` (that makes it a module,
+  `build.<folder>`). `core-js` and `messages-js` stay in `build.mill`: they have no folder, and moving
+  them under `core`/`messages` would rename them on the command line.
+
+== Long-running local processes
+
+* **They run under devenv's process manager, started and stopped by Mill** (`devenv.nix`,
+  `mill-build/src/millbuild/Processes.scala`). The problem: `mcp.dev` ended in a blocking call, so for as
+  long as the server ran it held Mill 1.1.2's daemon-wide lock and every other `mill` command waited.
+  Mill commands now prepare a process — compile, apply, write its command and environment under
+  `.devenv/state/processes/<name>/` — have devenv (re)start it, wait for it to serve, and return. The
+  user still runs only Mill: CodeBuild runs `mill ci.run` without devenv, and wrapping every Mill
+  command in a devenv task would lose `__` selectors, `show`, `-w` and Mill's caching.
+* **Not Mill workers, measured on 1.1.2, 1.3.1 and 2.0.0-M2.** A `Task.Worker` is closed whenever the
+  build's compiled classes change, any edit to any task included (`MillBuildBootstrap.scala`, 1.1.2,
+  lines 307-341; measured with a worker whose `close()` logs). Its `dest` is wiped whenever it is
+  re-created, in a new daemon too, because `Worker` fixes `persistent = false`
+  (`GroupExecution.scala:313` in 1.1.2, `:441` in 1.3.1). The docs' "Workers can also make use of
+  their `Task.dest` folder as a cache that persists" does not hold: Mill's own compression-cache
+  example, run as written with `--no-daemon`, recompresses instead of reading "from disk" on all
+  three versions. The daemon exits after 30 minutes without a client (`mill.server_timeout`), os-lib
+  kills what it spawned on exit, and from 1.3 the daemon closes every worker on exit too. A worker
+  that owned LocalStack would have taken it down on every build edit and every idle half hour. A
+  `persistent` worker is possible only by subclassing `Task.Worker` and memoizing it with
+  `cachedTask` by hand, outside the macro — `Task(persistent = true).Worker` does not exist.
+* **OpenTofu stays in Mill.** An apply ends, it is part of the release CodeBuild runs without devenv,
+  and it is interleaved with tasks Mill owns: the image tags are the versions git-cliff computes, and
+  the registries are applied, the images pushed into them, then the rest.
+* **A process is alive when the pid its launcher recorded is, not when devenv says so.** devenv 2.1.2
+  keeps reporting `exited` after `devenv processes restart` until the restarted process first passes its
+  readiness check, and forever without one; `devenv processes start` on an exited process does nothing.
+  The launcher in `devenv.nix` writes `$$` before it `exec`s, so the pid is the command's own.
+* **Only a new command or environment restarts a process.** Comparing the written files decides it;
+  the readiness check is excluded, because restarting LocalStack for a new check discards every
+  resource the configuration made.
+* **The LocalStack licence reaches the container by name only.** The manager is started with the
+  task's environment plus `LOCALSTACK_AUTH_TOKEN` (`.env` names it `LOCALSTACK_TOKEN`), processes inherit
+  it, and the container gets `-e LOCALSTACK_AUTH_TOKEN` with no value — the token is in no file and on
+  no command line. A manager started without it runs LocalStack unlicensed until it is restarted.
+* **Kept as containers rather than devenv services.** LocalStack, the test databases and the tunnels
+  are what the build already ran; devenv only supervises them. LocalStack's own persistence
+  (`PERSISTENCE=1`, Base or Ultimate plan) would let a recreated container keep its resources; the plan
+  this project's licence is on was not checked.
 
 == Comments vs. documentation
 

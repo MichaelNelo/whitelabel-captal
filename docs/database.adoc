@@ -373,16 +373,16 @@ There is no local rqlite to install. The database `api.dev` and `mcp.dev` share 
 the backoffice writes what the portal reads — is the local configuration's rqlite service: three
 nodes in LocalStack, applied by `mcp.dev`, reached from this machine on `localhost:5001` and from a
 deployed location's task as `rqlite.captal.local:5001`, as in production. The test suites each have a
-Docker container of their own instead: `ensureRqlite(name, port)` checks Docker, reuses a running
-container when its image matches `rqlite/rqlite:<rqliteVersion>`, recreates it when it does not,
-waits for readiness, and returns the JDBC URL.
+container of their own instead, run as a devenv process of the same name: `ensureRqlite(name, port,
+env)` reuses it while it runs `rqlite/rqlite:<rqliteVersion>` on that port, starts it again otherwise,
+waits for readiness, and returns the JDBC URL. Its data goes with the container.
 
 |===
 | Container | Port | Used by
 
 | `rqlite-test` | 4011 | `api.test`
 | `rqlite-mcp-test` | 4012 | `mcp.test`
-| `rqlite-mcp-e2e` | — | the end-to-end suite
+| `rqlite-mcp-e2e` | 4013 | the end-to-end suite
 |===
 
 Test tasks migrate once, up front, through `Migrate` and `McpMigrate` as two sequential processes

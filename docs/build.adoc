@@ -1,0 +1,149 @@
+= Build
+:toc:
+:toclevels: 2
+
+The repository is built by Mill. The build is a set of modules: one `package.mill` per module, with shared helpers in `mill-build/`. This document describes the build as it stands; the reasons for it are in xref:context/decisions.adoc[the context tree].
+
+== Files
+
+[cols="2,3"]
+|===
+| File | Holds
+
+| `build.mill`
+| The root build: the `rqlite` image object, the cross-compiled `core-js` and `messages-js` modules, and the `ci` object with `ci.run`.
+
+| `core/package.mill`
+| The `core` module (JVM and shared sources) and its test suite.
+
+| `messages/package.mill`
+| The `messages` module, the wire vocabulary shared by `api` and `client`.
+
+| `platform/package.mill`
+| The `platform` module: repositories, services, migrations and their JDBC and Flyway dependencies. Its `migrate` command.
+
+| `api/package.mill`
+| The `api` module: the guest-facing server, its test suite, and the `image`, `imagePush` and `dev` commands.
+
+| `client/package.mill`
+| The `client` module: the Scala.js front end, its bundle, and the `publish` and `publishS3` commands.
+
+| `mcp/package.mill`
+| The `mcp` module: the backoffice server, on Scala 3.10, with its test suite, `image` and `imagePush`.
+
+| `mill-build/src/millbuild/Modules.scala`
+| The base traits (`BaseModule`, `BaseJSModule`), the `Released` trait that computes module versions, and the core dependency sets.
+
+| `mill-build/src/millbuild/Bundle.scala`
+| Rendering `index.html` from its template, the `modulepreload` hints, publishing the bundle and the MCP App scripts to S3.
+
+| `mill-build/src/millbuild/Rqlite.scala`
+| The rqlite engine version, the rqlite container used by the test suites, and the local database URL.
+
+| `mill-build/src/millbuild/LocalStack.scala`
+| LocalStack, run as a devenv process, and the OpenTofu configuration applied to it.
+
+| `mill-build/src/millbuild/Release.scala`
+| The release operations: applying the configuration, pushing images, moving locations, publishing the client.
+
+| `mill-build/src/millbuild/Processes.scala`
+| Starting, restarting, stopping and waiting for the long-running processes `devenv.nix` declares. See xref:development.adoc#processes[Local processes].
+
+| `mill-build/src/millbuild/Tunnels.scala`
+| The Cloudflare quick tunnels `mcp.dev --tunnel` opens, as devenv processes.
+|===
+
+== Modules
+
+[cols="1,1,3"]
+|===
+| Module | Scala | Depends on
+
+| `core`, `core-js`
+| 3.8.0, JVM and Scala.js
+| Nothing. `core-js` compiles the sources of `core`.
+
+| `messages`, `messages-js`
+| 3.8.0, JVM and Scala.js
+| `core` and `core-js`. `messages-js` compiles the sources of `messages`.
+
+| `platform`
+| 3.8.0, JVM
+| `core`.
+
+| `api`
+| 3.8.0, JVM
+| `core`, `messages`, `platform`.
+
+| `client`
+| 3.8.0, Scala.js with ES modules
+| `core-js`, `messages-js`.
+
+| `mcp`
+| 3.10.0, JVM
+| `core`, `platform`.
+
+| `rqlite`
+| none
+| Only the Dockerfile and entrypoint in `docker/`.
+|===
+
+`api`, `client` and `mcp` are released modules. `core-js` and `messages-js` have no folder of their own; for versioning they count the sources of `core` and `messages`.
+
+== Versions
+
+`api`, `client` and `mcp` are versioned apart, each from its own git tags. The version is computed from the conventional commits that touch the module or the modules it depends on. The rules and the commit types are in xref:development.adoc#versions[Versions].
+
+== Commands
+
+=== Build and test
+
+`mill __.compile`:: Compiles every module.
+
+`mill core.test`, `mill api.test`, `mill mcp.test`:: Run the test suite of one module. `api.test` and `mcp.test` need Docker, and `mcp.test` also needs LocalStack. xref:testing.adoc[Test strategy] says what each layer needs.
+
+`mill <module>.assembly`:: Builds the jar of `api` or `mcp`.
+
+=== Images
+
+`mill rqlite.image [--tag T]`:: Builds `captal-rqlite:<tag>` from `docker/rqlite.Dockerfile`. The tag defaults to `latest`.
+
+`mill api.image [--tag T] [--devEndpoints]`:: Builds `captal-api:<tag>` from the `api` jar. `--devEndpoints` enables `/api/dev/reset-phase`, which is off by default and must not reach an image that serves guests.
+
+`mill mcp.image [--tag T]`:: Builds `captal-mcp:<tag>` from the `mcp` jar.
+
+`mill rqlite.imagePush`, `mill api.imagePush`, `mill mcp.imagePush`:: Build the image and push it to a registry. Take `--registry`, `--repository` and `[--tag T]`. The registry needs a `docker login` first.
+
+=== Client
+
+`mill client.bundle`:: Builds the production bundle into `out/client/bundle.dest/`. The output is not pre-gzipped; CloudFront compresses it.
+
+`mill client.publish --bucket B [--region R] [--endpoint E]`:: Publishes the MCP App scripts under `ui/` in the bucket. `--endpoint` points it at LocalStack.
+
+`mill client.publishS3 --bucket B --prefix P [--region R] [--endpoint E]`:: Publishes the whole bundle under `<bucket>/<prefix>/`. Needs AWS credentials, through `aws sso login` or the usual environment variables.
+
+=== Release
+
+`CAPTAL_ENV=<environment> mill ci.run`:: Releases to an environment. It builds the `rqlite`, `api` and `mcp` images, applies the `terraform/` configuration with the variables of `environments/<environment>`, moves every deployed location onto the API image, publishes the client under its version, and tags the commit with each module version that moved. Reads `AWS_REGION` or `AWS_DEFAULT_REGION` (default `us-east-1`), and `AWS_ENDPOINT_URL` when releasing to LocalStack, which tags nothing.
+
+=== Database
+
+`mill platform.migrate`:: Runs the API's migrations against the database named by `DB_URL`.
+
+`mill api.test.stopRqlite`, `mill mcp.test.stopRqlite`:: Stop the rqlite databases the matching suite starts. Their data goes with them.
+
+=== Local development
+
+These start processes that keep running after the command returns, under devenv's process manager. xref:development.adoc#processes[Local processes] explains how.
+
+`mill mcp.dev [--tunnel] [--token T] [--port P]`:: Applies the local configuration to LocalStack, releases the build into it, and starts the backoffice on `:8081`, with Cloudflare quick tunnels when asked.
+
+`mill api.dev [--slug S]`:: Migrates the local configuration's database and serves one location's API on `:8080`.
+
+`mill mcp.stop`, `mill api.stop`:: Stop the backoffice with its tunnels, or the API.
+
+`mill mcp.localStackSetup`, `mill mcp.stopLocalStack`:: Ensure LocalStack is up, or stop it with the containers it ran for ECS tasks.
+
+`mill mcp.test.resetLocalStack`:: Stops LocalStack and removes its OpenTofu state, so the next run creates both together.
+
+`mill mcp.destroyLocal`:: Stops every local process and removes every container, image and local state the build creates.

@@ -1,0 +1,177 @@
+package build.client
+
+import com.goyeau.mill.scalafix.ScalafixModule
+import mill.*, scalalib.*, scalafmt.*, scalajslib.*
+import millbuild.*
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Client: JS only (Laminar app)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One linker run for every public module: the portal, the maintenance page and the MCP App pages.
+  * Sources under `client/src`, entry stubs under `client/entries`.
+  */
+object `package` extends BaseJSModule with Released:
+  def moduleDeps = Seq(build.`core-js`, build.`messages-js`)
+
+  /** Targets ES2021 and backs `Long` with the native `BigInt`, which removes `RuntimeLong` from the bundle.
+    * `BigInt` is slower than emulated `Long` in hot loops.
+    */
+  def esFeatures = mill
+    .scalajslib
+    .api
+    .ESFeatures
+    .Defaults
+    .withESVersion(mill.scalajslib.api.ESVersion.ES2021)
+    .withAllowBigIntsForLongs(true)
+
+  // ESModule, required for per-route dynamic imports (`NoModule` refuses `js.dynamicImport`).
+  // The bundle step below, not Closure Compiler, minifies the multi-module output.
+  def moduleKind = mill.scalajslib.api.ModuleKind.ESModule
+  def moduleSplitStyle = mill.scalajslib.api.ModuleSplitStyle.SmallModulesFor("whitelabel.captal")
+  def mvnDeps = Seq(
+    mvn"com.raquo::laminar::17.2.0",
+    mvn"com.raquo::waypoint::9.0.0",
+    // Declared directly: the MCP App pages depend on the DOM alone.
+    mvn"org.scala-js::scalajs-dom::2.8.0",
+    mvn"io.github.cquiroz::scala-java-time::2.6.0")
+
+  // Generates `BuildInfo`: the environment (`ENVIRONMENT`, default production) and the release version.
+  def generatedSources: T[Seq[PathRef]] = Task:
+    val env = Task.env.getOrElse("ENVIRONMENT", "production")
+    val isDevMode = env == "dev"
+    val dest = Task.dest / "BuildInfo.scala"
+    os.write(
+      dest,
+      s"""package whitelabel.captal.client
+         |
+         |object BuildInfo:
+         |  val environment: String = "$env"
+         |  val isDevMode: Boolean = $isDevMode
+         |  val version: String = "${releaseVersion().version}"
+         |""".stripMargin
+    )
+    Seq(PathRef(Task.dest))
+
+  private def gzipFile(src: os.Path, dest: os.Path): Unit =
+    val in = java.io.FileInputStream(src.toIO)
+    val out = java.util.zip.GZIPOutputStream(java.io.FileOutputStream(dest.toIO))
+    try
+      val buf = new Array[Byte](8192)
+      var n = in.read(buf)
+      while n > 0 do
+        out.write(buf, 0, n)
+        n = in.read(buf)
+    finally
+      out.close()
+      in.close()
+
+  def clientAssets: T[PathRef] = Task.Source(moduleDir / "assets")
+  def clientTemplate: T[PathRef] = Task.Source(moduleDir / "index.html.template")
+  def maintenanceTemplate: T[PathRef] = Task.Source(moduleDir / "maintenance.html.template")
+
+  /** Hand-written entries that call `start`, staged beside the linker's output: one per public module other than the portal.
+    */
+  def entries: T[PathRef] = Task.Source(moduleDir / "entries")
+
+  def viteConfig: T[PathRef] = Task.Source(moduleDir / "vite.config.mjs")
+
+  /** Installs Vite and terser into the task's directory. Vite's Rollup build does the scope hoisting. */
+  def jsTools: T[PathRef] = Task:
+    val result = os
+      .proc(
+        "npm",
+        "install",
+        "--no-save",
+        "--no-audit",
+        "--no-fund",
+        "--silent",
+        "--prefix",
+        Task.dest.toString,
+        "vite@6.0.7",
+        "terser@5.37.0")
+      .call(check = false, stderr = os.Pipe)
+    if result.exitCode != 0 then
+      sys.error(s"[bundle] npm install failed: ${result.err.trim()}")
+    PathRef(Task.dest)
+
+  /** Builds the production bundle into `out/client/bundle.dest/`. Usage: `mill client.bundle`
+    *
+    * Output is not pre-gzipped: CloudFront compresses it, since ES module chunks must keep their paths.
+    */
+  def bundle = Task:
+    val linked = fullLinkJS().dest.path
+    val assets = clientAssets().path
+    val dest = Task.dest
+
+    // Vite needs a project directory: the linker output as `src/`, the config, and `node_modules`.
+    val project = os.temp.dir(prefix = "captal-vite")
+    os.makeDir.all(project / "src")
+    for
+      module <- os.list(linked)
+      if module.ext == "js"
+    do
+      os.copy(module, project / "src" / module.last)
+    // Checked after the linker output: a stub that collides with a module is an error, not an overwrite.
+    for
+      entry <- os.list(entries().path)
+      if entry.ext == "js"
+    do
+      if os.exists(project / "src" / entry.last) then
+        sys.error(
+          s"[bundle] ${entry.last} is both a hand-written entry and a module the linker emitted. Rename the Scala.js moduleID.")
+      os.copy(entry, project / "src" / entry.last)
+    os.copy(viteConfig().path, project / "vite.config.mjs")
+    os.symlink(project / "node_modules", jsTools().path / "node_modules")
+
+    val built = os
+      .proc((project / "node_modules" / ".bin" / "vite").toString, "build")
+      .call(cwd = project, check = false, stderr = os.Pipe)
+    if built.exitCode != 0 then
+      sys.error(s"[bundle] vite build failed: ${built.err.trim()}")
+
+    for
+      output <- os.list(project / "dist")
+      if output.ext == "js"
+    do
+      os.copy(output, dest / output.last)
+
+    os.copy(assets / "styles.css", dest / "styles.css")
+    os.copy(assets / "brand-icon.svg", dest / "brand-icon.svg")
+
+    // Relative paths: production serves the bundle at https://<host>/<slug>/.
+    renderIndex(
+      clientTemplate().path,
+      dest / "index.html",
+      "./main.js",
+      "./styles.css",
+      preloadLinks(dest, "main.js"))
+    renderIndex(
+      maintenanceTemplate().path,
+      dest / "maintenance.html",
+      "./maintenance.js",
+      "./styles.css",
+      preloadLinks(dest, "maintenance.js"))
+
+    PathRef(dest)
+
+  /** Publishes the MCP App pages' scripts under `ui/` (see [[publishUiScripts]]). Usage:
+    * `mill client.publish --bucket captal-prod-assets`. `--endpoint` targets LocalStack.
+    */
+  def publish(bucket: String, region: String = "us-east-1", endpoint: String = "") = Task.Command:
+    publishUiScripts(bundle().path, bucket, region, local = endpoint.nonEmpty)
+
+  /** Publishes the bundle to `<bucket>/<prefix>/`, with per-file Content-Type and Cache-Control.
+    *
+    * Usage: `mill client.publishS3 --bucket captal-prod-assets --prefix bundle`. Optional:
+    * `--region us-east-1` (default) and `--endpoint` for LocalStack.
+    *
+    * Needs AWS credentials: `aws sso login`, or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.
+    */
+  def publishS3(
+      bucket: String,
+      prefix: String,
+      region: String = "us-east-1",
+      endpoint: String = "") = Task.Command:
+    publishBundle(bundle().path, bucket, prefix, region, local = endpoint.nonEmpty)
+end `package`

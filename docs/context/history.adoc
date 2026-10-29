@@ -38,6 +38,38 @@ request and response types rode along in the same module; nothing in `client` ev
 endpoint, only the types. Those types are `messages/` now, cross-compiled for both sides, and the
 route descriptions live beside the routes.
 
+The API's test suites used `tapir-sttp-stub-server`. They now send `basicRequest` and answer it with
+sttp-client's own `SttpBackendStub` (in `TestHelpers`), so sttp-client is declared directly in
+`api/package.mill` at 3.10.2, the version tapir had been resolving. The `tapir-zio-http-server` and
+`tapir-json-circe` dependencies went with the last route.
+
+=== `endpoints-js`, the browser half of the old pairing
+
+The cross-compiled `endpoints` and `endpoints-js` modules were the pairing that caused the trouble:
+`endpoints-js` compiled every source in the module, so the browser build carried tapir on its compile
+classpath to typecheck declarations nothing in the browser reads. The linker dropped them: 0 of 188
+output modules mention tapir, though the dependency and the compile were real. Of the endpoint
+descriptions, `SurveyEndpoints`, `VideoEndpoints` and `FinishEndpoints` had no reference anywhere,
+`LocaleEndpoints` had two of its five used, and every other route built its endpoint inline in `api`
+on `SessionEndpoint`. The descriptions were deleted, the two live ones moved into `LocaleRoutes` beside
+the three already there, and the tapir `Schema` instances moved to `api.schemas`, in the one module
+that still held tapir. What was genuinely shared became `messages`. The name `endpoints` had invited
+descriptions and collected 174 lines of dead ones, so `messages` names what the module holds, not a
+layer; `http` or `api-shared` would have invited the same.
+
+=== `ensureLocalStackInfra`
+
+Replaced by `ensureLocalStackTofu`, which applies the configuration the AWS environments use. The
+removed function was 219 lines of `awslocal` calls that built a cluster, a VPC, two subnets, a security
+group, a load balancer, a listener and two IAM roles, each in a describe-or-create wrapper. It agreed
+with the deployed topology only as long as someone kept it agreeing, and `modules/alb` had already grown
+rules it did not know about. The reasoning is in `decisions.adoc`, "Build, deploy and infrastructure".
+
+=== Manual `aws s3 cp` publishing
+
+`client.publishS3` replaced four manual `aws s3 cp` invocations. It sets `Content-Type` and
+`Cache-Control` per file, which the manual copies did not do consistently.
+
 **Stale references to expect.** `api/schemas.scala` (tapir `Schema` instances — replaced by
 `api/wire.scala`, which holds zio-schema `Schema`s and is not the same kind of thing),
 `prependSecurityIn` (how the slug prefix used to be applied — `ApiBase` does it now),
@@ -81,6 +113,39 @@ Two consequences worth knowing:
   outside. `mcp.test.tofuSources` is the `Task.Sources` declaration that permits the staging copy;
   without it the apply fails with `Reading from terraform not allowed`, a message that names the
   task and not the read.
+
+=== The build was split into one `package.mill` per module
+
+`build.mill` held every module. It now holds only the `rqlite` image object, the cross-compiled
+`core-js` and `messages-js`, and `ci.run`. Each module has its own `package.mill` (`core`, `messages`,
+`platform`, `api`, `client`, `mcp`), and the shared helpers live in `mill-build/src/millbuild/`
+(`Modules`, `Bundle`, `Rqlite`, `LocalStack`, `Release`, `Processes`, `Tunnels`). Split on 2026-10-29,
+in the same commit that moved the long-running processes under devenv.
+
+=== Long-running processes moved under devenv
+
+Until 2026-10-29 the build ran them itself: LocalStack and the test databases as `docker run -d`
+containers reused by inspecting their image and environment, the tunnels as `QuickTunnels`, a class
+holding `cloudflared` subprocesses that closed with the server, and `mcp.dev`/`api.dev` as a blocking
+`java` call that held Mill's lock for the server's whole life. `api.dev` beside `mcp.dev` needed its
+own `MILL_OUTPUT_DIR`. The LocalStack state lived in `out/localstack/<container-id>/`, which `mill
+clean` emptied while the container kept its resources.
+
+The `rqlite` image was pushed by hand before it became a Mill task (`rqlite.image`), with its tag set in
+each `terraform.tfvars`.
+
+=== Skills moved from `cli/resources/templates/` to `mcp/resources/skills/`
+
+The CLI scaffolded the skills into an operator's workspace, and the backoffice reached across with `os.up`
+to borrow them. They are served now from the backoffice's own resources, which is the classpath location
+`Skills.load` reads. The failure that the old arrangement hid is in `incidents.adoc`, "The Mill build".
+
+=== The maintenance page was `object maintenance`
+
+It was built in its own linker run, and so it went through the Closure Compiler. It is now the fourth
+public module of `client`, with its template at `client/maintenance.html.template` and its stub at
+`client/entries/maintenance.js`. The `build.mill` comment that described the old object was in Spanish
+and was removed with the move; this is its only record.
 
 === `api/` was split out of one object
 
@@ -128,4 +193,8 @@ When something cannot be found, check this list before assuming it was renamed:
 | `modules/vpc` | Removed from configuration; still live in deployed environments.
 | `../whitelabel-captal-infrastructure` | `terraform/` in this repository.
 | `endpoints/` | `messages/` for the types; route descriptions in `api/routes/`.
+| `endpoints-js` | `messages-js`, and nothing else.
+| `object maintenance` | The fourth public module of `client`.
+| `ensureLocalStackInfra` | `ensureLocalStackTofu`.
+| `cli/resources/templates` | `mcp/resources/skills`.
 |===

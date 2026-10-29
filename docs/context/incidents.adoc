@@ -531,6 +531,107 @@ GET /api/health              -> 200 {"status":"ok"}
   dependency; this module only ever constructs the synchronous (`apache-client`) AWS clients, so
   nothing is lost.
 
+== The Mill build
+
+* **`messages` would not derive its codecs: "Maximal number of successive inlines (32) exceeded".**
+  `ApiError` has exactly 32 variants and circe's derivation inlines once per case, so the default
+  `-Xmax-inlines` of 32 is reached. The type is not too large. **Fix:** `-Xmax-inlines:64` in
+  `messages/package.mill` and in `messages-js` (`build.mill`). **Lesson:** read the compiler limit
+  before restructuring a type. The hand-written pair of codecs this replaced had drifted 22 of 32
+  variants apart (see "Codecs were consolidated" in `history.adoc`).
+* **`api.test` hung after its rqlite container was removed between runs.** `rqliteTestUrl` in
+  `api/package.mill` was a plain `Task`, which cached the URL and never re-checked the container. The
+  symptom was tests hanging on `HTTP POST error: (-1) [http://localhost:4011/...]`. **Fix:** a
+  `Task.Input`, which re-checks on every invocation. **Lesson:** an unchanged URL in a cache is no
+  evidence that anything behind it still exists. The same cache-key failure hit the migration task
+  (see "Concurrent migrations").
+* **LocalStack refused its licence on the `:3` tag, which resolved to 3.8.1 (built 2024-10-08).**
+  LocalStack checks its licence against the image: "Your LocalStack license requires you to use localstack-pro version 2026.3.0 or higher".
+  The container exits with code 55 within a couple of seconds, and the only explanation is in
+  `docker logs`. **Fix:** LocalStack is versioned by date now, pinned to `2026.9.1` (`localStackVersion`
+  in `mill-build/src/millbuild/LocalStack.scala`). `ensureLocalStack` stops waiting as soon as the
+  container has exited, instead of waiting out the full minute.
+* **A LocalStack container started without a licence was reused after one was configured.** Reuse
+  checked only the container's name, so `ecs` answered 501 and the build still reported LocalStack
+  ready. The failure surfaced inside a test as an `InternalFailure`. Docker cannot change the
+  environment of a running container. **Fix:** `ensureLocalStack` compares `SERVICES`, the image,
+  the IAM settings, `LOCALSTACK_HOST` and `GATEWAY_LISTEN` (via `docker inspect`) before reusing it, and
+  checks each declared service against the health endpoint's registry. **Lesson:** a reuse check that
+  is skipped looks exactly like success. The IAM half of this is in "Deploy / infrastructure plumbing".
+* **Services missing from the free tier fail as credential errors.** A service LocalStack does not
+  register (the free tier has only S3) answers `UnrecognizedClientException`, which reads like a
+  credentials problem and is not one. **Fix:** the health-registry check in `ensureLocalStack` names
+  the missing service.
+* **Scripts served through LocalStack's distribution were refused.** LocalStack's gateway refuses a
+  request to a distribution that carries an `Origin` it does not know, and a page in a host's frame
+  always sends one. **Fix:** `SCRIPT_BASE_URL` in `mcp/package.mill` (`dev`) points at the bucket,
+  which answers with its own CORS rule. In production the distribution adds the CORS header at the
+  edge, so the difference exists only locally.
+* **`stopLocalStack` left resources that broke the next run.** It removed the container and nothing
+  else. The anonymous volume and the ECS task containers LocalStack had started outlived it, and a task
+  still holding a published port made the next run fail on a port that looked free. **Fix:** LocalStack
+  runs with `--rm`, so its volume goes with it, and `removeLocalStackContainers` (in
+  `mill-build/src/millbuild/LocalStack.scala`) removes the `ls-ecs-captal-*` task containers whenever it
+  is stopped or replaced; `destroyLocal` removes every container and image the build created.
+* **The LocalStack licence was read from a stale environment.** `System.getenv` inside a build returns
+  the environment the Mill daemon had when it started, and the daemon outlives the invocation. Configuring
+  a token and re-running quietly kept the free tier. **Fix:** `localStackToken` takes the launching
+  client's environment (`Task.env`).
+* **A cached task replayed an empty fixture.** `Task.env` read inside a cached task is the environment of
+  whichever invocation filled the cache. Configuring a token and re-running reused an empty fixture, so
+  the end-to-end deploy test skipped itself with no explanation. **Fix:** the licence state is part of the
+  `localStackStamp` input in `mcp/package.mill`.
+* **`git-cliff` was not found by Mill.** The `IOException` in `Released.releaseVersion` means git-cliff is
+  not on the PATH the Mill daemon runs with. `devenv` installs it, but a daemon started earlier keeps the
+  old PATH. **Fix:** reload the shell, then `mill shutdown` so the daemon starts again with it.
+* **Versions moved on commits outside a module's paths.** `git-cliff --bumped-version` computes the
+  version from every commit and ignores `--include-path`. **Fix:** `Released.releaseVersion` uses
+  `--bump --unreleased --context`, whose version honours the path filter. **Lesson:** a flag that looks
+  equivalent can read the whole history where the context reads only the paths asked for.
+* **`read_skill` answered "no such skill" after the CLI was deleted.** The skills lived under
+  `cli/resources/templates/`, and `mcp` reached across with `os.up` to borrow them. Deleting the CLI
+  broke the server silently: it compiles, and every call returns "no such skill". **Fix:** the skills
+  moved into `mcp/resources/skills/`, which is the only place the server reads them from (see
+  "Structural moves" in `history.adoc`). **Lesson:** a build that borrows another subproject's files
+  fails without a compile error when that subproject goes away.
+* **The end-to-end spec deleted data another spec was reading.** Advertisers and the three
+  identification surveys are deployment-wide. On a shared database, `get_location_readiness` counted what
+  every other spec had written, and in one run `SurveyToolsSpec` deleted, between two of the end-to-end
+  spec's own calls, the survey it had just read. **Fix:** the end-to-end spec has its own rqlite
+  container and database (`E2E_DB_URL`, `migratedE2eUrl` in `mcp/package.mill`). **Lesson:** isolating
+  suites by module is not enough when a single module's suites share tables.
+
+== Long-running local processes
+
+Found while moving them under devenv, on 2026-10-29, with devenv 2.1.2 on WSL 2.
+
+* **A failed `api.dev` took two minutes to say so.** With a slug that has no location, the API exits
+  at once, yet the task waited for its port until its own deadline. On this WSL a TCP connection to a
+  local port nobody listens on is not refused, it hangs: `curl` to `127.0.0.1:8080` timed out after
+  10 s instead of failing. The port check had no timeout, so each attempt sat out the kernel's
+  ~2-minute connect timeout and the loop never got to notice the dead process. **Fix:** `listening`
+  connects with a 1 s timeout, `answers` and every readiness `curl` carry `-m`. **Lesson:** on this
+  machine, "nothing listens" looks like "slow", not like "closed".
+* **`devenv processes status` said `exited` about a process that was serving.** After a failed start,
+  `devenv processes restart api` brought the API up, but the phase stayed `exited` until the process
+  passed its readiness check — and stays so forever for a process without one; `devenv processes
+  start` on an exited process does nothing. The wait read `exited` right after the restart and failed
+  a server that went on to answer. **Fix:** liveness is the pid the launcher records
+  (`Processes.running`). **Lesson:** a supervisor's reported phase is a cache; ask the process.
+* **Changing a readiness check restarted LocalStack and lost everything.** Any change to a process's
+  files counted as a new configuration, so a new `ready` snippet restarted LocalStack, which took the
+  rqlite service and every resource the apply had made with it. **Fix:** only the command and the
+  environment decide a restart (`Processes.write`).
+* **`devenv processes down` left the test databases running.** Their containers were running again a
+  few seconds after the manager stopped, now outside its control. A single `devenv processes stop`
+  leaves nothing behind. **Fix:** `Processes.down` stops each process before the manager; and a start
+  removes any container under the process's name first.
+* **The test databases and LocalStack started with no `mill` command.** The editor's Mill BSP server
+  (`.bsp/out`) evaluated `api.test.rqliteTestUrl`, `mcp.test.rqliteStamp`, `localStackStamp` and then
+  `localStackInfra` — a full apply — seconds after files of the build changed: Metals re-imports the
+  build and asks for the test modules' environment, which is `forkEnv`. Not new; it was invisible while
+  the containers were plain `docker run -d`. Still open, see `pending.adoc`.
+
 == Measured, then reverted: the jsoniter migration
 
 A full migration off circe onto `jsoniter-scala` for the client's wire codecs was built, verified

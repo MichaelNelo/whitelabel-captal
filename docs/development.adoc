@@ -6,8 +6,9 @@
 
 Nix, https://devenv.sh[devenv] and direnv on the host — none of the three is managed by this
 repository, and everything else is. Docker is also required directly: `rqlite` and, for the MCP
-backoffice's deploy-related work, LocalStack both run as containers the build starts for you, not
-as something devenv provisions.
+backoffice's deploy-related work, LocalStack both run as containers. Those containers, the dev
+servers and the tunnels run under devenv's process manager, which the build starts and drives — see
+<<processes>>.
 
 `devenv.nix` provides the rest of the toolchain the moment the shell is entered:
 
@@ -79,16 +80,14 @@ running a different, per-module configuration there.
 
 == Running rqlite
 
-`ensureRqlite(containerName, hostPort)` is the one function every `*.dev` and `*.test` task calls
-to get a database. It checks Docker is reachable, looks for a container already running under the
-given name, and compares its image against the one this build currently asks for
-(`rqlite/rqlite:10.6.1`) — a name match alone is not reuse, because that is exactly how a stale
-image survived three version drifts unnoticed in the past (see
-xref:context/incidents.adoc[Incidents]). A container on the wrong image, or none at all, is removed
-and recreated; a container already on the right image is left alone.
+`ensureRqlite(name, hostPort, env)` (`mill-build/src/millbuild/Rqlite.scala`) is how a test suite
+gets its database: a container named `name` on `hostPort`, run as the devenv process of the same
+name. A process already running the same command — the same image, `rqlite/rqlite:10.6.1`, and the
+same port — is reused; anything else, or nothing at all, is (re)started, after removing any
+container left under that name. Its data goes with the container.
 
-Three of those containers exist across the whole build, never shared between purposes:
-`rqlite-test`, `rqlite-mcp-test` and `rqlite-mcp-e2e`, covered in xref:testing.adoc[Test strategy].
+Three of those exist across the whole build, never shared between purposes: `rqlite-test`,
+`rqlite-mcp-test` and `rqlite-mcp-e2e`, covered in xref:testing.adoc[Test strategy].
 The database `api.dev` and `mcp.dev` run against is not one of them: it is the local
 configuration's rqlite service, the same one production runs, in LocalStack — see
 <<Running the stack locally>>.
@@ -102,6 +101,7 @@ configuration's rqlite service, the same one production runs, in LocalStack — 
 [dev] Step 1/3: Waiting for the local configuration's rqlite...
 [dev] Step 2/3: Running migrations...
 [dev] Step 3/3: Starting server (location=cafe-centro)...
+[dev] The API serves 'cafe-centro' on :8080. Its log: `devenv processes logs api`. Stop it with `mill api.stop`.
 ----
 
 In order: waits for the local configuration's rqlite to have a leader, on the host port
@@ -109,8 +109,10 @@ In order: waits for the local configuration's rqlite to have a leader, on the ho
 `mcp.dev` has applied that configuration, and the wait says so when it never answers;
 `whitelabel.captal.platform.Migrate` against it; `copyIndex` renders `client/index.html` from the template (pointing at `fastLinkJS`'s output by
 default, or at `client.bundle`'s Vite-processed output when `CLIENT_LINKER=full` — the shape
-production actually serves); then the server is forked with `LOCATION_SLUG` set to the `--slug`
-argument, defaulting to `cafe-centro`.
+production actually serves); then the server is started as the devenv process `api`, with
+`LOCATION_SLUG` set to the `--slug` argument, defaulting to `cafe-centro`. The task returns once the
+server listens on 8080, or fails with the process's log if it exits first. A run restarts the server
+on the current build; `mill api.stop` stops it.
 
 IMPORTANT: **A location row must already exist before this will boot.** `ServerSettings`/`AppLayers`
 resolve `LOCATION_SLUG` against the `locations` table during layer construction and fail the whole
@@ -118,8 +120,8 @@ process with `LocationNotFound` if it is absent — see xref:api.adoc[Guest API]
 writes that row. Create the location first (through the MCP backoffice's `create_location` tool —
 run `mcp.dev` and drive it from a client) before running `api.dev` against a fresh database.
 
-While `mcp.dev` runs it holds Mill's lock on `out/`, so `api.dev` beside it needs an output
-directory of its own: `MILL_OUTPUT_DIR=/tmp/captal-api-out mill api.dev --slug <slug>`.
+It runs beside `mcp.dev`'s backoffice: both tasks return once their server serves, so neither
+holds Mill while the servers run.
 
 === `mill mcp.dev`
 
@@ -130,8 +132,12 @@ directory of its own: `MILL_OUTPUT_DIR=/tmp/captal-api-out mill api.dev --slug <
 [dev] Step 3/6: Waiting for rqlite, then running migrations...
 [dev] Step 4/6: Publishing the portal, the MCP App scripts and the images...
 [dev] Step 5/6: Opening the Cloudflare tunnels...
-[dev] Step 6/6: Starting MCP backoffice on :8081
+[dev] Step 6/6: Starting the MCP backoffice on :8081...
 ----
+
+The task returns once the backoffice serves; it keeps running as the devenv process `mcp`. A run
+restarts it on the current build, `mill mcp.stop` stops it with its tunnels, and `devenv processes
+logs mcp` shows its log.
 
 Everything the backoffice runs against is the local configuration's, applied to LocalStack: the
 same OpenTofu configuration production uses, so nothing here is a resource the build made on the
@@ -141,7 +147,8 @@ Steps 2 and 4 are the release `ci.run` makes (see <<release>>), run with the
 variables of this machine's LocalStack instead of CodeBuild's: `CAPTAL_ENV=local` and
 `AWS_ENDPOINT_URL` at the container, which turns every AWS call into `awslocal` inside it.
 
-Step 1 starts (or reuses) the `localstack-dev` container. Step 2 applies `environments/local`,
+Step 1 starts (or reuses) LocalStack: the devenv process `localstack`, which runs the
+`localstack-dev` container in the foreground. Step 2 applies `environments/local`,
 sharing `mcp.test.localStackInfra`'s state so the two cannot come apart: `init`, the image
 registries alone, the rqlite image pushed into its own, then a plan of everything and that plan
 applied — the rqlite service, the assets bucket with its CORS rule, the distribution, and the
@@ -186,15 +193,15 @@ containers. It is the same port inside the container and out: `GATEWAY_LISTEN` m
 `LOCALSTACK_HOST` names it, because LocalStack writes that host into every URL it returns — an ECR
 repository URI, the endpoint its own ECS tasks are given — and `awslocal` dials it from inside the
 container. A URL saying 4566 would reach whichever LocalStack holds that port; one saying 4567 while
-LocalStack listened on 4566 inside would reach nothing. A container started on any other port is
-replaced, not reused.
+LocalStack listened on 4566 inside would reach nothing. LocalStack started with any other command —
+another port, image, service list or IAM mode — is replaced, not reused.
 
-Step 5 runs only with `mill mcp.dev --tunnel`. It opens two Cloudflare quick tunnels, `cloudflared
-tunnel --url http://localhost:<port>`, one to the server and one to LocalStack. They need no account,
-token or domain, and close when the server exits. Each address is a random
-`https://<name>.trycloudflare.com` that changes every run and is known only once `cloudflared` prints
-it, so the step waits for both before the server starts. Only `cloudflared`'s error lines reach the
-terminal.
+Step 5 runs only with `mill mcp.dev --tunnel`. It opens two Cloudflare quick tunnels, the devenv
+processes `tunnel-mcp` and `tunnel-localstack` (`cloudflared tunnel --url http://localhost:<port>`),
+one to the server and one to LocalStack. They need no account, token or domain. Each address is a
+random `https://<name>.trycloudflare.com`, read from `cloudflared`'s metrics endpoint (ports 20241
+and 20242) once it has one. A tunnel already running is reused, so the addresses stay the same from
+one run to the next until `mill mcp.stop`; a run without `--tunnel` stops them.
 
 The server's tunnel becomes `MCP_RESOURCE_URI`: the UniFi and upload pages post to it and declare it
 in their CSP. LocalStack's is there because those pages render in the operator's browser, on the
@@ -212,8 +219,9 @@ in-flight requests and carry no uptime guarantee.
 The backoffice starts on port 8081 with a **fixed** admin token, `dev-token` — not generated, because
 it is meant to be copied once into an MCP host's configuration by hand, and a token that changed
 every run would be miscopied more often than it would ever be stolen. With `--tunnel` that no longer
-holds. The server is public and `dev-token` is written here, so the token is random instead. Seeding
-replaces the admin row in place, so `dev-token` stops working until the next run without the flag.
+holds. The server is public and `dev-token` is written here, so the token is random instead, and new
+on every run even when the tunnel's address is not. Seeding replaces the admin row in place, so
+`dev-token` stops working until the next run without the flag.
 `--token <value>` overrides either. The task prints a ready-to-paste block, addressed to the tunnel
 when there is one:
 
@@ -228,18 +236,42 @@ when there is one:
 
 and, if a quick probe of the `locations` table over raw HTTP finds it empty, a reminder that a
 location has to be created through `create_location` before either side of the loop has anything to
-serve. `mill mcp.stopLocalStack` stops the LocalStack container; `mill mcp.localStackSetup` ensures
-it is up without starting the server, for working against it with another client.
+serve. `mill mcp.stopLocalStack` stops LocalStack and removes the containers it ran for ECS tasks;
+`mill mcp.localStackSetup` ensures it is up without starting the server, for working against it with
+another client.
 
 The database lives in LocalStack's ECS tasks, so it goes wherever they go: recreating the container
-empties it along with the bucket, and the next apply makes both again, empty.
+empties it along with the bucket, and the next apply makes both again, empty. A new LocalStack also
+discards the OpenTofu state of the one before, which described resources that went with it.
 
-`mill mcp.destroyLocal` is the whole teardown: every container this build starts, LocalStack's
-anonymous volume, the ECS task containers LocalStack spawned for a service, and the images built
-here. Reach for it over `stopLocalStack` when something is wedged — a stopped LocalStack leaves its
-volume and its task containers behind, and a task still holding a published port is what makes the
-next run fail on a port that looks free. It removes the local tofu state too, since with LocalStack
-gone none of it describes anything, and the next run builds the container and its state together.
+`mill mcp.destroyLocal` is the whole teardown: every process devenv runs for this build, every
+container it starts, the ECS task containers LocalStack spawned, the images built here, the local
+tofu state, and the process files under `.devenv/state/processes/`. The next run builds the
+container and its state together.
+
+[[processes]]
+=== Local processes
+
+Everything that keeps running — LocalStack, the three test databases, the two dev servers and the
+two tunnels — is a process of devenv's process manager, declared in `devenv.nix` and driven by the
+build (`mill-build/src/millbuild/Processes.scala`). None starts with `devenv up` and none restarts on
+its own. A task that needs one writes what it runs under `.devenv/state/processes/<name>/` — the
+command, one argument per line; its environment, readable by the owner only; and a readiness check —
+and has devenv start it, or restart it when the command or environment changed. The first one starts
+the manager itself, with the task's environment, which is how the LocalStack licence reaches the
+container without being written anywhere.
+
+The manager runs apart from Mill, so these outlive the command that started them, `mill clean` and
+the Mill daemon. Whether one is running is decided by the pid its launcher records next to those
+files, not by the phase devenv reports.
+
+* `devenv processes list` and `devenv processes logs <name>` show what runs and what it printed.
+* Stop one with its task (`mill mcp.stop`, `mill api.stop`, `mill mcp.stopLocalStack`, the
+  `stopRqlite` commands) or with `devenv processes stop <name>`.
+* After editing `devenv.nix`, stop the manager so the next task starts it with the new definitions:
+  stop each process, then `devenv processes down`. A bare `devenv processes down` can leave
+  containers running outside its control; `mill mcp.destroyLocal` does it in that order, and removes
+  everything else too.
 
 === A full local loop, in order
 
@@ -339,12 +371,9 @@ CAPTAL_ENV=local AWS_ENDPOINT_URL=http://localhost:4567 mill ci.run
 
 It needs no credentials: LocalStack's are fixed, the provider uses them when it is given an endpoint,
 and every AWS call goes through `awslocal` inside the container. It needs the LocalStack licence
-`mcp.dev` needs, starts the container as `mcp.dev` does if it is not running, and applies with the
-same state, `out/localstack/<container-id>/` — so a release from here and an `mcp.dev` run never
-come apart. That directory is under the workspace's `out/` whatever `MILL_OUTPUT_DIR` says, which
-is what lets `ci.run` run beside a running `mcp.dev` with an output directory of its own; that is a
-second Mill daemon building the whole project, though, which a machine short of memory will not
-hold. It tags nothing: a release to LocalStack is not a release.
+`mcp.dev` needs, starts LocalStack as `mcp.dev` does if it is not running, and applies with the
+same state, `.devenv/state/localstack/tofu/<container-id>/` — so a release from here and an
+`mcp.dev` run never come apart. It tags nothing: a release to LocalStack is not a release.
 
 [[versions]]
 === Versions
@@ -363,9 +392,10 @@ modules it depends on (`core`, `messages` and `platform` for the API; `core` and
 Dockerfile of an image, and the portal stylesheet the backoffice carries. Source folders as well as
 module folders because `core-js` and `messages-js` have none of their own: their sources are
 `core`'s and `messages`'. The build passes those paths from its own module graph, so a module that
-starts depending on another counts that one's commits without anyone listing it. `build.mill` is
-not among them: most commits touching it change other modules, so a change there that only alters
-how a module is built needs a `fix:` in the module itself, or it is not released.
+starts depending on another counts that one's commits without anyone listing it. A module's own
+`package.mill` is in its folder and counts; `build.mill` and `mill-build/` are not among them: most
+commits touching them change other modules, so a change there that only alters how a module is built
+needs a `fix:` in the module itself, or it is not released.
 
 The rules are each module's `cliff.toml` — `api/cliff.toml`, `mcp/cliff.toml`,
 `client/cliff.toml` — including its tag pattern and the `initial_tag` released before any tag
@@ -388,13 +418,12 @@ document only needs to name them: `api.dev` consumes the first pair directly, an
 
 `mill core.test`, `mill api.test` and `mill mcp.test` are the three module-level suites;
 `platform` and `messages` have none of their own and are exercised through the other two. Each test
-module that depends on a Docker container checks and restarts it on every invocation rather than
-trusting a cached URL, for the same reason `ensureRqlite` compares images above — an operator
-removing a container between runs must be caught, not silently misread as a schema problem. The full
-breakdown of what each suite covers, what needs LocalStack, and the three separate `rqlite`
-containers the test tasks use is xref:testing.adoc[Test strategy]'s subject; `mill
-api.test.stopRqlite` and `mill mcp.test.resetLocalStack` are the matching cleanup commands for the
-test-side containers.
+module that depends on a container checks it on every invocation, through a `Task.Input`, and starts
+it again when it is not running, rather than trusting a cached URL: a container removed between runs
+must be caught, not silently misread as a schema problem. The full breakdown of what each suite
+covers, what needs LocalStack, and the three separate `rqlite` containers the test tasks use is
+xref:testing.adoc[Test strategy]'s subject; `mill api.test.stopRqlite`, `mill mcp.test.stopRqlite`
+and `mill mcp.test.resetLocalStack` are the matching cleanup commands.
 
 == Sharp edges
 
@@ -403,16 +432,13 @@ it has not been explicitly allowed to run, as a security measure — a freshly c
 edit to `.envrc` itself, needs `direnv allow` run by hand in that directory before `devenv shell`'s
 packages and environment variables take effect. Without it, commands that assume the devenv shell
 (`mill`, `tofu`, `scalafmt`) are simply not on `PATH`, with no message pointing at `.envrc`.
-* **`mill clean` breaks the LocalStack state pairing `mcp.test` depends on.** The Tofu state
-directory for the `local` environment is kept alive across ordinary Mill re-evaluations specifically
-so it survives alongside the LocalStack container it describes; `mill clean` discards it anyway,
-leaving the container holding every resource a freshly-emptied state no longer knows about. Run
-`mill mcp.test.resetLocalStack` immediately after any `mill clean`. Full mechanics in
-xref:infrastructure.adoc[Infrastructure] and xref:testing.adoc[Test strategy].
 * **`api.dev` needs a location row before it will start.** Covered above — worth repeating here
-because the failure mode (`LocationNotFound` during layer construction, nothing binds the port) gives
-no hint that the fix is "create a location first," and the task's own log output does not mention it
-unless `mcp.dev` happens to be run afterward against the same database.
+because the failure is `LocationNotFound` during layer construction, deep in the process log the task
+prints, with no hint that the fix is "create a location first".
+* **The editor runs the test fixtures.** Metals imports the build through Mill's BSP server, with its
+own output folder (`.bsp/out`), and on an import it evaluates the test modules' `forkEnv` — which
+starts the test databases and LocalStack and applies the local configuration. Expect them to start
+after an edit to the build, without a `mill` command.
 * **Changing `ENVIRONMENT` needs a clean rebuild of one generated file.** `client.generatedSources`
 writes `BuildInfo.scala` (which drives `isDevMode`, and therefore the dev reset button in
 `ReadyView`) from the `ENVIRONMENT` variable, but the task is cached against its own normal inputs,
@@ -437,5 +463,4 @@ and what each suite needs running.
 tasks build, and the LocalStack state-pairing mechanics `resetLocalStack` exists to fix.
 * xref:database.adoc[Database] — `platform.migrate`, and the two migration histories `Migrate` and
 `McpMigrate` own.
-* xref:context/incidents.adoc[Incidents] — the rqlite version drift `ensureRqlite`'s image check
-exists to stop from happening again.
+* xref:build.adoc[Build] — which file of the build holds what.

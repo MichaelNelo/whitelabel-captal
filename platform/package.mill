@@ -1,0 +1,28 @@
+package build.platform
+
+import com.goyeau.mill.scalafix.ScalafixModule
+import mill.*, scalalib.*, scalafmt.*, scalajslib.*
+import millbuild.*
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Platform: JVM only
+// ─────────────────────────────────────────────────────────────────────────────
+
+object `package` extends BaseModule:
+  def moduleDeps = Seq(build.core)
+  def mvnDeps = Seq(
+    mvn"dev.zio::zio:2.1.14",
+    mvn"dev.zio::zio-http:3.0.1",
+    mvn"io.getquill::quill-jdbc-zio:4.8.6",
+    mvn"com.github.geirolz::fly4s:1.0.8",
+    mvn"dev.zio::zio-interop-cats:23.1.0.3",
+    // Must match the rqlite server: 9.x reports refused statements as zero rows, and only this driver decodes 10.6+ result codes.
+    mvn"io.rqlite:rqlite-jdbc:10.5.2.1",
+    mvn"ch.qos.logback:logback-classic:1.5.6",
+    mvn"io.circe::circe-yaml:0.16.0"
+  )
+
+  def migrate() = Task.Command:
+    runMain("whitelabel.captal.platform.Migrate")()
+
+end `package`

@@ -1,7 +1,7 @@
 ---
 name: run-locally
 description: Use to spin up the captal stack on your dev machine — the local configuration in LocalStack, the MCP backoffice, a deployed portal, the guest API, and the client bundle. Triggers on "run locally", "local dev", "start dev", "correr en local", "levantar local".
-version: 3.0.0
+version: 3.1.0
 ---
 
 # Run the stack locally
@@ -44,11 +44,11 @@ Six steps, in order:
    new API image, and publishes the client — `bundle/` and `ui/` — and copies it under every
    deployed location's prefix. So a deploy from here runs the real API, and what is already
    deployed runs the build being run. To run that release on its own, waiting for the locations as
-   CodeBuild does: `CAPTAL_ENV=local AWS_ENDPOINT_URL=http://localhost:4567 mill ci.run` (with
-   `MILL_OUTPUT_DIR=<another dir>` while `mcp.dev` holds the lock).
+   CodeBuild does: `CAPTAL_ENV=local AWS_ENDPOINT_URL=http://localhost:4567 mill ci.run`.
 5. With `--tunnel`, opens two Cloudflare quick tunnels, to `:8081` and to LocalStack on `:4567`,
-   and waits for their `https://<random>.trycloudflare.com` URLs, which change every run. No
-   account or token is needed. The MCP App pages load their scripts and PUT uploads through
+   as the devenv processes `tunnel-mcp` and `tunnel-localstack`, and waits for their
+   `https://<random>.trycloudflare.com` URLs. A tunnel already open is reused, so the URLs stay the
+   same between runs until `mill mcp.stop`. No account or token is needed. The MCP App pages load their scripts and PUT uploads through
    LocalStack's tunnel (`SCRIPT_BASE_URL`, `PRESIGN_ENDPOINT_URL`), since a page rendered by a hosted
    client may not reach localhost. The tunnels close when the server exits. Without the flag the
    step is skipped.
@@ -99,14 +99,15 @@ As production does: call `deploy_location` and open
 Or, for the faster loop, run the guest API on this machine:
 
 ```bash
-MILL_OUTPUT_DIR=/tmp/captal-api-out mill api.dev --slug <that location's slug>
+mill api.dev --slug <that location's slug>
 ```
 
-Its own output directory because `mcp.dev` holds Mill's lock on `out/`. In order: waits for the
-configuration's rqlite (shared with step 1 — the backoffice writes what this reads); runs the
-migrations; renders `client/index.html` from the template; builds the client (`fastLinkJS` by
-default, or the Vite-processed `bundle` when `CLIENT_LINKER=full`); then forks the server with
-`LOCATION_SLUG` set to `--slug` and `DB_URL` at that rqlite.
+In order: waits for the configuration's rqlite (shared with step 1 — the backoffice writes what this
+reads); runs the migrations; renders `client/index.html` from the template; builds the client
+(`fastLinkJS` by default, or the Vite-processed `bundle` when `CLIENT_LINKER=full`); then starts the
+server as the devenv process `api`, with `LOCATION_SLUG` set to `--slug` and `DB_URL` at that rqlite,
+and returns once it listens on `:8080`. It runs beside the backoffice; `mill api.stop` stops it and
+`devenv processes logs api` shows its log.
 
 **The location must already exist** — `ServerSettings`/`AppLayers` resolve `LOCATION_SLUG` against
 the `locations` table during layer construction, and fail the whole process with `LocationNotFound`
@@ -176,10 +177,12 @@ The suites never touch the configuration's rqlite on 5001, which holds your loca
 |---|---|
 | `nothing ready at http://localhost:5001/readyz` | The configuration's rqlite isn't up. `mill mcp.dev` applies it; for `api.dev`, start `mcp.dev` first. If LocalStack is up and the service is not, `mill mcp.destroyLocal` and start again. |
 | `mcp.dev runs against the local configuration … LocalStack runs most of that only with a licence` | No `LOCALSTACK_AUTH_TOKEN` in `.env`. There is no unlicensed mode. |
-| `AlreadyExists` / `EntityAlreadyExists` from the terraform apply | LocalStack holds resources the state doesn't know about; the two came apart. `mill mcp.test.resetLocalStack` recreates the container *with its volume*, which `stopLocalStack` does not. |
+| `AlreadyExists` / `EntityAlreadyExists` from the terraform apply | LocalStack holds resources the state doesn't know about; the two came apart. `mill mcp.test.resetLocalStack` stops LocalStack and removes its state, and the next run builds both together. |
+| A task fails with `the process exited` | The process it started died; the error carries the end of its log, and `devenv processes logs <name>` has the rest. |
+| `<name> did not start` | devenv's process manager runs older definitions than `devenv.nix`: stop each process, then `devenv processes down`, and run again. |
 | The backoffice's upload, UniFi or run page is blank | `mcp.dev` publishes the page scripts at step 4, so check that they answer: `curl -I -H "Origin: https://x" http://localhost:4567/captal-local-assets/ui/upload.js` should give 200 with `Access-Control-Allow-Origin: *`. If they do, the browser did not load them. Without `--tunnel` they are served from `localhost:4567`, and a page rendered by a hosted client such as claude.ai may not be allowed to reach localhost; the browser console says so. Run with `--tunnel`. |
 | A deployed location's page loads but its API calls fail | Its task may not be running yet, or failing to start: `get_deploy_status` names the step, and `/ecs/captal-<slug>` in LocalStack's logs says why. |
-| Anything local is wedged and you want a clean slate | `mill mcp.destroyLocal` — every container this build starts, LocalStack's volume, the ECS task containers it spawned, the images built here, and the local tofu state under `out/localstack/`. The next run builds the container and its state together. |
+| Anything local is wedged and you want a clean slate | `mill mcp.destroyLocal` — every devenv process this build runs, every container it starts, the ECS task containers LocalStack spawned, the images built here, and the local tofu state under `.devenv/state/localstack/tofu/`. The next run builds the container and its state together. |
 | `LocationNotFound` and the process exits immediately | The slug doesn't exist in `locations` yet. Create it through the backoffice first (step 2). |
 | `No result set returned` after a restart | rqlite's data was wiped — it lives in LocalStack's tasks, and a recreated LocalStack starts it empty. Re-create the content through the backoffice. |
 | Reset button doesn't appear on the Ready page | `ENVIRONMENT=dev` wasn't set when building the client, or Mill cached the old `BuildInfo`. `mill clean client.generatedSources && ENVIRONMENT=dev mill client.bundle`. |
