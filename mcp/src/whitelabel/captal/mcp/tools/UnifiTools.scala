@@ -66,12 +66,23 @@ object UnifiTools:
       @description("Defaults to 1440 when unset.")
       durationMinutes: Option[Int],
       @description("Whether a token is stored. The value itself is never returned.")
-      tokenSet: Boolean)
+      tokenSet: Boolean,
+      @description(
+        "False means the portal never calls the UniFi controller for this location, whatever is configured: guests finish the flow and stay at Ready. Set with set_unifi_enabled.")
+      enabled: Boolean)
+
+  final case class SetEnabledRequest(
+      @description("Which location. Call list_locations for the slugs.")
+      slug: String,
+      @description(
+        "False stops every call to the location's UniFi controller; true resumes them. The stored settings are kept either way.")
+      enabled: Boolean)
 
   given Schema[ConfigureRequest] = DeriveSchema.gen
   given Schema[ConfigureResponse] = DeriveSchema.gen
   given Schema[StatusRequest] = DeriveSchema.gen
   given Schema[StatusResponse] = DeriveSchema.gen
+  given Schema[SetEnabledRequest] = DeriveSchema.gen
 
   /** @param origin
     *   Where this server is reached, used to build an absolute `postUrl`. The CSP that lets the
@@ -111,23 +122,33 @@ object UnifiTools:
 
   def status(): McpToolHandlerR[QuillSqlite] = McpTool("get_unifi_config")
     .description(
-      "What UniFi settings a location has, without the token. Worth checking before a deploy: a location missing any of them serves its portal and then strands every guest at Ready.")
+      "What UniFi settings a location has, without the token, and whether its UniFi calls are enabled. Worth checking before a deploy: a location missing any of them serves its portal and then strands every guest at Ready.")
     .readOnly
     .handle: (in: StatusRequest) =>
-      UiRoutes
-        .currentFor(in.slug.trim)
-        .map: current =>
-          StatusResponse(
-            slug = current.slug,
-            configured = current.host.isDefined && current.siteId.isDefined && current.tokenSet,
-            host = current.host,
-            port = current.port,
-            siteId = current.siteId,
-            apMac = current.apMac,
-            redirectUrl = current.redirectUrl,
-            durationMinutes = current.durationMinutes,
-            tokenSet = current.tokenSet
-          )
+      UiRoutes.currentFor(in.slug.trim).map(statusOf)
 
-  def all(origin: String): List[McpToolHandlerR[QuillSqlite]] = List(configure(origin), status())
+  def setEnabled(): McpToolHandlerR[QuillSqlite] = McpTool("set_unifi_enabled")
+    .description(
+      "Turn a location's UniFi calls off or back on. Off, the portal still runs its whole flow but never asks the controller to authorize or revoke a guest — for a location whose network grants access some other way. Takes effect on the next guest that finishes, with no redeploy. The stored settings are kept, so turning it back on needs nothing else.")
+    .requireScopes(Auth.ContentWrite)
+    .handle: (in: SetEnabledRequest) =>
+      UiRoutes.setEnabled(in.slug.trim, in.enabled).map(statusOf)
+
+  private def statusOf(current: UiRoutes.UnifiSettings): StatusResponse = StatusResponse(
+    slug = current.slug,
+    configured = current.host.isDefined && current.siteId.isDefined && current.tokenSet,
+    host = current.host,
+    port = current.port,
+    siteId = current.siteId,
+    apMac = current.apMac,
+    redirectUrl = current.redirectUrl,
+    durationMinutes = current.durationMinutes,
+    tokenSet = current.tokenSet,
+    enabled = current.enabled
+  )
+
+  def all(origin: String): List[McpToolHandlerR[QuillSqlite]] = List(
+    configure(origin),
+    status(),
+    setEnabled())
 end UnifiTools

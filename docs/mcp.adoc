@@ -551,7 +551,13 @@ flow and then leaves every guest stranded at `Ready` with no network access.
 |read-only
 |Reports *whether* host, site id and a token are all present, never the token's value. Port
 defaults to 443 and duration to 1440 minutes when unset, matching `UnifiAccess`'s own defaults — see
-xref:platform.adoc[Platform] and xref:unifi.adoc[UniFi integration].
+xref:platform.adoc[Platform] and xref:unifi.adoc[UniFi integration]. Also reports `enabled`.
+
+|`set_unifi_enabled`
+|`content:write`
+|Turns the location's calls to its controller off or back on (`unifi_is_enabled`), keeping the
+stored settings. Off, the portal runs its whole flow and never authorizes or revokes a guest. The API
+reads the switch on every event, so it takes effect without a redeploy.
 |===
 
 === Skills (`SkillTools`)

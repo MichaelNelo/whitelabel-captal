@@ -7,7 +7,7 @@ import zio.test.*
 object E2ETests extends ZIOSpecDefault:
   private val clearAndSeedNoise =
     TestFixtures.clearAllData *> TestFixtures.seedNoiseData *> TestUnifiClient.disable *>
-      TestUnifiClient.reset
+      TestUnifiClient.reset *> TestUnifiSwitch.set(true)
 
   def spec: Spec[Any, Throwable] = (
     suite("E2E")(

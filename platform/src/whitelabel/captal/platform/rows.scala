@@ -198,7 +198,8 @@ final case class LocationRow(
     unifiSiteId: Option[String] = None,
     unifiApiToken: Option[String] = None,
     unifiDurationMinutes: Option[Int] = None,
-    unifiRedirectUrl: Option[String] = None)
+    unifiRedirectUrl: Option[String] = None,
+    unifiIsEnabled: Int = 1)
 
 final case class EventLogRow(
     id: String,

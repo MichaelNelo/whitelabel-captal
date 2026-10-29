@@ -71,7 +71,8 @@ object TestLayers:
   private val videoRepoLayer = VideoRepositoryQuill.layer
 
   private val eventHandlerLayer: ZLayer[
-    QuillSqlite & SessionContext & SessionService & CurrentLocation & TestUnifiClient & JobQueue,
+    QuillSqlite & SessionContext & SessionService & CurrentLocation & TestUnifiClient &
+      TestUnifiSwitch & JobQueue,
     Nothing,
     EventHandler[Task, Event]] = ZLayer.fromFunction:
     (
@@ -80,6 +81,7 @@ object TestLayers:
         sessionService: SessionService,
         currentLocation: CurrentLocation,
         unifiClient: TestUnifiClient,
+        unifiSwitch: TestUnifiSwitch,
         jobQueue: JobQueue) =>
       val dbHandler = EventLogHandler(ctx)
         .andThen(AnswerPersistenceHandler(ctx))
@@ -93,6 +95,7 @@ object TestLayers:
       // The production handler, with its HTTP transport swapped for TestUnifiClient.
       val unifiAccess = UnifiAccessHandler(
         currentLocation.unifi,
+        unifiSwitch.enabled,
         ctx,
         sessionService,
         unifiClient,
@@ -252,7 +255,7 @@ object TestLayers:
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType & QuillSqlite &
       SessionCookieConfig & ApiBase & CurrentLocation & UserCookieConfig & UserLookup &
       SurveyRoutes & LocaleRoutes & VideoRoutes & AdvertiserSurveyRoutes & FinishRoutes &
-      TestUnifiClient & JobQueue & JobRunner.ExpireFlow & JobRunner
+      TestUnifiClient & TestUnifiSwitch & JobQueue & JobRunner.ExpireFlow & JobRunner
 
   val testEnv: ZLayer[Any, Throwable, TestEnv] = ZLayer.make[TestEnv](
     SessionContext.make,
@@ -264,6 +267,7 @@ object TestLayers:
     userRepoLayer,
     videoRepoLayer,
     TestUnifiClient.layer,
+    TestUnifiSwitch.layer,
     JobQueue.layer,
     expireAccessFlowLayer,
     JobRunner.layer,

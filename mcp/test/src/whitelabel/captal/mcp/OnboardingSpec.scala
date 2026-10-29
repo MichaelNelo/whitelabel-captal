@@ -21,6 +21,7 @@ object OnboardingSpec extends ZIOSpecDefault:
       advertisers: Int = 1,
       missingIdentificationSurveys: List[String] = Nil,
       unifi: Boolean = true,
+      unifiEnabled: Boolean = true,
       // Defaults to the healthy case, so a test that wants a failure has to ask for it.
       adVideos: Int = 1,
       advertiserSurveys: Int = 1,
@@ -29,6 +30,7 @@ object OnboardingSpec extends ZIOSpecDefault:
     name = "Spec",
     active = true,
     unifiConfigured = unifi,
+    unifiEnabled = unifiEnabled,
     locales = locales,
     requiredKeys = 39,
     hasStyles = hasStyles,
@@ -153,6 +155,10 @@ object OnboardingSpec extends ZIOSpecDefault:
           steps.exists(s =>
             s.contains("host") && s.contains("siteId") && s.contains("apiToken") &&
               s.contains("get_unifi_config")))
+      ,
+      test("a location with UniFi turned off is not asked for its credentials"):
+        val steps = Readiness.steps(readiness(unifi = false, unifiEnabled = false))
+        assertTrue(steps.forall(!_.contains("UniFi")))
       ,
       // `fromRow` is what decides whether a guest is ever authorized: the handler skips on `None`
       // and leaves the session at Ready, with nothing said anywhere.

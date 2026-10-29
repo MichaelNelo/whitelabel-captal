@@ -35,7 +35,8 @@ object UiRoutes:
       apMac: Option[String],
       redirectUrl: Option[String],
       durationMinutes: Option[Int],
-      tokenSet: Boolean)
+      tokenSet: Boolean,
+      enabled: Boolean)
 
   private inline def bySlug = quote: (slugParam: String) =>
     query[LocationRow].filter(_.slug == slugParam)
@@ -88,8 +89,31 @@ object UiRoutes:
             redirectUrl = row.unifiRedirectUrl,
             durationMinutes = row.unifiDurationMinutes,
             // Whether, never what. The value leaves this server only towards the UniFi controller.
-            tokenSet = row.unifiApiToken.isDefined
+            tokenSet = row.unifiApiToken.isDefined,
+            enabled = row.unifiIsEnabled == 1
           )
+
+  /** Turns the location's UniFi calls on or off, leaving its stored settings as they are. */
+  private[mcp] def setEnabled(
+      slug: String,
+      enabled: Boolean): ZIO[QuillSqlite, String, UnifiSettings] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
+      import quill.*
+      val flag =
+        if enabled then
+          1
+        else
+          0
+      for
+        _        <- currentFor(slug)
+        affected <-
+          run(
+            bySlug(lift(slug)).update(
+              _.unifiIsEnabled -> lift(flag),
+              _.updatedAt      -> lift(Instant.now.toString))).orDie
+        _       <- Writes.expectOne(affected, s"Cambiando UniFi de '$slug'")
+        current <- currentFor(slug)
+      yield current
 
   private def save(slug: String, form: Form): ZIO[QuillSqlite, String, String] = ZIO.serviceWithZIO[
     QuillSqlite]: quill =>

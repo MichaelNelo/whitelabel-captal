@@ -68,6 +68,9 @@ object Readiness:
         "True only when all three of host, siteId and apiToken are stored — which is what UnifiAccess needs to build. Any one missing and the portal completes the whole flow and then authorizes nobody: the handler logs and skips, and the guest is left at Ready. Call get_unifi_config for which field is missing, configure_unifi to set it.")
       unifiConfigured: Boolean,
       @description(
+        "False means the portal never calls the UniFi controller here, so unifiConfigured does not matter: guests finish the flow and stay at Ready. Turned off or on with set_unifi_enabled.")
+      unifiEnabled: Boolean,
+      @description(
         "Locales with at least one translation, and how many required keys each still lacks. A locale absent here has none at all; an empty list means the portal would render raw key names to every guest.")
       locales: List[LocaleGap],
       @description("How many keys the portal requires, derived from the I18n type.")
@@ -164,7 +167,7 @@ object Readiness:
           "No brand icon of its own. Call set_location_icon if it should be branded.")
       ).flatten
     val unifi =
-      if r.unifiConfigured then
+      if r.unifiConfigured || !r.unifiEnabled then
         Nil
       else
         List(
@@ -225,6 +228,7 @@ object Readiness:
           // alone made this field say "configured" about a location that authorizes nobody, which
           // is the exact failure the whole tool exists to surface.
           unifiConfigured = UnifiAccess.fromRow(row).isDefined,
+          unifiEnabled = row.unifiIsEnabled == 1,
           locales = byLocale,
           requiredKeys = requiredKeys.size,
           hasStyles = styles,

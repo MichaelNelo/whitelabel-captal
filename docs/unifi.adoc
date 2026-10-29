@@ -35,7 +35,7 @@ The integration is not a module. Its moving parts are spread across four of them
   xref:platform.adoc[Platform].
 
 | `mcp/src/whitelabel/captal/mcp/tools/UnifiTools.scala`
-| The backoffice tools `configure_unifi` and `get_unifi_config`.
+| The backoffice tools `configure_unifi`, `get_unifi_config` and `set_unifi_enabled`.
 
 | `mcp/src/whitelabel/captal/mcp/apps/UnifiUi.scala`
 | The server-rendered MCP App that collects the credentials, with
@@ -45,7 +45,7 @@ The integration is not a module. Its moving parts are spread across four of them
 | `api/test/src/whitelabel/captal/api/TestUnifiClient.scala`
 | The test double that stands in for the transport.
 
-| `platform/resources/db/migration/V16…V19`
+| `platform/resources/db/migration/V16…V19`, `V24`
 | The `unifi_*` columns on `locations` and `sessions.access_expires_at`.
 
 | `terraform/modules/{tailscale-proxy,global-accelerator,portal-dispatcher}`
@@ -351,6 +351,9 @@ configuration file: the `locations` table is the configuration surface.
   `https://<cloudfront-host>/<slug>/` | Overrides where the dispatcher sends the device, preserving
   the controller's query parameters. For a location running its own portal SPA behind this system's
   static IP.
+| `unifi_is_enabled` | `unifiIsEnabled` | INTEGER | optional | `1` | Whether the portal calls the
+  controller at all. `0` skips both authorize and revoke, whatever else is configured, and keeps the
+  other columns as they are.
 |===
 
 "Required" means required for the integration to do anything. `UnifiAccess.fromRow` is a
@@ -372,6 +375,14 @@ returns, so the session stays `Ready`. `api/src/whitelabel/captal/api/session/Cu
 resolves this once at startup from the `LOCATION_SLUG` row and holds it in memory; there is no
 per-request lookup, so a configuration change takes effect on the next task start.
 
+`unifi_is_enabled` is the exception: the handler reads it from the row on every event, before
+calling the controller (`LocationService.unifiEnabled`, wired in `Flows.unifiEnabled`). With `0` it
+logs `UniFi <action>: disabled for current location — skipping` and returns the same way, so the
+session stays `Ready`. Turning it off or back on takes effect on the next guest that finishes or
+expires, with no task restart. If the read itself fails, the handler logs the error and skips. An
+API run with no location (`LOCATION_SLUG` unset) has no switch, and the configuration alone
+decides.
+
 The migrations that shaped these columns: **V16** added `unifi_host`, `unifi_port`, `unifi_site`,
 `unifi_use_os`, `unifi_api_token` and `unifi_duration_minutes`. **V17** added
 `sessions.access_expires_at` (TEXT, an ISO-8601 instant). **V18** moved to Integration v1 — renamed
@@ -381,8 +392,9 @@ the uniform `/proxy/network/integration/v1` path made irrelevant. **V19** rename
 
 === Which tool writes them
 
-`configure_unifi` (`UnifiTools.configure`, scope `content:write`) is the only writer. It takes a
-slug and nothing else: no token travels through the conversation. The tool returns a short-lived
+`configure_unifi` (`UnifiTools.configure`, scope `content:write`) is the only writer of the
+credentials and the rest of the settings. It takes a slug and nothing else: no token travels through
+the conversation. The tool returns a short-lived
 ticket, an absolute `postUrl`, and the location's current values with `tokenSet: Boolean` in place of
 the token, and points the host at the MCP App `ui://configure-unifi`. The operator types the
 credentials into that page and the browser posts them directly to `POST /ui/unifi`
@@ -401,9 +413,14 @@ Behaviour of that write:
 * `port` and `durationMinutes` must parse as positive integers or the page shows an error.
 * The response body names the host it configured and never the token.
 
-`get_unifi_config` (`UnifiTools.status`, read-only) reports the same fields and
-`configured = host.isDefined && siteId.isDefined && tokenSet`. The token value is never returned by
-any tool.
+`get_unifi_config` (`UnifiTools.status`, read-only) reports the same fields,
+`configured = host.isDefined && siteId.isDefined && tokenSet`, and `enabled`. The token value is
+never returned by any tool.
+
+`set_unifi_enabled` (`UnifiTools.setEnabled`, scope `content:write`) is the only writer of
+`unifi_is_enabled`. It takes a slug and `enabled`, leaves every other column alone, and answers with
+the same report as `get_unifi_config`. The readiness resource reports the switch as `unifiEnabled`
+and stops listing missing credentials as a step while it is off.
 
 === The proxy URL
 

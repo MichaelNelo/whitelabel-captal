@@ -1,7 +1,7 @@
 ---
 name: add-location
-description: Use this skill to onboard a location end-to-end — create it, give it translations, advertisers and videos, brand it, configure UniFi, and check what is still missing. Composes the smaller skills into one flow. Triggers on "agregar location", "add new location", "onboard location", "nuevo cliente", "new client", "create location", "configurar unifi", "configure unifi", "readiness", "qué falta".
-version: 2.0.0
+description: Use this skill to onboard a location end-to-end — create it, give it translations, advertisers and videos, brand it, configure UniFi, and check what is still missing. Composes the smaller skills into one flow. Triggers on "agregar location", "add new location", "onboard location", "nuevo cliente", "new client", "create location", "configurar unifi", "configure unifi", "desactivar unifi", "disable unifi", "readiness", "qué falta".
+version: 2.1.0
 ---
 
 # Onboard a location end-to-end
@@ -98,6 +98,12 @@ curl https://<ucg-host>:443/proxy/network/integration/v1/sites -H "X-API-KEY:<to
 Copy `data[].id`, not `internalReference` — the legacy `default` name does not work with the
 Integration v1 endpoints. All UCG hardware uses port 443 and the same base path; standalone
 (non-UCG) controllers are not supported.
+
+**A location that grants network access some other way** does not need any of this: call
+`set_unifi_enabled` with `enabled: false` and the portal never calls a controller there, so
+readiness stops asking for credentials. Guests finish the flow and stay at Ready. It can be turned
+off or back on at any time, also after deploying; the stored settings are kept and the change
+reaches the next guest without a redeploy.
 
 ## 7. Deploy
 

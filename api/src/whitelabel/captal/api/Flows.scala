@@ -19,6 +19,7 @@ import whitelabel.captal.platform.eventhandlers.{
   UserPersistenceHandler
 }
 import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.platform.services.LocationService
 import whitelabel.captal.platform.session.{JobQueue, SessionContext, SessionService}
 import zio.*
 import zio.interop.catz.*
@@ -52,12 +53,23 @@ private[api] object Flows:
       val transactional = TransactionalEventHandler(dbHandler, quill)
       val unifiAccess = UnifiAccessHandler(
         currentLocation.unifi,
+        unifiEnabled(quill, currentLocation),
         ctx,
         sessionService,
         unifiClient,
         jobQueue)
       // unifiAccess corre POST-commit; cualquier fallo HTTP no impacta el chain transaccional.
       transactional.andThen(unifiAccess)
+
+  /** The served location's UniFi switch, read from its row on every call. Without a location (dev,
+    * standalone) there is no switch, and the UniFi config alone decides.
+    */
+  private[api] def unifiEnabled(quill: QuillSqlite, location: CurrentLocation): Task[Boolean] =
+    location.id match
+      case Some(id) =>
+        LocationService(quill).unifiEnabled(id)
+      case None =>
+        ZIO.succeed(true)
 
   val answerEmailFlowLayer: ZLayer[SurveyRepository[
     Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, AnswerEmailCommand, NextStep]] =

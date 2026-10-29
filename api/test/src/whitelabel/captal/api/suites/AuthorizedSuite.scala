@@ -2,9 +2,12 @@ package whitelabel.captal.api.suites
 
 import io.circe.parser.parse
 import whitelabel.captal.api.TestHelpers.*
-import whitelabel.captal.api.{TestFixtures, TestUnifiClient}
+import whitelabel.captal.api.session.CurrentLocation
+import whitelabel.captal.api.{Flows, TestFixtures, TestUnifiClient, TestUnifiSwitch}
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.user
+import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.platform.services.LocationService
 import whitelabel.captal.platform.session.JobRunner
 import zio.test.*
 import zio.{Clock, ZIO, durationInt}
@@ -87,6 +90,49 @@ object AuthorizedSuite:
               sessionAfter.exists(_.phase == Phase.Ready),
               sessionAfter.exists(_.accessExpiresAt.isEmpty))
         ,
+        test("Finish makes no UniFi call when the location has UniFi disabled"):
+          for
+            _       <- TestUnifiClient.enable
+            _       <- TestUnifiSwitch.set(false)
+            _       <- TestFixtures.seedEmailSurvey
+            fixture <- TestFixtures.seedAdvertiserWithVideoAndSurvey(questionCount = 1)
+            backend <- testBackend
+            cookie  <- createSession(backend)
+            sessionId = user.SessionId.unsafe(cookie)
+            _ <- getNextSurvey(backend, cookie)
+            _ <- postEmailAnswer(backend, cookie, "finish-disabled@example.com")
+            _ <- getNextVideo(backend, cookie)
+            _ <- postMarkVideoWatched(backend, cookie, 15, completed = true)
+            _ <- getNextAdvertiserSurvey(backend, cookie)
+            _ <- postAdvertiserAnswer(backend, cookie, fixture.optionIds.head.head.asString)
+            finishResp <- postFinish(backend, cookie)
+            calls      <- TestUnifiClient.calls
+            dbState    <- TestFixtures.queryDbState
+          yield
+            val sessionAfter = dbState.sessions.find(_.id == sessionId)
+            assertTrue(
+              finishResp.code.isSuccess,
+              // The client is answering, so an empty record means the handler never asked.
+              calls.isEmpty,
+              sessionAfter.exists(_.phase == Phase.Ready),
+              sessionAfter.exists(_.accessExpiresAt.isEmpty)
+            )
+        ,
+        test("The UniFi switch is read from the location's row, and defaults to enabled"):
+          for
+            _       <- insertLocation("unifi-on", None)
+            _       <- insertLocation("unifi-off", Some(0))
+            _       <- insertLocation("unifi-back-on", Some(1))
+            quill   <- ZIO.service[QuillSqlite]
+            on      <- Flows.unifiEnabled(quill, servedAt("unifi-on"))
+            off     <- Flows.unifiEnabled(quill, servedAt("unifi-off"))
+            backOn  <- Flows.unifiEnabled(quill, servedAt("unifi-back-on"))
+            missing <- Flows.unifiEnabled(quill, servedAt("no-such-location"))
+            noRow   <- Flows.unifiEnabled(quill, CurrentLocation.empty)
+            // The row itself, so an insert rqlite rejected cannot pass for a disabled location.
+            offRow <- LocationService(quill).findBySlug("unifi-off")
+          yield assertTrue(on, !off, offRow.exists(_.unifiIsEnabled == 0), backOn, !missing, noRow)
+        ,
         test("Finish triggers UniFi authorization → /status returns Authorized + secondsRemaining"):
           for
             _       <- TestUnifiClient.enable
@@ -168,6 +214,29 @@ object AuthorizedSuite:
               log.exists(_.eventType == "user.access_expired")
             )
       )
+
+  private def servedAt(id: String): CurrentLocation = CurrentLocation(
+    Some(id),
+    Some(id),
+    None,
+    None)
+
+  /** A bare location row. `None` leaves `unifi_is_enabled` out of the insert, so the column's own
+    * default applies.
+    */
+  private def insertLocation(id: String, unifiIsEnabled: Option[Int])
+      : ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    ZIO.attemptBlocking:
+      val conn = quill.ds.getConnection
+      try
+        val (column, value) = unifiIsEnabled.fold(("", ""))(v => (", unifi_is_enabled", s", $v"))
+        val stmt = conn.createStatement()
+        stmt.execute(
+          s"INSERT INTO locations (id, slug, name, is_active, created_at, updated_at$column) " +
+            s"VALUES ('$id', '$id', '$id', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'$value)")
+        stmt.close()
+      finally
+        conn.close()
 
   /** The scheduler's worker runs on its own fiber and talks to rqlite, so the effect is not
     * observable synchronously. Bounded poll against the real clock.

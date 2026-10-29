@@ -1,7 +1,7 @@
 ---
 name: troubleshoot-deployment
 description: Symptom to cause to fix for a portal that is misbehaving — blank page, 403s, 500s, unhealthy targets, stale content, missing questions or videos, guests stuck at Ready with no internet. Triggers on "no funciona", "broken", "error", "503", "502", "500", "404", "403", "unhealthy", "stuck", "drain", "no carga", "troubleshoot", "diagnose", "debug", "sin internet", "no autoriza".
-version: 2.0.0
+version: 2.1.0
 ---
 
 # Troubleshoot a portal
@@ -120,9 +120,13 @@ retiring an advertiser takes its videos out of the rotation.
 ## J. Guests reach Ready but have no internet
 
 The flow completed and the authorization never happened. `get_unifi_config` for the slug:
-`configured` is false unless host, site id and token are all stored. Fix with `configure_unifi`,
-which opens a form — it takes no token as an argument on purpose. `unifiConfigured` in
-`list_locations` and `get_location_readiness` reports the same thing.
+
+* `enabled` false means UniFi calls are turned off for this location on purpose, and nothing will
+  authorize a guest there. If that is wrong, `set_unifi_enabled` with `enabled: true`; it takes
+  effect on the next guest, no redeploy.
+* `configured` is false unless host, site id and token are all stored. Fix with `configure_unifi`,
+  which opens a form — it takes no token as an argument on purpose. `unifiConfigured` in
+  `list_locations` and `get_location_readiness` reports the same thing.
 
 ## K. The UCG redirect gives 404 "No location registered for AP"
 

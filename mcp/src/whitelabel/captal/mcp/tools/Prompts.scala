@@ -40,7 +40,7 @@ object Prompts:
        |- videos: ${r.activeVideos} in rotation, ${r.pendingVideos} waiting for their file
        |- advertiser surveys here: ${r.advertiserSurveys}
        |- advertisers registered (deployment-wide): ${r.advertisers}
-       |- UniFi configured: ${r.unifiConfigured}
+       |- UniFi configured: ${r.unifiConfigured}; UniFi calls enabled: ${r.unifiEnabled}
        |
        |What is left:
        |$steps

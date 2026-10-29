@@ -24,11 +24,16 @@ import zio.*
   * The HTTP mechanics live in [[whitelabel.captal.platform.UnifiClient]]; this is only the event
   * adapter. It must stay outside the transactional chain (composed via `.andThen`, so it runs after
   * the commit). Both branches log and skip on failure.
+  *
+  * @param unifiEnabled
+  *   Whether the location has UniFi calls enabled, evaluated on every event so that turning it off
+  *   in the backoffice takes effect without a restart. False skips both branches.
   */
 object UnifiAccessHandler:
 
   def apply(
       unifi: Option[UnifiAccess],
+      unifiEnabled: Task[Boolean],
       ctx: SessionContext,
       sessionService: SessionService,
       unifiClient: UnifiClient,
@@ -51,15 +56,24 @@ object UnifiAccessHandler:
           case _ =>
             ZIO.unit
 
-      /** Shared guard: with no UniFi config (dev, tests, locations without a controller) it logs
-        * and moves on.
+      /** Shared guard: with no UniFi config (dev, tests, locations without a controller), or with
+        * UniFi disabled for the location, it logs and moves on.
         */
       private def withConfig(action: String)(body: UnifiAccess => Task[Unit]): Task[Unit] =
         unifi match
           case None =>
             ZIO.logWarning(s"UniFi $action: no config for current location — skipping")
           case Some(unifiCfg) =>
-            body(unifiCfg)
+            unifiEnabled
+              .catchAll: error =>
+                ZIO.logError(
+                  s"UniFi $action: could not read whether it is enabled — skipping: ${error
+                      .getMessage}") *> ZIO.succeed(false)
+              .flatMap:
+                case false =>
+                  ZIO.logInfo(s"UniFi $action: disabled for current location — skipping")
+                case true =>
+                  body(unifiCfg)
 
       private def authorize(unifiCfg: UnifiAccess, occurredAt: java.time.Instant): Task[Unit] =
         for

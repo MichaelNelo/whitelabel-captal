@@ -3,7 +3,7 @@ package whitelabel.captal.mcp
 import com.jamesward.ziohttp.mcp.{CallToolResult, ToolContent}
 import io.getquill.*
 import io.getquill.jdbczio.Quill
-import whitelabel.captal.mcp.tools.{I18nTools, LocationTools}
+import whitelabel.captal.mcp.tools.{I18nTools, LocationTools, UnifiTools}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.{LocationRow, RqliteDataSource}
@@ -180,6 +180,34 @@ object LocationToolsSpec extends ZIOSpecDefault:
           // Nothing configures UniFi at creation, and the listing has to say so.
           textOf(listed).contains("\"unifiConfigured\":false")
         )
+      ,
+      test("UniFi calls are turned off and back on per location, and get_unifi_config says so"):
+        val slug = s"$Prefix-unifi"
+        def set(target: String, enabled: Boolean) = UnifiTools
+          .setEnabled()
+          .call(json("slug" -> str(target), "enabled" -> zio.json.ast.Json.Bool(enabled)))
+        for
+          _       <- clear
+          _       <- create(slug, "UniFi")
+          initial <- UnifiTools.status().call(json("slug" -> str(slug)))
+          off     <- set(slug, false)
+          stored  <- rows
+          after   <- UnifiTools.status().call(json("slug" -> str(slug)))
+          on      <- set(slug, true)
+          missing <- set(s"$Prefix-nope", false)
+        yield assertTrue(
+          // A new location calls its controller unless told otherwise.
+          textOf(initial).contains("\"enabled\":true"),
+          !off.isError.contains(true),
+          textOf(off).contains("\"enabled\":false"),
+          // The row, so a write rqlite rejected cannot pass for one that happened.
+          stored.find(_.slug == slug).exists(_.unifiIsEnabled == 0),
+          textOf(after).contains("\"enabled\":false"),
+          textOf(on).contains("\"enabled\":true"),
+          missing.isError.contains(true),
+          textOf(missing).contains("No existe")
+        )
+        end for
       // The schema is laid down once by `mcp.test` before forking — see `migratedRqliteUrl` in
       // build.mill.
     ).provideShared(
