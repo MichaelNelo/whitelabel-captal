@@ -38,6 +38,7 @@ import whitelabel.captal.mcp.tools.{
   IdentificationCategory,
   LocalizedText,
   LocationTools,
+  PlaybackExpiry,
   SurveyTools,
   VideoFileCollector,
   VideoTools
@@ -491,16 +492,47 @@ object DeployE2ESpec extends ZIOSpecDefault:
       quill.run(VideoFiles.currentQuery(lift(video.Id.unsafe(videoId)))).map(_.headOption)
 
   /** A guest's playback of `fileId`, as the portal records one; ended by `endPlayback`. */
-  private def openPlayback(fileId: String): ZIO[QuillSqlite, Throwable, String] = ZIO
+  private def openPlayback(fileId: String, startedAt: java.time.Instant)
+      : ZIO[QuillSqlite, Throwable, String] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.*
+    val id = java.util.UUID.randomUUID.toString
+    val session = user.SessionId.unsafe(java.util.UUID.randomUUID.toString)
+    val row = VideoPlaybackRow(id, session, fileId, VideoFiles.stamp(startedAt), None)
+    quill.run(query[VideoPlaybackRow].insertValue(lift(row))).as(id)
+
+  private def playback(id: String): ZIO[QuillSqlite, Throwable, Option[VideoPlaybackRow]] = ZIO
     .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
-      val id = java.util.UUID.randomUUID.toString
-      val session = user.SessionId.unsafe(java.util.UUID.randomUUID.toString)
-      quill
-        .run(
-          query[VideoPlaybackRow].insertValue(
-            lift(VideoPlaybackRow(id, session, fileId, "2026-01-01T00:00:00.000000000Z", None))))
-        .as(id)
+      quill.run(query[VideoPlaybackRow].filter(_.id == lift(id))).map(_.headOption)
+
+  /** What the timers did with an abandoned playback and a live one. */
+  final private case class TimerOutcome(
+      abandoned: Option[VideoPlaybackRow],
+      timedBeforeCancel: Set[String],
+      timedAfterCancel: Set[String])
+
+  /** Starts the timers as the server does at startup, waits for `abandoned`'s to close it, then
+    * cancels `live`'s as an ended playback does.
+    */
+  private def timers(abandoned: String, live: String): ZIO[QuillSqlite, Throwable, TimerOutcome] =
+    ZIO.scoped:
+      for
+        asked  <- Queue.sliding[Unit](1)
+        timers <- PlaybackExpiry.make(asked)
+        row    <- playback(abandoned)
+          .repeat(
+            Schedule.recurUntil[Option[VideoPlaybackRow]](_.exists(_.endedAt.isDefined)) &&
+              Schedule.spaced(200.millis) && Schedule.recurs(50))
+          .map(_._1)
+        before <- timers.pending
+        _      <- timers.cancel(live)
+        after  <- timers
+          .pending
+          .repeat(
+            Schedule.recurUntil[Set[String]](_.isEmpty) && Schedule.spaced(100.millis) &&
+              Schedule.recurs(20))
+          .map(_._1)
+      yield TimerOutcome(row, before, after)
 
   private def endPlayback(id: String): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[
     QuillSqlite]: quill =>
@@ -532,7 +564,10 @@ object DeployE2ESpec extends ZIOSpecDefault:
       again <- client.tool[VideoTools.ReplaceFileRequest, VideoTools.ResumeUploadResponse](
         "replace_video_file",
         VideoTools.ReplaceFileRequest(videoId))
-      watching  <- openPlayback(old.id)
+      now      <- Clock.instant
+      watching <- openPlayback(old.id, now)
+      // A page that died without saying so, long past its file's length plus the grace.
+      abandoned <- openPlayback(old.id, now.minus(java.time.Duration.ofDays(1)))
       _         <- putFile(opened.uploadUrl, "lighter-mp4-bytes")
       confirmed <- client.tool[VideoTools.ConfirmUploadRequest, VideoTools.ConfirmUploadResponse](
         "confirm_video_upload",
@@ -541,6 +576,9 @@ object DeployE2ESpec extends ZIOSpecDefault:
       newKey    <- ZIO.serviceWith[AssetStore](_.keyOf(confirmed.videoUrl))
       stored    <- objectText(newKey)
       kept      <- objectText(oldKey)
+      timed     <- timers(abandoned, watching)
+      current   <- playback(watching)
+      stillKept <- objectText(oldKey)
       _         <- endPlayback(watching)
       collected <- VideoFileCollector.collect(None)
       gone      <- objectText(oldKey)
@@ -559,7 +597,14 @@ object DeployE2ESpec extends ZIOSpecDefault:
       // Still played, so kept through the confirm...
       confirmed.filesDeleted == 0,
       kept.contains("fake-mp4-bytes"),
-      // ...and deleted once that playback ended.
+      // ...the abandoned playback closed by its timer, the live one left alone...
+      timed.abandoned.exists(p => p.endedAt.isDefined && p.expired == 1),
+      current.exists(_.endedAt.isEmpty),
+      // The live one had a timer until it was cancelled, and none is left after.
+      timed.timedBeforeCancel.contains(watching),
+      timed.timedAfterCancel.isEmpty,
+      stillKept.contains("fake-mp4-bytes"),
+      // ...and deleted once the live one ended.
       collected == 1,
       gone.isEmpty
     )

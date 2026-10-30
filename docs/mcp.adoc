@@ -562,13 +562,32 @@ A pass runs on three occasions:
 
 * `confirm_video_upload`, for that video: the previous file may have nobody left on it already.
 * A `POST` to `/cdc/video-playbacks`, which rqlite's change data capture sends on every change to
-  `video_playbacks` (see xref:infrastructure.adoc[Infrastructure]). The body is not read and the
-  route is not authenticated: a post only asks for a pass, and a pass deletes nothing the database
-  does not allow. Posts queue in a one-slot sliding queue, so a burst costs two passes.
+  `video_playbacks` (see xref:infrastructure.adoc[Infrastructure]). The route is not
+  authenticated: a post only asks for a pass, and a pass deletes nothing the database does not
+  allow. Posts queue in a one-slot sliding queue, so a burst costs two passes. A body that is not
+  rqlite's is still answered `200`; a refusal would only have rqlite retry it.
 * Startup, for whatever changed while the server was not there to hear it.
+* A playback expiring (below).
 
 A file whose object could not be deleted after it was marked is logged and left: the row says
 deleted, the object is garbage.
+
+A page that dies without `pagehide` reaching the server — the captive-portal browser closed, the
+phone left the WiFi — leaves its playback open, and its file would be kept for ever.
+`PlaybackExpiry` closes those: one fiber per playback, started for each `INSERT` the change data
+capture post reports (read from the row in `after`) and, at startup, for every playback still open,
+since timers live in memory and a restart would forget them. Each sleeps until
+`Playback.expiresAt` — the start plus the file's length plus ten minutes, so a long video is not cut
+short — and then sets `ended_at` and `expired = 1` if the playback is still open, and asks for a
+pass. The deadline is read from the database, never from the post; an id that names no open
+playback schedules nothing, and a repeated one schedules once.
+
+A playback that ends any other way has its timer cancelled when the post reports it: an `UPDATE`
+whose `after` sets `ended_at`, or a `DELETE`, whose row is only in `before`. The timers are a map of
+playback id to fiber in a `Ref.Synchronized`, and a fiber leaves it when it ends, whether it
+expired its playback, found it already closed, or was cancelled. Cancelling interrupts with
+`interruptFork`: the fiber's own removal needs the lock the cancel holds, and waiting for it there
+would never return.
 
 === UniFi (`UnifiTools`)
 

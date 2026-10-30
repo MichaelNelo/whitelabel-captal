@@ -14,13 +14,14 @@ import zio.http.*
   *
   * Run when a replacement is confirmed, since the previous file may have no playback left already;
   * on every change rqlite reports to `video_playbacks`, since a playback ending can be what frees
-  * one; and once at startup, for whatever changed while this server was not there to hear it.
+  * one; when [[PlaybackExpiry]] closes a playback its page never ended; and once at startup, for
+  * whatever changed while this server was not there to hear it.
   */
 object VideoFileCollector:
 
-  /** Where rqlite's change data capture posts. Not authenticated, and it does not need to be: the
-    * body is never read. A post only asks for a pass, and a pass deletes nothing the database does
-    * not itself say may go.
+  /** Where rqlite's change data capture posts. Not authenticated, and it does not need to be: a
+    * post only asks for a pass, and a pass deletes nothing the database does not itself say may go;
+    * the ids it names only start timers, which read their deadline from the database.
     */
   val CdcPath: String = "/cdc/video-playbacks"
 
@@ -66,10 +67,20 @@ object VideoFileCollector:
             .ignore)
     yield marked
 
+  /** What the change data capture route drives: a collection pass, and a timer per playback that
+    * started.
+    */
+  final case class Running(asked: Queue[Unit], timers: PlaybackExpiry.Timers)
+
+  /** What a change data capture post says happened to a playback. */
+  enum PlaybackChange:
+    case Started(id: String)
+    case Ended(id: String)
+
   /** A pass whenever asked, one at a time: posts that arrive during a pass are folded into the one
     * after it, so a burst of playbacks ending costs two passes, not one each.
     */
-  def runner: ZIO[QuillSqlite & AssetStore & Scope, Nothing, Queue[Unit]] =
+  def runner: ZIO[QuillSqlite & AssetStore & Scope, Nothing, Running] =
     for
       asked <- Queue.sliding[Unit](1)
       _     <-
@@ -80,9 +91,59 @@ object VideoFileCollector:
               ZIO.when(n > 0)(ZIO.logInfo(s"Deleted $n replaced video files"))))
           .forever
           .forkScoped
-      _ <- asked.offer(())
-    yield asked
+      _      <- asked.offer(())
+      timers <- PlaybackExpiry.make(asked)
+    yield Running(asked, timers)
 
-  def routes(asked: Queue[Unit]): Routes[Any, Nothing] = Routes(
-    Method.POST / "cdc" / "video-playbacks" -> handler(asked.offer(()).as(Response.ok)))
+  /** Every change asks for a pass; a playback starting starts its timer, and one ending cancels it.
+    * A body that is not rqlite's is still a request for a pass, and is answered 200 all the same: a
+    * refusal would only have rqlite retry it.
+    */
+  def routes(running: Running): Routes[Any, Nothing] = Routes(
+    Method.POST / "cdc" / "video-playbacks" ->
+      handler: (request: Request) =>
+        request
+          .body
+          .asString
+          .orElseSucceed("")
+          .flatMap(body =>
+            ZIO.foreachDiscard(playbackChanges(body)):
+              case PlaybackChange.Started(id) =>
+                running.timers.start(id)
+              case PlaybackChange.Ended(id) =>
+                running.timers.cancel(id))
+          .zipRight(running.asked.offer(()))
+          .as(Response.ok))
+
+  /** What a change data capture post reports for `video_playbacks`, in order: an insert of an open
+    * row starts a playback; an update that sets `ended_at`, or a delete, ends one. Read from the
+    * rows themselves, which rqlite sends only with `row_ids_only` off.
+    */
+  def playbackChanges(body: String): List[PlaybackChange] =
+    import zio.json.ast.Json
+    def field(json: Json, name: String): Option[Json] = json.asObject.flatMap(_.get(name))
+    def items(json: Option[Json]): List[Json] = json.flatMap(_.asArray).map(_.toList).getOrElse(Nil)
+    def id(row: Option[Json]): Option[String] = row.flatMap(field(_, "id")).flatMap(_.asString)
+    def ended(row: Option[Json]): Boolean = row.flatMap(field(_, "ended_at")).exists(_ != Json.Null)
+    Json
+      .decoder
+      .decodeJson(body)
+      .toOption
+      .toList
+      .flatMap(post => items(field(post, "payload")))
+      .flatMap(entry => items(field(entry, "events")))
+      .filter(event => field(event, "table").flatMap(_.asString).contains("video_playbacks"))
+      .flatMap: event =>
+        val before = field(event, "before")
+        val after = field(event, "after")
+        field(event, "op").flatMap(_.asString) match
+          case Some("INSERT") if !ended(after) =>
+            id(after).map(PlaybackChange.Started(_))
+          case Some("UPDATE") if ended(after) && !ended(before) =>
+            id(after).map(PlaybackChange.Ended(_))
+          case Some("DELETE") =>
+            id(before).map(PlaybackChange.Ended(_))
+          case _ =>
+            None
+  end playbackChanges
 end VideoFileCollector

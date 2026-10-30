@@ -265,6 +265,12 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
      it can delete a file someone is still playing. The count fails the other way: a guest whose
      end never arrives (the captive-portal browser closed, the phone left the WiFi) leaves a file
      kept too long, never one deleted too soon.
+  ** *Playbacks expire, after the file's length plus ten minutes.* Without it, one page dying
+     without `pagehide` kept a file for ever. A fixed ten minutes was rejected: a long video, or a
+     paused one, would lose its playback and its replaced file with it. Closed, not deleted
+     (`expired = 1`), so how often pages die without saying so stays countable. One timer per
+     playback, started from the change data capture insert, was chosen over a periodic sweep;
+     timers live in memory, so startup starts one for every playback still open.
   ** *A row per playback, not a counter on the file.* A counter decremented twice — the beacon and
      the watched report both arriving — reaches zero with someone still watching. Ending an ended
      playback changes nothing, and a playback left open is visible and can be closed by hand. A

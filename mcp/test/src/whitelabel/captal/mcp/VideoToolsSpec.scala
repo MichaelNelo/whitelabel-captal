@@ -1,6 +1,6 @@
 package whitelabel.captal.mcp
 
-import whitelabel.captal.mcp.tools.{VideoFileCollector, VideoTools}
+import whitelabel.captal.mcp.tools.{PlaybackExpiry, VideoFileCollector, VideoTools}
 import zio.test.*
 
 /** Where the video's length comes from — read from the file by the upload page and recorded at
@@ -84,19 +84,49 @@ object VideoToolsSpec extends ZIOSpecDefault:
           uiOf(VideoTools.createPromo) == uiOf(VideoTools.create))
       ,
       // What rqlite's change data capture reaches: a post asks for a pass, whatever it carries,
-      // and a burst asks for one.
-      test("a change posted by rqlite asks for one pass, however many arrive"):
+      // and a burst asks for one; a playback starting starts its timer, and one ending cancels it.
+      test("a change posted by rqlite asks for one pass, and starts and cancels timers"):
         for
           asked <- zio.Queue.sliding[Unit](1)
-          post = zio
-            .http
-            .Request
-            .post(
-              VideoFileCollector.CdcPath,
-              zio.http.Body.fromString("""{"node_id":"n1","payload":[]}"""))
-          first  <- VideoFileCollector.routes(asked).runZIO(post)
-          _      <- VideoFileCollector.routes(asked).runZIO(post)
+          calls <- zio.Ref.make(List.empty[String])
+          timers = PlaybackExpiry.Timers(
+            start = id => calls.update(_ :+ s"start $id"),
+            cancel = id => calls.update(_ :+ s"cancel $id"),
+            pending = zio.ZIO.succeed(Set.empty))
+          running = VideoFileCollector.Running(asked, timers)
+          post    =
+            (body: String) =>
+              VideoFileCollector
+                .routes(running)
+                .runZIO(
+                  zio.http.Request.post(VideoFileCollector.CdcPath, zio.http.Body.fromString(body)))
+          first  <- post(InsertThenEnd)
+          _      <- post("not what rqlite sends")
           queued <- asked.size
-        yield assertTrue(first.status == zio.http.Status.Ok, queued == 1)
+          made   <- calls.get
+        yield assertTrue(
+          first.status == zio.http.Status.Ok,
+          queued == 1,
+          made == List("start p-1", "cancel p-1"))
+      ,
+      test("a playback starts on an open insert and ends on an update that ends it or a delete"):
+        import VideoFileCollector.PlaybackChange.{Ended, Started}
+        assertTrue(
+          VideoFileCollector.playbackChanges(InsertThenEnd) == List(Started("p-1"), Ended("p-1")),
+          VideoFileCollector.playbackChanges(InsertThenDelete) ==
+            List(Started("p-2"), Ended("p-2")),
+          VideoFileCollector.playbackChanges("""{"node_id":"n1","payload":[]}""") == Nil,
+          VideoFileCollector.playbackChanges("{") == Nil
+        )
     )
+
+  /** What rqlite 10.6.1 posted for an insert and then an update ending the same row, with
+    * `row_ids_only` off, captured from a running node.
+    */
+  private val InsertThenEnd =
+    """{"node_id":"90b33141e85d","payload":[{"index":3,"events":[{"op":"INSERT","table":"video_playbacks","new_row_id":1,"after":{"ended_at":null,"file_id":"f-1","id":"p-1","session_id":"s-1","started_at":"2026-10-30T10:00:00.000000000Z"}},{"op":"UPDATE","table":"video_playbacks","new_row_id":1,"old_row_id":1,"before":{"ended_at":null,"file_id":"f-1","id":"p-1","session_id":"s-1","started_at":"2026-10-30T10:00:00.000000000Z"},"after":{"ended_at":"2026-10-30T10:01:00.000000000Z","file_id":"f-1","id":"p-1","session_id":"s-1","started_at":"2026-10-30T10:00:00.000000000Z"}}]}]}"""
+
+  /** The same for an insert and then a delete: a delete carries the row only in `before`. */
+  private val InsertThenDelete =
+    """{"node_id":"66013d2433fb","payload":[{"index":3,"events":[{"op":"INSERT","table":"video_playbacks","new_row_id":1,"after":{"ended_at":null,"file_id":"f-1","id":"p-2","session_id":"s-1","started_at":"2026-10-30T10:00:00.000000000Z"}},{"op":"DELETE","table":"video_playbacks","old_row_id":1,"before":{"ended_at":null,"file_id":"f-1","id":"p-2","session_id":"s-1","started_at":"2026-10-30T10:00:00.000000000Z"}}]}]}"""
 end VideoToolsSpec

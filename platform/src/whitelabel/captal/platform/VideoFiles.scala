@@ -89,6 +89,14 @@ object VideoFiles:
           p.id == lift(playbackId) && p.sessionId == lift(sessionId) && p.endedAt.isEmpty)
         .update(_.endedAt -> lift(Option(stamp(at)))))
 
+  /** Closes a playback its page never ended. Answers whether it was still open. */
+  def expire(quill: QuillSqlite, playbackId: String, at: Instant): Task[Boolean] =
+    import quill.*
+    run(
+      query[VideoPlaybackRow]
+        .filter(p => p.id == lift(playbackId) && p.endedAt.isEmpty)
+        .update(_.endedAt -> lift(Option(stamp(at))), _.expired -> 1)).map(_ > 0)
+
   /** Marks a file deleted when it is no longer current and nobody is playing it. Answers whether it
     * was marked, which is the caller's permission to delete its object.
     */

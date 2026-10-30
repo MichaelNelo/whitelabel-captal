@@ -29,6 +29,17 @@ final case class Playback(
     endedAt: Option[Instant]):
   def isOpen: Boolean = endedAt.isEmpty
 
+object Playback:
+  /** Room for an intro, a pause, a slow connection: a page that has not said it ended this long
+    * after the file would have finished is taken to have died without saying so.
+    */
+  val Grace: java.time.Duration = java.time.Duration.ofMinutes(10)
+
+  /** When a playback still open is closed for its page: its file's length plus [[Grace]]. */
+  def expiresAt(startedAt: Instant, fileDurationSeconds: Int): Instant = startedAt
+    .plusSeconds(fileDurationSeconds.toLong)
+    .plus(Grace)
+
 /** One uploaded file of a video. A video plays its current file, the newest confirmed one; the
   * others stay only while someone is still playing them.
   *

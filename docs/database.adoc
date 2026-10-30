@@ -131,7 +131,7 @@ by the MCP server (`mcp/resources/db/migration-mcp`, `V1` and `V2`).
 | via its video
 
 | `video_playbacks`
-| One guest playing one file: `session_id`, `file_id`, `started_at`, and `ended_at` (NULL while open). A file with an open playback is never deleted.
+| One guest playing one file: `session_id`, `file_id`, `started_at`, `ended_at` (NULL while open), and `expired` (1 when the backoffice closed it because its page never did). A file with an open playback is never deleted.
 | via its session
 
 | `video_views`

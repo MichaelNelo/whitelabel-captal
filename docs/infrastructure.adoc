@@ -276,9 +276,11 @@ authoritative `ingress` blocks would revoke those external rules on every apply.
 ==== Change data capture
 
 The leader posts every change to `video_playbacks` to `cdc_endpoint`, which is how the backoffice
-learns that a replaced video file may have nobody left playing it (see
-xref:mcp.adoc#replaced-files[Replaced files]). The entrypoint writes the `-cdc-config` file only when
-`RQLITE_CDC_ENDPOINT` is set, so an image from `1.0.6` on is what turns it on. Retries are bounded —
+learns that a replaced video file may have nobody left playing it, and that a playback started
+whose page might never say it ended (see xref:mcp.adoc#replaced-files[Replaced files]). Whole rows,
+not `row_ids_only`: the timer needs the playback's own id, and a row id is SQLite's. The entrypoint
+writes the `-cdc-config` file only when `RQLITE_CDC_ENDPOINT` is set, so an image from `1.0.7` on is
+what turns it on as described here. Retries are bounded —
 ten, backing off exponentially to a minute — because with the backoffice down unbounded retries
 grow the on-disk queue until the disk is full; a change it never hears about is caught by the pass
 it runs at startup. In the config file the retry policy and the backoff are numbers: `1` for

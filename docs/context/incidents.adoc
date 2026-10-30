@@ -745,6 +745,14 @@ then reverted in its entirety once actually wired into the published bundle.
   streams and honours ranges. **Lesson:** a file that size is heavy for a guest on the venue's WiFi
   in any environment — it is what `replace_video_file` was for — and locally the emulator, not the
   network, is what a large object measures.
+* **LocalStack left six rqlite tasks running for a desired count of three.** Rolling the service
+  from image `1.0.6` to `1.0.7` started the new revision's tasks and stopped none of the old
+  deployment's surplus: `describe-services` reported one `PRIMARY` deployment, `desiredCount` 3,
+  `runningCount` 6, and all six joined one Raft cluster as voters. The cluster worked; it was just
+  not the one configured. Found 2026-10-30, with the other rolling-update quirks of LocalStack's
+  ECS. **Fix:** none in the configuration — `mill mcp.test.resetLocalStack` before the next
+  `mcp.dev` brings it back to three. **Lesson:** after a local change to rqlite's task definition,
+  count the tasks before trusting what the cluster looks like.
 * **rqlited refused to start on the CDC config the guide shows.** The guide gives
   `transmit_retry_policy` as `"ExponentialRetryPolicy"` and durations as strings like `"1m"`; 10.6.1
   decodes the policy as an integer and durations as `time.Duration`, nanoseconds, and exits with

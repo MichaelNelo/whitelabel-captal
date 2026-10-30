@@ -172,13 +172,16 @@ final case class VideoFileRow(
     confirmedAt: Option[String],
     deletedAt: Option[String])
 
-/** One guest playing one file; open while `endedAt` is empty. */
+/** One guest playing one file; open while `endedAt` is empty. `expired` is 1 when the backoffice
+  * closed it because its page never did.
+  */
 final case class VideoPlaybackRow(
     id: String,
     sessionId: user.SessionId,
     fileId: String,
     startedAt: String,
-    endedAt: Option[String])
+    endedAt: Option[String],
+    expired: Int = 0)
 
 final case class VideoViewRow(
     id: String,

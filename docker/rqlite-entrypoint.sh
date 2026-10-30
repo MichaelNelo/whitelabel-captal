@@ -137,8 +137,9 @@ fi
 
 # ─── Change data capture ─────────────────────────────────────────────────────
 # Every change to video_playbacks is posted to the backoffice, which deletes a replaced video file
-# once its last playback has ended. Only the leader posts; the others queue on disk so a new leader
-# carries on. Off when RQLITE_CDC_ENDPOINT is empty.
+# once its last playback has ended, and starts a timer for each playback inserted. Whole rows, not
+# row ids: the timer needs the playback's own id, and a row id is SQLite's. Only the leader posts;
+# the others queue on disk so a new leader carries on. Off when RQLITE_CDC_ENDPOINT is empty.
 #
 # Retries are bounded: with the backoffice down, unbounded retries grow the queue until the disk is
 # full. A change it never hears about is caught by the pass it runs when it starts.
@@ -151,7 +152,6 @@ if [ -n "$RQLITE_CDC_ENDPOINT" ]; then
 {
   "endpoint": "$RQLITE_CDC_ENDPOINT",
   "table_filter": "^video_playbacks\$",
-  "row_ids_only": true,
   "transmit_retry_policy": 1,
   "transmit_max_retries": 10,
   "transmit_max_backoff": 60000000000

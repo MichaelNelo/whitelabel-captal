@@ -41,7 +41,7 @@ container_port = 8080
 # definitions pull cannot drift apart. It goes up with the apply, before the service that pulls it
 # exists; bump it with the Dockerfile or the entrypoint. `image_tag` (the API) and `mcp_image_tag`
 # (the backoffice) are not set here: they are each module's version, which the build passes.
-rqlite_image_tag = "1.0.6"
+rqlite_image_tag = "1.0.7"
 
 # Off 4001/4002, which the test suites' own rqlite containers sit beside. LocalStack publishes an
 # ECS task's ports on the host, and the first node to start takes 5001: that is how `mill mcp.dev`
