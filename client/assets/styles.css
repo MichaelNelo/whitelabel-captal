@@ -1322,16 +1322,16 @@ body {
 /* ═══════════════════════════════════════════════════════════════════
    VIDEO INTRO CARD
    ═══════════════════════════════════════════════════════════════════ */
-/* The layer the intro sits on, over the player.
- *
- * Only stacking and an opaque ground: the `Layout` inside does its own centring and animation, so
- * the flex alignment this used to carry — written for a `.video-intro-card` that no longer exists —
- * would now shrink-wrap a full view. `.video-hero` is `position: fixed; inset: 0`, so without the
- * opaque background here the video is visible straight through the intro. */
+/* The layer the intro sits on, over the player. Centres and pads its `Layout` as `#app` and
+ * `.app-root` do every other view's, since that column is only `--content-max-width` wide. Opaque,
+ * because `.video-hero` beneath is `position: fixed; inset: 0`. */
 .video-intro {
   position: fixed;
   inset: 0;
   z-index: 10;
+  display: flex;
+  justify-content: center;
+  padding: var(--space-lg);
   background: linear-gradient(var(--bg-gradient-angle), var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
   transition: opacity var(--video-intro-out) ease-out;
 }
