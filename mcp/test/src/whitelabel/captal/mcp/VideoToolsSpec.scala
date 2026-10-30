@@ -1,6 +1,6 @@
 package whitelabel.captal.mcp
 
-import whitelabel.captal.mcp.tools.VideoTools
+import whitelabel.captal.mcp.tools.{VideoFileCollector, VideoTools}
 import zio.test.*
 
 /** Where the video's length comes from — read from the file by the upload page and recorded at
@@ -82,5 +82,21 @@ object VideoToolsSpec extends ZIOSpecDefault:
         assertTrue(
           uiOf(VideoTools.createPromo).contains("ui://upload-video"),
           uiOf(VideoTools.createPromo) == uiOf(VideoTools.create))
+      ,
+      // What rqlite's change data capture reaches: a post asks for a pass, whatever it carries,
+      // and a burst asks for one.
+      test("a change posted by rqlite asks for one pass, however many arrive"):
+        for
+          asked <- zio.Queue.sliding[Unit](1)
+          post = zio
+            .http
+            .Request
+            .post(
+              VideoFileCollector.CdcPath,
+              zio.http.Body.fromString("""{"node_id":"n1","payload":[]}"""))
+          first  <- VideoFileCollector.routes(asked).runZIO(post)
+          _      <- VideoFileCollector.routes(asked).runZIO(post)
+          queued <- asked.size
+        yield assertTrue(first.status == zio.http.Status.Ok, queued == 1)
     )
 end VideoToolsSpec

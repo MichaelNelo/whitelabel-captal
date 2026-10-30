@@ -27,6 +27,9 @@ import whitelabel.captal.core.survey.question.{
 import whitelabel.captal.messages.ApiError.given
 import whitelabel.captal.messages.MarkVideoWatchedRequest.given
 import whitelabel.captal.messages.SetLocaleRequest.given
+import whitelabel.captal.messages.EndPlaybackRequest.given
+import whitelabel.captal.messages.PlaybackResponse.given
+import whitelabel.captal.messages.StartPlaybackRequest.given
 import whitelabel.captal.messages.StatusResponse.given
 import whitelabel.captal.messages.SurveyResponse.given
 import whitelabel.captal.messages.VideoResponse.given
@@ -34,8 +37,11 @@ import whitelabel.captal.messages.VideoWatchedResponse.given
 import whitelabel.captal.messages.i18n.given
 import whitelabel.captal.messages.{
   ApiError,
+  EndPlaybackRequest,
   MarkVideoWatchedRequest,
+  PlaybackResponse,
   SetLocaleRequest,
+  StartPlaybackRequest,
   StatusResponse,
   SurveyResponse,
   VideoResponse,
@@ -181,6 +187,8 @@ object WireContractSuite:
     ApiError.QuestionNotPending("u1", "q1"),
     ApiError.VideoNotFound("v1"),
     ApiError.NoVideoAvailable,
+    ApiError.StaleVideoFile("v1", "https://cdn.test/a.mp4"),
+    ApiError.InvalidPlaybackId("not-a-uuid"),
     ApiError.LocationNotFound("cafe-centro"),
     ApiError.InternalError("something gave way")
   )
@@ -312,6 +320,18 @@ object WireContractSuite:
             MarkVideoWatchedRequest(30, completed = true),
             MarkVideoWatchedRequest(0, completed = false))),
         agreement("VideoWatchedResponse", List(VideoWatchedResponse("advertiser_video_survey"))),
+        agreement(
+          "StartPlaybackRequest",
+          List(
+            StartPlaybackRequest(
+              "3f1c0a52-7d3e-4c1b-9a77-2f5e8b1d6c40",
+              "https://cdn.test/a.mp4"))),
+        agreement(
+          "EndPlaybackRequest",
+          List(EndPlaybackRequest("3f1c0a52-7d3e-4c1b-9a77-2f5e8b1d6c40"))),
+        agreement(
+          "PlaybackResponse",
+          List(PlaybackResponse("3f1c0a52-7d3e-4c1b-9a77-2f5e8b1d6c40"))),
         // The survey tree, where the format is a column as well as a response: these same bytes go
         // into `question_rules.rule_config` and `answers.answer_value`, so this also checks that
         // what the MCP backoffice writes is what the browser can read.

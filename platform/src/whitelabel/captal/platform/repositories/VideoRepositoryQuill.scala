@@ -91,9 +91,20 @@ object VideoRepositoryQuill:
       import quill.*
 
       def findById(id: video.Id): Task[Option[AdvertiserVideo]] =
-        run(query[AdvertiserVideoRow].filter(_.id == lift(id)))
-          .map(_.headOption.map(toAdvertiserVideo))
+        val program =
+          for
+            row  <- run(query[AdvertiserVideoRow].filter(_.id == lift(id))).map(_.headOption)
+            file <- ZIO.foreach(row)(r => currentFile(r.id)).map(_.flatten)
+          yield row.zip(file).map(toAdvertiserVideo)
+        program.orDie
+
+      def openPlaybacks(sessionId: user.SessionId): Task[List[video.PlaybackId]] =
+        run(VideoFiles.openPlaybacksQuery(lift(sessionId)))
+          .map(_.flatMap(p => video.PlaybackId.fromString(p.id)))
           .orDie
+
+      private def currentFile(videoId: video.Id): Task[Option[VideoFileRow]] = run(
+        VideoFiles.currentQuery(lift(videoId))).map(_.headOption)
 
       /** Advertiser video first, then the venue's own promo when no advertiser video qualifies. */
       def findNextForUser(userId: user.Id): Task[Option[VideoToWatch]] =
@@ -120,7 +131,7 @@ object VideoRepositoryQuill:
               case Nil =>
                 ZIO.none
               case rows =>
-                fetchLocalizedTexts(rows.head, locale).map(Some(_))
+                fetchLocalizedTexts(rows.head, locale)
         yield result
 
       /** The location's promo this user has watched the fewest times, the earliest in rotation
@@ -140,16 +151,19 @@ object VideoRepositoryQuill:
                 run(viewsByUserQuery(lift(userId)))
             watched = views.groupMapReduce(identity)(_ => 1)(_ + _)
             next    = promos.minByOption(promo => watched.getOrElse(promo.id, 0))
-            result <- ZIO.foreach(next)(fetchLocalizedTexts(_, locale))
+            result <- ZIO.foreach(next)(fetchLocalizedTexts(_, locale)).map(_.flatten)
           yield result
         program.orDie
 
-      // Fetch localized texts for a video (title and description)
+      /** The video as the player gets it: its current file and its texts in the user's locale. None
+        * when it has no confirmed file, which an active video always has.
+        */
       private def fetchLocalizedTexts(
           videoRow: AdvertiserVideoRow,
-          locale: String): Task[VideoToWatch] =
+          locale: String): Task[Option[VideoToWatch]] =
         val videoIdStr = videoRow.id.asString
         for
+          file       <- currentFile(videoRow.id)
           titleTexts <- run(
             query[LocalizedTextRow]
               .filter(lt => lt.entityId == lift(videoIdStr) && lt.isActive == 1)
@@ -158,32 +172,37 @@ object VideoRepositoryQuill:
             query[LocalizedTextRow]
               .filter(lt => lt.entityId == lift(videoIdStr + "_desc") && lt.isActive == 1)
               .filter(lt => lt.locale == lift(locale) || lt.locale == "en"))
-        yield toVideoToWatch(
-          videoRow,
-          selectPreferredText(titleTexts, locale),
-          selectPreferredText(descTexts, locale))
+        yield file.map(
+          toVideoToWatch(
+            videoRow,
+            _,
+            selectPreferredText(titleTexts, locale),
+            selectPreferredText(descTexts, locale)))
+      end fetchLocalizedTexts
 
-  private def toAdvertiserVideo(row: AdvertiserVideoRow): AdvertiserVideo = AdvertiserVideo(
-    id = row.id,
-    advertiserId = row.advertiserId.flatMap(AdvertiserId.fromString),
-    videoType = row.videoType,
-    videoUrl = row.videoUrl,
-    durationSeconds = row.durationSeconds,
-    minWatchSeconds = row.minWatchSeconds,
-    showCountdown = row.showCountdown == 1,
-    noRepeatSeconds = row.noRepeatSeconds,
-    priority = row.priority
-  )
+  private def toAdvertiserVideo(row: AdvertiserVideoRow, file: VideoFileRow): AdvertiserVideo =
+    AdvertiserVideo(
+      id = row.id,
+      advertiserId = row.advertiserId.flatMap(AdvertiserId.fromString),
+      videoType = row.videoType,
+      videoUrl = file.url,
+      durationSeconds = file.durationSeconds.getOrElse(0),
+      minWatchSeconds = row.minWatchSeconds,
+      showCountdown = row.showCountdown == 1,
+      noRepeatSeconds = row.noRepeatSeconds,
+      priority = row.priority
+    )
 
   private def toVideoToWatch(
       row: AdvertiserVideoRow,
+      file: VideoFileRow,
       title: Option[LocalizedText],
       description: Option[LocalizedText]): VideoToWatch = VideoToWatch(
     id = row.id,
     advertiserId = row.advertiserId.flatMap(AdvertiserId.fromString),
     videoType = row.videoType,
-    videoUrl = row.videoUrl,
-    durationSeconds = row.durationSeconds,
+    videoUrl = file.url,
+    durationSeconds = file.durationSeconds.getOrElse(0),
     title = title,
     description = description
   )

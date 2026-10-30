@@ -4,11 +4,17 @@ import whitelabel.captal.api.Phases.*
 import whitelabel.captal.api.session.CurrentLocation
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Event, EventHandler, Flow, NextStep}
-import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository, VideoRepository}
+import whitelabel.captal.core.infrastructure.{
+  SessionData,
+  SurveyRepository,
+  UserRepository,
+  VideoRepository
+}
 import whitelabel.captal.platform.UnifiClient
 import whitelabel.captal.platform.eventhandlers.{
   AnswerPersistenceHandler,
   EventLogHandler,
+  PlaybackHandler,
   SessionExpirationHandler,
   SessionPhaseHandler,
   SessionSurveyHandler,
@@ -58,8 +64,9 @@ private[api] object Flows:
         sessionService,
         unifiClient,
         jobQueue)
-      // unifiAccess corre POST-commit; cualquier fallo HTTP no impacta el chain transaccional.
-      transactional.andThen(unifiAccess)
+      // Both run after the commit: a UniFi call failing must not undo the chain, and a playback
+      // has to see its own insert, which a transaction defers.
+      transactional.andThen(PlaybackHandler(quill)).andThen(unifiAccess)
 
   /** The served location's UniFi switch, read from its row on every call. Without a location (dev,
     * standalone) there is no switch, and the UniFi config alone decides.
@@ -191,5 +198,40 @@ private[api] object Flows:
             (events, value) = result
             _ <- eventHandler.handle(events)
           yield value
+
+  /** Built per request for the same reason as [[markVideoWatchedFlowLayer]]: the handler needs the
+    * session.
+    */
+  val startPlaybackFlowLayer: ZLayer[
+    VideoRepository[Task] & SessionContext & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[Task, StartPlaybackCommand, Unit]] = ZLayer.fromFunction:
+    (
+        videoRepo: VideoRepository[Task],
+        ctx: SessionContext,
+        eventHandler: EventHandler[Task, Event]) =>
+      perSession(ctx, eventHandler)(StartPlaybackHandler.withSession(videoRepo, _))
+
+  val endPlaybackFlowLayer: ZLayer[
+    SessionContext & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[Task, EndPlaybackCommand, Unit]] = ZLayer.fromFunction:
+    (ctx: SessionContext, eventHandler: EventHandler[Task, Event]) =>
+      perSession(ctx, eventHandler)(EndPlaybackHandler.withSession[Task](_))
+
+  private def perSession[C](ctx: SessionContext, eventHandler: EventHandler[Task, Event])(
+      build: SessionData => Handler.Aux[Task, C, Unit]): Flow.Aux[Task, C, Unit] =
+    import zio.interop.catz.given
+    new Flow[Task, C]:
+      type Result = Unit
+      def execute(command: C): Task[Unit] =
+        for
+          session  <- ctx.getOrFail
+          opResult <- build(session).handle(command)
+          result   <- ZIO.fromEither(
+            whitelabel.captal.core.Op.run(opResult).left.map(Flow.HandlerError(_)))
+          (events, _) = result
+          _ <- eventHandler.handle(events)
+        yield ()
 
 end Flows

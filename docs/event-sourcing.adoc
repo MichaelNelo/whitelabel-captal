@@ -110,9 +110,17 @@ The logged `answer` is the `AnswerValue` encoded with the same circe codec the b
 | `VideoVisualized`
 | `sessionId`, `userId: Option`, `videoId`, `advertiserId: Option`, `videoType`, `durationWatched: Int`, `completed: Boolean`, `occurredAt`
 | `video.visualized`
+
+| `PlaybackStarted`
+| `playbackId`, `sessionId`, `videoId`, `fileUrl`, `occurredAt`
+| not logged
+
+| `PlaybackEnded`
+| `playbackId`, `sessionId`, `occurredAt`
+| not logged
 |===
 
-This is the only event that carries a session id in its own payload, because the command that emits it is built from the session rather than from an aggregate.
+These carry a session id in their own payload because the commands that emit them are built from the session rather than from an aggregate. The two playback events are recorded in `video_playbacks` by `PlaybackHandler` after the commit, not in `event_log`: a start the handler refuses — the file was replaced in between — would otherwise be logged as having happened.
 
 == The handler chains
 
@@ -255,10 +263,20 @@ One pass through the portal, with the endpoint, the phase it requires, the event
 | `AdvertiserVideo`
 | `VideoAssigned`, and `sessions.current_video_id`. With no video available the response is a `Step` to `Ready` and the route writes that phase. With no identified user the command fails with `UserNotIdentified`.
 
+| 4a. Start playing it
+| `POST /api/video/playback/start`
+| `AdvertiserVideo`
+| `PlaybackStarted` → a `video_playbacks` row, if the URL is still the video's current file; otherwise `StaleVideoFile`, and the page asks for the video again. Sent before the player fetches anything.
+
 | 5. Report it watched
 | `POST /api/video/watched`
 | `AdvertiserVideo`
-| `VideoVisualized` → a `video_views` row and `sessions.phase` = `AdvertiserVideoSurvey`.
+| `VideoVisualized` → a `video_views` row and `sessions.phase` = `AdvertiserVideoSurvey`; `PlaybackEnded` for each of the session's open playbacks.
+
+| —. Leave the page
+| `POST /api/video/playback/end`
+| any
+| `PlaybackEnded` → the playback's `ended_at`, if it is this session's and still open. Sent by `sendBeacon` from `pagehide`.
 
 | 6. Ask for the video's question
 | `GET /api/survey/advertiser/next`

@@ -2,6 +2,8 @@ package whitelabel.captal.client
 
 import scala.scalajs.js
 
+import io.circe.syntax.*
+import org.scalajs.dom
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.core.survey.question.AnswerValue
 import whitelabel.captal.messages.i18n.given
@@ -9,8 +11,11 @@ import whitelabel.captal.messages.{
   AdvertiserSurveyResponse,
   AnswerRequest,
   ApiError,
+  EndPlaybackRequest,
   MarkVideoWatchedRequest,
+  PlaybackResponse,
   SetLocaleRequest,
+  StartPlaybackRequest,
   StatusResponse,
   SurveyResponse,
   VideoResponse,
@@ -56,6 +61,25 @@ object VideoApi:
       completed: Boolean): js.Promise[Either[ApiError, VideoWatchedResponse]] = ApiClient.postJson(
     ApiClient.url("/video/watched"),
     MarkVideoWatchedRequest(durationWatched, completed))
+
+  def startPlayback(
+      playbackId: String,
+      videoUrl: String): js.Promise[Either[ApiError, PlaybackResponse]] = ApiClient.postJson(
+    ApiClient.url("/video/playback/start"),
+    StartPlaybackRequest(playbackId, videoUrl))
+
+  /** Sent with `sendBeacon`, the one request a page can still make while it is being torn down; a
+    * `fetch` from `pagehide` is cancelled with the page. Nothing reads the answer.
+    */
+  def endPlayback(playbackId: String): Unit =
+    val body = EndPlaybackRequest(playbackId).asJson.noSpaces
+    val blob =
+      new dom.Blob(
+        js.Array(body),
+        new dom.BlobPropertyBag:
+          `type` = "application/json")
+    val _ = dom.window.navigator.sendBeacon(ApiClient.url("/video/playback/end"), blob)
+end VideoApi
 
 object AdvertiserApi:
   def getNextAdvertiserSurvey(): js.Promise[Either[ApiError, AdvertiserSurveyResponse]] = ApiClient

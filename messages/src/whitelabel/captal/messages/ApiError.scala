@@ -47,6 +47,8 @@ enum ApiError:
   // Video errors
   case VideoNotFound(videoId: String)
   case NoVideoAvailable
+  case StaleVideoFile(videoId: String, videoUrl: String)
+  case InvalidPlaybackId(value: String)
 
   // Location errors
   case LocationNotFound(slug: String)
@@ -129,6 +131,8 @@ object ApiError:
         ApiError.VideoNotFound(videoId.asString)
       case video.Error.NoVideoAvailable =>
         ApiError.NoVideoAvailable
+      case video.Error.StaleFile(videoId, fileUrl) =>
+        ApiError.StaleVideoFile(videoId.asString, fileUrl)
 
   def fromThrowable(cause: Throwable): ApiError = ApiError.InternalError(
     Option(cause.getMessage).getOrElse("Unknown error"))

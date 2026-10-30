@@ -261,4 +261,7 @@ object EventLogHandler:
               "occurredAt"      -> Json.fromString(occurredAt.toString)
             ),
             occurredAt))
+      // `video_playbacks` is their record; see `PlaybackHandler`.
+      case _: VideoEvent.PlaybackStarted | _: VideoEvent.PlaybackEnded =>
+        None
 end EventLogHandler

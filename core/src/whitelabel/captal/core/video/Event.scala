@@ -15,3 +15,12 @@ enum Event:
       durationWatched: Int,
       completed: Boolean,
       occurredAt: Instant)
+
+  case PlaybackStarted(
+      playbackId: PlaybackId,
+      sessionId: user.SessionId,
+      videoId: Id,
+      fileUrl: String,
+      occurredAt: Instant)
+
+  case PlaybackEnded(playbackId: PlaybackId, sessionId: user.SessionId, occurredAt: Instant)

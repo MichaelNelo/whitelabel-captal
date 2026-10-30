@@ -187,6 +187,13 @@ and persisted by the MCP tools but read by no query in `VideoRepositoryQuill`.
 `POST /api/video/watched` records whatever `durationWatched` and `completed` the client reports,
 with no server-side check against `minWatchSeconds` or the video's own `durationSeconds`.
 
+While the video plays, the page holds a playback open on the server: started before the player
+fetches anything, ended by the watched report or by a beacon when the page goes away. That is what
+lets the backoffice give a video a new file without breaking a guest mid-video — the guest keeps the
+file they were given, and its object is deleted only once no playback of it is open. See
+xref:client.adoc[Client] for the page's side and xref:mcp.adoc#replaced-files[Replaced files] for
+the deletion.
+
 === The survey after it
 
 `GET /api/survey/advertiser/next` reads the video from `sessions.current_video_id` — never from

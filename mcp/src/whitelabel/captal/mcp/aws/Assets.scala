@@ -259,7 +259,7 @@ final case class AssetStore(
     ZIO.foreachDiscard(keys)(deleteIfPresent).as(keys.size)
 
   /** Deletes a key, treating absence as success. */
-  private def deleteIfPresent(key: String): ZIO[Any, String, Unit] = ZIO
+  private[mcp] def deleteIfPresent(key: String): ZIO[Any, String, Unit] = ZIO
     .attemptBlocking:
       s3.deleteObject(DeleteObjectRequest.builder().bucket(bucket).key(key).build())
       ()

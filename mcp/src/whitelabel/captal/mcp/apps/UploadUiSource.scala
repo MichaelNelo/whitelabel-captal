@@ -80,7 +80,7 @@ final class UploadUiSource(uploadOrigin: String, scriptOrigin: String)
     "Subir video",
     appMeta,
     Some(
-      "The upload page. Opened from create_advertiser_video or resume_video_upload it takes the video from that call; opened on its own it has nothing to upload — pick a pending video from the listing instead.")
+      "The upload page. Opened from create_advertiser_video, create_promo_video, resume_video_upload or replace_video_file it takes the video from that call; opened on its own it has nothing to upload — pick a pending video from the listing instead.")
   )
 
   override def listResources(ctx: McpToolContext): ZIO[Any, Nothing, Chunk[ResourceDefinition]] =

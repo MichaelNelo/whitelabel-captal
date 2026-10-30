@@ -12,7 +12,7 @@ exactly as `create_advertiser_video` does.
 
 **The upload half is identical.** Presigned PUT, `ui://upload-video/<videoId>`, the page reads the
 duration from the file and calls `confirm_video_upload`, `list_pending_uploads` and
-`resume_video_upload` to finish one later. Read `skill://add-video/SKILL.md` for it rather than
+`resume_video_upload` to finish one later, `replace_video_file` for a new file. Read `skill://add-video/SKILL.md` for it rather than
 repeating it here. And as there: never ask the operator how long the video is.
 
 ## `create_promo_video`

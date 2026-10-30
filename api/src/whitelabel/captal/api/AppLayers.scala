@@ -41,7 +41,8 @@ private[api] object AppLayers:
       AdvertiserSurveyRoutes & FinishRoutes & SurveyRoutes.AnswerEmailFlowType &
       SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
       SurveyRoutes.NextSurveyFlowType & VideoRoutes.NextVideoFlowType &
-      VideoRoutes.MarkVideoWatchedFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
+      VideoRoutes.MarkVideoWatchedFlowType & VideoRoutes.StartPlaybackFlowType &
+      VideoRoutes.EndPlaybackFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType
 
   // ─── Location-aware ───────────────────────────────────────────────────────────
@@ -143,6 +144,8 @@ private[api] object AppLayers:
       Flows.nextSurveyFlowLayer,
       Flows.nextVideoFlowLayer,
       Flows.markVideoWatchedFlowLayer,
+      Flows.startPlaybackFlowLayer,
+      Flows.endPlaybackFlowLayer,
       Flows.nextAdvertiserSurveyFlowLayer,
       Flows.answerAdvertiserFlowLayer,
       Flows.finishFlowLayer,

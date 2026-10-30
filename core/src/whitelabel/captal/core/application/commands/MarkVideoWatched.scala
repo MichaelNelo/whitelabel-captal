@@ -38,10 +38,10 @@ object MarkVideoWatchedHandler:
       def handle(cmd: MarkVideoWatchedCommand) =
         session.currentVideoId match
           case Some(videoId) =>
-            videoRepo
-              .findById(videoId)
+            Monad[F]
+              .product(videoRepo.findById(videoId), videoRepo.openPlaybacks(session.sessionId))
               .map:
-                case Some(video) =>
+                case (Some(video), open) =>
                   val event = VideoEvent.VideoVisualized(
                     sessionId = session.sessionId,
                     userId = session.userId,
@@ -52,12 +52,14 @@ object MarkVideoWatchedHandler:
                     completed = cmd.completed,
                     occurredAt = cmd.occurredAt
                   )
+                  // Watched, the file is no longer being fetched.
+                  val ended = open.map(
+                    VideoEvent.PlaybackEnded(_, session.sessionId, cmd.occurredAt))
                   CoreOp
-                    .emit[videoPkg.Event, videoPkg.Error](event)
+                    .emitAll[videoPkg.Event, videoPkg.Error, NextStep](event :: ended, nextStep)
                     .convertEvent
                     .convertError
-                    .as(nextStep)
-                case None =>
+                case (None, _) =>
                   CoreOp
                     .fail[videoPkg.Event, videoPkg.Error, NextStep](
                       VideoError.VideoNotFound(videoId))

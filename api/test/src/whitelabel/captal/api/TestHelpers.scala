@@ -290,6 +290,27 @@ object TestHelpers:
   def parseVideoWatchedResponse(body: String): Option[VideoWatchedResponse] =
     decode[VideoWatchedResponse](body).toOption
 
+  def postStartPlayback(
+      backend: SttpBackend[Task, Any],
+      sessionCookie: String,
+      playbackId: String,
+      videoUrl: String) = basicRequest
+    .post(uri"http://test/api/video/playback/start")
+    .cookie("captal_session", sessionCookie)
+    .body(s"""{"playbackId":"$playbackId","videoUrl":"$videoUrl"}""")
+    .contentType("application/json")
+    .response(asStringAlways)
+    .send(backend)
+
+  def postEndPlayback(backend: SttpBackend[Task, Any], sessionCookie: String, playbackId: String) =
+    basicRequest
+      .post(uri"http://test/api/video/playback/end")
+      .cookie("captal_session", sessionCookie)
+      .body(s"""{"playbackId":"$playbackId"}""")
+      .contentType("application/json")
+      .response(asStringAlways)
+      .send(backend)
+
   // Advertiser survey helpers
   def getNextAdvertiserSurvey(backend: SttpBackend[Task, Any], sessionCookie: String) = basicRequest
     .get(uri"http://test/api/survey/advertiser/next")

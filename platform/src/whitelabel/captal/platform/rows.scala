@@ -150,8 +150,6 @@ final case class AdvertiserVideoRow(
       * `schema.core`, so a query reads `v.videoType == lift(VideoType.Promo)`.
       */
     videoType: video.VideoType,
-    videoUrl: String,
-    durationSeconds: Int,
     minWatchSeconds: Int,
     showCountdown: Int,
     noRepeatSeconds: Option[Int],
@@ -161,6 +159,26 @@ final case class AdvertiserVideoRow(
     createdAt: String,
     updatedAt: String,
     productCampaignId: Option[String] = None)
+
+/** One uploaded file of a video. The video plays the newest confirmed one; `deletedAt` is set once
+  * its object is gone from the bucket.
+  */
+final case class VideoFileRow(
+    id: String,
+    videoId: video.Id,
+    url: String,
+    durationSeconds: Option[Int],
+    createdAt: String,
+    confirmedAt: Option[String],
+    deletedAt: Option[String])
+
+/** One guest playing one file; open while `endedAt` is empty. */
+final case class VideoPlaybackRow(
+    id: String,
+    sessionId: user.SessionId,
+    fileId: String,
+    startedAt: String,
+    endedAt: Option[String])
 
 final case class VideoViewRow(
     id: String,

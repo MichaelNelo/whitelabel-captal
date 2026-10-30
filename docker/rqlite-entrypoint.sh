@@ -135,6 +135,32 @@ else
     -raft-reap-node-timeout "${RQLITE_REAP_TIMEOUT:-120s}"
 fi
 
+# ─── Change data capture ─────────────────────────────────────────────────────
+# Every change to video_playbacks is posted to the backoffice, which deletes a replaced video file
+# once its last playback has ended. Only the leader posts; the others queue on disk so a new leader
+# carries on. Off when RQLITE_CDC_ENDPOINT is empty.
+#
+# Retries are bounded: with the backoffice down, unbounded retries grow the queue until the disk is
+# full. A change it never hears about is caught by the pass it runs when it starts.
+#
+# The policy and the backoff are numbers, not the names and duration strings the guide shows: 1 is
+# ExponentialRetryPolicy and durations are nanoseconds. rqlited refuses to start on the strings.
+if [ -n "$RQLITE_CDC_ENDPOINT" ]; then
+  CDC_CFG=/tmp/cdc.json
+  cat > "$CDC_CFG" <<EOF
+{
+  "endpoint": "$RQLITE_CDC_ENDPOINT",
+  "table_filter": "^video_playbacks\$",
+  "row_ids_only": true,
+  "transmit_retry_policy": 1,
+  "transmit_max_retries": 10,
+  "transmit_max_backoff": 60000000000
+}
+EOF
+  set -- "$@" -cdc-config "$CDC_CFG"
+  echo "Change data capture to $RQLITE_CDC_ENDPOINT"
+fi
+
 exec rqlited "$@" \
   -extensions-path=/opt/extensions/sqlean.zip,/opt/extensions/misc.zip \
   -auto-backup "$BACKUP_CFG" \

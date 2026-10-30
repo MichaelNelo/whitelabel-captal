@@ -88,7 +88,7 @@ inline given SchemaMeta[SessionRow] = schemaMeta[SessionRow]("sessions")
 inline given SchemaMeta[DeviceRow] = schemaMeta[DeviceRow]("devices")
 // ... surveys, questions, question_options, question_rules, answers,
 //     user_survey_progress, localized_texts, advertisers, advertiser_videos,
-//     video_views, locations, event_log
+//     video_files, video_playbacks, video_views, locations, event_log
 ----
 
 WARNING: A row type without a `SchemaMeta` does not fail to compile. Quill derives the table name
@@ -208,8 +208,9 @@ is ambient, which is what lets the same repository serve a request and a schedul
 | `advertiser_videos` for `findById`, and for `findNextForUser` a weighted-random ad selection
   joining `advertisers` and filtering on `surveys`/`questions`/`answers` for an unanswered
   follow-up survey, falling back to the session's location's promo the user has watched least
-  (`video_views`), ties broken by `(priority, created_at)`. Localized title and description come from
-  `localized_texts`.
+  (`video_views`), ties broken by `(priority, created_at)`. The URL and the length are the current
+  file's (`VideoFiles.currentQuery`); localized title and description come from `localized_texts`.
+  `openPlaybacks` lists the session's playbacks not yet ended.
 |===
 
 `SurveyRepositoryQuill` also owns the parsing of a `QuestionRow` plus its rule rows into a
@@ -424,6 +425,36 @@ It mirrors the guest-access lifecycle onto the controller, symmetrically:
 Both branches log and continue on failure. A failed authorize leaves the session in its pre-authorized
 phase so the finish endpoint can be retried; a failed revoke is already absorbed, because the reset is
 committed either way.
+
+`PlaybackHandler` runs after the commit too, before `UnifiAccessHandler`, for a different reason:
+inside a transaction the rqlite driver defers every write to the commit and reports none of them
+affecting a row, and starting a playback has to know whether its insert found the file still
+current. `PlaybackStarted` runs `VideoFiles.start` and fails the request with `StaleFile` when the
+insert recorded nothing new; `PlaybackEnded` runs `VideoFiles.end`. Neither event is written to
+`event_log` — `video_playbacks` is their record, and a refused start would otherwise be logged as
+having happened.
+
+[[video-files]]
+== Video files and playbacks
+
+`VideoFiles` holds the rule both the portal and the backoffice write by. A video's files are rows of
+`video_files`; the current one is the newest confirmed, and a file that stops being current never
+becomes current again. A guest's playback of a file is a row of `video_playbacks`, open while
+`ended_at` is empty, and a file with an open playback is never deleted.
+
+Each side decides in one statement, so the order rqlite applies them in is the whole story:
+
+* `start` inserts a playback with `INSERT … SELECT … WHERE` the file is the video's current one;
+  `INSERT OR IGNORE`, because the id is the page's and a repeated start must count once.
+* `condemn` sets `deleted_at` with an `UPDATE … WHERE` a newer confirmed file exists `AND NOT EXISTS`
+  an open playback.
+
+Whichever runs second sees the first: a start after the condemn finds the file not current, and a
+condemn after the start finds the playback. Reading first and writing after would leave a window
+between the two, transaction or not — the driver's transactions batch the writes, not the reads.
+
+`confirmed_at` is compared as text, so `VideoFiles.stamp` writes it at a fixed width:
+`Instant.toString` drops trailing zeros, and `…:41Z` sorts after `…:41.5Z`.
 
 == Migrations
 

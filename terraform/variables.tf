@@ -129,6 +129,12 @@ variable "rqlite_image_tag" {
   default     = "1.0.0"
 }
 
+variable "rqlite_cdc_endpoint" {
+  description = "Where rqlite posts changes to video_playbacks. Empty means the backoffice by its service discovery name, which is right wherever it runs as a task beside rqlite."
+  type        = string
+  default     = ""
+}
+
 variable "tailscale_proxy_desired_count" {
   description = "Desired number of Tailscale proxy replicas. 1 is enough — stateless, retries cover gaps."
   type        = number

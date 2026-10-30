@@ -18,6 +18,8 @@ import whitelabel.captal.platform.{
   LocationRow,
   SurveyCategory as StoredCategory,
   SurveyRow,
+  VideoFileRow,
+  VideoFiles,
   VideoStatus
 }
 import zio.*
@@ -149,12 +151,16 @@ object VideoTools:
       @description(
         "`pending` is registered with no file and invisible to guests; `active` is in rotation; `retired` keeps its file and its answers but is never drawn.")
       status: String,
-      @description("Zero for a pending video, whose length is read from the file at confirm.")
+      @description(
+        "The length of the file it plays. Zero for a pending video, whose length is read from the file at confirm.")
       durationSeconds: Int,
       @description("When the survey unlocks.")
       minWatchSeconds: Int,
       @description("Weights it against the others. Zero means never drawn.")
-      priority: Int)
+      priority: Int,
+      @description(
+        "True while a new file started with replace_video_file waits to be uploaded or confirmed. The video keeps playing its current file meanwhile; resume_video_upload reopens the page.")
+      replacing: Boolean)
 
   final case class ListVideosResponse(
       @description("Active first, then pending, then retired; by descending priority within each.")
@@ -183,6 +189,10 @@ object VideoTools:
       @description("The video to upload. Call list_pending_uploads for what is waiting.")
       videoId: String)
 
+  final case class ReplaceFileRequest(
+      @description("The video whose file to replace. Call list_videos for the ids.")
+      videoId: String)
+
   final case class ResumeUploadResponse(
       @description("The video the page was opened for.")
       videoId: String,
@@ -198,7 +208,7 @@ object VideoTools:
 
   final case class ConfirmUploadRequest(
       @description(
-        "The video whose upload to check. Comes from create_advertiser_video, create_promo_video, resume_video_upload or list_pending_uploads.")
+        "The video whose upload to check. Comes from create_advertiser_video, create_promo_video, resume_video_upload, replace_video_file or list_pending_uploads.")
       videoId: String,
       @description(
         "The file's length in whole seconds. The upload page reads it from the file itself and sends it; supply it by hand only when the page could not — some WebM files carry no duration in their header. It is not a preference: a wrong value makes the player count down to the wrong place.")
@@ -208,7 +218,7 @@ object VideoTools:
       @description("The video confirmed.")
       videoId: String,
       @description(
-        "True once the object was found and the video entered rotation. The tool refuses rather than returning false, so this reports success.")
+        "Whether the video is in rotation. A pending video enters it here; a retired one whose file was replaced stays retired until set_video_active.")
       active: Boolean,
       @description("Where the portal will fetch it from.")
       videoUrl: String,
@@ -219,13 +229,19 @@ object VideoTools:
       minWatchSeconds: Int,
       @description(
         "Present when the requested minWatchSeconds was longer than the video and was lowered to its length. Not an error — a survey that unlocks after the video ends never unlocks at all.")
-      minWatchAdjustedFrom: Option[Int])
+      minWatchAdjustedFrom: Option[Int],
+      @description(
+        "True when this file took over from one the video was already playing (replace_video_file). Guests given the previous file keep playing it.")
+      replaced: Boolean,
+      @description(
+        "Replaced files of this video deleted now, because nobody was playing them. One still being played is deleted when its last playback ends.")
+      filesDeleted: Int)
 
   /** What a video can be corrected to after it exists.
     *
-    * Not the file and not the location. The file is addressed by a key derived from the video's id
-    * and S3 is written by the upload page, so replacing it means a new video; the location is in
-    * that key and in the survey hanging off it, so moving one would orphan both.
+    * Not the file and not the location: the file is replaced with `replace_video_file`, and the
+    * location is in the file's key and in the survey hanging off it, so moving one would orphan
+    * both.
     *
     * `durationSeconds` is absent for the same reason `create_advertiser_video` does not take it: it
     * is read from the file, and a hand-supplied value is a countdown that ends in the wrong place.
@@ -293,6 +309,7 @@ object VideoTools:
   given Schema[CreateVideoRequest] = DeriveSchema.gen
   given Schema[CreateVideoResponse] = DeriveSchema.gen
   given Schema[ResumeUploadRequest] = DeriveSchema.gen
+  given Schema[ReplaceFileRequest] = DeriveSchema.gen
   given Schema[ResumeUploadResponse] = DeriveSchema.gen
   given Schema[ConfirmUploadRequest] = DeriveSchema.gen
   given Schema[ConfirmUploadResponse] = DeriveSchema.gen
@@ -322,9 +339,54 @@ object VideoTools:
       import quill.*
       run(activeVideoCountQuery(lift(advertiserId))).orDie.map(_.toInt)
 
-  /** Storage key derived from slug and video id, without extension (read from file's content type).
+  /** Storage key derived from slug and file id, without extension (read from file's content type).
+    * A video's first file takes the video's id.
     */
-  private def storageKey(slug: String, videoId: String): String = s"$slug/videos/$videoId"
+  private def storageKey(slug: String, fileId: String): String = s"$slug/videos/$fileId"
+
+  /** The file uploaded but not yet confirmed, if one is waiting: the first file of a pending video,
+    * or the replacement of a video already playing another.
+    */
+  private inline def waitingFileQuery = quote: (videoIdParam: video.Id) =>
+    query[VideoFileRow]
+      .filter(f => f.videoId == videoIdParam && f.confirmedAt.isEmpty && f.deletedAt.isEmpty)
+      .sortBy(_.createdAt)(using Ord.desc)
+      .take(1)
+
+  private[mcp] def waitingFile(videoId: video.Id): ZIO[QuillSqlite, Nothing, Option[VideoFileRow]] =
+    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      run(waitingFileQuery(lift(videoId))).orDie.map(_.headOption)
+
+  private[mcp] def currentFile(videoId: video.Id): ZIO[QuillSqlite, Nothing, Option[VideoFileRow]] =
+    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      run(VideoFiles.currentQuery(lift(videoId))).orDie.map(_.headOption)
+
+  /** Reserves the row for a file about to be uploaded to `key`. */
+  private def addFile(
+      fileId: String,
+      videoId: video.Id,
+      key: String,
+      now: String): ZIO[QuillSqlite & AssetStore, String, Unit] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
+      import quill.*
+      for
+        store    <- ZIO.service[AssetStore]
+        affected <-
+          run(
+            query[VideoFileRow].insertValue(
+              lift(
+                VideoFileRow(
+                  id = fileId,
+                  videoId = videoId,
+                  url = store.publicUrl(key),
+                  durationSeconds = None,
+                  createdAt = now,
+                  confirmedAt = None,
+                  deletedAt = None)))).orDie
+        _ <- Writes.expectOne(affected, s"Reserving file '$fileId' for video '${videoId.asString}'")
+      yield ()
 
   /** Survey title from localized text, preferring Spanish. */
   private def titleFor(texts: List[LocalizedText]): String = texts
@@ -386,9 +448,6 @@ object VideoTools:
                     id = videoId,
                     advertiserId = Some(in.advertiserId),
                     videoType = VideoType.Ad,
-                    videoUrl = store.publicUrl(key),
-                    // Written as zero, filled by confirm_video_upload.
-                    durationSeconds = 0,
                     minWatchSeconds = in.minWatchSeconds.getOrElse(0),
                     showCountdown = 1,
                     noRepeatSeconds = None,
@@ -400,6 +459,7 @@ object VideoTools:
                     productCampaignId = in.productCampaignId.map(_.trim).filter(_.nonEmpty)
                   )))).orDie
           _ <- Writes.expectOne(affected, s"Creating video '${videoId.asString}'")
+          _ <- addFile(videoId.asString, videoId, key, now)
           // Portal reads texts keyed on video id; description uses `_desc` suffix.
           _ <- SurveyTools.writeTexts(videoId.asString, in.title, now)
           _ <- SurveyTools.writeTexts(
@@ -488,8 +548,6 @@ object VideoTools:
                     // The whole difference, in one field. A promo belongs to the venue.
                     advertiserId = None,
                     videoType = VideoType.Promo,
-                    videoUrl = store.publicUrl(key),
-                    durationSeconds = 0,
                     minWatchSeconds = in.minWatchSeconds.getOrElse(0),
                     showCountdown = 1,
                     noRepeatSeconds = in.noRepeatSeconds,
@@ -500,6 +558,7 @@ object VideoTools:
                     updatedAt = now
                   )))).orDie
           _ <- Writes.expectOne(affected, s"Creating promo '${videoId.asString}'")
+          _ <- addFile(videoId.asString, videoId, key, now)
           _ <- SurveyTools.writeTexts(videoId.asString, in.title, now)
           _ <- SurveyTools.writeTexts(
             s"${videoId.asString}_desc",
@@ -573,18 +632,24 @@ object VideoTools:
         import quill.*
         for
           videos      <- run(query[AdvertiserVideoRow]).orDie
+          files       <- run(query[VideoFileRow].filter(_.deletedAt.isEmpty)).orDie
           locations   <- run(query[LocationRow]).orDie
           advertisers <- run(query[AdvertiserRow]).orDie
           titles      <- run(query[LocalizedTextRow].filter(_.isActive == 1)).orDie
           slugOf  = locations.map(l => l.id -> l.slug).toMap
           nameOf  = advertisers.map(a => a.id -> a.name).toMap
           titleOf = titles.groupBy(_.entityId).view.mapValues(_.map(_.value).minOption).toMap
+          filesOf = files.groupBy(_.videoId)
           wanted  = in.slug.map(_.trim).filter(_.nonEmpty)
           retired = in.includeRetired.getOrElse(false)
           listed  = videos
             .toList
             .map: row =>
               val id = row.id.toString
+              val (confirmed, waiting) = filesOf
+                .getOrElse(row.id, Nil)
+                .partition(_.confirmedAt.isDefined)
+              val current = confirmed.maxByOption(_.confirmedAt)
               VideoView(
                 videoId = id,
                 title = titleOf.get(id).flatten.getOrElse(id),
@@ -599,9 +664,10 @@ object VideoTools:
                 ,
                 advertiser = row.advertiserId.flatMap(nameOf.get),
                 status = row.status,
-                durationSeconds = row.durationSeconds,
+                durationSeconds = current.flatMap(_.durationSeconds).getOrElse(0),
                 minWatchSeconds = row.minWatchSeconds,
-                priority = row.priority
+                priority = row.priority,
+                replacing = current.isDefined && waiting.nonEmpty
               )
             .filter(v => wanted.forall(_ == v.slug))
             .filter(v => retired || v.status != VideoStatus.Retired)
@@ -666,7 +732,7 @@ object VideoTools:
 
   val confirm: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("confirm_video_upload")
     .description(
-      "Check the file arrived, record its length, and put the video into rotation. Refuses when the object is not there, which is what an abandoned upload looks like. The upload page calls this itself with the duration it read from the file.")
+      "Check the file arrived, record its length, and make it the file the video plays. A pending video enters rotation here; a replaced file takes over from the previous one, which is deleted once nobody is still playing it. Refuses when the object is not there, which is what an abandoned upload looks like. The upload page calls this itself with the duration it read from the file.")
     .requireScopes(Auth.ContentWrite)
     .handle: (in: ConfirmUploadRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
@@ -676,47 +742,63 @@ object VideoTools:
             .orDie
             .map(_.headOption)
             .someOrFail(s"No video with id '${in.videoId}'.")
-          _ <- ZIO
-            .fail(
-              s"Video '${in.videoId}' is ${row.status}, not pending; there is nothing to confirm.")
-            .when(row.status != VideoStatus.Pending)
           _ <-
             ZIO.when(in.durationSeconds <= 0)(
               ZIO.fail(
                 s"durationSeconds must be at least 1, got ${in
                     .durationSeconds}. The upload page reads it from the file; if it could not, ask the operator and pass it here."))
+          file <- waitingFile(row.id).someOrFail(
+            s"Video '${in
+                .videoId}' has no file waiting to be confirmed; replace_video_file starts a new one.")
           store <- ZIO.service[AssetStore]
-          key = store.keyOf(row.videoUrl)
+          key = store.keyOf(file.url)
           // HEAD request: check if object exists without downloading.
           present <- store.exists(key)
           _       <-
             ZIO.when(!present)(
               ZIO.fail(
                 s"Nothing was uploaded to $key. The signed URL may have lapsed — call resume_video_upload for a fresh one."))
-          now       = java.time.Instant.now.toString
+          previous <- currentFile(row.id)
+          now      <- Clock.instant
+          // The switch itself: from here the video plays this file.
+          confirmed <-
+            run(
+              query[VideoFileRow]
+                .filter(f => f.id == lift(file.id) && f.confirmedAt.isEmpty)
+                .update(
+                  _.confirmedAt     -> lift(Option(VideoFiles.stamp(now))),
+                  _.durationSeconds -> lift(Option(in.durationSeconds)))).orDie
+          _ <- Writes.expectOne(confirmed, s"Confirming file '${file.id}'")
           requested = row.minWatchSeconds
           minWatch  = resolveMinWatch(requested, in.durationSeconds)
+          status    =
+            if row.status == VideoStatus.Pending then
+              VideoStatus.Active
+            else
+              row.status
           affected <-
             run(
               videoByIdQuery(lift(in.videoId)).update(
-                _.status          -> lift(VideoStatus.Active),
-                _.durationSeconds -> lift(in.durationSeconds),
+                _.status          -> lift(status),
                 _.minWatchSeconds -> lift(minWatch),
-                _.updatedAt       -> lift(now))).orDie
-          _ <- Writes.expectOne(affected, s"Activating video '${in.videoId}'")
+                _.updatedAt       -> lift(now.toString))).orDie
+          _       <- Writes.expectOne(affected, s"Activating video '${in.videoId}'")
+          deleted <- VideoFileCollector.collect(Some(row.id))
         yield ConfirmUploadResponse(
           videoId = in.videoId,
-          active = true,
-          videoUrl = row.videoUrl,
+          active = status == VideoStatus.Active,
+          videoUrl = file.url,
           durationSeconds = in.durationSeconds,
           minWatchSeconds = minWatch,
-          minWatchAdjustedFrom = Option.when(requested > in.durationSeconds)(requested)
+          minWatchAdjustedFrom = Option.when(requested > in.durationSeconds)(requested),
+          replaced = previous.isDefined,
+          filesDeleted = deleted
         )
         end for
 
   def resume: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("resume_video_upload")
     .description(
-      "Open the upload page for a video created earlier whose file never arrived. Signs a fresh URL; the previous one having expired does not matter. Does not create anything.")
+      "Open the upload page again for a file that never arrived: a new video's first file, or a replacement started with replace_video_file. Signs a fresh URL; the previous one having expired does not matter. Does not create anything.")
     .requireScopes(Auth.ContentWrite)
     .handle: (in: ResumeUploadRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
@@ -724,18 +806,13 @@ object VideoTools:
         for
           rows  <- run(videoByIdQuery(lift(in.videoId))).orDie
           video <- ZIO.succeed(rows.headOption).someOrFail(s"No video with id '${in.videoId}'.")
-          // Only pending videos can be resumed; retired videos keep their file and cannot be re-uploaded.
-          _ <- ZIO
-            .fail(
-              s"Video '${in.videoId}' is ${video
-                  .status}, not pending. A retired video keeps its file; create_advertiser_video makes a new one.")
-            .when(video.status != VideoStatus.Pending)
+          file  <- waitingFile(video.id).someOrFail(
+            s"Video '${in
+                .videoId}' has no file waiting: it plays the one it has. replace_video_file starts a new one.")
           locations <- run(query[LocationRow]).orDie
           titles    <- run(query[LocalizedTextRow].filter(_.entityId == lift(in.videoId))).orDie
           store     <- ZIO.service[AssetStore]
-          key = store.keyOf(video.videoUrl)
-          // Use stored key; object already exists.
-          url <- store.presignPut(key, UploadValidFor)
+          url       <- store.presignPut(store.keyOf(file.url), UploadValidFor)
         yield ResumeUploadResponse(
           videoId = in.videoId,
           title = titles.map(_.value).minOption.getOrElse(in.videoId),
@@ -750,9 +827,51 @@ object VideoTools:
         end for
     .withUi(UploadUi.AppUri)
 
+  def replace: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("replace_video_file")
+    .description(
+      "Give a video a new file — a lighter encoding, a corrected cut — keeping its id, survey and answers. Opens the upload page for a new file; the video keeps playing its current one, and stays in or out of rotation as it is, until the page confirms the new one by itself. Guests already playing the old file finish it; its object is deleted once the last of them does. Abandoned, nothing changes. Calling it again reopens the same new file. A pending video, still waiting for its first file, is resume_video_upload's.")
+    .requireScopes(Auth.ContentWrite)
+    .handle: (in: ReplaceFileRequest) =>
+      ZIO.serviceWithZIO[QuillSqlite]: quill =>
+        import quill.*
+        for
+          video <- run(videoByIdQuery(lift(in.videoId)))
+            .orDie
+            .map(_.headOption)
+            .someOrFail(s"No video with id '${in.videoId}'. Call list_videos to see what exists.")
+          _ <- ZIO
+            .fail(
+              s"Video '${in.videoId}' is pending, waiting for its first file: resume_video_upload.")
+            .when(video.status == VideoStatus.Pending)
+          locations <- run(query[LocationRow]).orDie
+          slug      <- ZIO
+            .succeed(video.locationId.flatMap(id => locations.find(_.id == id)).map(_.slug))
+            .someOrFail(s"Video '${in.videoId}' belongs to no location, so its file has no key.")
+          store   <- ZIO.service[AssetStore]
+          waiting <- waitingFile(video.id)
+          now     <- Clock.instant.map(_.toString)
+          key     <-
+            waiting match
+              case Some(file) =>
+                ZIO.succeed(store.keyOf(file.url))
+              case None =>
+                val fileId = java.util.UUID.randomUUID.toString
+                val key = storageKey(slug, fileId)
+                addFile(fileId, video.id, key, now).as(key)
+          titles <- run(query[LocalizedTextRow].filter(_.entityId == lift(in.videoId))).orDie
+          url    <- store.presignPut(key, UploadValidFor)
+        yield ResumeUploadResponse(
+          videoId = in.videoId,
+          title = titles.map(_.value).minOption.getOrElse(in.videoId),
+          slug = slug,
+          uploadUrl = url,
+          expiresInSeconds = UploadValidFor.toSeconds)
+        end for
+    .withUi(UploadUi.AppUri)
+
   val update: McpToolHandlerR[QuillSqlite] = McpTool("update_video")
     .description(
-      "Correct a video after it exists: its title, blurb, minWatchSeconds, priority, noRepeatSeconds or the client's campaign id. Omitted fields are left alone. Cannot replace the file or move the video to another location — the S3 key is derived from the video's id and the survey hangs off it, so both of those mean a new video.")
+      "Correct a video after it exists: its title, blurb, minWatchSeconds, priority, noRepeatSeconds or the client's campaign id. Omitted fields are left alone. The file is replaced with replace_video_file. Cannot move the video to another location — the location is in the file's key and the survey hangs off it, so that means a new video.")
     .requireScopes(Auth.ContentWrite)
     .handle: (in: UpdateVideoRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
@@ -769,13 +888,15 @@ object VideoTools:
           _ <-
             ZIO.when(in.noRepeatSeconds.exists(_ < 0))(
               ZIO.fail("noRepeatSeconds cannot be negative."))
-          now <- Clock.instant.map(_.toString)
-          // Re-resolve against stored duration (zero for pending videos).
+          now     <- Clock.instant.map(_.toString)
+          current <- currentFile(row.id)
+          // Re-resolved against the current file's length; a pending video has none yet.
+          duration = current.flatMap(_.durationSeconds).getOrElse(0)
           resolved = in
             .minWatchSeconds
             .map: requested =>
-              if row.durationSeconds > 0 then
-                resolveMinWatch(requested, row.durationSeconds)
+              if duration > 0 then
+                resolveMinWatch(requested, duration)
               else
                 requested
           adjusted = in
@@ -867,6 +988,7 @@ object VideoTools:
     create,
     createPromo,
     resume,
+    replace,
     confirm,
     list,
     listPending,

@@ -1,6 +1,6 @@
 ---
 name: add-video
-description: Use this skill when adding an advertiser's video to a location, or finishing an upload that never completed. Triggers on "add video", "upload video", "new video", "advertiser video", "pending upload", "resume upload".
+description: Use this skill when adding an advertiser's video to a location, finishing an upload that never completed, or replacing a video's file. Triggers on "add video", "upload video", "new video", "advertiser video", "pending upload", "resume upload", "replace video", "re-upload".
 version: 2.0.0
 ---
 
@@ -73,9 +73,27 @@ second video, a second survey and a second set of questions.
 
 - `list_pending_uploads` — every video still waiting for its file, oldest first. Omit `slug`: the
   forgotten upload is the one at the location nobody is looking at.
-- `resume_video_upload` — signs a fresh URL and opens the page for that video. Creates nothing. Only
-  works on a pending video; a retired one keeps its own file.
+- `resume_video_upload` — signs a fresh URL and opens the page for the file that video is waiting
+  for. Creates nothing. Also reopens a replacement that was never confirmed.
 - `get_location_readiness` also counts them, per location.
+
+## Replacing a file
+
+`replace_video_file` — a lighter encoding, a corrected cut. It opens the same page for a new file of
+an **active or retired** video and keeps its id, so the survey, its answers and every guest's view
+history stay. Nothing changes for guests until the page confirms the new file: the video keeps its
+status and keeps playing the current one. Confirming makes the new file current, and the response
+says `replaced: true`.
+
+Guests already playing the old file finish it. Its object is deleted once the last of them is done;
+`filesDeleted` in the response counts the ones that went at once.
+
+If the operator gives up halfway, nothing has changed. `list_videos` shows `replacing: true` until a
+new file is confirmed; calling `replace_video_file` or `resume_video_upload` again reopens the same
+page. A pending video, still waiting for its first file, is `resume_video_upload`'s.
+
+The file is what every guest downloads over the venue's WiFi before they get online. Hundreds of MB
+is a reason to replace it: a 720p H.264 encode of a short spot is a few tens of MB at most.
 
 ## `minWatchSeconds`
 

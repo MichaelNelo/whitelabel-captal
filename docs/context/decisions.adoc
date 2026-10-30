@@ -105,8 +105,10 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
   pick without guessing") — `i18n_status` was renamed to `get_i18n_status` for this alone.
 * **Edit tools deliberately exclude some fields.** `update_question` cannot change a question's
   type or options (the type decides which rules and options are representable at all);
-  `update_video` cannot change the file or location (the S3 key derives from the video id and the
-  survey hangs off it, so either change means a new video, not an edit).
+  `update_video` cannot change the location (the S3 key carries the slug and the survey hangs off
+  the video, so that means a new video, not an edit). The file is replaced by `replace_video_file`,
+  which keeps the video's id: the id is what the survey's answers and every guest's view history
+  point at, so a new video would have started those over. See "Video files" under Data model.
 * **`create_location` still sits under `content:write`, and the code says that's wrong**: "a
   translator holding `content:write` should not be able to stand up a portal." Tracked in
   `pending.adoc`.
@@ -253,6 +255,33 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
 * **`users` has no `location_id`; everything else does.** A user is identified once and recognised
   across every location's portal via the cross-location `captal_user` cookie; sessions, surveys,
   advertiser videos and localized texts are all scoped.
+* **Video files: one row and one key per file, deleted when no playback of it is open** (V25,
+  2026-10-30). A replaced file first overwrote the object under the same key and took the video
+  out of rotation while it uploaded. A guest's player fetches a video in ranges for as long as it
+  plays, so the ranges after an overwrite came from the new file, and out of rotation meant minutes
+  without that promo for a large file. Now each file has its own key and row, the newest confirmed
+  is current, and the old object goes once no playback of it is open.
+  ** *Counting, not time.* Deleting a superseded file after a fixed delay was rejected as risky —
+     it can delete a file someone is still playing. The count fails the other way: a guest whose
+     end never arrives (the captive-portal browser closed, the phone left the WiFi) leaves a file
+     kept too long, never one deleted too soon.
+  ** *A row per playback, not a counter on the file.* A counter decremented twice — the beacon and
+     the watched report both arriving — reaches zero with someone still watching. Ending an ended
+     playback changes nothing, and a playback left open is visible and can be closed by hand. A
+     websocket heartbeat would know who is still watching, at a cost not worth it here.
+  ** *Ended by the page.* `pagehide` with `sendBeacon`, the one request a page being torn down can
+     still make; it fires on a reload as on a close, so the page keeps the playback in
+     `sessionStorage` marked released and a reload starts a new one. A playback held but not
+     released is a page that died without `pagehide`, which plays without counting twice.
+  ** *Started before the first byte, and only on the current file, in one statement.* Mounting the
+     `<video>` starts the download, so the start is posted first. The insert itself checks the file
+     is current, and the delete marks a file only while it is not current and has no open playback;
+     a check followed by a write would leave a window, and the rqlite driver's transactions batch
+     writes, not reads. The same deferral is why `PlaybackHandler` runs after the commit.
+  ** *Told by rqlite's change data capture.* A playback ending is what frees a file, and only the
+     database sees every one. CDC is configured on rqlited at startup, not registered by the
+     backoffice; retries are bounded so a backoffice that is down cannot fill rqlite's disk, and
+     the backoffice runs a pass at startup and on every confirm for what it did not hear about.
 
 == Client and bundle
 

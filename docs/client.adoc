@@ -337,7 +337,7 @@ split can defer each view's paths and response decoders:
 | `StatusApi` | `GET /status` (takes the captive-portal headers)
 | `WelcomeApi` | `GET /survey/next`, `PUT /session/locale`, `GET /locales`
 | `QuestionApi` | `POST /survey/email`, `POST /survey/profiling`, `POST /survey/location`
-| `VideoApi` | `GET /video/next`, `POST /video/watched`
+| `VideoApi` | `GET /video/next`, `POST /video/watched`, `POST /video/playback/start`, `POST /video/playback/end` (by `sendBeacon`)
 | `AdvertiserApi` | `GET /survey/advertiser/next`, `POST /survey/advertiser`
 | `ReadyApi` | `POST /finish`, `POST /dev/reset-phase`
 | `I18nApi` | `GET /i18n/{locale}`
@@ -569,6 +569,30 @@ a `fullscreenchange` listener on `document` keeping `isFullscreen` in step and c
 `currentTime / duration`; the button stays disabled until `videoCompleted`, and clicking it calls
 `markAsWatched`, which turns the nav loader on, posts `POST /video/watched` and routes to
 `Phase.fromDbString(resp.nextPhase)`.
+
+=== The playback
+
+The server keeps a video's file while a playback of it is open, so the view counts itself before the
+player fetches a byte and stops counting when it is done. `VideoPlayback` holds the open playback in
+`sessionStorage` as `{id, url, released}`:
+
+* `loadNextVideo` calls `VideoPlayback.begin(url)` before setting `videoData`, because mounting the
+  `<video>` is what starts the download. A held, unreleased playback for the same URL is reused;
+  otherwise it ends that one and posts `POST /video/playback/start` with a new id, recording it only
+  once the server answers. A `StaleVideoFile` answer — the video got a new file in between — asks
+  for the video again, once. Any other failure is logged and the video plays anyway.
+* `pagehide` ends it with `sendBeacon` and marks it released. It fires on a reload as well as on a
+  close, and the leaving page cannot tell which, so a reload finds it released and starts a new one.
+  One that finds it still held is a page that died without `pagehide`; the server still counts it,
+  and it plays without starting another.
+* `pageshow` with `persisted` — back from the back-forward cache — starts one again.
+* `markAsWatched` forgets it: the server ended it with `VideoVisualized`. Unmounting the view any
+  other way releases it.
+
+The id is the browser's `crypto.randomUUID`, or built from `getRandomValues` outside a secure
+context: `java.util.UUID.randomUUID` needs `SecureRandom`, which Scala.js does not ship. Storage that
+is missing or refuses, as in a private window or some captive-portal browsers, leaves the playback
+to the page alone, as if every load were the first.
 
 == Error handling
 

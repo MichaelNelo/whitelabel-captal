@@ -100,7 +100,7 @@ object TestLayers:
         sessionService,
         unifiClient,
         jobQueue)
-      transactional.andThen(unifiAccess)
+      transactional.andThen(PlaybackHandler(quill)).andThen(unifiAccess)
 
   private val expireAccessFlowLayer: ZLayer[UserRepository[
     Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, ExpireAccessCommand, Unit]] = ZLayer
@@ -251,7 +251,8 @@ object TestLayers:
     SessionContext & SessionService & LocaleService & SurveyRoutes.AnswerEmailFlowType &
       SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
       SurveyRoutes.NextSurveyFlowType & VideoRoutes.NextVideoFlowType &
-      VideoRoutes.MarkVideoWatchedFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
+      VideoRoutes.MarkVideoWatchedFlowType & VideoRoutes.StartPlaybackFlowType &
+      VideoRoutes.EndPlaybackFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType & QuillSqlite &
       SessionCookieConfig & ApiBase & CurrentLocation & UserCookieConfig & UserLookup &
       SurveyRoutes & LocaleRoutes & VideoRoutes & AdvertiserSurveyRoutes & FinishRoutes &
@@ -278,6 +279,8 @@ object TestLayers:
     nextSurveyFlowLayer,
     nextVideoFlowLayer,
     markVideoWatchedFlowLayer,
+    Flows.startPlaybackFlowLayer,
+    Flows.endPlaybackFlowLayer,
     nextAdvertiserSurveyFlowLayer,
     answerAdvertiserFlowLayer,
     finishFlowLayer,

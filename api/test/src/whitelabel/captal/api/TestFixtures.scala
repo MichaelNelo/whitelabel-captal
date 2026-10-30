@@ -20,6 +20,20 @@ object TestFixtures:
   // TestClock.setTime / TestClock.adjust before invoking the fixture.
   private val FixedNow: String = java.time.Instant.EPOCH.toString
 
+  /** A video's first file, confirmed: what an uploaded and confirmed video has. Its id is the
+    * video's, as for every first file.
+    */
+  def confirmedFile(videoId: video.Id, url: String, durationSeconds: Int): VideoFileRow =
+    VideoFileRow(
+      id = videoId.asString,
+      videoId = videoId,
+      url = url,
+      durationSeconds = Some(durationSeconds),
+      createdAt = FixedNow,
+      confirmedAt = Some(VideoFiles.stamp(java.time.Instant.EPOCH)),
+      deletedAt = None
+    )
+
   private val testConfig = ConfigFactory.load("test.conf")
 
   /** Through [[Migrate]], so the tests migrate the way the deployed images do — same config, same
@@ -373,6 +387,27 @@ object TestFixtures:
       import quill.*
       run(query[UserRow].filter(_.email.contains(lift(email)))).map(_.headOption)
 
+  def getPlaybacks
+      : ZIO[QuillSqlite, Throwable, List[VideoPlaybackRow]] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
+      import quill.*
+      run(query[VideoPlaybackRow])
+
+  /** A newer confirmed file for the video: what `replace_video_file` and its confirmation leave. */
+  def replaceFile(videoId: video.Id, url: String): ZIO[QuillSqlite, Throwable, Unit] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      val row = VideoFileRow(
+        id = UUID.randomUUID.toString,
+        videoId = videoId,
+        url = url,
+        durationSeconds = Some(20),
+        createdAt = FixedNow,
+        confirmedAt = Some(VideoFiles.stamp(java.time.Instant.EPOCH.plusSeconds(60))),
+        deletedAt = None
+      )
+      run(query[VideoFileRow].insertValue(lift(row))).unit
+
   def clearAllData: ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     ZIO.attemptBlocking:
       val conn = quill.ds.getConnection
@@ -380,6 +415,7 @@ object TestFixtures:
         val stmt = conn.createStatement()
         stmt.execute("DELETE FROM event_log")
         stmt.execute("DELETE FROM video_views")
+        stmt.execute("DELETE FROM video_playbacks")
         stmt.execute("DELETE FROM user_survey_progress")
         stmt.execute("DELETE FROM answers")
         stmt.execute("DELETE FROM sessions")
@@ -388,6 +424,7 @@ object TestFixtures:
         stmt.execute("DELETE FROM question_options")
         stmt.execute("DELETE FROM questions")
         stmt.execute("DELETE FROM surveys")
+        stmt.execute("DELETE FROM video_files")
         stmt.execute("DELETE FROM advertiser_videos")
         stmt.execute("DELETE FROM advertisers")
         stmt.execute("DELETE FROM users")
@@ -586,8 +623,6 @@ object TestFixtures:
       id = videoId,
       advertiserId = Some(advertiserId),
       videoType = video.VideoType.Ad,
-      videoUrl = videoUrl,
-      durationSeconds = durationSeconds,
       minWatchSeconds = 8,
       showCountdown = 1,
       noRepeatSeconds = None,
@@ -608,9 +643,12 @@ object TestFixtures:
       createdAt = now,
       updatedAt = now)
 
+    val fileRow = confirmedFile(videoId, videoUrl, durationSeconds)
+
     for
       _ <- run(query[AdvertiserRow].insertValue(lift(advertiserRow)))
       _ <- run(query[AdvertiserVideoRow].insertValue(lift(videoRow)))
+      _ <- run(query[VideoFileRow].insertValue(lift(fileRow)))
       _ <- run(query[LocalizedTextRow].insertValue(lift(titleRow)))
     yield VideoFixture(advertiserId, videoId, videoUrl, durationSeconds, Some(videoTitle))
 
@@ -629,8 +667,6 @@ object TestFixtures:
         id = videoId,
         advertiserId = None,
         videoType = video.VideoType.Promo,
-        videoUrl = videoUrl,
-        durationSeconds = durationSeconds,
         minWatchSeconds = 5,
         showCountdown = 0,
         noRepeatSeconds = None,
@@ -651,8 +687,11 @@ object TestFixtures:
         createdAt = now,
         updatedAt = now)
 
+      val fileRow = confirmedFile(videoId, videoUrl, durationSeconds)
+
       for
         _ <- run(query[AdvertiserVideoRow].insertValue(lift(videoRow)))
+        _ <- run(query[VideoFileRow].insertValue(lift(fileRow)))
         _ <- run(query[LocalizedTextRow].insertValue(lift(titleRow)))
       yield VideoFixture("", videoId, videoUrl, durationSeconds, Some(videoTitle))
 
@@ -754,8 +793,6 @@ object TestFixtures:
           else
             video.VideoType.Ad
         ,
-        videoUrl = videoUrl,
-        durationSeconds = durationSeconds,
         minWatchSeconds = 8,
         showCountdown = 1,
         noRepeatSeconds = None,
@@ -840,6 +877,8 @@ object TestFixtures:
         // No advertiser row for a promo, so the ad selection has no candidate.
         _ <- ZIO.unless(promo)(run(query[AdvertiserRow].insertValue(lift(advertiserRow))))
         _ <- run(query[AdvertiserVideoRow].insertValue(lift(videoRow)))
+        _ <- run(
+          query[VideoFileRow].insertValue(lift(confirmedFile(videoId, videoUrl, durationSeconds))))
         _ <- run(query[LocalizedTextRow].insertValue(lift(titleRow)))
         _ <- run(query[SurveyRow].insertValue(lift(surveyRow)))
         _ <-

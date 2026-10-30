@@ -1,6 +1,7 @@
 locals {
   name_prefix                 = "${var.project_name}-${var.environment}"
   service_discovery_namespace = "${var.project_name}.local"
+  mcp_cdc_endpoint            = "http://mcp.${local.service_discovery_namespace}:${var.container_port}/cdc/video-playbacks"
 }
 
 # ECS tasks security group (created here for shared reference by app and rqlite modules)
@@ -28,6 +29,24 @@ resource "aws_security_group" "ecs_tasks" {
   tags = {
     Name = "${local.name_prefix}-ecs-tasks-sg"
   }
+
+  # `mcp_from_rqlite_cdc` attaches its ingress as a separate rule. It cannot be inline: rqlite's
+  # group names this one in its own ingress, so naming rqlite's here would be a cycle. Without this,
+  # the authoritative inline `ingress` above would revoke that rule on every apply.
+  lifecycle {
+    ignore_changes = [ingress]
+  }
+}
+
+# rqlite's change data capture posting to the backoffice, which shares this group with every
+# location's API task.
+resource "aws_vpc_security_group_ingress_rule" "mcp_from_rqlite_cdc" {
+  security_group_id            = aws_security_group.ecs_tasks.id
+  description                  = "Backoffice from rqlite change data capture"
+  ip_protocol                  = "tcp"
+  from_port                    = var.container_port
+  to_port                      = var.container_port
+  referenced_security_group_id = module.rqlite.security_group_id
 }
 
 # S3 Backend for Terraform state
@@ -151,6 +170,9 @@ module "rqlite" {
   image_tag                        = var.rqlite_image_tag
   http_port                        = var.rqlite_http_port
   raft_port                        = var.rqlite_raft_port
+  # The backoffice by its service discovery name, unless the configuration says otherwise: locally
+  # it runs on the host, outside LocalStack's network.
+  cdc_endpoint = coalesce(var.rqlite_cdc_endpoint, local.mcp_cdc_endpoint)
   # Public subnets and no NAT, so a task without an address of its own cannot reach ECR. See the
   # `data "aws_vpc" "default"` block for why the private option is gone.
   assign_public_ip = true
@@ -341,13 +363,14 @@ module "mcp" {
   # Passed through so the server's own AWS clients resolve where this configuration does.
   aws_endpoint_url = var.aws_endpoint_url
 
-  cluster_id          = module.ecs.cluster_id
-  cluster_name        = module.ecs.cluster_name
-  vpc_id              = local.vpc_id
-  subnet_ids          = local.workload_subnet_ids
-  security_group_id   = aws_security_group.ecs_tasks.id
-  execution_role_arn  = module.ecs.execution_role_arn
-  execution_role_name = module.ecs.execution_role_name
+  cluster_id                     = module.ecs.cluster_id
+  cluster_name                   = module.ecs.cluster_name
+  vpc_id                         = local.vpc_id
+  subnet_ids                     = local.workload_subnet_ids
+  security_group_id              = aws_security_group.ecs_tasks.id
+  service_discovery_namespace_id = aws_service_discovery_private_dns_namespace.main.id
+  execution_role_arn             = module.ecs.execution_role_arn
+  execution_role_name            = module.ecs.execution_role_name
 
   image            = "${module.ecr.mcp_repository_url}:${var.mcp_image_tag}"
   container_port   = var.container_port

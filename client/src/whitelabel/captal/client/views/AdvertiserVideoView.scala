@@ -39,8 +39,16 @@ object AdvertiserVideoView:
     // unmounted in the same frame.
     val introLeaving: Var[Boolean] = Var(false)
 
+    val onPageHide: js.Function1[dom.Event, Unit] = _ => VideoPlayback.release()
+    val onPageShow: js.Function1[dom.PageTransitionEvent, Unit] =
+      event =>
+        if event.persisted then
+          VideoPlayback.resume()
+
     def onMount(el: Div): Unit =
       containerRef.set(Some(el))
+      dom.window.addEventListener("pagehide", onPageHide)
+      dom.window.addEventListener("pageshow", onPageShow)
       loadNextVideo(videoData, showIntro)
       js.timers
         .setTimeout(IntroTimeoutMs.millis):
@@ -55,11 +63,20 @@ object AdvertiserVideoView:
             if !fs then
               el.classList.remove("controls-visible"))
 
+    // Leaving the view without reporting the video watched — an error, a phase sync — ends the
+    // playback too; reporting it watched has already had the server end it.
+    def onUnmount(): Unit =
+      dom.window.removeEventListener("pagehide", onPageHide)
+      dom.window.removeEventListener("pageshow", onPageShow)
+      VideoPlayback.release()
+
     // The player and the intro overlay coexist. The `<video>` mounts as soon as there is data and
     // must NEVER change parent — one mount, one network request. The intro is an overlay on top
     // that unmounts when `showIntro=false`.
     div(
-      onMountCallback(ctx => onMount(ctx.thisNode.ref.asInstanceOf[Div])),
+      onMountUnmountCallback(
+        mount = ctx => onMount(ctx.thisNode.ref.asInstanceOf[Div]),
+        unmount = _ => onUnmount()),
       // canPlay + minTimeReached → the intro dissolves and the video starts. Both have to be true.
       //
       // Playback begins here, not at the player's mount: the element mounts behind the intro only
@@ -390,21 +407,35 @@ object AdvertiserVideoView:
     svg.path(svg.d := "M20 6L9 17l-5-5")
   )
 
-  /** The metadata request to the backend, and nothing else. Once `videoData` is set, Laminar's
-    * `<video>` element mounts and starts the preload on its own.
+  /** The metadata request to the backend, then the playback, and nothing else. Once `videoData` is
+    * set, Laminar's `<video>` element mounts and starts the preload on its own — so the playback is
+    * recorded first, before the first byte of the file is asked for.
+    *
+    * A file replaced between the two answers is asked for again, once.
     */
-  private def loadNextVideo(videoData: Var[Option[NextVideo]], showIntro: Var[Boolean]): Unit =
-    Runtime.run:
-      VideoApi
-        .getNextVideo()
-        .map:
-          case Right(VideoResponse.Video(data)) =>
-            videoData.set(Some(data))
-          case Right(VideoResponse.Step(nextStep)) =>
-            Router.syncWithPhase(nextStep.phase)
-          case Left(err) =>
-            showIntro.set(false)
-            ErrorHandler.escalate(err)
+  private def loadNextVideo(
+      videoData: Var[Option[NextVideo]],
+      showIntro: Var[Boolean],
+      retried: Boolean = false): Unit = Runtime.run:
+    VideoApi
+      .getNextVideo()
+      .flatMap:
+        case Right(VideoResponse.Video(data)) =>
+          VideoPlayback
+            .begin(data.videoUrl)
+            .map:
+              case Right(_) =>
+                videoData.set(Some(data))
+              case Left(_) if !retried =>
+                loadNextVideo(videoData, showIntro, retried = true)
+              case Left(err) =>
+                showIntro.set(false)
+                ErrorHandler.escalate(err)
+        case Right(VideoResponse.Step(nextStep)) =>
+          js.Promise.resolve(Router.syncWithPhase(nextStep.phase))
+        case Left(err) =>
+          showIntro.set(false)
+          js.Promise.resolve(ErrorHandler.escalate(err))
 
   private def markAsWatched(duration: Int, completed: Boolean): Unit =
     AppState.setNavigating(true)
@@ -413,6 +444,7 @@ object AdvertiserVideoView:
         .markVideoWatched(duration, completed)
         .map:
           case Right(resp) =>
+            VideoPlayback.forget()
             val nextPhase = Phase.fromDbString(resp.nextPhase)
             Router.syncWithPhase(nextPhase)
           case Left(err) =>

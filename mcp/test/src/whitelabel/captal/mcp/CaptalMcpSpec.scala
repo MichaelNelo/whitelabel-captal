@@ -320,7 +320,7 @@ object CaptalMcpSpec extends ZIOSpecDefault:
 
         assertTrue(gaps == Nil)
       ,
-      test("both upload tools name the page that renders them"):
+      test("every upload tool names the page that renders it"):
         def metaOf(tool: com.jamesward.ziohttp.mcp.McpToolHandlerR[?]) = tool
           .definition
           .meta
@@ -330,7 +330,8 @@ object CaptalMcpSpec extends ZIOSpecDefault:
           // Both, because a View is instantiated only by calling a tool that carries this; a
           // resource a user opens is never rendered.
           metaOf(VideoTools.create).contains("ui://upload-video"),
-          metaOf(VideoTools.resume).contains("ui://upload-video")
+          metaOf(VideoTools.resume).contains("ui://upload-video"),
+          metaOf(VideoTools.replace).contains("ui://upload-video")
         )
       ,
       test("the upload page declares the origin it has to reach"):

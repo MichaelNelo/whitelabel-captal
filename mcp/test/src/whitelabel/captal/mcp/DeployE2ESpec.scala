@@ -39,8 +39,10 @@ import whitelabel.captal.mcp.tools.{
   LocalizedText,
   LocationTools,
   SurveyTools,
+  VideoFileCollector,
   VideoTools
 }
+import whitelabel.captal.core.{user, video}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
@@ -54,6 +56,9 @@ import whitelabel.captal.platform.{
   QuestionRuleRow,
   RqliteDataSource,
   SurveyRow,
+  VideoFileRow,
+  VideoFiles,
+  VideoPlaybackRow,
   VideoStatus
 }
 import zio.*
@@ -230,6 +235,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
       import quill.*
       quill.run(query[QuestionRuleRow].delete) *> quill.run(query[QuestionOptionRow].delete) *>
         quill.run(query[QuestionRow].delete) *> quill.run(query[SurveyRow].delete) *>
+        quill.run(query[VideoPlaybackRow].delete) *> quill.run(query[VideoFileRow].delete) *>
         quill.run(query[AdvertiserVideoRow].delete) *> quill.run(query[LocalizedTextRow].delete) *>
         quill.run(query[AdvertiserRow].delete) *> quill.run(query[LocationRow].delete).unit
 
@@ -427,21 +433,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
 
       // The file, PUT to the presigned URL the tool just handed out, then confirmed. Until that
       // happens the video is `pending` and out of rotation, which is what `pendingVideos` counts.
-      _ <- ZIO.attemptBlocking:
-        val connection = java
-          .net
-          .URI
-          .create(created.uploadUrl)
-          .toURL
-          .openConnection()
-          .asInstanceOf[java.net.HttpURLConnection]
-        connection.setRequestMethod("PUT")
-        connection.setDoOutput(true)
-        connection.getOutputStream.write("fake-mp4-bytes".getBytes("UTF-8"))
-        connection.getOutputStream.close()
-        val status = connection.getResponseCode
-        if status / 100 != 2 then
-          throw new AssertionError(s"The presigned PUT was refused with $status")
+      _ <- putFile(created.uploadUrl, "fake-mp4-bytes")
       _ <- client.tool[VideoTools.ConfirmUploadRequest, VideoTools.ConfirmUploadResponse](
         "confirm_video_upload",
         VideoTools.ConfirmUploadRequest(created.videoId, 30))
@@ -469,6 +461,109 @@ object DeployE2ESpec extends ZIOSpecDefault:
       )
     yield created
 
+  /** What the upload page does with the URL a tool hands it. */
+  private def putFile(uploadUrl: String, body: String): ZIO[Any, Throwable, Unit] = ZIO
+    .attemptBlocking:
+      val connection = java
+        .net
+        .URI
+        .create(uploadUrl)
+        .toURL
+        .openConnection()
+        .asInstanceOf[java.net.HttpURLConnection]
+      connection.setRequestMethod("PUT")
+      connection.setDoOutput(true)
+      connection.getOutputStream.write(body.getBytes("UTF-8"))
+      connection.getOutputStream.close()
+      val status = connection.getResponseCode
+      if status / 100 != 2 then
+        throw new AssertionError(s"The presigned PUT was refused with $status")
+
+  private def videoStatus(videoId: String): ZIO[QuillSqlite, Throwable, Option[String]] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      quill.run(query[AdvertiserVideoRow]).map(_.find(_.id.toString == videoId).map(_.status))
+
+  /** The file a video plays, as the portal finds it. */
+  private def currentFileOf(videoId: String): ZIO[QuillSqlite, Throwable, Option[VideoFileRow]] =
+    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      quill.run(VideoFiles.currentQuery(lift(video.Id.unsafe(videoId)))).map(_.headOption)
+
+  /** A guest's playback of `fileId`, as the portal records one; ended by `endPlayback`. */
+  private def openPlayback(fileId: String): ZIO[QuillSqlite, Throwable, String] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      val id = java.util.UUID.randomUUID.toString
+      val session = user.SessionId.unsafe(java.util.UUID.randomUUID.toString)
+      quill
+        .run(
+          query[VideoPlaybackRow].insertValue(
+            lift(VideoPlaybackRow(id, session, fileId, "2026-01-01T00:00:00.000000000Z", None))))
+        .as(id)
+
+  private def endPlayback(id: String): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[
+    QuillSqlite]: quill =>
+    import quill.*
+    quill
+      .run(
+        query[VideoPlaybackRow]
+          .filter(_.id == lift(id))
+          .update(_.endedAt -> lift(Option("2026-01-01T00:01:00.000000000Z"))))
+      .unit
+
+  /** A new file for a video already in rotation, as an operator replaces one, while a guest is
+    * still playing the old one.
+    *
+    * Run before readiness is read, so the readiness assertions also say the video never left: one
+    * active, none pending.
+    */
+  private def replaceFile(
+      client: McpClient,
+      videoId: String): ZIO[QuillSqlite & AssetStore, Throwable, TestResult] =
+    for
+      old <- currentFileOf(videoId).someOrFail(new AssertionError("the video has no current file"))
+      oldKey <- ZIO.serviceWith[AssetStore](_.keyOf(old.url))
+      opened <- client.tool[VideoTools.ReplaceFileRequest, VideoTools.ResumeUploadResponse](
+        "replace_video_file",
+        VideoTools.ReplaceFileRequest(videoId))
+      during <- videoStatus(videoId)
+      // Again before uploading: the same new file, not a second one.
+      again <- client.tool[VideoTools.ReplaceFileRequest, VideoTools.ResumeUploadResponse](
+        "replace_video_file",
+        VideoTools.ReplaceFileRequest(videoId))
+      watching  <- openPlayback(old.id)
+      _         <- putFile(opened.uploadUrl, "lighter-mp4-bytes")
+      confirmed <- client.tool[VideoTools.ConfirmUploadRequest, VideoTools.ConfirmUploadResponse](
+        "confirm_video_upload",
+        VideoTools.ConfirmUploadRequest(videoId, 20))
+      after     <- videoStatus(videoId)
+      newKey    <- ZIO.serviceWith[AssetStore](_.keyOf(confirmed.videoUrl))
+      stored    <- objectText(newKey)
+      kept      <- objectText(oldKey)
+      _         <- endPlayback(watching)
+      collected <- VideoFileCollector.collect(None)
+      gone      <- objectText(oldKey)
+    yield assertTrue(
+      opened.videoId == videoId,
+      during.contains(VideoStatus.Active),
+      again.uploadUrl.takeWhile(_ != '?') == opened.uploadUrl.takeWhile(_ != '?'),
+      confirmed.replaced,
+      confirmed.active,
+      confirmed.durationSeconds == 20,
+      // Asked for 5 when the video was created, and still within the new length.
+      confirmed.minWatchSeconds == 5,
+      after.contains(VideoStatus.Active),
+      newKey != oldKey,
+      stored.contains("lighter-mp4-bytes"),
+      // Still played, so kept through the confirm...
+      confirmed.filesDeleted == 0,
+      kept.contains("fake-mp4-bytes"),
+      // ...and deleted once that playback ended.
+      collected == 1,
+      gone.isEmpty
+    )
+
   /** The whole lifecycle, as one sequence, extracted from the test it is the body of.
     *
     * Not for readability: inline, the typer overflowed its stack on it. Five phases of calls and
@@ -486,7 +581,8 @@ object DeployE2ESpec extends ZIOSpecDefault:
       // list per request and the auth middleware decides what the token may see.
       tools <- client.listTools.mapError(error => new AssertionError(s"tools/list: $error"))
 
-      video <- buildContent(client)
+      video       <- buildContent(client)
+      replacement <- replaceFile(client, video.videoId)
 
       // The content half, read back through the tool an operator would call.
       ready <- client.tool[Readiness.ReadinessRequest, Readiness.LocationReadiness](
@@ -706,6 +802,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
       val service = services.get(0)
       val targetGroup = targetGroups.get(0).targetGroupArn()
       val pattern = store.targets.pathPattern(Slug)
+      replacement &&
       assertTrue(
         // Discovery: the deploy tool is advertised because a cluster is configured, and
         // the token's scopes let this caller see it.

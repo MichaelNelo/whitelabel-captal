@@ -501,7 +501,8 @@ ascending priority and creation date among equals — not weighted at random lik
 
 |`list_videos`
 |read-only
-|Active, then pending, then retired; descending priority within a status.
+|Active, then pending, then retired; descending priority within a status. `durationSeconds` is the
+current file's; `replacing` is true while a new file waits to be confirmed.
 
 |`list_pending_uploads`
 |read-only
@@ -509,31 +510,65 @@ ascending priority and creation date among equals — not weighted at random lik
 
 |`resume_video_upload`
 |`content:write`, `.withUi`
-|Re-signs the upload URL for an existing `Pending` video; refuses anything not pending — a retired
-video keeps its file, and a new upload is `create_advertiser_video` instead.
+|Re-signs the upload URL for the file a video is waiting for: a pending video's first file, or a
+replacement not yet confirmed. Refuses a video with nothing waiting.
+
+|`replace_video_file`
+|`content:write`, `.withUi`
+|Reserves a new file row under a new key and signs a PUT to it; the id, the survey and its answers
+stay. The video's status does not change and it keeps playing its current file until the new one
+is confirmed. Called again before then, it reopens the same new file. Refuses a pending video,
+which is `resume_video_upload`'s.
 
 |`confirm_video_upload`
 |`content:write`
 |`visibleTo(Model, App)` — the one write an App page may call directly (see <<Default-deny
-visibility>>). HEAD-checks the S3 object exists before activating, and clamps `minWatchSeconds` to
-the file's own duration — "a survey that unlocks after the video ends never unlocks at all."
+visibility>>). HEAD-checks the waiting file's object, marks the file confirmed — which is what makes
+it current — and puts a pending video into rotation; it clamps `minWatchSeconds` to the file's own
+duration — "a survey that unlocks after the video ends never unlocks at all." Then runs the
+<<Replaced files>> pass for the video, reporting `replaced` and `filesDeleted`.
 
 |`update_video`
 |`content:write`
-|Cannot replace the file or move the location: either change means a new video, because the S3 key
-derives from the video id and the survey hangs off it.
+|Cannot move the location: that means a new video, because the S3 key carries the location's slug
+and the survey hangs off the video. The file is `replace_video_file`'s.
 
 |`set_video_active`
 |`content:write`
 |Refuses while a video is still `Pending` — it has to go through `confirm_video_upload` first.
 |===
 
-The storage key, shared with the deploy/asset machinery in xref:infrastructure.adoc[Infrastructure],
-is `<slug>/videos/<videoId>` with no extension — the content type is read from the uploaded file.
+A video's files are rows of `video_files`, the current one being the newest confirmed. The storage
+key, shared with the deploy/asset machinery in xref:infrastructure.adoc[Infrastructure], is
+`<slug>/videos/<fileId>` with no extension — the content type is read from the uploaded file. A
+video's first file takes the video's id, so its key is `<slug>/videos/<videoId>`.
 `productCampaignId` is opaque end to end: "nothing here parses, validates or joins on it — it
 exists so a client can match our reporting against their campaign." An empty string clears it;
 omitting the field leaves it untouched. `UploadValidFor = 30.minutes` is the presigned PUT's
 lifetime.
+
+[[replaced-files]]
+==== Replaced files
+
+A replaced file's object is deleted by `VideoFileCollector` once no playback of it is open — see
+xref:platform.adoc#video-files[Video files and playbacks] for how the portal records them. A pass
+reads every confirmed, undeleted file and the open playbacks, picks the ones `VideoFile.collectable`
+allows (not current, nobody watching), and for each runs `VideoFiles.condemn`: a single `UPDATE`
+that sets `deleted_at` only if the file is still not current and still has no open playback. Only a
+file that statement marked has its object deleted, so a playback that started between the read and
+the delete keeps its file.
+
+A pass runs on three occasions:
+
+* `confirm_video_upload`, for that video: the previous file may have nobody left on it already.
+* A `POST` to `/cdc/video-playbacks`, which rqlite's change data capture sends on every change to
+  `video_playbacks` (see xref:infrastructure.adoc[Infrastructure]). The body is not read and the
+  route is not authenticated: a post only asks for a pass, and a pass deletes nothing the database
+  does not allow. Posts queue in a one-slot sliding queue, so a burst costs two passes.
+* Startup, for whatever changed while the server was not there to hear it.
+
+A file whose object could not be deleted after it was marked is logged and left: the row says
+deleted, the object is garbage.
 
 === UniFi (`UnifiTools`)
 
@@ -759,7 +794,7 @@ for a run that lasts minutes, which a tool call cannot show moving.
 |`configure_unifi`
 
 |`ui://upload-video` (`UploadUi`/`UploadUiSource`)
-|`create_advertiser_video`, `resume_video_upload`
+|`create_advertiser_video`, `create_promo_video`, `resume_video_upload`, `replace_video_file`
 
 |`ui://deploy-run` (`RunUi`)
 |`deploy_location`, `pause_location`, `resume_location`, `destroy_location`

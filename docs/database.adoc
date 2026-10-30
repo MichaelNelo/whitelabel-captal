@@ -123,8 +123,16 @@ by the MCP server (`mcp/resources/db/migration-mcp`, `V1` and `V2`).
 | Global
 
 | `advertiser_videos`
-| A video: `video_type` (`ad` or `promo`, `CHECK`-constrained), `video_url` (NOT NULL — it carries the S3 key), `duration_seconds`, `min_watch_seconds`, `show_countdown`, `no_repeat_seconds`, `priority`, optional `product_campaign_id`, and `status` (`pending`, `active`, `retired`, `CHECK`-constrained).
+| A video: `video_type` (`ad` or `promo`, `CHECK`-constrained), `min_watch_seconds`, `show_countdown`, `no_repeat_seconds`, `priority`, optional `product_campaign_id`, and `status` (`pending`, `active`, `retired`, `CHECK`-constrained). Its file is in `video_files`.
 | `location_id`
+
+| `video_files`
+| One uploaded file of a video: `url` (UNIQUE — it carries the S3 key), `duration_seconds` (NULL until confirmed), `confirmed_at`, `deleted_at`. The video plays its newest confirmed file; the first file's id is the video's.
+| via its video
+
+| `video_playbacks`
+| One guest playing one file: `session_id`, `file_id`, `started_at`, and `ended_at` (NULL while open). A file with an open playback is never deleted.
+| via its session
 
 | `video_views`
 | One row per view: session, user, video, `duration_watched_seconds`, `completed`, `viewed_at`.
@@ -170,8 +178,8 @@ what lets a returning visitor skip the questions they have already answered. The
 
 Everything a venue configures or produces is scoped by location: `sessions`, `surveys`,
 `advertiser_videos`, `localized_texts` and `locations` carry `location_id` directly, and
-`questions`, `question_options`, `question_rules`, `answers`, `user_survey_progress`, `video_views`
-and `event_log` inherit it through their parent. `advertisers` and `devices` are global, like
+`questions`, `question_options`, `question_rules`, `answers`, `user_survey_progress`, `video_files`,
+`video_playbacks`, `video_views` and `event_log` inherit it through their parent. `advertisers` and `devices` are global, like
 `users`.
 
 A nullable `location_id` means *shared*. `surveys.location_id IS NULL` is a deployment-wide survey

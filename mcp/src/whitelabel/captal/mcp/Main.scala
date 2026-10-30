@@ -16,6 +16,7 @@ import whitelabel.captal.mcp.tools.{
   SurveyTools,
   TokenTools,
   UnifiTools,
+  VideoFileCollector,
   VideoTools
 }
 import whitelabel.captal.platform.RqliteDataSource
@@ -115,12 +116,14 @@ object Main extends ZIOAppDefault:
             // Startup, not a request: a server that cannot name the origin its own upload page
             // must reach would serve a page whose PUT the browser blocks, and nothing would say so.
             .mapError(new IllegalStateException(_))
-            .flatMap: origin =>
+            .zip(VideoFileCollector.runner)
+            .flatMap: (origin, collector) =>
               // Read off the same store, so the origin the pages declare and the URL they name
               // cannot disagree.
               val scriptOrigin = env.get[AssetStore].scriptOrigin
               Server.serve(
                 UiRoutes.routes ++ RunRoutes.routes ++ OauthMetadata.routes(uiOrigin) ++
+                  VideoFileCollector.routes(collector) ++
                   CaptalMcp
                     .server(
                       Auth.mcpAuth(resource),
@@ -143,7 +146,7 @@ object Main extends ZIOAppDefault:
                     ""
                   else
                     " (no ECS_CLUSTER, so the deploy, pause and destroy tools are not registered)"
-                }") *> serve
+                }") *> ZIO.scoped(serve)
         .provide(
           Server.defaultWithPort(p),
           RqliteDataSource.layer,

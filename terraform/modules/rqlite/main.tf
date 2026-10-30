@@ -386,7 +386,7 @@ resource "aws_ecs_task_definition" "rqlite" {
         }
       ] : []
 
-      environment = [
+      environment = concat([
         {
           # Its only effect: the entrypoint takes this node's Raft identity from the container's own
           # address instead of the ECS task metadata endpoint, which LocalStack does not serve. On a
@@ -426,7 +426,10 @@ resource "aws_ecs_task_definition" "rqlite" {
           name  = "RQLITE_BACKUP_INTERVAL"
           value = var.backup_interval
         }
-      ]
+        ], var.cdc_endpoint == "" ? [] : [{
+          name  = "RQLITE_CDC_ENDPOINT"
+          value = var.cdc_endpoint
+      }])
 
       portMappings = [
         {

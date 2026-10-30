@@ -46,6 +46,11 @@ variable "security_group_id" {
   type        = string
 }
 
+variable "service_discovery_namespace_id" {
+  description = "Private DNS namespace the server registers in as `mcp`, which is how rqlite's change data capture reaches it"
+  type        = string
+}
+
 variable "execution_role_arn" {
   description = "Role ECS itself assumes to pull the image and read the admin token out of Secrets Manager"
   type        = string

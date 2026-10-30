@@ -5,9 +5,13 @@ import whitelabel.captal.api.wire.given
 import whitelabel.captal.api.{ApiBase, ApiErrors, SessionEndpoint}
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Flow, NextStep, Phase}
+import whitelabel.captal.core.video.PlaybackId
 import whitelabel.captal.messages.{
   ApiError,
+  EndPlaybackRequest,
   MarkVideoWatchedRequest,
+  PlaybackResponse,
+  StartPlaybackRequest,
   VideoResponse,
   VideoWatchedResponse
 }
@@ -21,24 +25,35 @@ object VideoRoutes:
 
   type NextVideoFlowType = Flow.Aux[Task, ProvideNextVideoCommand, NextVideo | NextStep]
   type MarkVideoWatchedFlowType = Flow.Aux[Task, MarkVideoWatchedCommand, NextStep]
+  type StartPlaybackFlowType = Flow.Aux[Task, StartPlaybackCommand, Unit]
+  type EndPlaybackFlowType = Flow.Aux[Task, EndPlaybackCommand, Unit]
 
-  type FullEnv = SessionContext & SessionService & NextVideoFlowType & MarkVideoWatchedFlowType
+  type FullEnv =
+    SessionContext & SessionService & NextVideoFlowType & MarkVideoWatchedFlowType &
+      StartPlaybackFlowType & EndPlaybackFlowType
 
   val layer: ZLayer[SessionCookieConfig & ApiBase, Nothing, VideoRoutes] = ZLayer.fromFunction(
     VideoRoutes(_, _))
 
 end VideoRoutes
 
-/** The advertiser video: ask for the next one, report it watched. Both routes are
-  * `Phase.AdvertiserVideo` only.
+/** The advertiser video: ask for the next one, start and end playing its file, report it watched.
+  * All `Phase.AdvertiserVideo` only, except ending a playback, which a page leaving sends whatever
+  * phase the session has reached.
   */
 final class VideoRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
   import VideoRoutes.*
 
-  private def session(cookie: Option[zio.http.Header.Cookie]) = SessionEndpoint.authorise(
+  private def session(
+      cookie: Option[zio.http.Header.Cookie],
+      phases: Seq[Phase] = Seq(Phase.AdvertiserVideo)) = SessionEndpoint.authorise(
     cookieConfig.valueFrom(cookie),
     SessionEndpoint.OnMissing.Fail,
-    Seq(Phase.AdvertiserVideo))
+    phases)
+
+  private def playbackId(value: String): IO[ApiError, PlaybackId] = ZIO
+    .fromOption(PlaybackId.fromString(value))
+    .orElseFail(ApiError.InvalidPlaybackId(value))
 
   /** Whatever a flow failed with, as the `ApiError` the route answers: a typed failure goes through
     * `ApiErrors`, and a defect is wrapped so its cause still reaches the log.
@@ -60,6 +75,18 @@ final class VideoRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
     .header(HeaderCodec.cookie.optional)
     .in[MarkVideoWatchedRequest]
     .out[VideoWatchedResponse]
+    .outError[ApiError](Status.BadRequest)
+
+  private val startPlayback = Endpoint(base(Method.POST / "api" / "video" / "playback" / "start"))
+    .header(HeaderCodec.cookie.optional)
+    .in[StartPlaybackRequest]
+    .out[PlaybackResponse]
+    .outError[ApiError](Status.BadRequest)
+
+  private val endPlayback = Endpoint(base(Method.POST / "api" / "video" / "playback" / "end"))
+    .header(HeaderCodec.cookie.optional)
+    .in[EndPlaybackRequest]
+    .out[PlaybackResponse]
     .outError[ApiError](Status.BadRequest)
 
   val routes: Routes[FullEnv, Nothing] = Routes(
@@ -92,7 +119,23 @@ final class VideoRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
           flow
             .execute(command)
             .map((step: NextStep) => VideoWatchedResponse(Phase.toDbString(step.phase))))
-      yield result
+      yield result,
+    startPlayback.implement: (cookie, request) =>
+      for
+        _    <- session(cookie)
+        id   <- playbackId(request.playbackId)
+        flow <- ZIO.service[StartPlaybackFlowType]
+        now  <- Clock.instant
+        _    <- asApiError(flow.execute(StartPlaybackCommand(id, request.videoUrl, now)))
+      yield PlaybackResponse(request.playbackId),
+    endPlayback.implement: (cookie, request) =>
+      for
+        _    <- session(cookie, phases = Seq.empty)
+        id   <- playbackId(request.playbackId)
+        flow <- ZIO.service[EndPlaybackFlowType]
+        now  <- Clock.instant
+        _    <- asApiError(flow.execute(EndPlaybackCommand(id, now)))
+      yield PlaybackResponse(request.playbackId)
   )
 
 end VideoRoutes

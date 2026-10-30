@@ -7,8 +7,11 @@ import whitelabel.captal.messages.{
   AdvertiserSurveyResponse,
   AnswerRequest,
   ApiError,
+  EndPlaybackRequest,
   MarkVideoWatchedRequest,
+  PlaybackResponse,
   SetLocaleRequest,
+  StartPlaybackRequest,
   StatusResponse,
   SurveyResponse,
   VideoResponse,
@@ -53,6 +56,9 @@ object wire:
   given Schema[VideoResponse] = DeriveSchema.gen[VideoResponse]
   given Schema[MarkVideoWatchedRequest] = DeriveSchema.gen[MarkVideoWatchedRequest]
   given Schema[VideoWatchedResponse] = DeriveSchema.gen[VideoWatchedResponse]
+  given Schema[StartPlaybackRequest] = DeriveSchema.gen[StartPlaybackRequest]
+  given Schema[EndPlaybackRequest] = DeriveSchema.gen[EndPlaybackRequest]
+  given Schema[PlaybackResponse] = DeriveSchema.gen[PlaybackResponse]
 
   // ─── Survey ───────────────────────────────────────────────────────────────
 

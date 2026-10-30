@@ -78,6 +78,82 @@ object VideoSuite:
             dbState.sessions.exists(_.phase == Phase.AdvertiserVideoSurvey)
           )
         ,
+        test("a playback is counted once, however often the page reports it started"):
+          for
+            _             <- TestFixtures.seedEmailSurvey
+            fixture       <- TestFixtures.seedAdvertiserWithVideoAndSurvey()
+            backend       <- testBackend
+            (cookie, url) <- servedVideo(backend, "count-once@example.com")
+            id = java.util.UUID.randomUUID.toString
+            first     <- postStartPlayback(backend, cookie, id, url)
+            again     <- postStartPlayback(backend, cookie, id, url)
+            playbacks <- TestFixtures.getPlaybacks
+          yield assertTrue(
+            url == fixture.videoUrl,
+            first.code.isSuccess,
+            again.code.isSuccess,
+            playbacks.map(_.id) == List(id),
+            playbacks.forall(_.endedAt.isEmpty))
+        ,
+        test("ending a playback closes it, and ending it again changes nothing"):
+          for
+            _             <- TestFixtures.seedEmailSurvey
+            _             <- TestFixtures.seedAdvertiserWithVideoAndSurvey()
+            backend       <- testBackend
+            (cookie, url) <- servedVideo(backend, "end-twice@example.com")
+            id = java.util.UUID.randomUUID.toString
+            _      <- postStartPlayback(backend, cookie, id, url)
+            first  <- postEndPlayback(backend, cookie, id)
+            closed <- TestFixtures.getPlaybacks
+            again  <- postEndPlayback(backend, cookie, id)
+            after  <- TestFixtures.getPlaybacks
+          yield assertTrue(
+            first.code.isSuccess,
+            again.code.isSuccess,
+            closed.flatMap(_.endedAt).size == 1,
+            after.flatMap(_.endedAt) == closed.flatMap(_.endedAt))
+        ,
+        test("reporting the video watched ends its playback"):
+          for
+            _             <- TestFixtures.seedEmailSurvey
+            _             <- TestFixtures.seedAdvertiserWithVideoAndSurvey()
+            backend       <- testBackend
+            (cookie, url) <- servedVideo(backend, "watched-ends@example.com")
+            _         <- postStartPlayback(backend, cookie, java.util.UUID.randomUUID.toString, url)
+            _         <- postMarkVideoWatched(backend, cookie, 15, completed = true)
+            playbacks <- TestFixtures.getPlaybacks
+          yield assertTrue(playbacks.size == 1, playbacks.forall(_.endedAt.isDefined))
+        ,
+        test("a file replaced after the page was given it cannot be started"):
+          for
+            _             <- TestFixtures.seedEmailSurvey
+            fixture       <- TestFixtures.seedAdvertiserWithVideoAndSurvey()
+            backend       <- testBackend
+            (cookie, url) <- servedVideo(backend, "stale@example.com")
+            newer = "https://cdn.example.com/newer.mp4"
+            _       <- TestFixtures.replaceFile(fixture.videoId, newer)
+            stale   <- postStartPlayback(backend, cookie, java.util.UUID.randomUUID.toString, url)
+            current <- postStartPlayback(backend, cookie, java.util.UUID.randomUUID.toString, newer)
+            playbacks <- TestFixtures.getPlaybacks
+          yield assertTrue(
+            !stale.code.isSuccess,
+            stale.body.contains("StaleVideoFile"),
+            current.code.isSuccess,
+            playbacks.size == 1)
+        ,
+        test("a session cannot end another session's playback"):
+          for
+            _            <- TestFixtures.seedEmailSurvey
+            _            <- TestFixtures.seedAdvertiserWithVideoAndSurvey()
+            backend      <- testBackend
+            (owner, url) <- servedVideo(backend, "owner@example.com")
+            (other, _)   <- servedVideo(backend, "other@example.com")
+            id = java.util.UUID.randomUUID.toString
+            _         <- postStartPlayback(backend, owner, id, url)
+            _         <- postEndPlayback(backend, other, id)
+            playbacks <- TestFixtures.getPlaybacks
+          yield assertTrue(playbacks.size == 1, playbacks.forall(_.endedAt.isEmpty))
+        ,
         test("POST /api/video/watched with partial viewing records duration"):
           for
             _            <- TestFixtures.seedEmailSurvey
@@ -154,6 +230,17 @@ object VideoSuite:
             served  <- watchPromo(backend, "located@example.com", Some("promo-here"))
           yield assertTrue(served.contains(here.videoUrl))
       )
+
+  /** A new session by `email` at the video phase, with a video served: its cookie and the url the
+    * page was given.
+    */
+  private def servedVideo(backend: sttp.client3.SttpBackend[zio.Task, Any], email: String) =
+    for
+      cookie    <- createSession(backend)
+      _         <- getNextSurvey(backend, cookie)
+      _         <- postEmailAnswer(backend, cookie, email)
+      videoResp <- getNextVideo(backend, cookie)
+    yield (cookie, parseNextVideo(videoResp.body).map(_.videoUrl).getOrElse(""))
 
   /** One visit by `email` in a new session, placed at `locationId` when given: identify, take the
     * video served, watch it. The url served, which is what identifies the video.

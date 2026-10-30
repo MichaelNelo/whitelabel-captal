@@ -285,14 +285,13 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
         video  <- ZIO
           .succeed(videos.find(_.id.toString == videoId))
           .someOrFail(s"No video with id '$videoId'.")
-        _ <- ZIO
-          .fail(s"Video '$videoId' is ${video.status}; only a pending video has a file to upload.")
-          .when(video.status != "pending")
+        file <- VideoTools
+          .waitingFile(video.id)
+          .someOrFail(s"Video '$videoId' has no file waiting to be uploaded.")
         locations <- run(query[LocationRow]).orDie
         titles    <- run(query[LocalizedTextRow].filter(_.entityId == lift(videoId))).orDie
         store     <- ZIO.service[AssetStore]
-        key = store.keyOf(video.videoUrl)
-        url <- store.presignPut(key, VideoTools.UploadValidFor)
+        url       <- store.presignPut(store.keyOf(file.url), VideoTools.UploadValidFor)
         slug = video.locationId.flatMap(id => locations.find(_.id == id)).map(_.slug)
         styles <- ZIO.foreach(slug)(store.get(_, Asset.Styles)).map(_.flatten)
         ticket = UploadTicket(

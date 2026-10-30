@@ -68,6 +68,8 @@ object ClientDecodeSuite:
     ApiError.QuestionNotPending("u1", "q1"),
     ApiError.VideoNotFound("v1"),
     ApiError.NoVideoAvailable,
+    ApiError.StaleVideoFile("v1", "https://cdn.test/a.mp4"),
+    ApiError.InvalidPlaybackId("not-a-uuid"),
     ApiError.LocationNotFound("cafe-centro"),
     ApiError.InternalError("something gave way")
   )

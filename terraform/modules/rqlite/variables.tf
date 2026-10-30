@@ -101,3 +101,9 @@ variable "image_tag" {
   default     = "1.0.0"
 }
 
+variable "cdc_endpoint" {
+  description = "Where the leader posts every change to video_playbacks (rqlite change data capture). Empty turns it off."
+  type        = string
+  default     = ""
+}
+

@@ -267,7 +267,7 @@ other by suites under `api/test/` — see xref:testing.adoc[Test strategy].
 
 == Endpoints
 
-Fifteen routes. Paths below are literal; when `LOCATION_SLUG` is set every one of them is prefixed
+Seventeen routes. Paths below are literal; when `LOCATION_SLUG` is set every one of them is prefixed
 with `/<slug>` (so `/cafe-centro/api/status`). All session-bearing routes take the whole `Cookie`
 header as an optional input and pick their cookie out of it. Every route except `/api/health`
 declares `outError[ApiError](Status.BadRequest)`.
@@ -317,6 +317,18 @@ declares `outError[ApiError](Status.BadRequest)`.
 |`MarkVideoWatchedRequest`
 |`VideoWatchedResponse`
 |`AdvertiserVideo`
+
+|POST
+|`/api/video/playback/start`
+|`StartPlaybackRequest`
+|`PlaybackResponse`
+|`AdvertiserVideo`
+
+|POST
+|`/api/video/playback/end`
+|`EndPlaybackRequest`
+|`PlaybackResponse`
+|any — a page leaving sends it whatever phase the session reached
 
 |GET
 |`/api/status`
@@ -380,7 +392,7 @@ Where each is defined:
 |`/api/status`, `/api/survey/next`, `/api/survey/{email,profiling,location}`
 
 |`api/src/whitelabel/captal/api/routes/VideoRoutes.scala`
-|`/api/video/next`, `/api/video/watched`
+|`/api/video/next`, `/api/video/watched`, `/api/video/playback/{start,end}`
 
 |`api/src/whitelabel/captal/api/routes/AdvertiserSurveyRoutes.scala`
 |`/api/survey/advertiser/next`, `/api/survey/advertiser`

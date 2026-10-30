@@ -273,6 +273,27 @@ carries `lifecycle { ignore_changes = [ingress] }` specifically because sibling 
 `aws_vpc_security_group_ingress_rule` resources, and without the lifecycle block the group's own
 authoritative `ingress` blocks would revoke those external rules on every apply.
 
+==== Change data capture
+
+The leader posts every change to `video_playbacks` to `cdc_endpoint`, which is how the backoffice
+learns that a replaced video file may have nobody left playing it (see
+xref:mcp.adoc#replaced-files[Replaced files]). The entrypoint writes the `-cdc-config` file only when
+`RQLITE_CDC_ENDPOINT` is set, so an image from `1.0.6` on is what turns it on. Retries are bounded —
+ten, backing off exponentially to a minute — because with the backoffice down unbounded retries
+grow the on-disk queue until the disk is full; a change it never hears about is caught by the pass
+it runs at startup. In the config file the retry policy and the backoff are numbers: `1` for
+exponential, durations in nanoseconds. rqlited refuses to start on the names and duration strings
+the guide shows.
+
+The root passes `rqlite_cdc_endpoint`, or `http://mcp.<namespace>:<container_port>/cdc/video-playbacks`
+when it is empty. That name exists because `modules/mcp` registers the backoffice in Cloud Map,
+and the post gets through because of `mcp_from_rqlite_cdc`, an ingress rule on the shared
+`ecs_tasks` group from rqlite's — separate rather than inline, since rqlite's group already names
+`ecs_tasks` and the reverse would be a cycle, and with the same `ignore_changes = [ingress]` the
+rqlite group carries. Locally the backoffice runs on the host, so `local` sets
+`rqlite_cdc_endpoint` to `host.docker.internal:8081`, which every container Docker starts can
+resolve.
+
 See xref:context/pending.adoc[Pending work] for two risks this shape carries that have not yet been
 settled — production's `FARGATE_SPOT` choice sharing a single reclamation signal across all three
 nodes despite tolerating only individual node loss, and `continue_on_failure: true` in the backup
