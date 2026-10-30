@@ -3,7 +3,7 @@ package whitelabel.captal.messages
 import cats.data.NonEmptyChain
 import io.circe.{Decoder, Encoder}
 import whitelabel.captal.core.application.Error as AppError
-import whitelabel.captal.core.{survey, user, video}
+import whitelabel.captal.core.{recovery, survey, user, video}
 
 enum ApiError:
   // Session errors
@@ -53,8 +53,24 @@ enum ApiError:
   // Location errors
   case LocationNotFound(slug: String)
 
+  // Recovery errors
+  case UnknownError(errorId: String)
+  case RecoveryAlreadyUsed(errorId: String)
+  case RecoveryNotYet(availableAt: String)
+  case InvalidRecoveryRequest(reason: String)
+
+  /** Failed in granting access itself, where nothing on the guest's side can help. `errorId` is the
+    * code staff can look it up by.
+    */
+  case Unrecoverable(errorId: String)
+
   // Internal
-  case InternalError(message: String)
+
+  /** @param errorId
+    *   the id the server recorded it under, when it had a session to record it against: what the
+    *   page asks for a way out with.
+    */
+  case InternalError(message: String, errorId: Option[String] = None)
 end ApiError
 
 object ApiError:
@@ -74,6 +90,17 @@ object ApiError:
         fromUserError(errors.head)
       case AppError.Video(errors) =>
         fromVideoError(errors.head)
+      case AppError.Recovery(errors) =>
+        fromRecoveryError(errors.head)
+
+  private def fromRecoveryError(err: recovery.Error): ApiError =
+    err match
+      case recovery.Error.UnknownError(errorId) =>
+        ApiError.UnknownError(errorId.asString)
+      case recovery.Error.AlreadyRedeemed(errorId) =>
+        ApiError.RecoveryAlreadyUsed(errorId.asString)
+      case recovery.Error.NotYet(availableAt) =>
+        ApiError.RecoveryNotYet(availableAt.toString)
 
   private def fromSurveyError(err: survey.Error): ApiError =
     err match

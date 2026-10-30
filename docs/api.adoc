@@ -97,6 +97,14 @@ See xref:unifi.adoc[UniFi integration].
 `ByMacAndClickId`. Read at startup; a name that is not a policy stops the server. See
 xref:core.adoc[Core] for the policies.
 
+|`BUNDLE_MANIFEST_URL`
+|`bundle.manifest-url`
+|`""` (unset)
+|Where the location's bundle publishes its `manifest.json`: its version and each file's line
+lengths, which a client error report is checked against. Read on demand and cached for a minute;
+unset or unreadable, reports are judged without it. `deploy_location` sets it to the location's own
+copy; see xref:infrastructure.adoc[Infrastructure] and xref:core.adoc#_recovery[Core].
+
 |`PROVISION_DIR`
 |`provision.dir`
 |`""`
@@ -118,7 +126,7 @@ xref:development.adoc[Local development].
 `FullEnv & Server.Config & JobRunner` from `ServerSettings`. `FullEnv` is the type alias for
 everything a request handler may ask for: `SessionContext`, `SessionService`, `LocaleService`,
 `QuillSqlite`, `SessionCookieConfig`, `ApiBase`, `CurrentLocation`, `UserCookieConfig`,
-`UserLookup`, the five route classes, and the nine `Flow.Aux` refinements the routes resolve by
+`UserLookup`, the six route classes, and the fourteen `Flow.Aux` refinements the routes resolve by
 type.
 
 `JobRunner` is produced by the composition but deliberately absent from `FullEnv`: `Main.run`
@@ -130,15 +138,17 @@ Three groups of layers:
 
 Infrastructure:: `RqliteDataSource.layer`, `Quill.Sqlite.fromNamingStrategy(SnakeCase)`,
 `SurveyRepositoryQuill.layer`, `UserRepositoryQuill.layer`, `VideoRepositoryQuill.layer`,
-`SessionContext.make`, `JobQueue.layer`, `JobRunner.layer`.
+`RecoveryRepositoryQuill.layer`, `bundleManifestLayer` (`BundleManifest.fromUrl` when
+`BUNDLE_MANIFEST_URL` is set, `BundleManifest.absent` otherwise), `SessionContext.make`,
+`JobQueue.layer`, `JobRunner.layer`.
 
 Location-aware:: `locationServiceLayer`, `sessionServiceLayer`, `localeServiceLayer`,
 `sessionCookieConfigLayer`, `currentLocationLayer`, `ApiBase.layer`, `unifiHttpClientLayer`,
 `UnifiClient.layer`. Each of these reads `ServerSettings.locationSlug`; the session and locale
 services take an `Option[String]` location id and scope their queries by it.
 
-Routes and flows:: the five `*Routes.layer` values plus `Flows.eventHandlerLayer` and the ten
-`Flows.*FlowLayer` values (nine reachable from an endpoint, plus `expireAccessFlowLayer`).
+Routes and flows:: the six `*Routes.layer` values plus `Flows.eventHandlerLayer` and the fifteen
+`Flows.*FlowLayer` values (fourteen reachable from an endpoint, plus `expireAccessFlowLayer`).
 
 `Flows.scala` builds one layer per command. `eventHandlerLayer` is the chain every flow writes
 through — see <<request-lifecycle>>. `expireAccessFlowLayer` is the one flow no endpoint calls: the
@@ -230,7 +240,8 @@ match a route and then fail to decode.
 
 * `apiRoutes` concatenates `HealthRoutes.routes(base)`, `finishRoutes.routes`,
   `localeRoutes.routes`, `videoRoutes.routes`, `surveyRoutes.routes`,
-  `advertiserSurveyRoutes.routes`, appends `localeRoutes.devRoutes` when `devEndpoints`, and applies
+  `advertiserSurveyRoutes.routes`, `recoveryRoutes.routes`, appends `localeRoutes.devRoutes` when
+  `devEndpoints`, and applies
   `CodecConfig.withConfig(HttpApp.codecConfig)`.
 * `routes` wraps that; when `devMode` is on it also mounts `devStaticRoutes`
   (`assets/styles.css`, `brand-icon.svg`, at the root and under the slug), `spaCatchAllRoutes`
@@ -272,9 +283,28 @@ so on, while `ApiError` and the `*Response` enums use the derived shape with the
 under the variant name (`{"Video":{"data":{…}}}`). Two sides of one contract are pinned against each
 other by suites under `api/test/` — see xref:testing.adoc[Test strategy].
 
+=== Before a response leaves
+
+The suites pin fixed values; what depends on the data — a question rule stored in a form the
+browser's decoder does not know — they cannot. So `WireCheck.readable` (`api/WireCheck.scala`)
+asks every response, before it is sent, what the browser will: it writes it the way the route
+will, with `HttpApp.codecConfig`, and reads it back with the circe `Decoder` the browser uses, which
+`messages` compiles for the JVM too. One that does not decode is a defect of ours that the server
+saw: it goes through `ApiErrors`, so it is recorded with the session and answered as
+`InternalError` with its id, and the guest leaves through it at once instead of through a client
+report the server has no reason to believe. It checks that the response decodes, not that it
+decodes to an equal value — the browser's own test; a stricter one would turn a harmless difference
+into a guest sent out of the flow.
+
+Routes get it through `implementReadable`, an extension of `Endpoint.implement`; the three whose
+answer carries a `Set-Cookie` too — `/api/status`, `/api/survey/email` and `/api/session/locale` —
+call `readable` on the body. `/api/health`, `/api/locales` and `/api/i18n/{locale}` are not
+checked: they read no session, and an error recorded without one is one nobody can leave through.
+The browser's own report still covers them.
+
 == Endpoints
 
-Seventeen routes. Paths below are literal; when `LOCATION_SLUG` is set every one of them is prefixed
+Twenty routes. Paths below are literal; when `LOCATION_SLUG` is set every one of them is prefixed
 with `/<slug>` (so `/cafe-centro/api/status`). All session-bearing routes take the whole `Cookie`
 header as an optional input and pick their cookie out of it. Every route except `/api/health`
 declares `outError[ApiError](Status.BadRequest)`.
@@ -293,7 +323,7 @@ declares `outError[ApiError](Status.BadRequest)`.
 |`/api/finish`
 |–
 |`StatusResponse`
-|`Ready`
+|`Ready`, `Recovered`
 
 |GET
 |`/api/locales`
@@ -380,6 +410,24 @@ declares `outError[ApiError](Status.BadRequest)`.
 |`AdvertiserVideoSurvey`
 
 |POST
+|`/api/recovery`
+|`RecoveryRequest`
+|`RecoveryOffer`, or `ApiError.Unrecoverable` in a final phase
+|any; session required
+
+|POST
+|`/api/recovery/check`
+|`CheckRecoveryRequest`
+|`RecoveryOffer`, the wait as it stands now — shortened, and `recurrent`, once another device reported the same error
+|any; session required
+
+|POST
+|`/api/recovery/redeem`
+|`RedeemRecoveryRequest`
+|`StatusResponse`, the session in `Recovered`
+|any; session required
+
+|POST
 |`/api/dev/reset-phase`
 |–
 |`StatusResponse`
@@ -406,6 +454,9 @@ Where each is defined:
 
 |`api/src/whitelabel/captal/api/routes/FinishRoutes.scala`
 |`/api/finish`
+
+|`api/src/whitelabel/captal/api/routes/RecoveryRoutes.scala`
+|`/api/recovery`, `/api/recovery/check`, `/api/recovery/redeem`
 
 |`api/src/whitelabel/captal/api/routes/LocaleRoutes.scala`
 |`/api/locales`, `/api/i18n/{locale}`, `/api/session/locale`, and `/api/dev/reset-phase` in
@@ -645,11 +696,18 @@ module: no 401, no 403, no 404 from a route handler.
 
 [source,scala]
 ----
-def toApiError(error: Throwable): UIO[ApiError] =
+def toApiError(error: Throwable): URIO[QuillSqlite & SessionContext, ApiError] =
   error match
     case Flow.HandlerError(errors) => ZIO.succeed(ApiError.fromAppErrors(errors))
     case SessionContext.NotSet     => ZIO.succeed(ApiError.SessionMissing)
-    case other => ZIO.logErrorCause("Internal error", Cause.fail(other)).as(ApiError.fromThrowable(other))
+    case other =>
+      for
+        _       <- ZIO.logErrorCause("Internal error", Cause.fail(other))
+        session <- SessionContext.get
+        quill   <- ZIO.service[QuillSqlite]
+        now     <- Clock.instant
+        errorId <- Errors.recordServer(quill, session, message, stackOf(other), now)
+      yield ApiError.InternalError(message, errorId.map(_.asString))
 ----
 
 * `Flow.HandlerError` carries a `NonEmptyChain[core.application.Error]`; `ApiError.fromAppErrors`
@@ -658,8 +716,11 @@ def toApiError(error: Throwable): UIO[ApiError] =
   `NoVideoAvailable`, and so on). The mapping is total and exhaustive over the domain enums.
 * `SessionContext.NotSet` means a handler reached a repository without a published session, and is
   reported as `SessionMissing`.
-* Anything else is logged with its `Cause` (stack trace preserved) and answered as
-  `ApiError.InternalError(message)` — the message only, never the trace.
+* Anything else is a defect of ours. It is logged with its `Cause` (stack trace preserved),
+  recorded in `errors` with origin `server` against the session in context, and answered as
+  `ApiError.InternalError(message, errorId)` — the message only, never the trace. `errorId` is
+  what the page sends to `POST /api/recovery` to leave through the error; it is `None` when the
+  record itself could not be written, which is logged and never replaces the original failure.
 
 The route-level wrapper `asApiError`, duplicated in `SurveyRoutes`, `VideoRoutes`,
 `AdvertiserSurveyRoutes` and inline in `FinishRoutes`, catches the whole `Cause`: a typed failure
@@ -684,16 +745,16 @@ private val finish = Endpoint(base(Method.POST / "api" / "finish"))
 
 The handler, in order:
 
-. `SessionEndpoint.authorise(cookie, OnMissing.Fail, Seq(Phase.Ready))` — a session not at `Ready`
-  is a `WrongPhase` 400.
-. `FinishFlowType.execute(FinishCommand(now))`. `FinishHandler` reads the authorized-ready user
-  from `UserRepository` and emits `UserEvent.UserFinishedProcess`; see
-  xref:event-sourcing.adoc[Event sourcing].
+. `SessionEndpoint.authorise(cookie, OnMissing.Fail, Seq(Phase.Ready, Phase.Recovered))` — a
+  session at neither is a `WrongPhase` 400. `Recovered` is where leaving through an error lands.
+. `FinishFlowType.execute(FinishCommand(now))`. `FinishHandler` emits `AccessEvent.AccessGranted`:
+  from `Ready` after the ready user's `UserEvent.UserFinishedProcess`, from `Recovered` with no user
+  required; see xref:event-sourcing.adoc[Event sourcing].
 . The event handler chain runs. The transactional half commits; `UnifiAccessHandler` runs *after*
   the commit and calls the location's controller with `AUTHORIZE_GUEST_ACCESS`. On success it sets
   `Phase.Authorized` with `accessExpiresAt = occurredAt + defaultDurationMinutes` and schedules an
   `ExpireAccess` job; on failure, or when the location has no UniFi configuration, it logs and
-  leaves the session at `Ready`. See xref:unifi.adoc[UniFi integration].
+  leaves the session where it was. See xref:unifi.adoc[UniFi integration].
 . The route re-reads the session with `SessionService.findById` and builds the response from that
   fresh snapshot.
 
@@ -713,7 +774,7 @@ yield StatusResponse(
 ----
 
 So a successful finish answers `phase = "authorized"` with a `secondsRemaining`, and a finish whose
-UniFi call failed answers `phase = "ready"` with `secondsRemaining = null` — still a 200, because
+UniFi call failed answers `phase = "ready"` (or `"recovered"`) with `secondsRemaining = null` — still a 200, because
 nothing in the domain failed. A session missing from the database between the authorise and the
 re-read is `ApiError.SessionMissing`.
 

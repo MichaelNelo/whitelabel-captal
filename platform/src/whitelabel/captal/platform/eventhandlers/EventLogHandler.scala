@@ -6,14 +6,16 @@ import java.util.UUID
 import io.circe.Json
 import io.circe.syntax.*
 import io.getquill.*
+import whitelabel.captal.core.access.Event as AccessEvent
 import whitelabel.captal.core.application.Event
 import whitelabel.captal.core.device.Event as DeviceEvent
+import whitelabel.captal.core.recovery.Event as RecoveryEvent
 import whitelabel.captal.core.survey.Event as SurveyEvent
 import whitelabel.captal.core.survey.question.Event as QuestionEvent
 import whitelabel.captal.core.survey.question.codecs.given
 import whitelabel.captal.core.user.Event as UserEvent
 import whitelabel.captal.core.video.{Event as VideoEvent, VideoType}
-import whitelabel.captal.platform.EventLogRow
+import whitelabel.captal.platform.{Errors, EventLogRow}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.session.SessionContext
@@ -65,6 +67,63 @@ object EventLogHandler:
         extractSurveyEvent(e)
       case Event.Video(e) =>
         extractVideoEvent(e)
+      case Event.Access(AccessEvent.AccessGranted(sessionId, userId, occurredAt)) =>
+        Some(
+          (
+            "access.granted",
+            Json.obj(
+              "sessionId"  -> Json.fromString(sessionId.asString),
+              "userId"     -> userId.fold(Json.Null)(id => Json.fromString(id.asString)),
+              "occurredAt" -> Json.fromString(occurredAt.toString)
+            ),
+            occurredAt))
+      case Event.Access(AccessEvent.AccessExpired(sessionId, userId, occurredAt)) =>
+        Some(
+          (
+            "access.expired",
+            Json.obj(
+              "sessionId"  -> Json.fromString(sessionId.asString),
+              "userId"     -> userId.fold(Json.Null)(id => Json.fromString(id.asString)),
+              "occurredAt" -> Json.fromString(occurredAt.toString)
+            ),
+            occurredAt))
+      case Event.Recovery(RecoveryEvent.ErrorRecorded(errorId, _, deviceId, _, _, verdict, at)) =>
+        Some(
+          (
+            "recovery.error_recorded",
+            Json.obj(
+              "errorId"    -> Json.fromString(errorId.asString),
+              "deviceId"   -> Json.fromString(deviceId.asString),
+              "verdict"    -> Json.fromString(Errors.verdict(verdict)),
+              "occurredAt" -> Json.fromString(at.toString)
+            ),
+            at))
+      case Event.Recovery(RecoveryEvent.RecoveryOffered(errorId, _, availableAt, at)) =>
+        Some(
+          (
+            "recovery.offered",
+            Json.obj(
+              "errorId"     -> Json.fromString(errorId.asString),
+              "availableAt" -> Json.fromString(availableAt.toString),
+              "occurredAt"  -> Json.fromString(at.toString)),
+            at))
+      case Event.Recovery(RecoveryEvent.RecoveryShortened(errorId, _, availableAt, at)) =>
+        Some(
+          (
+            "recovery.shortened",
+            Json.obj(
+              "errorId"     -> Json.fromString(errorId.asString),
+              "availableAt" -> Json.fromString(availableAt.toString),
+              "occurredAt"  -> Json.fromString(at.toString)),
+            at))
+      case Event.Recovery(RecoveryEvent.RecoveryRedeemed(errorId, _, at)) =>
+        Some(
+          (
+            "recovery.redeemed",
+            Json.obj(
+              "errorId"    -> Json.fromString(errorId.asString),
+              "occurredAt" -> Json.fromString(at.toString)),
+            at))
       case Event.Device(DeviceEvent.DeviceLinked(userId, deviceId, occurredAt)) =>
         Some(
           (
@@ -175,14 +234,6 @@ object EventLogHandler:
                       "questionId" -> Json.fromString(q.questionId.asString)))*),
               "occurredAt" -> Json.fromString(occurredAt.toString)
             ),
-            occurredAt))
-      case UserEvent.AccessExpired(userId, occurredAt) =>
-        Some(
-          (
-            "user.access_expired",
-            Json.obj(
-              "userId"     -> Json.fromString(userId.asString),
-              "occurredAt" -> Json.fromString(occurredAt.toString)),
             occurredAt))
 
   private def extractSurveyEvent(event: SurveyEvent): Option[(String, Json, Instant)] =

@@ -9,6 +9,11 @@ enum Phase:
   case AdvertiserVideoSurvey
   case AdvertiserQuestion
   case Ready
+
+  /** Left through an error: what `finish` grants access from, as from `Ready`, but with no user
+    * required — the error may have come before the guest gave an email.
+    */
+  case Recovered
   case Authorized
 
 object Phase:
@@ -26,6 +31,8 @@ object Phase:
         "advertiser_question"
       case Ready =>
         "ready"
+      case Recovered =>
+        "recovered"
       case Authorized =>
         "authorized"
 
@@ -43,6 +50,8 @@ object Phase:
         AdvertiserQuestion
       case "ready" =>
         Ready
+      case "recovered" =>
+        Recovered
       case "authorized" =>
         Authorized
       case _ =>

@@ -492,6 +492,13 @@ def pathPattern(slug: String): String     = s"/$slug/api/*"
 def healthCheckPath(slug: String): String = s"/$slug/api/health" // set only when the group is created
 ----
 
+A location's task definition carries `LOCATION_SLUG`, `DB_URL` (`TASK_DB_URL` when the tasks reach
+the database by another name), `UNIFI_PROXY_URL` when the backoffice has one, and
+`BUNDLE_MANIFEST_URL` when it has a `PUBLIC_BASE_URL`: `<PUBLIC_BASE_URL>/<slug>/manifest.json`, the
+location's own copy of the bundle's manifest, which the API checks client error reports against.
+The tasks run with a public IP, which is what lets them read it from the edge. A location deployed
+before this variable existed has none until its next `deploy_location`.
+
 `deploy_location` runs five AWS-side steps in a fixed order — log group, target group, listener
 rule, task definition, service — because `CreateService` with a `loadBalancers` block fails with
 "no associated load balancer" when the target group is not yet reachable through a listener; the

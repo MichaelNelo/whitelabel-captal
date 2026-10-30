@@ -211,7 +211,7 @@ object AuthorizedSuite:
               calls.exists(_.isInstanceOf[TestUnifiClient.Call.Authorize]),
               calls.exists(_.isInstanceOf[TestUnifiClient.Call.Revoke]),
               // and it was recorded for analytics
-              log.exists(_.eventType == "user.access_expired")
+              log.exists(_.eventType == "access.expired")
             )
       )
 
@@ -237,13 +237,4 @@ object AuthorizedSuite:
         stmt.close()
       finally
         conn.close()
-
-  /** The scheduler's worker runs on its own fiber and talks to rqlite, so the effect is not
-    * observable synchronously. Bounded poll against the real clock.
-    */
-  private def awaitWithLiveClock[R](check: ZIO[R, Throwable, Boolean]): ZIO[R, Throwable, Boolean] =
-    (ZIO.sleep(50.millis) *> check)
-      .repeatUntil(identity)
-      .timeoutTo(false)(identity)(15.seconds)
-      .withClock(Clock.ClockLive)
 end AuthorizedSuite

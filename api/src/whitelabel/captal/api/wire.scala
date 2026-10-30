@@ -7,9 +7,15 @@ import whitelabel.captal.messages.{
   AdvertiserSurveyResponse,
   AnswerRequest,
   ApiError,
+  CheckRecoveryRequest,
+  ClientErrorReport,
   EndPlaybackRequest,
+  ErrorFrame,
   MarkVideoWatchedRequest,
   PlaybackResponse,
+  RecoveryOffer,
+  RecoveryRequest,
+  RedeemRecoveryRequest,
   SetLocaleRequest,
   StartPlaybackRequest,
   StatusResponse,
@@ -59,6 +65,15 @@ object wire:
   given Schema[StartPlaybackRequest] = DeriveSchema.gen[StartPlaybackRequest]
   given Schema[EndPlaybackRequest] = DeriveSchema.gen[EndPlaybackRequest]
   given Schema[PlaybackResponse] = DeriveSchema.gen[PlaybackResponse]
+
+  // ─── Recovery ─────────────────────────────────────────────────────────────
+
+  given Schema[ErrorFrame] = DeriveSchema.gen[ErrorFrame]
+  given Schema[ClientErrorReport] = DeriveSchema.gen[ClientErrorReport]
+  given Schema[RecoveryRequest] = DeriveSchema.gen[RecoveryRequest]
+  given Schema[RecoveryOffer] = DeriveSchema.gen[RecoveryOffer]
+  given Schema[RedeemRecoveryRequest] = DeriveSchema.gen[RedeemRecoveryRequest]
+  given Schema[CheckRecoveryRequest] = DeriveSchema.gen[CheckRecoveryRequest]
 
   // ─── Survey ───────────────────────────────────────────────────────────────
 

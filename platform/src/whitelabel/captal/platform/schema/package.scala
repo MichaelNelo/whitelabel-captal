@@ -50,6 +50,7 @@ package object schema:
   inline given SchemaMeta[LocalizedTextRow] = schemaMeta[LocalizedTextRow]("localized_texts")
   inline given SchemaMeta[AdvertiserRow] = schemaMeta[AdvertiserRow]("advertisers")
   inline given SchemaMeta[AdvertiserVideoRow] = schemaMeta[AdvertiserVideoRow]("advertiser_videos")
+  inline given SchemaMeta[ErrorRow] = schemaMeta[ErrorRow]("errors")
   inline given SchemaMeta[VideoFileRow] = schemaMeta[VideoFileRow]("video_files")
   inline given SchemaMeta[VideoPlaybackRow] = schemaMeta[VideoPlaybackRow]("video_playbacks")
   inline given SchemaMeta[VideoViewRow] = schemaMeta[VideoViewRow]("video_views")

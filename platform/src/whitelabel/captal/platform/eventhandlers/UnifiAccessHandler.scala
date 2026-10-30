@@ -1,7 +1,7 @@
 package whitelabel.captal.platform.eventhandlers
 
+import whitelabel.captal.core.access.Event as AccessEvent
 import whitelabel.captal.core.application.{Event, EventHandler}
-import whitelabel.captal.core.user.Event as UserEvent
 import whitelabel.captal.platform.session.{
   JobQueue,
   ScheduledAt,
@@ -14,11 +14,11 @@ import zio.*
 
 /** Post-commit event handler that mirrors the guest-access lifecycle onto the UniFi controller.
   *
-  *   - [[whitelabel.captal.core.user.Event.UserFinishedProcess]] → `AUTHORIZE_GUEST_ACCESS`, and on
+  *   - [[whitelabel.captal.core.access.Event.AccessGranted]] → `AUTHORIZE_GUEST_ACCESS`, and on
   *     success marks the session `Phase.Authorized` with `expiresAt = occurredAt +
   *     defaultDurationMinutes`.
-  *   - [[whitelabel.captal.core.user.Event.AccessExpired]] → `UNAUTHORIZE_GUEST_ACCESS`, which also
-  *     disconnects the client. No session write here: the transactional
+  *   - [[whitelabel.captal.core.access.Event.AccessExpired]] → `UNAUTHORIZE_GUEST_ACCESS`, which
+  *     also disconnects the client. No session write here: the transactional
   *     [[SessionExpirationHandler]] already reset the row before this runs.
   *
   * The HTTP mechanics live in [[whitelabel.captal.platform.UnifiClient]]; this is only the event
@@ -41,11 +41,11 @@ object UnifiAccessHandler:
     new EventHandler[Task, Event]:
       def handle(events: List[Event]): Task[Unit] =
         val finishedOpt = events.collectFirst {
-          case Event.User(UserEvent.UserFinishedProcess(_, _, _, occurredAt)) =>
+          case Event.Access(AccessEvent.AccessGranted(_, _, occurredAt)) =>
             occurredAt
         }
         val expiredOpt = events.collectFirst {
-          case Event.User(UserEvent.AccessExpired(_, occurredAt)) =>
+          case Event.Access(AccessEvent.AccessExpired(_, _, occurredAt)) =>
             occurredAt
         }
         (finishedOpt, expiredOpt) match

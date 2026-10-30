@@ -50,7 +50,7 @@ object AnswerPersistenceHandler:
     event match
       case Event.Survey(SurveyEvent.QuestionAnswered(_, questionEvent)) =>
         Some(questionEventToRow(questionEvent, sessionId, now))
-      case Event.User(_) | Event.Video(_) | Event.Device(_) =>
+      case _ =>
         None
 
   private def questionEventToRow(

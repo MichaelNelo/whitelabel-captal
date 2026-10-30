@@ -69,6 +69,7 @@ object `package` extends BaseJSModule with Released:
   def clientAssets: T[PathRef] = Task.Source(moduleDir / "assets")
   def clientTemplate: T[PathRef] = Task.Source(moduleDir / "index.html.template")
   def maintenanceTemplate: T[PathRef] = Task.Source(moduleDir / "maintenance.html.template")
+  def errorTemplate: T[PathRef] = Task.Source(moduleDir / "error.html.template")
 
   /** Hand-written entries that call `start`, staged beside the linker's output: one per public module other than the portal.
     */
@@ -152,6 +153,9 @@ object `package` extends BaseJSModule with Released:
       "./maintenance.js",
       "./styles.css",
       preloadLinks(dest, "maintenance.js"))
+    // No script of the bundle: it is where a guest goes when the bundle is what failed.
+    renderIndex(errorTemplate().path, dest / "error.html", "", "./styles.css")
+    writeManifest(dest, releaseVersion().version)
 
     PathRef(dest)
 

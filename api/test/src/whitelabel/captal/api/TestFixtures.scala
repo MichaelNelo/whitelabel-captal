@@ -11,6 +11,7 @@ import whitelabel.captal.platform.*
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
+import whitelabel.captal.platform.session.SessionService
 import whitelabel.captal.platform.surveySchemas.given
 import zio.*
 
@@ -305,8 +306,9 @@ object TestFixtures:
       userId: user.Id,
       sessionId: user.SessionId,
       questionId: survey.question.Id,
-      answerValue: String): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]:
-    quill =>
+      answerValue: String,
+      deviceId: Option[user.DeviceId] = None): ZIO[QuillSqlite, Throwable, Unit] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
       import quill.*
       val now = FixedNow
       val answerRow = AnswerRow(
@@ -316,8 +318,52 @@ object TestFixtures:
         questionId = questionId,
         answerValue = answerValue,
         answeredAt = now,
-        createdAt = now)
+        createdAt = now,
+        deviceId = deviceId
+      )
       run(query[AnswerRow].insertValue(lift(answerRow))).unit
+
+  def createVideoView(
+      userId: user.Id,
+      videoId: video.Id,
+      deviceId: user.DeviceId): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
+      import quill.*
+      val row = VideoViewRow(
+        id = UUID.randomUUID.toString,
+        sessionId = user.SessionId.generate,
+        userId = Some(userId),
+        videoId = videoId,
+        durationWatchedSeconds = 15,
+        completed = 1,
+        viewedAt = FixedNow,
+        createdAt = FixedNow,
+        deviceId = Some(deviceId)
+      )
+      run(query[VideoViewRow].insertValue(lift(row))).unit
+
+  /** A client error as `RecoveryHandler` records one, at `at`, taken at `redeemedAt` if given. */
+  def createClientError(
+      deviceId: user.DeviceId,
+      fingerprint: String,
+      at: java.time.Instant,
+      redeemedAt: Option[java.time.Instant] = None): ZIO[QuillSqlite, Throwable, Unit] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      val row = ErrorRow(
+        id = UUID.randomUUID.toString,
+        sessionId = Some(user.SessionId.generate),
+        deviceId = Some(deviceId),
+        origin = "client",
+        message = "x",
+        detail = "{}",
+        fingerprint = Some(fingerprint),
+        verdict = Some("plausible"),
+        createdAt = VideoFiles.stamp(at),
+        availableAt = Some(VideoFiles.stamp(at)),
+        redeemedAt = redeemedAt.map(VideoFiles.stamp)
+      )
+      run(query[ErrorRow].insertValue(lift(row))).unit
 
   def linkSessionToUser(
       sessionId: user.SessionId,
@@ -362,6 +408,23 @@ object TestFixtures:
       answers: List[AnswerRow],
       sessions: List[SessionRow],
       progress: List[UserSurveyProgressRow])
+
+  def getErrors: ZIO[QuillSqlite, Throwable, List[ErrorRow]] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
+      import quill.*
+      run(query[ErrorRow])
+
+  /** A defect the API recorded against the session, as `ApiErrors` does when it catches one. */
+  def recordServerError(
+      sessionId: user.SessionId): ZIO[QuillSqlite & SessionService, Throwable, String] =
+    for
+      quill   <- ZIO.service[QuillSqlite]
+      session <- ZIO.serviceWithZIO[SessionService](_.findById(sessionId))
+      id      <- Errors.recordServer(quill, session, "boom", "stack", java.time.Instant.EPOCH)
+    yield id.get.asString
+
+  def setPhase(sessionId: user.SessionId, phase: Phase): ZIO[SessionService, Throwable, Unit] = ZIO
+    .serviceWithZIO[SessionService](_.setPhase(sessionId, phase))
 
   def getDeviceLinks
       : ZIO[QuillSqlite, Throwable, List[DeviceUserRow]] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
@@ -424,6 +487,7 @@ object TestFixtures:
       try
         val stmt = conn.createStatement()
         stmt.execute("DELETE FROM event_log")
+        stmt.execute("DELETE FROM errors")
         stmt.execute("DELETE FROM video_views")
         stmt.execute("DELETE FROM video_playbacks")
         stmt.execute("DELETE FROM user_survey_progress")

@@ -45,7 +45,7 @@ wire-protocol end-to-end spec covering both.
 [source,scala]
 ----
 suite("E2E")(
-  suite("Identification Survey Flow")( /* sixteen suites */ ) @@ TestAspect.before(clearAndSeedNoise.orDie),
+  suite("Identification Survey Flow")( /* eighteen suites */ ) @@ TestAspect.before(clearAndSeedNoise.orDie),
   MigrationLockSuite.suite,   // migrates itself; must stay in this spec, not its own ZIOSpecDefault
   WireContractSuite.suite     // pure serialisation; needs none of the layers above
 ) @@ TestAspect.sequential
@@ -55,7 +55,7 @@ The inner suite — `LocaleSessionSuite`, `SessionManagementSuite`, `EmailSurvey
 `SurveyProgressionSuite`, `MultiQuestionSurveySuite`, `ValidationSuite`, `PhaseValidationSuite`,
 `ProtocolRejectionSuite`, `ClientDecodeSuite`, `SessionIsolationSuite`, `VideoSuite`,
 `AdvertiserVideoSurveySuite`, `FinishSuite`, `AuthorizedSuite`, `SoftDeleteSuite`,
-`UnreadableRuleSuite` — runs `TestFixtures.clearAllData *> TestFixtures.seedNoiseData *>
+`UnreadableRuleSuite`, `DeviceSuite`, `RecoverySuite` — runs `TestFixtures.clearAllData *> TestFixtures.seedNoiseData *>
 TestUnifiClient.disable *> TestUnifiClient.reset` before each test. `MigrationLockSuite` and
 `WireContractSuite` sit outside that block deliberately: the first runs its own migration against
 its own history table and clearing the application schema around it would prove nothing; the
@@ -110,6 +110,14 @@ equivalence the decoders themselves implement, not a loosening of the check.)
 fails, the browser cannot read what the server sent.)
 . What circe writes, does zio-schema read back to the same value? (The request path: what a
 route's `.in[A]` depends on.)
+
+Requests are checked once more, over every value rather than a list: a request is a closed type the
+browser builds, so `everyRequest` generates them — `AnswerRequest` across every `AnswerValue`,
+`SetLocaleRequest`, `MarkVideoWatchedRequest`, the playback and recovery requests — with text that
+carries quotes, backslashes, control characters, accents and characters outside the basic plane,
+and asks the third question of each. When it passes, a request the server cannot read in production
+was not sent by our client: it was made by hand, or broke on the way, and gives no way out. Ratings
+are finite, as a form produces them; JSON has no spelling for the others.
 
 It reads `HttpApp.codecConfig` from the server rather than restating the flag, because
 `ignoreEmptyCollections` differs between zio-schema's own default (`true`) and the server's
@@ -266,6 +274,11 @@ not the `dom.fetch` call itself, the branching on HTTP status that picks which d
 the `InternalError(s"HTTP $status: $text")` fallback when decoding fails. `client` has no test
 module at all, because that half is Scala.js and genuinely browser-shaped; see
 xref:client.adoc[Client].
+* **The same decoders, compiled to JavaScript.** Every check of the browser's side — these suites
+and `WireCheck` before each response — runs its decoders on the JVM. They are the same source, but
+Scala.js differs at some edges (`Long`, number formatting, `java.time` through `scala-java-time`),
+and nothing runs the contract's values through the JavaScript build. See
+xref:context/pending.adoc[Pending work].
 
 == See also
 

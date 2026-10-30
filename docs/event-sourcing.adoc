@@ -79,12 +79,8 @@ A failed command emits nothing, by construction: `Op` only carries events on its
 | `user.video_survey_assigned`
 
 | `UserFinishedProcess`
-| `userId`, `videoId: Option`, `answeredQuestionIds: List[FullyQualifiedQuestionId]`
+| `userId`, `videoId: Option`, `answeredQuestionIds: List[FullyQualifiedQuestionId]` — the user went through the flow; what grants the access is `AccessGranted`, emitted with it
 | `user.finished_process`
-
-| `AccessExpired`
-| `userId`
-| `user.access_expired`
 |===
 
 `advertiserId` is `null` on `VideoAssigned` and `VideoSurveyAssigned` when the content was a promo — the venue's own video, which belongs to no advertiser. Analytics reading the log should treat the two consistently.
@@ -117,6 +113,46 @@ The logged `answer` is the `AnswerValue` encoded with the same circe codec the b
 |===
 
 The device itself is not an event: `SessionService.create` resolves it from the fingerprint before the session exists, and the commands that link it carry its id, taken from the session by the route.
+
+=== Recovery events
+
+[cols="2,3,2"]
+|===
+| Event | Payload | `event_log.event_type`
+
+| `ErrorRecorded`
+| `errorId`, `sessionId`, `deviceId`, the client's `report`, its `fingerprint` (`None` when the report has no frame of the bundle's own) and the `verdict` on it, `occurredAt` — an error the page says it caught
+| `recovery.error_recorded`
+
+| `RecoveryOffered`
+| `errorId`, `sessionId`, `availableAt`, `occurredAt` — the session may leave through the error from `availableAt`
+| `recovery.offered`
+
+| `RecoveryShortened`
+| `errorId`, `sessionId`, `availableAt`, `occurredAt` — another device reported the same error since it was offered: the wait shortens to `availableAt`, and the error is recurrent from now on. Emitted when the waiting page asks, or when the redeem finds it
+| `recovery.shortened`
+
+| `RecoveryRedeemed`
+| `errorId`, `sessionId`, `occurredAt` — it left through it: the session moves to `Recovered`, where `finish` grants access
+| `recovery.redeemed`
+|===
+
+A server error is not an event: the API records it where it catches the defect, with no command running (see xref:api.adoc#_error_model[Error model]).
+
+=== Access events
+
+[cols="2,3,2"]
+|===
+| Event | Payload | `event_log.event_type`
+
+| `AccessGranted`
+| `sessionId`, `userId: Option`, `occurredAt` — `finish` grants the session access, from `Ready` or from `Recovered`; emitted again on each retry until the controller confirms. With no user when the guest left through an error before giving an email
+| `access.granted`
+
+| `AccessExpired`
+| `sessionId`, `userId: Option`, `occurredAt` — the session's access reached its `accessExpiresAt`. Emitted by the expiration scheduler, not by a request. The session's, not a user's: a session that left through an error before giving an email is authorized with no user
+| `access.expired`
+|===
 
 === Video events
 
@@ -168,16 +204,23 @@ val dbHandler = EventLogHandler(ctx)
   .andThen(SessionVideoHandler(ctx))
   .andThen(SessionExpirationHandler(ctx))
   .andThen(SurveyProgressHandler())
+  .andThen(RecoveryHandler())
 val transactional = TransactionalEventHandler(dbHandler, quill)
-val unifiAccess = UnifiAccessHandler(currentLocation.unifi, ctx, sessionService, unifiClient, jobQueue)
-transactional.andThen(unifiAccess)
+val unifiAccess = UnifiAccessHandler(
+  currentLocation.unifi,
+  unifiEnabled(quill, currentLocation),
+  ctx,
+  sessionService,
+  unifiClient,
+  jobQueue)
+transactional.andThen(PlaybackHandler(quill)).andThen(unifiAccess)
 ----
 
 Every `Flow` in the application shares this one `EventHandler[Task, Event]` instance.
 
 === Transactional chain
 
-All eight run inside one transaction, in this order. All live in `platform/src/whitelabel/captal/platform/eventhandlers/`.
+All nine run inside one transaction, in this order. All live in `platform/src/whitelabel/captal/platform/eventhandlers/`.
 
 [cols="2,2,3"]
 |===
@@ -196,8 +239,8 @@ All eight run inside one transaction, in this order. All live in `platform/src/w
 | inserts the user on `UserCreated` only — whether an email is already someone's is decided in `core`, by `AnswerEmailHandler` — then sets `sessions.user_id` and updates the ambient `SessionContext` so later handlers and the route see the id; upserts the `device_users` pair on `DeviceLinked`
 
 | `SessionPhaseHandler`
-| `IdentificationCompleted`, any identification answer, `UserRecognized`, `VideoSurveyAssigned`, `VideoVisualized`
-| `sessions.phase`. First match wins: the first two cases set the phase after identification (`AdvertiserVideo`), and so does `UserRecognized` — the email question met by a user who answered it before, which records no answer but moves on all the same. `VideoSurveyAssigned` sets `AdvertiserVideoSurvey`, `VideoVisualized` sets the configured phase after a video (also `AdvertiserVideoSurvey`). It has no case for `AccessExpired`.
+| `RecoveryRedeemed`, `IdentificationCompleted`, any identification answer, `UserRecognized`, `VideoSurveyAssigned`, `VideoVisualized`
+| `sessions.phase`. First match wins: `RecoveryRedeemed` sets `Recovered`, wherever the session was; the next two cases set the phase after identification (`AdvertiserVideo`), and so does `UserRecognized` — the email question met by a user who answered it before, which records no answer but moves on all the same. `VideoSurveyAssigned` sets `AdvertiserVideoSurvey`, `VideoVisualized` sets the configured phase after a video (also `AdvertiserVideoSurvey`). It has no case for `AccessExpired`.
 
 | `SessionSurveyHandler`
 | `SurveyAssigned`, `NewUserArrived` with a next question, `VideoSurveyAssigned`
@@ -214,18 +257,22 @@ All eight run inside one transaction, in this order. All live in `platform/src/w
 | `SurveyProgressHandler`
 | any `QuestionAnswered`
 | upserts `user_survey_progress` for the `(userId, surveyId)` pair, then marks it complete when `SurveyService.isSurveyCompleteQuery` says every question is answered
+
+| `RecoveryHandler`
+| `ErrorRecorded`, `RecoveryOffered`, `RecoveryShortened`, `RecoveryRedeemed`
+| inserts the client error into `errors` with its fingerprint and verdict; sets `available_at` on an offer, `available_at` and the verdict `recurrent` on a shortening, and `redeemed_at` on a redemption
 |===
 
 === Post-commit chain
 
-One handler, outside the transaction, so an HTTP failure against the controller cannot roll back database writes.
+Two handlers, outside the transaction. `PlaybackHandler` records playbacks in `video_playbacks` and needs to see its own inserts, which a transaction defers (see xref:platform.adoc[Platform]). `UnifiAccessHandler` calls the controller, and an HTTP failure there must not roll back database writes.
 
 [cols="2,3"]
 |===
 | Event | `UnifiAccessHandler` behaviour
 
-| `UserFinishedProcess`
-| `AUTHORIZE_GUEST_ACCESS` for the session's `clientMac`. On success: `sessionService.setAuthorized(sessionId, occurredAt + defaultDurationMinutes)`, then `jobQueue.schedule(ScheduledAt(expiresAt, ExpireAccess(sessionId)))`. On failure: log the error and stop — the session stays at `Ready`.
+| `AccessGranted`
+| `AUTHORIZE_GUEST_ACCESS` for the session's `clientMac`. On success: `sessionService.setAuthorized(sessionId, occurredAt + defaultDurationMinutes)`, then `jobQueue.schedule(ScheduledAt(expiresAt, ExpireAccess(sessionId)))`. On failure: log the error and stop — the session stays at `Ready` or `Recovered`.
 
 | `AccessExpired`
 | `UNAUTHORIZE_GUEST_ACCESS`, which also disconnects the client. No session write: `SessionExpirationHandler` already reset the row inside the transaction. An empty `clientMac` is logged and skipped, as is a failure.
@@ -308,7 +355,7 @@ One pass through the portal, with the endpoint, the phase it requires, the event
 | 8. Claim access
 | `POST /api/finish`
 | `Ready`
-| `UserFinishedProcess`. Post-commit, `UnifiAccessHandler` authorises on the controller; on success the session becomes `Authorized` with `accessExpiresAt` and an expiry job is scheduled. The response re-reads the session, so `phase` is `Authorized` only if the grant succeeded.
+| `UserFinishedProcess` and `AccessGranted`. Post-commit, `UnifiAccessHandler` authorises on the controller; on success the session becomes `Authorized` with `accessExpiresAt` and an expiry job is scheduled. The response re-reads the session, so `phase` is `Authorized` only if the grant succeeded.
 
 | 9. Browse
 | `GET /api/status` (polled)
@@ -325,6 +372,10 @@ Identification asks **one question per visit**: answering any identification que
 
 NOTE: a deployment with no active email survey cannot identify an unidentified visitor. The repository logs a warning, `ProvideNextIdentificationSurveyHandler` takes its `unidentifiable` fallback, and the flow ends at `Ready` without granting access.
 
+=== Leaving through an error
+
+An error at any step before `Ready` is a way out, not a dead end: `POST /api/recovery` offers one and `POST /api/recovery/redeem` takes it. `RecoveryRedeemed` only moves the session to `Recovered`, in place of steps 1 to 7; from there step 8 is the same `POST /api/finish`, which grants access from `Recovered` with no user required — the error may have come before the guest gave an email. A server error opens at once; a client error waits the time `WaitPolicy` sets (see xref:core.adoc#_recovery[Core]). In `Ready`, `Recovered` or `Authorized` the error is in granting access itself, so the answer is `Unrecoverable` with the error's id, for staff to look up.
+
 == Ready and Authorized
 
 The two terminal phases are deliberately distinct, and the gap between them is where retries live.
@@ -336,17 +387,20 @@ The two terminal phases are deliberately distinct, and the gap between them is w
 | `Ready`
 | the guest has completed everything the portal asks for. No network access has been granted, and `accessExpiresAt` is unset.
 
+| `Recovered`
+| the guest left through an error. As `Ready`, with no user required.
+
 | `Authorized`
 | the UniFi controller confirmed the grant. `accessExpiresAt` is set, an expiry job exists, and `/api/status` reports `secondsRemaining`.
 |===
 
-`FinishHandler` emits `UserFinishedProcess` and returns an in-memory `User[State.Authorized]`, but it does not write the phase: only `UnifiAccessHandler`, after the transaction, moves `sessions.phase` to `Authorized` — and only on a confirmed grant.
+`FinishHandler` emits `AccessGranted` — from `Ready`, with `UserFinishedProcess` before it — but it does not write the phase: only `UnifiAccessHandler`, after the transaction, moves `sessions.phase` to `Authorized` — and only on a confirmed grant.
 
 That gives retry for free:
 
-* UniFi fails, or is not configured → the session stays at `Ready`;
-* another `POST /api/finish` finds the user again through the same `findReadyUser()`, re-runs `finish`, re-emits `UserFinishedProcess`, and the post-commit handler tries again;
-* once the grant succeeds the phase is `Authorized`, `findReadyUser()` returns `None`, and a further call fails with `UserNotIdentified` — which the client reads as "you already have access".
+* UniFi fails, or is not configured → the session stays at `Ready` or `Recovered`;
+* another `POST /api/finish` grants access again — from `Ready` it finds the user again through the same `findReadyUser()` — and the post-commit handler tries again;
+* once the grant succeeds the phase is `Authorized`, and a further call is refused with `WrongPhase`, which the client reads as "you already have access".
 
 === Expiry
 
@@ -369,7 +423,7 @@ That gives retry for free:
 | takes due jobs one at a time (concurrency of 1 against the controller), re-reads the session, populates `SessionContext` with it via `ctx.locally`, and runs the flow exactly as a request would. Errors are logged and swallowed, so neither an unreachable controller nor a database failure can kill the fiber.
 
 | staleness
-| handled in the domain, not the scheduler: `ExpireAccessHandler` is a silent no-op when `findAuthorizedUser()` returns `None`. A guest who redid the flow and got re-authorized leaves the old job harmless, which is why jobs are never cancelled or indexed.
+| handled in the domain, not the scheduler: `ExpireAccessHandler` is a silent no-op unless the session is `Authorized` and past its own `accessExpiresAt`. A session reset in between, or a guest who redid the flow and got re-authorized until later, leaves the old job harmless, which is why jobs are never cancelled or indexed.
 |===
 
 A second, independent safety net lives in `GET /api/status`: when the session is `Authorized` and `accessExpiresAt` is already past, the route resets the session itself and answers `Welcome`. It runs the same `resetForExpirationQuery` the event handler does, but emits no event — so a reset that happens this way reaches neither `event_log` nor the controller.

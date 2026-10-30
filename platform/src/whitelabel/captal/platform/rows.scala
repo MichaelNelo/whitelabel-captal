@@ -173,6 +173,22 @@ final case class VideoFileRow(
     confirmedAt: Option[String],
     deletedAt: Option[String])
 
+/** An error a guest could be offered a way out of. `origin` is `server` or `client`; times are
+  * fixed-width stamps, compared as text.
+  */
+final case class ErrorRow(
+    id: String,
+    sessionId: Option[user.SessionId],
+    deviceId: Option[user.DeviceId],
+    origin: String,
+    message: String,
+    detail: String,
+    fingerprint: Option[String],
+    verdict: Option[String],
+    createdAt: String,
+    availableAt: Option[String],
+    redeemedAt: Option[String])
+
 /** One guest playing one file; open while `endedAt` is empty. `expired` is 1 when the backoffice
   * closed it because its page never did.
   */

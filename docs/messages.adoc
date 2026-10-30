@@ -19,9 +19,9 @@ object `messages-js` extends BaseJSModule:
   def scalacOptions = super.scalacOptions() ++ Seq("-Xmax-inlines:64")
 ----
 
-One source tree, eight files, compiled twice. The dependency direction is `messages` → `core` and never the reverse: these types translate the domain into HTTP, and xref:core.adoc[Core] has no HTTP vocabulary.
+One source tree, nine files, compiled twice. The dependency direction is `messages` → `core` and never the reverse: these types translate the domain into HTTP, and xref:core.adoc[Core] has no HTTP vocabulary.
 
-`-Xmax-inlines:64` is required to compile, not an optimisation: `ApiError` has 32 variants and circe's derivation inlines once per case, which hits the default limit of 32.
+`-Xmax-inlines:64` is required to compile, not an optimisation: `ApiError` has 39 variants and circe's derivation inlines once per case, which exceeds the default limit of 32.
 
 == Where the codecs live
 
@@ -37,7 +37,8 @@ Two serialisation libraries describe one format. circe instances travel with the
 | `AnswerRequest` | `messages/AnswerRequest.scala` | `api/wire.scala`
 | `SurveyResponse` | `messages/SurveyResponse.scala` | `api/wire.scala`
 | `AdvertiserSurveyResponse` | `messages/AdvertiserSurveyResponse.scala` | `api/wire.scala`
-| `VideoResponse`, `MarkVideoWatchedRequest`, `VideoWatchedResponse` | `messages/VideoResponse.scala` | `api/wire.scala`
+| `VideoResponse`, `MarkVideoWatchedRequest`, `VideoWatchedResponse`, `StartPlaybackRequest`, `EndPlaybackRequest`, `PlaybackResponse` | `messages/VideoResponse.scala` | `api/wire.scala`
+| `ErrorFrame`, `ClientErrorReport`, `RecoveryRequest`, `RecoveryOffer`, `CheckRecoveryRequest`, `RedeemRecoveryRequest` | `messages/RecoveryMessages.scala` | `api/wire.scala`
 | `I18n` | `messages/i18n.scala` (babel instances are in `core`) | `api/wire.scala`
 | `NextStep`, `NextVideo`, `NextAdvertiserSurvey` | declared in `core` beside the types | `api/wire.scala`
 | `Phase` | `core/application/phase.scala`, a bare string | `api/wire.scala`, hand-written `Schema[String].transform(fromDbString, toDbString)` to match
@@ -233,11 +234,18 @@ IMPORTANT: the client must count down from `secondsRemaining`, never from an abs
 | `QuestionNotPending` | `userId`, `questionId` | `user.Error.QuestionNotPending`
 | `VideoNotFound` | `videoId` | `video.Error.VideoNotFound`
 | `NoVideoAvailable` | — | `video.Error.NoVideoAvailable`
+| `StaleVideoFile` | `videoId`, `videoUrl` | `video.Error.StaleFile`
+| `InvalidPlaybackId` | `value` | the playback routes, for an id that is not a UUID
 | `LocationNotFound` | `slug: String` | nothing constructs it today
-| `InternalError` | `message: String` | `ApiError.fromThrowable`, and the two routes that reject a session with no `currentVideoId`
+| `UnknownError` | `errorId` | `recovery.Error.UnknownError`, and `RecoveryRoutes` for an id that is not a UUID
+| `RecoveryAlreadyUsed` | `errorId` | `recovery.Error.AlreadyRedeemed`
+| `RecoveryNotYet` | `availableAt: String` | `recovery.Error.NotYet`
+| `InvalidRecoveryRequest` | `reason` | `RecoveryRoutes`, for a request with both or neither of `serverErrorId` and `report`
+| `Unrecoverable` | `errorId` | `RecoveryRoutes`, for an error in a final phase; `errorId` is the code staff look it up by
+| `InternalError` | `message: String`, `errorId: Option[String]` | `ApiErrors.toApiError` for a defect, with the id it was recorded under; `ApiError.fromThrowable`, and the two routes that reject a session with no `currentVideoId`, without one
 |===
 
-Thirty-two variants; every opaque id becomes a `String`, and every numeric bound that is not a `Float` becomes a `String`, so the enum carries no domain types.
+Thirty-nine variants; every opaque id becomes a `String`, and every numeric bound that is not a `Float` becomes a `String`, so the enum carries no domain types.
 
 === Translation
 
@@ -250,7 +258,7 @@ def fromThrowable(cause: Throwable): ApiError
 
 `fromAppErrors` keeps only the head of the chain: validation accumulates every broken rule inside `Op`, and exactly one of them reaches the client. `fromAppError` dispatches to the three private per-aggregate functions, each total over its aggregate's `Error`. `fromThrowable` yields `InternalError(message)`, falling back to `"Unknown error"` when the throwable has none.
 
-On the server side, `api/ApiErrors.scala` is the single translation point: `Flow.HandlerError` goes through `fromAppErrors`, `SessionContext.NotSet` becomes `SessionMissing`, and anything else is logged with its cause before becoming an `InternalError`.
+On the server side, `api/ApiErrors.scala` is the single translation point: `Flow.HandlerError` goes through `fromAppErrors`, `SessionContext.NotSet` becomes `SessionMissing`, and anything else is logged with its cause and recorded in `errors` before becoming an `InternalError` carrying the record's id.
 
 Both codec directions are derived, so neither can drift from the enum.
 

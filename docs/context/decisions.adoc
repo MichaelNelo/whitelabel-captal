@@ -280,6 +280,100 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
      device is what earns them trust there, so typing someone else's email on your own laptop
      starts at nothing. Both survive the sessions being cleaned up, which the history in
      `sessions` would not.
+* **An error is a way out, and a client error costs time** (V28, 2026-10-30). Something breaking
+  must not leave a guest without internet. A server error is the server's own record, so its id
+  opens a way out at once. A client error cannot be told real from invented: on a phone or tablet
+  there is no leaving the page, but on a laptop DevTools can `fetch` from the page itself, with
+  its cookie and origin. So it is not judged, it is made slower than going through the flow, and
+  fast for whoever has shown they would have gone through it.
+  ** *CAPTCHA rejected.* AWS WAF's, or any other, checks that a human is on our page, and someone
+     with DevTools open is exactly that. A token redeemed with a CAPTCHA was considered; it stops a
+     headless client, not the console of the real page, and the error screen is not a route that
+     could require having reached it.
+  ** *Validating the message or the stack format against the engine rejected.* Libraries throw
+     their own messages, engines and versions word and print them differently, and a guest's
+     unusual browser would be punished for it. Checking the message against the phase the session
+     is in was also dropped: it is not a superficial check.
+  ** *What is checked can only contradict.* A frame from the console, a bundle version the location
+     does not serve, a line or column outside the published file: each is something a real error of
+     our bundle cannot produce, and multiplies the wait by ten. The same error reported by another
+     device in a week divides it by ten. One device, not two: the first version asked for two, but
+     the device is the link shortener's `click_id`, which a guest cannot mint, and what the product
+     asked for was that it had happened to someone else (2026-10-31).
+  ** *The same error is the same name at the same place, not the same message.* The first version
+     hashed the message, every frame and the file's full URL, so one error split by engine
+     wording, by the path that led to it and by location. It is now the bundle version, the
+     error's `name` — fixed by the standard for every engine — and the file name, line and column
+     of the first frame of ours, matched exactly. Similarity search over embeddings of the message
+     was considered and rejected: a fuzzy match makes the signal that cuts the wait easier to
+     fake, the same error in two engines' words is less alike than two different errors in one
+     engine's, and a model call per report would sit on an endpoint anyone can call.
+  ** *The column as reported, no source map.* Mapping it through a source map would merge an
+     error whose column two engines report slightly differently. Left out on purpose: such an
+     error is counted per engine, which finds fewer recurrences but never invents one.
+  ** *Trust with diminishing returns.* The wait falls as `(1 + n)^-weight` in what was done on this
+     device, and grows with the square of recent recoveries. Much history brings it near zero, no
+     single answer is worth much, and a guest at `Welcome` with nothing waits the full five
+     minutes. History is answers and views, not sessions, because sessions will be cleaned up.
+  ** *Effort weighs by kind, the email least* (2026-10-31). The first version counted every answer
+     alike and halved the wait per completed phase, so a returning guest typing their email again
+     had halved it with one field. Now a video weighs most, its survey's answer less, a profiling
+     or location answer less still, and the email almost nothing: answering it again and again is
+     what clearing cookies looks like, while profiling answers pile up only over real returning
+     visits. In this visit, being identified takes the wait to 1:30 and watching the video to 0:45,
+     the numbers the product chose.
+  ** *An error that turns out recurrent shortens the wait of those already waiting* (2026-10-31).
+     An error a deploy introduces reaches someone first, and that guest, with no history, would
+     wait five minutes for a bug of ours. The waiting page asks every ten seconds rather than being
+     pushed to: a poll survives the captive-portal browser sleeping and needs nothing between the
+     edge and the API, and the waits are minutes. The shortening is a tenth of the wait offered,
+     counted from when the error happened, never longer, and the redeem applies it too.
+  ** *The final phases are unrecoverable.* In `Ready`, `Recovered` or `Authorized` the error is in
+     granting access itself, which a way out would only repeat; the guest is told so and given the
+     error's id for staff.
+  ** *The way out is a static page, not a view* (2026-10-31). A view is part of the bundle, and the
+     bundle can be what failed. `error.html` has its own inline script, learns why it was opened
+     from its fragment, and keeps the offer there so a reload resumes the countdown rather than
+     reporting the error again. Its copy is fixed in Spanish and English, as the maintenance
+     page's: it cannot count on the server for translations.
+  ** *Not every error is a way out.* A lost connection, and a part of the bundle that does not
+     arrive, have nothing to judge: the guest is offered a retry, and nothing is reported. Checking
+     the edge for a missing object, which would make the second verifiable, is left for later. An
+     error the window reports only interrupts the flow when its stack names this origin, so an
+     extension's, or one typed into the console, does not.
+  ** *The wait over, the page redeems on its own.* A tap first was considered; it protects nothing,
+     since the redeem endpoint can be called directly.
+* **Access expires for the session, not for a user** (2026-10-31). `AccessExpired` was a user
+  event, emitted only when `findAuthorizedUser` found a user with an email on the session. Every
+  path to `Authorized` used to require identification, so the two coincided, until a way out of an
+  error authorized sessions that never gave an email: the scheduler skipped them. The controller
+  still dropped the authorization on the `timeLimitMinutes` the grant carries, but the session stayed
+  `Authorized` until `/api/status` happened to reset it, the client was not disconnected, and no
+  expiry was recorded. Nothing that reacts to the
+  event used the user — UniFi revokes the session's MAC, the reset is the session's row — so the
+  event moved to `core.access`, with the user optional, and `ExpireAccessHandler` asks the session:
+  `Authorized`, and past its own `accessExpiresAt`. The second condition is new, and is what keeps a
+  late job from ending an access granted again since.
+* **A way out lands in `Recovered`, and only `finish` grants access** (2026-10-31). The redeem used
+  to set `Ready` and authorize at once. When the controller failed, or there was none, the session
+  stayed at `Ready` with no user, and the client's `ReadyView` called `finish`, which needs one:
+  `UserNotIdentified`, the error view, and around again. A phase of its own says where the session
+  came from, and lets `finish` require a user from `Ready` and none from `Recovered`. Granting is
+  `AccessGranted` in `core.access`, the session's like the expiry: one event the controller acts
+  on, so the redeem does no authorizing and retrying is `finish` either way. `UserFinishedProcess`
+  stays, from `Ready` only, for what the user watched and answered.
+* **A serialisation bug between browser and server is the server's to prove** (2026-10-31). The
+  client cannot be believed about one, but it does not have to be: the browser's decoders are
+  `messages`, which compiles for the JVM, so the server reads each response the way the browser
+  will before sending it, and one it cannot read is its own error, with an immediate way out. The
+  other direction cannot happen by construction: property tests show every request the client can
+  build is one the server reads, so an unreadable request is not ours and gives no way out.
+  ** *Decodes, not equal.* The check asks what the browser asks. Comparing the decoded value with
+     the original was rejected: a harmless difference would send a guest out of the flow.
+  ** *Not where there is no session.* Health, locales and i18n are not checked: an error recorded
+     without a session cannot be left through, and the browser's own report covers them.
+  ** *The JVM stands in for the browser.* The decoders run on the JVM in the check and in the
+     suites; where Scala.js differs, the gap stays open (see `pending.adoc`).
 * **Video files: one row and one key per file, deleted when no playback of it is open** (V25,
   2026-10-30). A replaced file first overwrote the object under the same key and took the video
   out of rotation while it uploaded. A guest's player fetches a video in ranges for as long as it

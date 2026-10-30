@@ -8,6 +8,7 @@ import whitelabel.captal.api.routes.{
   AdvertiserSurveyRoutes,
   FinishRoutes,
   LocaleRoutes,
+  RecoveryRoutes,
   SurveyRoutes,
   VideoRoutes
 }
@@ -28,7 +29,9 @@ import whitelabel.captal.core.application.{
 }
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository, VideoRepository}
 import whitelabel.captal.platform.eventhandlers.*
+import whitelabel.captal.core.recovery.Manifest
 import whitelabel.captal.platform.repositories.{
+  RecoveryRepositoryQuill,
   SurveyRepositoryQuill,
   UserRepositoryQuill,
   VideoRepositoryQuill
@@ -36,7 +39,7 @@ import whitelabel.captal.platform.repositories.{
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.services.LocaleService
 import whitelabel.captal.platform.session.{JobQueue, JobRunner, SessionContext, SessionService}
-import whitelabel.captal.platform.{RqliteDataSource, UnifiAccess}
+import whitelabel.captal.platform.{BundleManifest, RqliteDataSource, UnifiAccess}
 import zio.*
 import zio.interop.catz.*
 
@@ -91,6 +94,7 @@ object TestLayers:
         .andThen(SessionVideoHandler(ctx))
         .andThen(SessionExpirationHandler(ctx))
         .andThen(SurveyProgressHandler())
+        .andThen(RecoveryHandler())
       val transactional = TransactionalEventHandler(dbHandler, quill)
       // The production handler, with its HTTP transport swapped for TestUnifiClient.
       val unifiAccess = UnifiAccessHandler(
@@ -101,11 +105,6 @@ object TestLayers:
         unifiClient,
         jobQueue)
       transactional.andThen(PlaybackHandler(quill)).andThen(unifiAccess)
-
-  private val expireAccessFlowLayer: ZLayer[UserRepository[
-    Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, ExpireAccessCommand, Unit]] = ZLayer
-    .fromFunction: (userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
-      Flow(ExpireAccessHandler(userRepo), eventHandler)
 
   private val answerEmailFlowLayer: ZLayer[
     SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
@@ -214,11 +213,6 @@ object TestLayers:
             _ <- eventHandler.handle(events)
           yield value
 
-  private val finishFlowLayer: ZLayer[UserRepository[
-    Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, FinishCommand, Unit]] = ZLayer
-    .fromFunction: (userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
-      Flow(FinishHandler(userRepo), eventHandler)
-
   val quill: ZLayer[Any, Throwable, QuillSqlite] = dataSourceLayer >>> quillLayer
 
   // No slug in tests → SessionCookieConfig produces name="captal_session", path="/"
@@ -260,7 +254,14 @@ object TestLayers:
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType & QuillSqlite &
       SessionCookieConfig & ApiBase & CurrentLocation & UserCookieConfig & UserLookup &
       SurveyRoutes & LocaleRoutes & VideoRoutes & AdvertiserSurveyRoutes & FinishRoutes &
+      RecoveryRoutes & RecoveryRoutes.RequestRecoveryFlowType &
+      RecoveryRoutes.CheckRecoveryFlowType & RecoveryRoutes.RedeemRecoveryFlowType &
       TestUnifiClient & TestUnifiSwitch & JobQueue & JobRunner.ExpireFlow & JobRunner
+
+  /** The bundle the suite's location serves, so a report can be found consistent with it or not. */
+  val TestBundle: Manifest = Manifest(
+    "test-1",
+    Map("main.js" -> Vector(120, 40000), "chunk-video.js" -> Vector(900)))
 
   val testEnv: ZLayer[Any, Throwable, TestEnv] = ZLayer.make[TestEnv](
     SessionContext.make,
@@ -274,7 +275,7 @@ object TestLayers:
     TestUnifiClient.layer,
     TestUnifiSwitch.layer,
     JobQueue.layer,
-    expireAccessFlowLayer,
+    Flows.expireAccessFlowLayer,
     JobRunner.layer,
     eventHandlerLayer,
     answerEmailFlowLayer,
@@ -287,7 +288,7 @@ object TestLayers:
     Flows.endPlaybackFlowLayer,
     nextAdvertiserSurveyFlowLayer,
     answerAdvertiserFlowLayer,
-    finishFlowLayer,
+    Flows.finishFlowLayer,
     sessionCookieConfigLayer,
     apiBaseLayer,
     currentLocationLayer,
@@ -297,6 +298,14 @@ object TestLayers:
     LocaleRoutes.layer,
     VideoRoutes.layer,
     AdvertiserSurveyRoutes.layer,
-    FinishRoutes.layer
+    FinishRoutes.layer,
+    RecoveryRoutes.layer,
+    ZLayer.succeed[BundleManifest](
+      new BundleManifest:
+        def current: UIO[Option[Manifest]] = ZIO.some(TestBundle)),
+    RecoveryRepositoryQuill.layer,
+    Flows.requestRecoveryFlowLayer,
+    Flows.checkRecoveryFlowLayer,
+    Flows.redeemRecoveryFlowLayer
   )
 end TestLayers

@@ -43,7 +43,9 @@
   </div>
   <div id="app"></div>
   <!-- `type="module"`: the client links as ES modules so each route can arrive in its own chunk,
-       and the browser resolves the imports between them by the exact paths the linker wrote. -->
-  <script type="module" src="{{JS_PATH}}"></script>
+       and the browser resolves the imports between them by the exact paths the linker wrote.
+       `onerror` fires when the entry or any module it imports fails to load: nothing of the bundle
+       is running then, so this attribute is what sends the guest to error.html to load it again. -->
+  <script type="module" src="{{JS_PATH}}" onerror="location.replace('error.html' + location.search + '#' + encodeURIComponent('{&quot;retry&quot;:true}'))"></script>
 </body>
 </html>

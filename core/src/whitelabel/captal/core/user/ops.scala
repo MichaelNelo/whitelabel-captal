@@ -154,16 +154,4 @@ object ops:
         now)
       Op.emit(event, authorized)
   end extension
-
-  extension (user: User[State.Authorized])
-    /** End of the granted access: emits AccessExpired. Returns no destination state — expiring ends
-      * the flow instead of moving to another step, and does not revert to `State.Guest`: re-entry
-      * is re-derived by `ProvideNextIdentificationSurveyHandler` from the surviving `users` row.
-      */
-    def expire(now: Instant): UserOp[Event.AccessExpired] =
-      // The annotation is required: an enum case constructor application infers the parent type
-      // `Event`, and the return value has to keep the case's own type.
-      val event: Event.AccessExpired = Event.AccessExpired(user.id, now)
-      Op.emit(event, event)
-  end extension
 end ops

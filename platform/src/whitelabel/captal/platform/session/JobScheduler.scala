@@ -131,9 +131,9 @@ object JobRunner:
               ZIO.logDebug(s"Session ${sessionId.asString} no longer exists — job discarded")
             case Some(session) =>
               // The context must be populated for the flow to run as it does in a request: the
-              // repository and every DbEventHandler read the session from the ambient context.
-              // The staleness guard is in the handler — `findAuthorizedUser` returns None for a
-              // re-authorized user and the command becomes a silent no-op.
+              // handler and every DbEventHandler read the session from the ambient context. The
+              // staleness guard is in the handler — a session no longer authorized, or authorized
+              // again until later, makes the command a silent no-op.
               ctx.locally(session):
                 Clock.instant.flatMap(now => flow.execute(ExpireAccessCommand(now)))
         // Errors are swallowed and kept out of the return type, so no failure here can take down

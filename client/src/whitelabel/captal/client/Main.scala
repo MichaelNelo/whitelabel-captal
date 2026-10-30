@@ -12,6 +12,7 @@ import whitelabel.captal.client.StatusApi
   */
 @main
 def main(): Unit =
+  Recovery.install()
   render(dom.document.getElementById("app"), App.app)
   // Check phase after mount and redirect if needed
   App.syncPhaseOnLoad()

@@ -11,9 +11,3 @@ trait UserRepository[F[_]]:
   def findWatchingVideo(): F[Option[User[State.WatchingVideo]]]
   def findAnsweringVideoSurvey(): F[Option[User[State.AnsweringVideoSurvey]]]
   def findReadyUser(): F[Option[User[State.Ready]]]
-
-  /** The current session's user, once that session is `Phase.Authorized`; counterpart of
-    * [[findReadyUser]]. `None` once the session is no longer authorized, which is what makes a
-    * stale expiration job harmless.
-    */
-  def findAuthorizedUser(): F[Option[User[State.Authorized]]]

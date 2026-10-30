@@ -130,6 +130,16 @@ by starting the dev server and asking for both paths; nothing in CI would catch 
 Covering it means either a suite that builds the routes with a slug-bearing `ApiBase`, or accepting
 that this stays a manual check and saying so where someone will read it.
 
+== The browser's decoders are only checked on the JVM
+
+`WireContractSuite`, `ClientDecodeSuite` and `WireCheck` read responses with the browser's circe
+decoders compiled for the JVM. The browser runs them compiled to JavaScript, and Scala.js differs at
+some edges: `Long`, number formatting, `java.time` through `scala-java-time`. A response that passes
+on the JVM and fails in the browser reaches the guest as a client error report, with its wait.
+
+Covering it means running the contract's values through the decoders on Scala.js: a test module for
+`client`, or for `messages-js`, which needs a JavaScript runtime in the build.
+
 == Nothing pins the images prod would run
 
 `prod/terraform.tfvars` does not set `rqlite_image_tag`, so it falls to the variable's default

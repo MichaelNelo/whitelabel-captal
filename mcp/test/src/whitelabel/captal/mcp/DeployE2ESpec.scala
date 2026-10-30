@@ -909,6 +909,8 @@ object DeployE2ESpec extends ZIOSpecDefault:
         store.targets.unifiProxyUrl.nonEmpty,
         taskEnv.get("UNIFI_PROXY_URL") == store.targets.unifiProxyUrl,
         taskEnv.get("LOCATION_SLUG").contains(Slug),
+        // The location's own copy of the manifest, under this server's `PUBLIC_BASE_URL`.
+        taskEnv.get("BUNDLE_MANIFEST_URL").contains(s"https://portal.test/$Slug/manifest.json"),
         service.desiredCount() == 1,
         targetGroups.size() == 1,
         // The service is attached to the target group the rule forwards to. Asserted

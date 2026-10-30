@@ -12,6 +12,9 @@ import zio.http.Server
   * @param deviceMatching
   *   which fingerprint fields make two sessions the same device. Read at startup, so a name that is
   *   not a policy stops the server rather than surfacing on the first guest.
+  * @param bundleManifestUrl
+  *   where the location's bundle publishes its `manifest.json`, which a client error report is
+  *   checked against. Unset, reports are judged without it.
   */
 final private[api] case class ServerSettings(
     config: Server.Config,
@@ -21,7 +24,8 @@ final private[api] case class ServerSettings(
     provisionDir: Option[String],
     sharedDir: Option[String],
     unifiProxyUrl: Option[String],
-    deviceMatching: Policy)
+    deviceMatching: Policy,
+    bundleManifestUrl: Option[String])
 
 private[api] object ServerSettings:
   val layer: ZLayer[Any, Throwable, ServerSettings] = ZLayer.fromZIO:
@@ -42,7 +46,8 @@ private[api] object ServerSettings:
           provisionDir = Option(c.getString("provision.dir")).filter(_.nonEmpty),
           sharedDir = Option(c.getString("shared.dir")).filter(_.nonEmpty),
           unifiProxyUrl = Option(c.getString("unifi.proxy-url")).filter(_.nonEmpty),
-          deviceMatching = matching
+          deviceMatching = matching,
+          bundleManifestUrl = Option(c.getString("bundle.manifest-url")).filter(_.nonEmpty)
         )
     yield settings
 end ServerSettings

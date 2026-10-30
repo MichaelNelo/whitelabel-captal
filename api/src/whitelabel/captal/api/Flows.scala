@@ -5,16 +5,19 @@ import whitelabel.captal.api.session.CurrentLocation
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Event, EventHandler, Flow, NextStep}
 import whitelabel.captal.core.infrastructure.{
+  RecoveryRepository,
   SessionData,
   SurveyRepository,
   UserRepository,
   VideoRepository
 }
+import whitelabel.captal.core.recovery.WaitPolicy
 import whitelabel.captal.platform.UnifiClient
 import whitelabel.captal.platform.eventhandlers.{
   AnswerPersistenceHandler,
   EventLogHandler,
   PlaybackHandler,
+  RecoveryHandler,
   SessionExpirationHandler,
   SessionPhaseHandler,
   SessionSurveyHandler,
@@ -56,6 +59,7 @@ private[api] object Flows:
         .andThen(SessionVideoHandler(ctx))
         .andThen(SessionExpirationHandler(ctx))
         .andThen(SurveyProgressHandler())
+        .andThen(RecoveryHandler())
       val transactional = TransactionalEventHandler(dbHandler, quill)
       val unifiAccess = UnifiAccessHandler(
         currentLocation.unifi,
@@ -162,20 +166,26 @@ private[api] object Flows:
         eventHandler: EventHandler[Task, Event]) =>
       Flow(AnswerAdvertiserHandler(surveyRepo, userRepo, nextAfterAdvertiserSurvey), eventHandler)
 
+  /** Built per request: what `finish` requires depends on the session's phase. */
   val finishFlowLayer: ZLayer[
-    UserRepository[Task] & EventHandler[Task, Event],
+    UserRepository[Task] & SessionContext & EventHandler[Task, Event],
     Nothing,
     Flow.Aux[Task, FinishCommand, Unit]] = ZLayer.fromFunction:
-    (userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
-      Flow(FinishHandler(userRepo), eventHandler)
+    (
+        userRepo: UserRepository[Task],
+        ctx: SessionContext,
+        eventHandler: EventHandler[Task, Event]) =>
+      perSession(ctx, eventHandler)(FinishHandler.withSession(userRepo, _))
 
   /** Counterpart of [[finishFlowLayer]]: executed by the `JobRunner` when an access expires, not by
-    * an endpoint.
+    * an endpoint, with the session it read in the context.
     */
-  val expireAccessFlowLayer: ZLayer[UserRepository[
-    Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, ExpireAccessCommand, Unit]] = ZLayer
-    .fromFunction: (userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
-      Flow(ExpireAccessHandler(userRepo), eventHandler)
+  val expireAccessFlowLayer: ZLayer[
+    SessionContext & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[Task, ExpireAccessCommand, Unit]] = ZLayer.fromFunction:
+    (ctx: SessionContext, eventHandler: EventHandler[Task, Event]) =>
+      perSession(ctx, eventHandler)(ExpireAccessHandler.withSession(_))
 
   /** The one flow built by hand rather than by `Flow(...)`: `MarkVideoWatchedHandler.withSession`
     * needs the session, so the handler can only be constructed per request, not at layer-build
@@ -223,19 +233,50 @@ private[api] object Flows:
     (ctx: SessionContext, eventHandler: EventHandler[Task, Event]) =>
       perSession(ctx, eventHandler)(EndPlaybackHandler.withSession[Task](_))
 
-  private def perSession[C](ctx: SessionContext, eventHandler: EventHandler[Task, Event])(
-      build: SessionData => Handler.Aux[Task, C, Unit]): Flow.Aux[Task, C, Unit] =
+  /** The recovery flows, per request like the others here. The wait policy is `core`'s default. */
+  val requestRecoveryFlowLayer: ZLayer[
+    RecoveryRepository[Task] & SessionContext & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[Task, RequestRecoveryCommand, RecoveryOutcome]] = ZLayer.fromFunction:
+    (
+        repo: RecoveryRepository[Task],
+        ctx: SessionContext,
+        eventHandler: EventHandler[Task, Event]) =>
+      perSession(ctx, eventHandler)(RequestRecoveryHandler.withSession(repo, WaitPolicy.Default, _))
+
+  val redeemRecoveryFlowLayer: ZLayer[
+    RecoveryRepository[Task] & SessionContext & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[Task, RedeemRecoveryCommand, Unit]] = ZLayer.fromFunction:
+    (
+        repo: RecoveryRepository[Task],
+        ctx: SessionContext,
+        eventHandler: EventHandler[Task, Event]) =>
+      perSession(ctx, eventHandler)(RedeemRecoveryHandler.withSession(repo, WaitPolicy.Default, _))
+
+  val checkRecoveryFlowLayer: ZLayer[
+    RecoveryRepository[Task] & SessionContext & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[Task, CheckRecoveryCommand, RecoveryOutcome]] = ZLayer.fromFunction:
+    (
+        repo: RecoveryRepository[Task],
+        ctx: SessionContext,
+        eventHandler: EventHandler[Task, Event]) =>
+      perSession(ctx, eventHandler)(CheckRecoveryHandler.withSession(repo, WaitPolicy.Default, _))
+
+  private def perSession[C, R](ctx: SessionContext, eventHandler: EventHandler[Task, Event])(
+      build: SessionData => Handler.Aux[Task, C, R]): Flow.Aux[Task, C, R] =
     import zio.interop.catz.given
     new Flow[Task, C]:
-      type Result = Unit
-      def execute(command: C): Task[Unit] =
+      type Result = R
+      def execute(command: C): Task[R] =
         for
           session  <- ctx.getOrFail
           opResult <- build(session).handle(command)
           result   <- ZIO.fromEither(
             whitelabel.captal.core.Op.run(opResult).left.map(Flow.HandlerError(_)))
-          (events, _) = result
+          (events, value) = result
           _ <- eventHandler.handle(events)
-        yield ()
+        yield value
 
 end Flows

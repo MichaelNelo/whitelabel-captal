@@ -7,6 +7,7 @@ import whitelabel.captal.api.routes.{
   FinishRoutes,
   HealthRoutes,
   LocaleRoutes,
+  RecoveryRoutes,
   SurveyRoutes,
   VideoRoutes
 }
@@ -47,22 +48,40 @@ private[api] object HttpApp:
                 ZIO.logError(
                   s"${request.method} ${request.url.path} -> ERROR (${duration}ms): $error")
 
-  /** `assets/styles.css` and `brand-icon.svg`, served at the root and under the slug: `index.html`
-    * sets `<base href="/<slug>/">`, so its relative asset URLs resolve under the slug.
+  /** `assets/styles.css`, `brand-icon.svg` and `error.html`, served at the root and under the slug:
+    * `index.html` sets `<base href="/<slug>/">`, so its relative asset URLs resolve under the slug.
     */
   private def devStaticRoutes(locationSlug: Option[String]): Routes[Any, Response] =
     val styles = zio.http.Handler.fromFile(java.io.File("client/assets/styles.css"))
     val icon = zio.http.Handler.fromFile(java.io.File("client/assets/brand-icon.svg"))
+    // Rendered from its template, as the bundle step does: the page the client leaves to on an
+    // error is only in `bundle.dest`, which dev serves under `out/`, not where the client looks.
+    val errorPage = zio
+      .http
+      .Handler
+      .fromZIO(
+        ZIO
+          .attemptBlocking(
+            String(
+              java.nio.file.Files.readAllBytes(java.io.File("client/error.html.template").toPath),
+              java.nio.charset.StandardCharsets.UTF_8))
+          .map(template =>
+            Response(
+              body = Body.fromString(template.replace("{{CSS_PATH}}", "assets/styles.css")),
+              headers = Headers(Header.ContentType(MediaType.text.html)))))
     val atRoot = Routes(
       Method.GET / "assets" / "styles.css" -> styles,
-      Method.GET / "brand-icon.svg"        -> icon)
+      Method.GET / "brand-icon.svg"        -> icon,
+      Method.GET / "error.html"            -> errorPage)
     val all =
       locationSlug.fold(atRoot): slug =>
         atRoot ++
           Routes(
             Method.GET / slug / "assets" / "styles.css" -> styles,
-            Method.GET / slug / "brand-icon.svg"        -> icon)
+            Method.GET / slug / "brand-icon.svg"        -> icon,
+            Method.GET / slug / "error.html"            -> errorPage)
     all.handleError(e => Response.internalServerError(e.getMessage))
+  end devStaticRoutes
 
   /** The linker's output directories served whole, never file by file: `ModuleKind.ESModule` with
     * `SmallModulesFor` emits one module per class and `main.js` pulls the rest in by relative path.
@@ -121,10 +140,12 @@ private[api] object HttpApp:
       localeRoutes: LocaleRoutes,
       videoRoutes: VideoRoutes,
       advertiserSurveyRoutes: AdvertiserSurveyRoutes,
-      finishRoutes: FinishRoutes): Routes[FullEnv, Nothing] =
+      finishRoutes: FinishRoutes,
+      recoveryRoutes: RecoveryRoutes): Routes[FullEnv, Nothing] =
     val mounted =
       HealthRoutes.routes(base) ++ finishRoutes.routes ++ localeRoutes.routes ++
-        videoRoutes.routes ++ surveyRoutes.routes ++ advertiserSurveyRoutes.routes
+        videoRoutes.routes ++ surveyRoutes.routes ++ advertiserSurveyRoutes.routes ++
+        recoveryRoutes.routes
     val all =
       if devEndpoints then
         mounted ++ localeRoutes.devRoutes
@@ -142,7 +163,8 @@ private[api] object HttpApp:
       localeRoutes: LocaleRoutes,
       videoRoutes: VideoRoutes,
       advertiserSurveyRoutes: AdvertiserSurveyRoutes,
-      finishRoutes: FinishRoutes): Routes[FullEnv, Response] =
+      finishRoutes: FinishRoutes,
+      recoveryRoutes: RecoveryRoutes): Routes[FullEnv, Response] =
     val served = apiRoutes(
       devEndpoints,
       base,
@@ -150,7 +172,8 @@ private[api] object HttpApp:
       localeRoutes,
       videoRoutes,
       advertiserSurveyRoutes,
-      finishRoutes)
+      finishRoutes,
+      recoveryRoutes)
     val baseRoutes =
       if devMode then
         devLinkerOutput(devStaticRoutes(base.slug) ++ served ++ spaCatchAllRoutes(base.slug))

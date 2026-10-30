@@ -4,7 +4,8 @@
 
 The `client` Mill module is a single Scala.js linker run that emits three applications: the guest
 captive portal (Laminar + Waypoint), the two MCP-UI apps the backoffice opens in a host iframe, and
-the maintenance page the edge serves while a location is paused.
+the maintenance page the edge serves while a location is paused. Beside them, `error.html`: the way
+out of an error, a static page with no part of the bundle in it (see <<Error handling>>).
 
 == One module, several applications
 
@@ -120,6 +121,8 @@ Non-Scala files in the module:
 * `client/entries/{maintenance,unifi,upload}.js` — the stubs that call the exported `start`.
 * `client/index.html.template`, `client/maintenance.html.template` — rendered by the build with
   `{{JS_PATH}}`, `{{CSS_PATH}}` and `{{PRELOADS}}` substituted.
+* `client/error.html.template` — `error.html`, with its own inline script; only `{{CSS_PATH}}` is
+  substituted.
 * `client/vite.config.mjs` — the Rollup/terser configuration.
 * `client/assets/styles.css` — the whole stylesheet; see xref:client-styling.adoc[Client styling].
 * `client/assets/brand-icon.svg` — the default brand icon, replaceable per location.
@@ -138,8 +141,9 @@ git-ignored.
 
 | `client.bundle`
 | Stages the linker output plus the stubs and the Vite config into a temporary project, runs
-  `vite build`, copies `dist/*.js` out, copies `styles.css` and `brand-icon.svg`, and renders both
-  HTML files.
+  `vite build`, copies `dist/*.js` out, copies `styles.css` and `brand-icon.svg`, renders the three
+  HTML files, and writes `manifest.json`: the release version and, per script, the length of each
+  line, which the API checks a client error report against.
 
 | `client.publishS3 --bucket … --prefix bundle`
 | Uploads the portal half of the bundle. Files reachable *only* from the MCP-UI entries are
@@ -159,7 +163,8 @@ See xref:infrastructure.adoc[Infrastructure] for what the edge does with those o
 
 === Entry point — `client/src/whitelabel/captal/client/Main.scala`
 
-`@main def main()` renders `App.app` into `#app` and then calls `App.syncPhaseOnLoad()`.
+`@main def main()` installs the global error handlers (`Recovery.install()`, see
+<<Error handling>>), renders `App.app` into `#app` and then calls `App.syncPhaseOnLoad()`.
 
 `App.app` is the root tree:
 
@@ -231,8 +236,12 @@ under any slug.
 | `AdvertiserVideoSurvey` | `AdvertiserVideoSurvey`
 | `AdvertiserQuestion` | `AdvertiserVideoSurvey`
 | `Ready` | `Ready`
+| `Recovered` | `Ready`
 | `Authorized` | `Welcome`
 |===
+
+`Phase.Recovered` — the guest left through an error — lands where the flow ends: `ReadyView` asks
+`/finish` for access as it does from `Ready`.
 
 `Phase.Authorized` has no page of its own: `WelcomeView` detects it and renders the countdown
 instead of the welcome copy. `Page.Error` sits outside the phase machine entirely and is reached
@@ -310,10 +319,16 @@ inline def url(path: String): String = s"$apiBase$path"
 `firstSegment` is the same slug derivation `Router` does, computed independently from
 `location.pathname` and ignoring `api`.
 
-`fetchApi[A](method, path, body, extraHeaders)` returns `js.Promise[Either[ApiError, A]]` and has
-three outcomes:
+`fetchApi[A](method, path, body, extraHeaders)` returns `js.Promise[Either[ApiError, A]]`. A
+rejected `fetch` or body read is the network's, not this code's: it resolves to
+`Left(InternalError("Connection lost: …"))`, so it reaches the error view and its retry rather than
+being reported. Otherwise there are three outcomes:
 
-. `response.ok` — decode `A`; a decode failure becomes `ApiError.InternalError`.
+. `response.ok` — decode `A`. A decode failure is our server's answer unreadable to our own
+  decoder, a bug: it is reported through `Recovery.clientError`, and the call answers
+  `ApiError.InternalError`. The server reads every session response with these same decoders before
+  sending it (see xref:api.adoc[Guest API]), so what reaches this branch is what that check could not
+  see: a decoder that behaves differently compiled to JavaScript, or a route it does not cover.
 . the body parses as JSON with `status == "paused"` — the load balancer is answering for a paused
   location, so the page calls `window.location.replace(maintenanceUrl)` (a replace, not an assign,
   so the paused page does not enter history) and returns a `Left`.
@@ -350,9 +365,10 @@ xref:api.adoc[Guest API].
 
 === Async plumbing — `Promises.scala` and `Runtime.scala`
 
-`Promises` adds `map`, `flatMap` and `onFailure` extensions to `js.Promise`, so call sites and
-for-comprehensions read the way they would with `Future`. `scala.concurrent.Future` is not used in
-the client. `onFailure` takes `Any => Unit`, because a JS promise can be rejected with anything.
+`Promises` adds `map`, `flatMap`, `recover` and `onFailure` extensions to `js.Promise`, so call
+sites and for-comprehensions read the way they would with `Future`. `scala.concurrent.Future` is
+not used in the client. `recover` and `onFailure` take `Any`, because a JS promise can be rejected
+with anything.
 
 `Runtime.run` is how a view fires an effect it does not await:
 
@@ -361,10 +377,11 @@ the client. `onFailure` takes `Any => Unit`, because a JS promise can be rejecte
 def run[A](body: => js.Promise[A]): Unit =
   val _ = body.onFailure: e =>
     dom.console.error(s"Async failure: $e", e.toString)
-    ErrorHandler.escalateMessage(s"Unexpected: $e")
+    Recovery.clientError(e)
 ----
 
-A rejected promise therefore always reaches the error page; it is never silently dropped.
+A lost connection arrives as a `Left`, so a rejection here is an exception in this code, and it is
+reported; it is never silently dropped.
 
 === Brand icon — `BrandLoader.scala`
 
@@ -420,9 +437,9 @@ Every view is an object under `client/src/whitelabel/captal/client/views/` expos
 
 | `ErrorView`
 | `/error`
-| The centralized error page. Renders `i18n.error.{title, generic, retry}`, loads a locale by best
-  effort when boot failed before one was known, and retries by clearing the error and re-running
-  the boot status check.
+| The error page for what a retry answers: a lost connection, a refusal, a failed video load.
+  Renders `i18n.error.{title, generic, retry}`, loads a locale by best effort when boot failed
+  before one was known, and retries by clearing the error and re-running the boot status check.
 |===
 
 == Loading and navigation
@@ -598,10 +615,12 @@ to the page alone, as if every load were the first.
 
 The distinction is a rule, not a convention:
 
-* *Escalated.* Any `Left(ApiError)` from an API call goes to `ErrorHandler.escalate`, which turns
-  the nav loader on, stores the error in `AppState`, and pushes `Page.Error`. A rejected promise
-  caught by `Runtime.run` and a failed `<video>` load both reach the same place through
-  `escalateMessage`, which wraps the message in `ApiError.InternalError`.
+* *A way out.* An error of ours, on either side, must not leave the guest without internet. It goes
+  to `error.html`, which asks the server for a way out (`POST /api/recovery`) and takes it
+  (`POST /api/recovery/redeem`); see xref:core.adoc#_recovery[Core] for how long it waits.
+* *Escalated.* What a retry answers — a lost connection, a refusal such as `WrongPhase`, a failed
+  `<video>` load — goes to `ErrorHandler.escalate`, which turns the nav loader on, stores the error
+  in `AppState`, and pushes `Page.Error`.
 * *Inline.* Validation errors never escalate and never touch `AppState`. They live in the view's own
   `validationError: Var[Option[String]]`, render as a `.validation-error` child of the
   `.question-card`, and drive that card's `card-error` / `card-valid` modifier. The submit button
@@ -610,6 +629,57 @@ The distinction is a rule, not a convention:
 `ErrorView` renders `i18n.error.generic` for every `ApiError` subtype today. Retry clears the error,
 turns the nav loader on and re-runs the boot status check, so a second failure simply lands back on
 the error page with the new error.
+
+=== The way out — `Recovery.scala` and `error.html`
+
+`error.html` is a page of its own rather than a view because it has to work when the bundle is what
+failed: it is static, its script is inline, and it learns why it was opened from its URL fragment,
+as JSON. `Recovery` is the bundle's side, and every path into the page goes through it, with
+`location.replace` so that going back does not return to the page that failed, and the query string
+kept, since the UniFi parameters may be needed to start a session again:
+
+[cols="1,2,2",options="header"]
+|===
+| Fragment | Sent by | The page
+
+| `{"serverErrorId": id}`
+| `ErrorHandler.escalate`, for `InternalError` carrying the id the API recorded the defect under
+| asks for the way out, which opens at once, and takes it
+
+| `{"report": ClientErrorReport}`
+| `Recovery.clientError`: `Runtime.run` failures, Airstream's unhandled errors, the window's
+  `error` and `unhandledrejection` events, and a response our decoder cannot read
+| asks for the way out, counts down the wait the server set, then takes it
+
+| `{"retry": true}`
+| `Recovery.cannotLoad`, when a route's chunk does not arrive, and the `onerror` of the entry's
+  `<script>` in `index.html`, when the entry or anything it imports does not
+| offers to load the portal again; nothing is reported
+|===
+
+A report is `ClientErrorReport(bundleVersion, name, message, frames)`: `BuildInfo.version`, the
+error's `name` — a Scala exception's class name, which every engine reports alike — its message, and
+its stack read by `core`'s `Frame.fromStack`. Scala.js makes `Throwable` a JavaScript `Error`, so a
+Scala exception carries the engine's stack too.
+
+The window's events are reported only when the error's stack names this origin: an extension's
+error, or one typed into the console, does not interrupt the flow. Airstream's are always ours.
+
+The page keeps the offer in its fragment once it has one (`{"errorId", "until", "recurrent"}`), so
+reloading resumes the countdown instead of reporting the error again; `until` is timed by the
+device's clock against itself, never compared with the server's. While it counts down it asks
+`POST /api/recovery/check` every ten seconds: when another device has reported the same error the
+server answers a shorter wait with `recurrent`, and the countdown jumps to it with a line saying
+other guests ran into the same problem. An answer that would lengthen the wait, or one that does
+not come, changes nothing. When the wait is over it redeems at once — a tap
+first would protect nothing, since the endpoint can be called directly — and goes back to the
+portal. The redeem only moves the session to `Recovered`; the portal routes that to `ReadyView`,
+whose `/finish` grants the access, and retries it as it would from `Ready`. `RecoveryNotYet`, from
+a device clock running ahead, waits three seconds more;
+`Unrecoverable` shows the error's id for staff, with no way out. Its copy is in the page, in Spanish
+and English by the browser's language, as the maintenance page's is.
+
+In dev, `HttpApp` serves `error.html` rendered from its template, at the root and under the slug.
 
 == Internationalisation
 
@@ -634,8 +704,9 @@ add the row, not to change the client. See xref:core.adoc[Core] and xref:platfor
 == Relative paths and the slug
 
 In production a location's portal is served at `https://<host>/<slug>/`, and the SPA's own routes
-sit beneath it (`/<slug>/video`). Both HTML templates therefore install a `<base>` before any
-`<link>` or `<script>`:
+sit beneath it (`/<slug>/video`). The HTML templates therefore install a `<base>` before any
+`<link>` or `<script>` (`error.html`'s also skips its own name, the first segment when dev serves it
+at the root):
 
 [source,html]
 ----

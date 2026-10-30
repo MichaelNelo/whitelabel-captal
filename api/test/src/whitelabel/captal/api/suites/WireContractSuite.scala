@@ -25,10 +25,15 @@ import whitelabel.captal.core.survey.question.{
   TextRule
 }
 import whitelabel.captal.messages.ApiError.given
+import whitelabel.captal.messages.AnswerRequest.given
 import whitelabel.captal.messages.MarkVideoWatchedRequest.given
 import whitelabel.captal.messages.SetLocaleRequest.given
 import whitelabel.captal.messages.EndPlaybackRequest.given
 import whitelabel.captal.messages.PlaybackResponse.given
+import whitelabel.captal.messages.CheckRecoveryRequest.given
+import whitelabel.captal.messages.RecoveryOffer.given
+import whitelabel.captal.messages.RecoveryRequest.given
+import whitelabel.captal.messages.RedeemRecoveryRequest.given
 import whitelabel.captal.messages.StartPlaybackRequest.given
 import whitelabel.captal.messages.StatusResponse.given
 import whitelabel.captal.messages.SurveyResponse.given
@@ -36,10 +41,17 @@ import whitelabel.captal.messages.VideoResponse.given
 import whitelabel.captal.messages.VideoWatchedResponse.given
 import whitelabel.captal.messages.i18n.given
 import whitelabel.captal.messages.{
+  AnswerRequest,
   ApiError,
+  CheckRecoveryRequest,
+  ClientErrorReport,
   EndPlaybackRequest,
+  ErrorFrame,
   MarkVideoWatchedRequest,
   PlaybackResponse,
+  RecoveryOffer,
+  RecoveryRequest,
+  RedeemRecoveryRequest,
   SetLocaleRequest,
   StartPlaybackRequest,
   StatusResponse,
@@ -190,7 +202,13 @@ object WireContractSuite:
     ApiError.StaleVideoFile("v1", "https://cdn.test/a.mp4"),
     ApiError.InvalidPlaybackId("not-a-uuid"),
     ApiError.LocationNotFound("cafe-centro"),
-    ApiError.InternalError("something gave way")
+    ApiError.UnknownError("e1"),
+    ApiError.RecoveryAlreadyUsed("e1"),
+    ApiError.RecoveryNotYet("2026-10-30T12:05:00Z"),
+    ApiError.InvalidRecoveryRequest("Send either serverErrorId or report, and only one."),
+    ApiError.Unrecoverable("e1"),
+    ApiError.InternalError("something gave way"),
+    ApiError.InternalError("something gave way", Some("e1"))
   )
 
   /** Every `Phase`, and both `Option` fields each way.
@@ -294,6 +312,74 @@ object WireContractSuite:
     */
   private val anOptionlessQuestion = aRadioQuestion.copy(questionType = QuestionType.Radio(Nil))
 
+  /** Every value the browser can send, not a list of them. A request is a closed type the client
+    * builds, so when what circe writes for any of them is what zio-schema reads back, a request the
+    * server cannot read in production was not sent by our client: it was made by hand, or broke on
+    * the way, and is no way out.
+    */
+  private def everyRequest[A: Schema: CirceEncoder](
+      what: String,
+      values: Gen[Any, A]): Spec[Any, Nothing] =
+    test(s"$what: whatever the browser sends, the server reads back"):
+      check(values): value =>
+        val json = circeWrites(value)
+        assertTrue(zioReads[A](json) == Right(value)) ?? json
+
+  /** Text a guest can type or a page can carry: quotes, backslashes, control characters, accents,
+    * characters outside the basic plane.
+    */
+  private val text: Gen[Any, String] = Gen
+    .listOfBounded(0, 40)(
+      Gen.oneOf(
+        Gen.alphaNumericChar.map(_.toString),
+        Gen.elements("\"", "\\", "/", "\n", "\t", "\u0000", " ", "ñ", "é", "€", "😀", "<script>")))
+    .map(_.mkString)
+
+  private val optionId: Gen[Any, OptionId] = Gen.uuid.map(OptionId(_))
+
+  /** Finite, as a form or a slider produces them; JSON has no spelling for the others. */
+  private val answer: Gen[Any, AnswerValue] = Gen.oneOf(
+    optionId.map(AnswerValue.SingleChoice(_)),
+    Gen.setOfBounded(0, 6)(optionId).map(AnswerValue.MultipleChoice(_)),
+    text.map(AnswerValue.Text(_)),
+    Gen
+      .oneOf(
+        Gen.int(0, 10).map(_.toFloat),
+        Gen.double(0, 10).map(_.toFloat),
+        Gen.elements(0.5f, 1e-7f, 3.4e38f, -1f))
+      .map(AnswerValue.Rating(_)),
+    Gen.bigDecimal(BigDecimal("-1e12"), BigDecimal("1e12")).map(AnswerValue.Numeric(_)),
+    Gen
+      .localDate(LocalDate.of(1900, 1, 1), LocalDate.of(2100, 12, 31))
+      .map(AnswerValue.DateValue(_))
+  )
+
+  private val report: Gen[Any, ClientErrorReport] =
+    for
+      version <- text
+      name    <- text
+      message <- text
+      frames  <-
+        Gen.listOfBounded(0, 20)(
+          (text <*> Gen.int <*> Gen.int).map((file, line, column) =>
+            ErrorFrame(file, line, column)))
+    yield ClientErrorReport(version, name, message, frames)
+
+  private val requests: List[Spec[Any, Nothing]] = List(
+    everyRequest("AnswerRequest", answer.map(AnswerRequest(_))),
+    everyRequest("SetLocaleRequest", text.map(SetLocaleRequest(_))),
+    everyRequest(
+      "MarkVideoWatchedRequest",
+      (Gen.int <*> Gen.boolean).map(MarkVideoWatchedRequest(_, _))),
+    everyRequest("StartPlaybackRequest", (text <*> text).map(StartPlaybackRequest(_, _))),
+    everyRequest("EndPlaybackRequest", text.map(EndPlaybackRequest(_))),
+    everyRequest(
+      "RecoveryRequest",
+      (Gen.option(text) <*> Gen.option(report)).map(RecoveryRequest(_, _))),
+    everyRequest("CheckRecoveryRequest", text.map(CheckRecoveryRequest(_))),
+    everyRequest("RedeemRecoveryRequest", text.map(RedeemRecoveryRequest(_)))
+  )
+
   val suite: Spec[Any, Throwable] =
     zio
       .test
@@ -332,6 +418,29 @@ object WireContractSuite:
         agreement(
           "PlaybackResponse",
           List(PlaybackResponse("3f1c0a52-7d3e-4c1b-9a77-2f5e8b1d6c40"))),
+        agreement(
+          "RecoveryRequest",
+          List(
+            RecoveryRequest(Some("e1"), None),
+            RecoveryRequest(
+              None,
+              Some(
+                ClientErrorReport(
+                  "1.4.0",
+                  "TypeError",
+                  "Cannot read properties of undefined (reading 'x')",
+                  List(ErrorFrame("https://cdn.test/cafe/main.js", 1, 4120))))
+            ),
+            RecoveryRequest(None, None)
+          )
+        ),
+        agreement(
+          "RecoveryOffer",
+          List(
+            RecoveryOffer("e1", "2026-10-30T12:05:00Z", 300, recurrent = false),
+            RecoveryOffer("e2", "x", 0, recurrent = true))),
+        agreement("CheckRecoveryRequest", List(CheckRecoveryRequest("e1"))),
+        agreement("RedeemRecoveryRequest", List(RedeemRecoveryRequest("e1"))),
         // The survey tree, where the format is a column as well as a response: these same bytes go
         // into `question_rules.rule_config` and `answers.answer_value`, so this also checks that
         // what the MCP backoffice writes is what the browser can read.
@@ -400,6 +509,7 @@ object WireContractSuite:
                 aRadioQuestion)),
             SurveyResponse.Step(NextStep(Phase.AdvertiserVideo))
           )
-        )
+        ),
+        zio.test.suite("Every request the browser can send")(requests*)
       )
 end WireContractSuite

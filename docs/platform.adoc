@@ -191,9 +191,8 @@ is ambient, which is what lets the same repository serve a request and a schedul
 | `UserRepository[Task]`
 | `repositories/UserRepositoryQuill.scala`
 | `users` joined against `sessions` to reconstruct each state-indexed `User`: `findWithEmail`,
-  `findAnswering`, `findWatchingVideo`, `findAnsweringVideoSurvey`, `findReadyUser`,
-  `findAuthorizedUser`. Also `answers` joined to `questions` for the answered-question audit
-  payload.
+  `findAnswering`, `findWatchingVideo`, `findAnsweringVideoSurvey`, `findReadyUser`. Also
+  `answers` joined to `questions` for the answered-question audit payload.
 
 | `SurveyRepository[Task]`
 | `repositories/SurveyRepositoryQuill.scala`
@@ -211,7 +210,26 @@ is ambient, which is what lets the same repository serve a request and a schedul
   (`video_views`), ties broken by `(priority, created_at)`. The URL and the length are the current
   file's (`VideoFiles.currentQuery`); localized title and description come from `localized_texts`.
   `openPlaybacks` lists the session's playbacks not yet ended.
+
+| `RecoveryRepository[Task]`
+| `repositories/RecoveryRepositoryQuill.scala`
+| `errors` for `find` (its verdict read back by `Errors.verdictOf`), for other devices that
+  reported a fingerprint and for the ways out a device took; for `activity`, `video_views` and
+  `answers` by user *and* device, each answer joined to its question's survey and counted by
+  `category`. `fingerprintOf` is `Errors.fingerprint`, and `publishedBundle` is the
+  `BundleManifest` layer. Takes no `SessionContext`: every question it answers names its session or
+  device.
 |===
+
+`Errors` is the `errors` table's vocabulary. `recordServer` inserts a defect the API caught and
+never fails: an error that cannot be recorded is still answered, only without an id.
+`fingerprint(signature)` is SHA-256 over the signature's fields; `detail(report)` the bundle
+version, the error's name and the frames as JSON; `verdict(v)` the stored form of a verdict.
+
+`BundleManifest` is the bundle the location serves, as `core`'s `Manifest`. `fromUrl(url)` reads
+the `manifest.json` the bundle publishes (`{"version": …, "files": {"main.js": [line lengths…]}}`)
+and caches it for a minute; an unreadable one is logged and read as `None`. `absent` is the
+manifest of a server told none.
 
 `SurveyRepositoryQuill` also owns the parsing of a `QuestionRow` plus its rule rows into a
 `QuestionToAnswer`, including `parseQuestionType`, `parseHierarchyLevel` and
@@ -346,8 +364,9 @@ reading `sessions` rows, so anything the job needs has to be reconstructible fro
 enum case carrying a `SessionId` satisfies that; a closure, a prepared effect or a captured service
 would not survive the restart, and the job would silently stop existing after a redeploy.
 
-The staleness guard is not in the scheduler. A job whose session was re-authorized in the meantime
-runs, but `UserRepository.findAuthorizedUser()` returns `None` and the command is a silent no-op.
+The staleness guard is not in the scheduler. A job whose session was reset, or re-authorized until
+later, in the meantime runs, but `ExpireAccessHandler` finds the session not `Authorized`, or not
+yet past its `accessExpiresAt`, and the command is a silent no-op.
 
 == Event handlers
 
@@ -385,7 +404,8 @@ val dbHandler = EventLogHandler(ctx)
   .andThen(SessionVideoHandler(ctx))
   .andThen(SessionExpirationHandler(ctx))
   .andThen(SurveyProgressHandler())
-TransactionalEventHandler(dbHandler, quill).andThen(unifiAccess)
+  .andThen(RecoveryHandler())
+TransactionalEventHandler(dbHandler, quill).andThen(PlaybackHandler(quill)).andThen(unifiAccess)
 ----
 
 Order matters within the chain: `UserPersistenceHandler` resolves the user id and updates the
@@ -401,11 +421,12 @@ every handler sees every event.
 | `EventLogHandler` | one `event_log` row per event: a stable `event_type` string (`user.created`, `user.survey_assigned`, `user.video_assigned`, …) and the event's fields as JSON in `event_data`, plus session id, user id and both timestamps
 | `AnswerPersistenceHandler` | one `answers` row per answered question, with `answer_value` encoded through `surveySchemas.encode`
 | `UserPersistenceHandler` | the user `core` resolved: inserts the row on `UserCreated`, not on `UserRecognized`; on both sets `sessions.user_id` and writes the id back into `SessionContext`. On `DeviceLinked`, upserts the `device_users` pair, moving `last_seen_at` when it exists
-| `SessionPhaseHandler` | `sessions.phase`, chosen from which event shape is present: identification answer or identification completed → the configured next phase; video survey assigned → `AdvertiserVideoSurvey`; video visualized → the configured post-video phase
+| `SessionPhaseHandler` | `sessions.phase`, chosen from which event shape is present: a redeemed recovery → `Recovered`; identification answer, recognized user or identification completed → the configured next phase; video survey assigned → `AdvertiserVideoSurvey`; video visualized → the configured post-video phase
 | `SessionSurveyHandler` | `sessions.current_survey_id` + `current_question_id` from `SurveyAssigned`, `NewUserArrived` and `VideoSurveyAssigned`
 | `SessionVideoHandler` | `sessions.current_video_id` and `current_advertiser_id` on assignment; one `video_views` row per `VideoVisualized`
 | `SessionExpirationHandler` | on `AccessExpired`, the single `resetForExpirationQuery` UPDATE. `users` and the cross-location cookie survive, so a returning guest skips the questions they already answered
 | `SurveyProgressHandler` | upserts `user_survey_progress` (insert or bump `updated_at`), then runs `SurveyService.isSurveyCompleteQuery` and sets `completed_at` when every active question has an answer
+| `RecoveryHandler` | inserts a client error into `errors` on `ErrorRecorded`; sets `available_at` on `RecoveryOffered`, `available_at` and the verdict `recurrent` on `RecoveryShortened`, and `redeemed_at` on `RecoveryRedeemed`
 |===
 
 === Post-commit handlers
@@ -416,7 +437,7 @@ committed and an HTTP failure cannot roll back a database write.
 
 It mirrors the guest-access lifecycle onto the controller, symmetrically:
 
-* `UserFinishedProcess` → authorize. On success it calls `SessionService.setAuthorized(sessionId,
+* `AccessGranted` → authorize. On success it calls `SessionService.setAuthorized(sessionId,
   occurredAt + defaultDurationMinutes)` and enqueues `ScheduledJob.ExpireAccess` on the `JobQueue`.
   This is the only place an authorization is born, and therefore the scheduler's only producer.
 * `AccessExpired` → revoke. No session write: `SessionExpirationHandler` already reset the row inside

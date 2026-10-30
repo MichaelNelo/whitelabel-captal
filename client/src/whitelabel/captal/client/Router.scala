@@ -5,6 +5,7 @@ import scala.scalajs.js
 import com.raquo.laminar.api.L.*
 import com.raquo.waypoint.*
 import org.scalajs.dom
+import whitelabel.captal.client.Promises.*
 import whitelabel.captal.client.views.{
   AdvertiserVideoSurveyView,
   AdvertiserVideoView,
@@ -143,7 +144,8 @@ object Router:
         Page.AdvertiserVideoSurvey
       case Phase.AdvertiserQuestion =>
         Page.AdvertiserVideoSurvey
-      case Phase.Ready =>
+      // Out of an error the guest lands where the flow ends: ReadyView asks `finish` for access.
+      case Phase.Ready | Phase.Recovered =>
         Page.Ready
       case Phase.Authorized =>
         Page.Welcome // WelcomeView detects Authorized phase + countdown
@@ -155,10 +157,19 @@ object Router:
     * the split point is where the expression appears, and a closure built outside leaves the view
     * reachable from the main module. `collectStatic` takes its argument by name, so the import
     * begins when the route is first rendered rather than at startup.
+    *
+    * A chunk that does not arrive is not this code's error but the network's or the edge's, so it
+    * is not reported: [[Recovery.cannotLoad]] offers to load the page again.
     */
   private def lazily(view: => js.Promise[HtmlElement]): HtmlElement = div(
     cls := "route-slot",
-    child <-- EventStream.fromJsPromise(view, emitOnce = true))
+    child <--
+      EventStream.fromJsPromise(
+        view.recover: _ =>
+          Recovery.cannotLoad()
+          div()
+        ,
+        emitOnce = true))
 
   val splitter: SplitRender[Page, HtmlElement] =
     SplitRender[Page, HtmlElement](router.currentPageSignal)

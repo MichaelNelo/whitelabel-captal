@@ -2,10 +2,12 @@ package whitelabel.captal.api.routes
 
 import whitelabel.captal.api.session.SessionCookieConfig
 import whitelabel.captal.api.wire.given
+import whitelabel.captal.api.WireCheck.implementReadable
 import whitelabel.captal.api.{ApiBase, ApiErrors, SessionEndpoint}
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Flow, Phase}
 import whitelabel.captal.messages.{ApiError, StatusResponse}
+import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.session.{SessionContext, SessionService}
 import zio.*
 import zio.http.codec.HeaderCodec
@@ -16,15 +18,16 @@ object FinishRoutes:
 
   type FinishFlowType = Flow.Aux[Task, FinishCommand, Unit]
 
-  type FullEnv = SessionContext & SessionService & FinishFlowType
+  type FullEnv = SessionContext & SessionService & QuillSqlite & FinishFlowType
 
   val layer: ZLayer[SessionCookieConfig & ApiBase, Nothing, FinishRoutes] = ZLayer.fromFunction(
     FinishRoutes(_, _))
 
 end FinishRoutes
 
-/** `POST /api/finish`: runs the finish flow for a session in `Phase.Ready` and answers that
-  * session's refreshed status. Rejections answer 400 with an `ApiError` body.
+/** `POST /api/finish`: runs the finish flow for a session in `Phase.Ready`, or in `Phase.Recovered`
+  * after leaving through an error, and answers that session's refreshed status. Rejections answer
+  * 400 with an `ApiError` body.
   */
 final class FinishRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
   import FinishRoutes.*
@@ -35,12 +38,12 @@ final class FinishRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
     .outError[ApiError](Status.BadRequest)
 
   val routes: Routes[FullEnv, Nothing] = Routes(
-    finish.implement: cookie =>
+    finish.implementReadable: cookie =>
       for
         session <- SessionEndpoint.authorise(
           cookieConfig.valueFrom(cookie),
           SessionEndpoint.OnMissing.Fail,
-          Seq(Phase.Ready))
+          Seq(Phase.Ready, Phase.Recovered))
         flow <- ZIO.service[FinishFlowType]
         now  <- Clock.instant
         _    <- flow

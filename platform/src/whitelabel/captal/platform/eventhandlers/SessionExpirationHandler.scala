@@ -2,7 +2,7 @@ package whitelabel.captal.platform.eventhandlers
 
 import io.getquill.*
 import whitelabel.captal.core.application.{Event, Phase}
-import whitelabel.captal.core.user.Event as UserEvent
+import whitelabel.captal.core.access.Event as AccessEvent
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
@@ -11,7 +11,7 @@ import zio.*
 
 /** Resets the session when access expires.
   *
-  * On [[whitelabel.captal.core.user.Event.AccessExpired]] it runs the same
+  * On [[whitelabel.captal.core.access.Event.AccessExpired]] it runs the same
   * `resetForExpirationQuery` as the `/api/status` safety net: a single UPDATE setting `phase =
   * Welcome` and clearing `userId`, `currentSurveyId`, `currentQuestionId`, `currentVideoId`,
   * `currentAdvertiserId` and `accessExpiresAt`. `SessionPhaseHandler` therefore needs no case for
@@ -27,7 +27,7 @@ object SessionExpirationHandler:
         import quill.*
 
         val hasExpired = events.exists:
-          case Event.User(_: UserEvent.AccessExpired) =>
+          case Event.Access(_: AccessEvent.AccessExpired) =>
             true
           case _ =>
             false

@@ -111,7 +111,7 @@ Errors surface as `Flow.HandlerError(errors: NonEmptyChain[Error])`, a `java.lan
 
 === Phase
 
-`application/phase.scala` holds the portal's seven phases plus their database spelling. `sessions.phase` stores the string.
+`application/phase.scala` holds the portal's eight phases plus their database spelling. `sessions.phase` stores the string.
 
 [cols="2,2,3"]
 |===
@@ -123,6 +123,7 @@ Errors surface as `Flow.HandlerError(errors: NonEmptyChain[Error])`, a `java.lan
 | `AdvertiserVideoSurvey` | `advertiser_video_survey` | answering the question that follows the video
 | `AdvertiserQuestion` | `advertiser_question` | declared, not used by any transition in `api.Phases`
 | `Ready` | `ready` | flow complete, access not granted yet
+| `Recovered` | `recovered` | left through an error, access not granted yet; unlike `Ready`, with no user required
 | `Authorized` | `authorized` | access granted, counting down to `accessExpiresAt`
 |===
 
@@ -176,7 +177,7 @@ Contravariant in the event type, with one extension — `andThen`, sequencing tw
 
 === Application Event and Error
 
-`application/Event.scala` is the three-way sum the handler chain consumes:
+`application/Event.scala` is the sum the handler chain consumes:
 
 [source,scala]
 ----
@@ -184,9 +185,12 @@ enum Event:
   case Survey(event: survey.Event)
   case User(event: user.Event)
   case Video(event: video.Event)
+  case Device(event: device.Event)
+  case Recovery(event: recovery.Event)
+  case Access(event: access.Event)
 ----
 
-`application/Error.scala` mirrors it, plus three errors that belong to no aggregate:
+`application/Error.scala` mirrors the aggregates that can refuse, plus three errors that belong to none:
 
 [source,scala]
 ----
@@ -197,6 +201,7 @@ enum Error:
   case Survey(errors: NonEmptyChain[survey.Error])
   case User(errors: NonEmptyChain[user.Error])
   case Video(errors: NonEmptyChain[video.Error])
+  case Recovery(errors: NonEmptyChain[recovery.Error])
 ----
 
 == Command handlers
@@ -268,16 +273,34 @@ All under `core/src/whitelabel/captal/core/application/commands/`. Every command
 | `PlaybackEnded`
 
 | `FinishCommand(occurredAt)`
-| `FinishHandler`
+| `FinishHandler.withSession`
 | `Unit`
-| `UserRepository`
-| `UserFinishedProcess`
+| `UserRepository` + a `SessionData`
+| `AccessGranted`, from `access`; from `Ready`, `UserFinishedProcess` before it
 
 | `ExpireAccessCommand(occurredAt)`
-| `ExpireAccessHandler`
+| `ExpireAccessHandler.withSession`
 | `Unit`
-| `UserRepository`
-| `AccessExpired`
+| a `SessionData`
+| `AccessExpired`, from `access`
+
+| `RequestRecoveryCommand(cause, occurredAt)`
+| `RequestRecoveryHandler.withSession`
+| `RecoveryOutcome`: `Offered(errorId, availableAt)` or `Unrecoverable(errorId)`
+| `RecoveryRepository` + a `WaitPolicy` + a `SessionData`
+| a server error: `RecoveryOffered`, open at once. A client one: `ErrorRecorded`, then `RecoveryOffered` unless the session is in a final phase
+
+| `CheckRecoveryCommand(errorId, occurredAt)`
+| `CheckRecoveryHandler.withSession`
+| `RecoveryOutcome.Offered`, with whether the error is recurrent
+| `RecoveryRepository` + a `WaitPolicy` + a `SessionData`
+| `RecoveryShortened` when another device reported the same error since it was offered; otherwise nothing
+
+| `RedeemRecoveryCommand(errorId, occurredAt)`
+| `RedeemRecoveryHandler.withSession`
+| `Unit`
+| `RecoveryRepository` + a `WaitPolicy` + a `SessionData`
+| `RecoveryRedeemed`, after `RecoveryShortened` when the wait it opens on was shortened
 |===
 
 The `Result` of the three `Provide*` handlers is a union type, exposed as `Handler.Aux[F, C, Response]` with `type Response = NextVideo | NextStep` (and the survey equivalents). xref:messages.adoc[Messages] wraps each union in an enum for serialisation.
@@ -307,7 +330,13 @@ The other three `Answer*` handlers follow one shape: find the user in the state 
 
 `StartPlaybackHandler` emits `PlaybackStarted` only when `fileUrl` is the session's video's current file, and fails with `video.Error.StaleFile` otherwise — the video got a new file after the page was given that one. `EndPlaybackHandler` emits `PlaybackEnded` unconditionally: ending one that already ended, or another session's, is the persistence's no-op, because the page sends it on its way out and cannot wait to be told.
 
-`FinishHandler` and `ExpireAccessHandler` are the two ends of one cycle and differ deliberately on the empty case: `FinishHandler` fails with `Error.UserNotIdentified` when `findReadyUser()` is `None`, while `ExpireAccessHandler` is a silent no-op when `findAuthorizedUser()` is `None`. See xref:event-sourcing.adoc[Event sourcing] for what that buys the scheduler.
+`FinishHandler` grants access, by `AccessGranted`, from either of the two phases that wait for it. From `Ready` the guest went through the flow, so the ready user finishes it as well — `UserFinishedProcess`, carrying what they watched and answered — and with no user it fails with `Error.UserNotIdentified`. From `Recovered` the guest left through an error, possibly before giving an email, so no user is required, and no `UserFinishedProcess` is emitted: the flow was not finished.
+
+`FinishHandler` and `ExpireAccessHandler` are the two ends of one cycle and differ deliberately on the empty case: `FinishHandler` fails when there is nobody to grant access to, while `ExpireAccessHandler` is a silent no-op unless the session is `Authorized` and past its own `accessExpiresAt`. It asks the session, not a user: a session that left through an error before giving an email is authorized with no user, and its access ends all the same. See xref:event-sourcing.adoc[Event sourcing] for what that buys the scheduler.
+
+`RequestRecoveryHandler` takes a `RecoveryCause`: `Server(errorId)`, the id an API error answered with, or `Client(report)`, what the page says it caught. A server error is honoured only when it was recorded with origin `server` against this same session; anything else is `UnknownError`, so an id seen on another guest's screen opens nothing. A client report is always recorded, with its verdict, even when no way out follows. In `Ready`, `Recovered` or `Authorized` both answer `Unrecoverable` with the error's id.
+
+`RedeemRecoveryHandler` refuses an error of another session or one never offered (`UnknownError`), one already taken (`AlreadyRedeemed`), and one taken before its `availableAt` (`NotYet`, carrying the instant). The clock is the command's, so the page's countdown is advisory: it is the server that decides. Its `RecoveryRedeemed` moves the session to `Recovered` and does nothing else: granting access is `finish`'s alone.
 
 == Queries
 
@@ -331,7 +360,7 @@ Each aggregate is one package holding `Id`, `Event`, `Error`, a `State`, a case 
 | `WatchingVideo` | `videoId` | `assignVideo(…)`
 | `AnsweringVideoSurvey` | `advertiserId: Option`, `surveyId`, `questionId` | `assignVideoSurvey(Some(q), …)`
 | `Ready` | `redirectUrl`, `watchedVideoId: Option`, `answeredQuestionIds: List` | rebuilt by `UserRepository.findReadyUser()`
-| `Authorized` | same three fields | `finish(…)`, and rebuilt by `findAuthorizedUser()`
+| `Authorized` | same three fields | `finish(…)`
 |===
 
 `advertiserId` is optional in `AnsweringVideoSurvey` because a promo's survey has no advertiser.
@@ -351,7 +380,6 @@ Each aggregate is one package holding `Id`, `Event`, `Error`, a `State`, a case 
 | `answerEmail` / `answerProfiling` / `answerLocation` / `answerAdvertiser` | `WithEmail` / `AnsweringQuestion` | delegated to `survey.ops` | `QuestionAnswer`
 | `answerAdvertiserSurvey(survey, value, now)` | `AnsweringVideoSurvey` | delegated to `survey.ops` | `QuestionAnswer`
 | `finish(now)` | `Ready` | `UserFinishedProcess` | `User[Authorized]`
-| `expire(now)` | `Authorized` | `AccessExpired` | the `AccessExpired` event itself
 |===
 
 `answerAdvertiserSurvey` narrows the receiver to `User[AnsweringQuestion]` internally, so the answering path is one function regardless of which phase reached it.
@@ -361,10 +389,8 @@ Each aggregate is one package holding `Id`, `Event`, `Error`, a `State`, a case 
 `user/Id.scala` holds four opaque types over `UUID`/`String`:
 
 * `Id`, `SessionId` — `apply`, `generate`, `fromString`, `unsafe`, with `value` / `asString` extensions;
-* `DeviceId` — same, plus `fromUserAgent(ua)`, which derives the id from a fixed namespace UUID string concatenated with the User-Agent;
+* `DeviceId` — same; a device is found by its fingerprint (see <<_device,device>>), and its id is generated when it is first seen;
 * `Email` — opaque over `String`, validated by `fromString` against the regex `^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+$`, with `unsafeFrom` for trusted values.
-
-NOTE: `DeviceId.fromUserAgent` uses `UUID.nameUUIDFromBytes`, which produces an MD5-based (version 3) name UUID, and prefixes the name with the namespace *string* rather than its bytes. It is stable for a given User-Agent, which is all the session code relies on.
 
 === survey and survey/question
 
@@ -493,6 +519,111 @@ A configured policy reaches the query through a `match` where the query is writt
 policy, each compiling its own static query. A `match` inside `core` handing the policy to a lambda
 does not compile: the lambda's parameter is typed as the trait, and the concrete policy is lost.
 
+=== recovery
+
+A guest's way out of an error, so that something breaking never leaves them without internet. A
+server error the server saw, and it opens at once. A client error only the page saw: nothing in it
+can be verified, so it is not judged true or false, it is made to cost time — more than going
+through the flow would, unless the guest has shown that they would have.
+
+|===
+| Type | Contents
+
+| `ErrorId`, `ErrorFingerprint` | the error's id, which the API answers with and the page asks with; a `Signature`, hashed
+| `Origin` | `Server` or `Client`
+| `ClientReport` | `bundleVersion`, `name` (`TypeError`, `RangeError`, …), `message` and `frames` (`Frame(file, line, column)`; `fileName` is the file without where it was served from). `signature(published)` is what the error is recognized by
+| `Frame.fromStack(stack)` | a stack as the engines print it, read into frames, at most `Frame.MaxFrames` (20): V8's `at name (file:line:column)` lines under the message, SpiderMonkey's and JavaScriptCore's `name@file:line:column`. The engine's own frames, which name no file, are dropped; JavaScriptCore's positionless `global code` is kept at 0:0 so the console markers find it. Used by the client, which compiles `core` to JavaScript
+| `Signature` | `bundleVersion`, `name`, and the `fileName`, line and column of the report's first frame in the bundle's own files — without a manifest, its first frame not from the console
+| `Manifest` | the bundle a location serves: its version and each file's line lengths. `owns(frame)` says a frame names one of its files; `holds(frame)` that the line and column exist in it
+| `Verdict` | `Fabricated(reasons)` or `Plausible(recurrent)`, from `Verdict.of(report, published, otherDevices)`
+| `Activity` | what the user did on this device, by kind of effort: `videosWatched`, `videoAnswers`, `identificationAnswers` (profiling and location), `emailAnswers`
+| `Progress` | how far this visit got: `Started` (welcome or identification question), `Identified` (at the video), `Watched` (at its survey); `Progress.of(phase)`, and `isFinal` for the phases with no way out
+| `Evidence` | what the wait is computed from: activity, progress, recent recoveries, verdict
+| `WaitPolicy` | the wait itself, and `recurring`, the shortening of one found recurrent later; `WaitPolicy.Default` is the one the API uses
+| `ErrorRecord` | an error as stored: `origin`, its session, `recordedAt`, a client error's `fingerprint` and `verdict`, `availableAt`, `redeemedAt`
+| `Event` | `ErrorRecorded`, `RecoveryOffered`, `RecoveryShortened`, `RecoveryRedeemed`
+| `Error` | `UnknownError(errorId)`, `AlreadyRedeemed(errorId)`, `NotYet(availableAt)`
+|===
+
+A report is `Fabricated` when it contradicts what the server knows, for any of three `Reason`s:
+
+* `ConsoleOrigin` — a frame names no file but the console, `eval` or a bookmarklet
+  (`Frame.ConsoleMarkers`, one per engine);
+* `UnknownVersion` — the bundle version is not the one the location serves;
+* `OutsideTheBundle` — a frame names one of the bundle's files at a line or column it does not have.
+
+Frames of other files — an extension, the browser itself — are not judged. Without a manifest
+(none published, or unreadable) only the console check runs: a deployment that failed to publish
+one must not count against every guest. A report is `Plausible(recurrent = true)` when at least
+`Verdict.RecurrenceThreshold` (1) other device reported the same signature within the policy's
+`recurrenceWindow`. One is enough because the device is the link shortener's `click_id`, not
+something a guest can mint.
+
+An error can become recurrent after it was offered: an error introduced by a deploy reaches one
+guest first, with nothing to tell it from an invented one. So the waiting page asks
+(`CheckRecoveryCommand`), and once another device reports the same signature the wait shortens to
+`WaitPolicy.recurring` of itself — `recurrentFactor` of the wait it was offered, still counted from
+when the error happened, never longer — and the page tells the guest why. The redeem applies the
+same rule, so it does not depend on the page having asked.
+
+The signature is how one error is recognized on other devices, and it leaves out what changes
+between them while the error stays the same:
+
+* the message — each engine words the same error its own way (`Cannot read properties of
+  undefined (reading 'x')`, `undefined is not an object (evaluating 'a.x')`), and versions of one
+  engine reword it. The `name` takes its place: the standard fixes it for every engine;
+* the frames past the first of ours, which follow whatever path led there;
+* where the file was served from: each location serves its own copy of the bundle.
+
+The column stays: the published bundle is minified to one line per file, so the line alone places
+nothing. A report with no frame of the bundle's own has no signature and is never recurrent.
+
+The wait, in seconds, is
+
+----
+maximum × (1 + videosWatched)^-videoWeight × (1 + videoAnswers)^-videoAnswerWeight
+        × (1 + identificationAnswers)^-identificationWeight × (1 + emailAnswers)^-emailWeight
+        × (1 | identifiedFactor | identifiedFactor × watchedFactor)
+        × (1 + recentRecoveries)^recoveryExponent
+        × (fabricatedFactor | recurrentFactor | 1)
+----
+
+capped at `ceiling` and rounded to zero below `zeroBelow`. History has diminishing returns: much
+of it brings the wait close to zero, and no single answer counts for much. It is the user's on this
+device only, so typing someone else's email borrows nothing, and it weighs kinds of effort apart:
+a video most, its survey's answer less, a profiling or location answer less still, and the email
+almost nothing — answering it again and again is what clearing cookies looks like, while the count
+of identification answers grows with real returning visits. This visit's progress takes the wait to
+`identifiedFactor` of it once identified and to `identifiedFactor × watchedFactor` once the video is
+watched. `recentRecoveries` are the ways out this device took within `recoveryWindow`, which grows
+the wait for whoever leaves through errors repeatedly.
+
+[cols="2,1,3"]
+|===
+| `WaitPolicy.Default` | Value | Meaning
+
+| `maximum` | 5 min | a plausible report at `Welcome` from a device with no history
+| `ceiling` | 30 min | no wait exceeds it
+| `zeroBelow` | 5 s | a wait shorter than this opens at once
+| `videoWeight`, `videoAnswerWeight`, `identificationWeight`, `emailWeight` | 1.0, 0.5, 0.25, 0.05 | one video halves it; the email alone takes 3 %
+| `identifiedFactor`, `watchedFactor` | 0.3, 0.5 | with no history: 1:30 at the video, 0:45 at its survey
+| `recoveryExponent` | 2 | one recent recovery quadruples it, two multiply it by nine
+| `fabricatedFactor`, `recurrentFactor` | 10, 0.1 | a fabricated report waits ten times longer; a recurrent one, a tenth
+| `recoveryWindow`, `recurrenceWindow` | 30 days, 7 days |
+|===
+
+=== access
+
+The network access a session is granted. It is the session's, not a user's: what the controller
+authorizes is the session's device, what expiring resets is the session, and a session that left
+through an error before giving an email has no user at all.
+
+|===
+| Type | Contents
+
+| `Event` | `AccessGranted(sessionId, userId: Option, occurredAt)`: the controller is asked to authorize the session's device, again on each retry until it confirms. `AccessExpired(sessionId, userId: Option, occurredAt)`: the access reached its end
+|===
+
 == Repository traits
 
 `core/src/whitelabel/captal/core/infrastructure/` declares what the domain needs from storage, all in `F[_]` and all returning `Option` rather than failing. The implementations are Quill-based and live in xref:platform.adoc[Platform] (`UserRepositoryQuill`, `SurveyRepositoryQuill`, `VideoRepositoryQuill`); they read the current session from the ambient `SessionContext`, which is why the finder methods take no session argument.
@@ -506,7 +637,6 @@ does not compile: the lambda's parameter is typed as the trait, and the concrete
 | `UserRepository.findWatchingVideo()` | `User[State.WatchingVideo]`
 | `UserRepository.findAnsweringVideoSurvey()` | `User[State.AnsweringVideoSurvey]`
 | `UserRepository.findReadyUser()` | `User[State.Ready]`
-| `UserRepository.findAuthorizedUser()` | `User[State.Authorized]` — `None` once the session is no longer `Authorized`
 | `SurveyRepository.findAssignedEmailSurvey()` | `Survey[State.WithEmailQuestion]`
 | `SurveyRepository.findWithProfilingQuestion(surveyId, questionId)` | `Survey[State.WithProfilingQuestion]`
 | `SurveyRepository.findWithLocationQuestion(surveyId, questionId)` | `Survey[State.WithLocationQuestion]`
@@ -515,9 +645,16 @@ does not compile: the lambda's parameter is typed as the trait, and the concrete
 | `SurveyRepository.findNextAdvertiserSurvey(videoId)` | `NextAdvertiserSurvey`
 | `VideoRepository.findById(id)` | `video.AdvertiserVideo`
 | `VideoRepository.findNextForUser(userId)` | `video.VideoToWatch` — an advertiser video when one qualifies, otherwise the session's location's promo this user has watched least; the implementation reads the location from the session, it is not passed in
+| `UserRepository.findIdByEmail(email)` | the id of the user who answered with this email, if any
+| `RecoveryRepository.find(errorId)` | `ErrorRecord`
+| `RecoveryRepository.fingerprintOf(signature)` | `ErrorFingerprint` — hashed by the implementation, since `core` also compiles to JavaScript
+| `RecoveryRepository.publishedBundle()` | `Manifest`, the bundle the location serves
+| `RecoveryRepository.devicesReporting(fp, excluding, since)` | `Int` — other devices that reported the same error since `since`
+| `RecoveryRepository.recoveriesSince(deviceId, since)` | `Int` — ways out this device took since `since`
+| `RecoveryRepository.activity(userId, deviceId)` | `Activity` — the user's watched videos on this device and their answers, by the category of the survey each belongs to
 |===
 
-`infrastructure/Session.scala` holds `SessionData`, the session projection the handlers and `MarkVideoWatchedHandler.withSession` read: `sessionId`, `userId: Option`, `locale`, `phase`, `currentQuestion: Option[FullyQualifiedQuestionId]`, `currentVideoId`, `lastPromoVideoId`, `currentAdvertiserId`, `locationId`, `clientMac`, `apMac`, `redirectUrl`, `ssid`, `clickId`, `accessExpiresAt: Option[Instant]`.
+`infrastructure/Session.scala` holds `SessionData`, the session projection the handlers and `MarkVideoWatchedHandler.withSession` read: `sessionId`, `deviceId`, `userId: Option`, `locale`, `phase`, `currentQuestion: Option[FullyQualifiedQuestionId]`, `currentVideoId`, `currentAdvertiserId`, `locationId`, `clientMac`, `apMac`, `redirectUrl`, `ssid`, `clickId`, `accessExpiresAt: Option[Instant]`.
 
 == i18n
 
@@ -545,4 +682,4 @@ At runtime `platform.services.LocaleServiceQuill.getI18n(locale)` reads `localiz
 
 == Tests
 
-`core/test/` holds the module's own suites (utest + ScalaCheck): `application/HandlerTests.scala`, `survey/ValidationSuccessTests.scala`, `survey/ValidationFailureTests.scala`, `i18n/I18nSchemaTests.scala`, and shared generators in `generators.scala`. See xref:testing.adoc[Test strategy].
+`core/test/` holds the module's own suites (utest + ScalaCheck): `application/HandlerTests.scala`, `recovery/RecoveryTests.scala`, `survey/ValidationSuccessTests.scala`, `survey/ValidationFailureTests.scala`, `i18n/I18nSchemaTests.scala`, and shared generators in `generators.scala`. See xref:testing.adoc[Test strategy].

@@ -28,7 +28,8 @@ object E2ETests extends ZIOSpecDefault:
         AuthorizedSuite.suite,
         SoftDeleteSuite.suite,
         UnreadableRuleSuite.suite,
-        DeviceSuite.suite
+        DeviceSuite.suite,
+        RecoverySuite.suite
       ) @@ TestAspect.before(clearAndSeedNoise.orDie),
       // Outside the block above: it migrates, so clearing the application data around it would
       // prove nothing. It must stay in this spec rather than its own `ZIOSpecDefault` — see the

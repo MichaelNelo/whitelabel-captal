@@ -71,7 +71,13 @@ object ClientDecodeSuite:
     ApiError.StaleVideoFile("v1", "https://cdn.test/a.mp4"),
     ApiError.InvalidPlaybackId("not-a-uuid"),
     ApiError.LocationNotFound("cafe-centro"),
-    ApiError.InternalError("something gave way")
+    ApiError.UnknownError("e1"),
+    ApiError.RecoveryAlreadyUsed("e1"),
+    ApiError.RecoveryNotYet("2026-10-30T12:05:00Z"),
+    ApiError.InvalidRecoveryRequest("Send either serverErrorId or report, and only one."),
+    ApiError.Unrecoverable("e1"),
+    ApiError.InternalError("something gave way"),
+    ApiError.InternalError("something gave way", Some("e1"))
   )
 
   val suite: Spec[TestEnv, Throwable] =

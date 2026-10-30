@@ -6,12 +6,14 @@ import whitelabel.captal.api.session.{
   UserCookieConfig,
   UserLookup
 }
+import whitelabel.captal.api.WireCheck.implementReadable
 import whitelabel.captal.api.wire.given
-import whitelabel.captal.api.{ApiBase, ApiErrors, SessionEndpoint}
+import whitelabel.captal.api.{ApiBase, ApiErrors, SessionEndpoint, WireCheck}
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Flow, NextStep, Phase}
 import whitelabel.captal.core.user
 import whitelabel.captal.messages.{AnswerRequest, ApiError, StatusResponse, SurveyResponse}
+import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.session.{CaptivePortalParams, SessionContext, SessionService}
 import zio.*
 import zio.http.codec.HeaderCodec
@@ -29,8 +31,8 @@ object SurveyRoutes:
     NextIdentificationSurvey | NextStep]
 
   type FullEnv =
-    SessionContext & SessionService & UserLookup & AnswerEmailFlowType & AnswerProfilingFlowType &
-      AnswerLocationFlowType & NextSurveyFlowType
+    SessionContext & SessionService & QuillSqlite & UserLookup & AnswerEmailFlowType &
+      AnswerProfilingFlowType & AnswerLocationFlowType & NextSurveyFlowType
 
   val layer: ZLayer[
     SessionCookieConfig & ApiBase & CurrentLocation & UserCookieConfig & UserLookup,
@@ -57,13 +59,14 @@ final class SurveyRoutes(
     Seq(Phase.IdentificationQuestion))
 
   /** Whatever a flow failed with, as the `ApiError` the route answers. See `VideoRoutes`. */
-  private def asApiError[A](result: Task[A]): IO[ApiError, A] = result.catchAllCause: cause =>
-    ApiErrors.failWith(
-      cause.failureOrCause match
-        case Left(error) =>
-          error
-        case Right(defect) =>
-          new Exception(s"Defect: ${defect.prettyPrint}"))
+  private def asApiError[A](result: Task[A]): ZIO[QuillSqlite & SessionContext, ApiError, A] =
+    result.catchAllCause: cause =>
+      ApiErrors.failWith(
+        cause.failureOrCause match
+          case Left(error) =>
+            error
+          case Right(defect) =>
+            new Exception(s"Defect: ${defect.prettyPrint}"))
 
   // ─── AnswerEmail ──────────────────────────────────────────────────────────
 
@@ -164,6 +167,7 @@ final class SurveyRoutes(
           answerFlow
             .execute(AnswerEmailCommand(request.answer, session.deviceId, now))
             .map(SurveyResponse.from))
+        _ <- WireCheck.readable(result)
         // After flow, SessionContext is updated with the resolved userId by
         // UserPersistenceHandler. Read it to set the cross-location user cookie.
         updated <- SessionContext.get
@@ -171,7 +175,7 @@ final class SurveyRoutes(
           .flatMap(_.userId)
           .map(uid => userCookieConfig.asSetCookie(uid.asString))
       yield (result, userCookie),
-    answerProfiling.implement: (cookie, request) =>
+    answerProfiling.implementReadable: (cookie, request) =>
       for
         _          <- identifying(cookie)
         answerFlow <- ZIO.service[AnswerProfilingFlowType]
@@ -181,7 +185,7 @@ final class SurveyRoutes(
             .execute(AnswerProfilingCommand(answer = request.answer, occurredAt = now))
             .map(SurveyResponse.from))
       yield result,
-    answerLocation.implement: (cookie, request) =>
+    answerLocation.implementReadable: (cookie, request) =>
       for
         _          <- identifying(cookie)
         answerFlow <- ZIO.service[AnswerLocationFlowType]
@@ -191,7 +195,7 @@ final class SurveyRoutes(
             .execute(AnswerLocationCommand(answer = request.answer, occurredAt = now))
             .map(SurveyResponse.from))
       yield result,
-    nextSurvey.implement: cookie =>
+    nextSurvey.implementReadable: cookie =>
       for
         session <- SessionEndpoint.authorise(
           cookieConfig.valueFrom(cookie),
@@ -265,6 +269,7 @@ final class SurveyRoutes(
                 session.locale,
                 Option(session.redirectUrl).filter(_.nonEmpty),
                 StatusResponse.secondsRemainingFrom(session.accessExpiresAt, now)))
+        _ <- WireCheck.readable(response)
       yield (response, Some(cookieConfig.asSetCookie(session.sessionId.asString)))
       end for
   )

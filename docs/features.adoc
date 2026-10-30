@@ -240,7 +240,7 @@ scheduler — is xref:unifi.adoc[UniFi integration]'s; the guest-relevant facts:
 
 | What is **not** recorded
 | No page-visit history, no byte count, no stored session-duration figure. `AccessExpired` carries
-  only `userId` and `occurredAt`.
+  only `sessionId`, `userId` (absent for a session that never gave an email) and `occurredAt`.
 |===
 
 Content filtering and download limits — a blocked-site list, a data cap — are not configured by

@@ -10,6 +10,7 @@ import whitelabel.captal.api.routes.{
   FinishRoutes,
   HealthRoutes,
   LocaleRoutes,
+  RecoveryRoutes,
   SurveyRoutes,
   VideoRoutes
 }
@@ -113,7 +114,8 @@ object TestHelpers:
         (
           HealthRoutes.routes(env.get[ApiBase]) ++ env.get[FinishRoutes].routes ++
             localeRoutes.routes ++ localeRoutes.devRoutes ++ env.get[VideoRoutes].routes ++
-            env.get[SurveyRoutes].routes ++ env.get[AdvertiserSurveyRoutes].routes
+            env.get[SurveyRoutes].routes ++ env.get[AdvertiserSurveyRoutes].routes ++
+            env.get[RecoveryRoutes].routes
         ).provideEnvironment(env))
 
   /** The health check. */
@@ -316,6 +318,42 @@ object TestHelpers:
     .response(asStringAlways)
     .send(backend)
 
+  def postRecovery(backend: SttpBackend[Task, Any], sessionCookie: String, body: String) =
+    basicRequest
+      .post(uri"http://test/api/recovery")
+      .cookie("captal_session", sessionCookie)
+      .body(body)
+      .contentType("application/json")
+      .response(asStringAlways)
+      .send(backend)
+
+  def postCheck(backend: SttpBackend[Task, Any], sessionCookie: String, errorId: String) =
+    basicRequest
+      .post(uri"http://test/api/recovery/check")
+      .cookie("captal_session", sessionCookie)
+      .body(s"""{"errorId":"$errorId"}""")
+      .contentType("application/json")
+      .response(asStringAlways)
+      .send(backend)
+
+  def postRedeem(backend: SttpBackend[Task, Any], sessionCookie: String, errorId: String) =
+    basicRequest
+      .post(uri"http://test/api/recovery/redeem")
+      .cookie("captal_session", sessionCookie)
+      .body(s"""{"errorId":"$errorId"}""")
+      .contentType("application/json")
+      .response(asStringAlways)
+      .send(backend)
+
+  /** A client report naming one frame of the suite's bundle, as the page would send it. */
+  def clientReport(
+      file: String = "https://cdn.test/cafe/main.js",
+      line: Int = 2,
+      column: Int = 10,
+      name: String = "TypeError",
+      message: String = "Cannot read properties of undefined (reading 'x')") =
+    s"""{"report":{"bundleVersion":"test-1","name":"$name","message":"$message","frames":[{"file":"$file","line":$line,"column":$column}]}}"""
+
   def postEndPlayback(backend: SttpBackend[Task, Any], sessionCookie: String, playbackId: String) =
     basicRequest
       .post(uri"http://test/api/video/playback/end")
@@ -366,4 +404,13 @@ object TestHelpers:
     .cookie("captal_session", sessionCookie)
     .response(asStringAlways)
     .send(backend)
+
+  /** The scheduler's worker runs on its own fiber and talks to rqlite, so the effect is not
+    * observable synchronously. Bounded poll against the real clock.
+    */
+  def awaitWithLiveClock[R](check: ZIO[R, Throwable, Boolean]): ZIO[R, Throwable, Boolean] =
+    (ZIO.sleep(50.millis) *> check)
+      .repeatUntil(identity)
+      .timeoutTo(false)(identity)(15.seconds)
+      .withClock(Clock.ClockLive)
 end TestHelpers

@@ -2,10 +2,12 @@ package whitelabel.captal.api.routes
 
 import whitelabel.captal.api.session.SessionCookieConfig
 import whitelabel.captal.api.wire.given
+import whitelabel.captal.api.WireCheck.implementReadable
 import whitelabel.captal.api.{ApiBase, ApiErrors, SessionEndpoint}
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Flow, NextStep, Phase}
 import whitelabel.captal.messages.{AdvertiserSurveyResponse, AnswerRequest, ApiError}
+import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.session.{SessionContext, SessionService}
 import zio.*
 import zio.http.codec.HeaderCodec
@@ -21,7 +23,8 @@ object AdvertiserSurveyRoutes:
   type AnswerAdvertiserFlowType = Flow.Aux[Task, AnswerAdvertiserCommand, NextStep]
 
   type FullEnv =
-    SessionContext & SessionService & NextAdvertiserSurveyFlowType & AnswerAdvertiserFlowType
+    SessionContext & SessionService & QuillSqlite & NextAdvertiserSurveyFlowType &
+      AnswerAdvertiserFlowType
 
   val layer: ZLayer[SessionCookieConfig & ApiBase, Nothing, AdvertiserSurveyRoutes] = ZLayer
     .fromFunction(AdvertiserSurveyRoutes(_, _))
@@ -41,13 +44,14 @@ final class AdvertiserSurveyRoutes(cookieConfig: SessionCookieConfig, base: ApiB
     Seq(Phase.AdvertiserVideoSurvey))
 
   /** Whatever a flow failed with, as the `ApiError` the route answers. See `VideoRoutes`. */
-  private def asApiError[A](result: Task[A]): IO[ApiError, A] = result.catchAllCause: cause =>
-    ApiErrors.failWith(
-      cause.failureOrCause match
-        case Left(error) =>
-          error
-        case Right(defect) =>
-          new Exception(s"Defect: ${defect.prettyPrint}"))
+  private def asApiError[A](result: Task[A]): ZIO[QuillSqlite & SessionContext, ApiError, A] =
+    result.catchAllCause: cause =>
+      ApiErrors.failWith(
+        cause.failureOrCause match
+          case Left(error) =>
+            error
+          case Right(defect) =>
+            new Exception(s"Defect: ${defect.prettyPrint}"))
 
   private val nextAdvertiserSurvey = Endpoint(
     base(Method.GET / "api" / "survey" / "advertiser" / "next"))
@@ -62,7 +66,7 @@ final class AdvertiserSurveyRoutes(cookieConfig: SessionCookieConfig, base: ApiB
     .outError[ApiError](Status.BadRequest)
 
   val routes: Routes[FullEnv, Nothing] = Routes(
-    nextAdvertiserSurvey.implement: cookie =>
+    nextAdvertiserSurvey.implementReadable: cookie =>
       for
         session <- watching(cookie)
         videoId <- ZIO
@@ -84,7 +88,7 @@ final class AdvertiserSurveyRoutes(cookieConfig: SessionCookieConfig, base: ApiB
             case _ =>
               ZIO.unit
       yield response,
-    answerAdvertiser.implement: (cookie, request) =>
+    answerAdvertiser.implementReadable: (cookie, request) =>
       for
         session <- watching(cookie)
         _       <- ZIO

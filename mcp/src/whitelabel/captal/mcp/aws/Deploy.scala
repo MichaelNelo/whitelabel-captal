@@ -66,6 +66,10 @@ import zio.*
   *
   * `unifiProxyUrl` is forwarded the same way, as `UNIFI_PROXY_URL`: the HTTP proxy a location's API
   * reaches its venue's gateway through. `None` means the API calls the gateway directly.
+  *
+  * `publicBaseUrl` is where the edge serves each location's copy of the bundle; a task is told its
+  * own `manifest.json` under it, as `BUNDLE_MANIFEST_URL`. `None` tells it none, and the API judges
+  * client error reports without one.
   */
 final case class DeployTargets(
     cluster: String,
@@ -80,7 +84,8 @@ final case class DeployTargets(
     region: String,
     /** The port the API listens on, and the port the target group forwards to. */
     containerPort: Int = 8080,
-    unifiProxyUrl: Option[String] = None):
+    unifiProxyUrl: Option[String] = None,
+    publicBaseUrl: Option[String] = None):
 
   /** `captal-<slug>`. AWS caps a target group name at 32 characters, which is where
     * `LocationTools.MaxSlugLength` comes from; the two have to agree or a slug `create_location`
@@ -101,6 +106,10 @@ final case class DeployTargets(
     * `modifyTargetGroup`, so an existing group silently keeps whatever path it already has.
     */
   def healthCheckPath(slug: String): String = s"/$slug/api/health"
+
+  /** The location's copy of the bundle's manifest, which `copyBundle` puts under its prefix. */
+  def bundleManifestUrl(slug: String): Option[String] = publicBaseUrl.map(base =>
+    s"${base.stripSuffix("/")}/$slug/manifest.json")
 end DeployTargets
 
 object DeployTargets:
@@ -139,6 +148,7 @@ object DeployTargets:
               .flatMap(_.map(_.trim).filter(_.nonEmpty).fold(required("DB_URL"))(ZIO.succeed(_)))
             region <- System.env("AWS_REGION").orDie.map(_.getOrElse("us-east-1"))
             proxy  <- System.env("UNIFI_PROXY_URL").orDie.map(_.map(_.trim).filter(_.nonEmpty))
+            base   <- System.env("PUBLIC_BASE_URL").orDie.map(_.map(_.trim).filter(_.nonEmpty))
             _      <-
               ZIO.when(proxy.isEmpty)(
                 ZIO.logWarning(
@@ -156,7 +166,8 @@ object DeployTargets:
               image = image,
               dbUrl = dbUrl,
               region = region,
-              unifiProxyUrl = proxy
+              unifiProxyUrl = proxy,
+              publicBaseUrl = base
             ))
 end DeployTargets
 
@@ -302,7 +313,10 @@ final case class InfraStore(
               KeyValuePair.builder().name("DB_URL").value(targets.dbUrl).build()) ++
               targets
                 .unifiProxyUrl
-                .map(url => KeyValuePair.builder().name("UNIFI_PROXY_URL").value(url).build())
+                .map(url => KeyValuePair.builder().name("UNIFI_PROXY_URL").value(url).build()) ++
+              targets
+                .bundleManifestUrl(slug)
+                .map(url => KeyValuePair.builder().name("BUNDLE_MANIFEST_URL").value(url).build())
           )*)
         .logConfiguration(
           LogConfiguration

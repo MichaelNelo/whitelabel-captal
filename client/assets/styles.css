@@ -766,6 +766,14 @@ body {
   margin-bottom: var(--space-xl);
 }
 
+/* The id staff look an unrecoverable error up by, on `error.html`: read aloud or typed, so it
+   breaks anywhere rather than overflowing. */
+.error-code {
+  font-family: ui-monospace, monospace;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
 /* ═══════════════════════════════════════════════════════════════════
    QUESTION VIEW
    ═══════════════════════════════════════════════════════════════════ */

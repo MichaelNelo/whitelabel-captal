@@ -101,7 +101,6 @@ object HandlerTests extends TestSuite:
       def findWatchingVideo() = None
       def findAnsweringVideoSurvey() = None
       def findReadyUser() = None
-      def findAuthorizedUser() = None
 
   given Parallel[Id] = Parallel.identity[Id]
 

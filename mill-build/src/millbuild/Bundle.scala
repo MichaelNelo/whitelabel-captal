@@ -18,6 +18,22 @@ def renderIndex(
     .replace("{{PRELOADS}}", preloads)
   os.write.over(destPath, rendered)
 
+/** `manifest.json`: the release's version and, per script, the length of each of its lines, which is
+  * what the API checks a client error report against (`platform.BundleManifest`). Lengths count
+  * UTF-16 code units, as the engines count columns.
+  */
+def writeManifest(dir: os.Path, version: String): Unit =
+  val files = os
+    .list(dir)
+    .filter(_.ext == "js")
+    .sortBy(_.last)
+    .map(script =>
+      script.last ->
+        ujson.Arr.from(os.read(script).split("\n", -1).toSeq.map(line => ujson.Num(line.length))))
+  os.write.over(
+    dir / "manifest.json",
+    ujson.Obj("version" -> ujson.Str(version), "files" -> ujson.Obj.from(files)).render())
+
 /** A local static ES import, `from"./x"` or a bare `import"./x"`, as Rollup emits them. Dynamic
   * `import("./x")` does not match: its parenthesis is not a quote.
   */
@@ -147,6 +163,8 @@ def publishBundle(
       "text/css"
     else if name.endsWith(".svg") then
       "image/svg+xml"
+    else if name.endsWith(".json") then
+      "application/json"
     else
       "application/octet-stream"
 
@@ -166,7 +184,8 @@ def publishBundle(
       (
         name,
         contentType(name),
-        if name.endsWith(".html") then
+        // The manifest describes the release, so it is stale exactly when the HTML is.
+        if name.endsWith(".html") || name == "manifest.json" then
           Revalidate
         else
           Day

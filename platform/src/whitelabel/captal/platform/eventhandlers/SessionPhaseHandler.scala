@@ -2,6 +2,7 @@ package whitelabel.captal.platform.eventhandlers
 
 import io.getquill.*
 import whitelabel.captal.core.application.{Event, Phase}
+import whitelabel.captal.core.recovery.Event as RecoveryEvent
 import whitelabel.captal.core.survey.Event as SurveyEvent
 import whitelabel.captal.core.survey.question.Event as QuestionEvent
 import whitelabel.captal.core.user.Event as UserEvent
@@ -34,11 +35,17 @@ object SessionPhaseHandler:
         val hasIdentificationCompleted = events.exists(isIdentificationCompleted)
         val hasVideoVisualized = events.exists(isVideoVisualized)
         val hasVideoSurveyAssigned = events.exists(isVideoSurveyAssigned)
+        val hasRecoveryRedeemed = events.exists(isRecoveryRedeemed)
 
         for
           sessionData <- ctx.getOrFail
           _           <-
-            if hasIdentificationCompleted then
+            // Out of an error, to where `finish` grants access from without a user.
+            if hasRecoveryRedeemed then
+              run(
+                SessionService.updatePhaseQuery(lift(sessionData.sessionId), lift(Phase.Recovered)))
+                .orDie
+            else if hasIdentificationCompleted then
               run(
                 SessionService.updatePhaseQuery(
                   lift(sessionData.sessionId),
@@ -80,6 +87,13 @@ object SessionPhaseHandler:
           case _ =>
             false
       case Event.User(_: UserEvent.UserRecognized) =>
+        true
+      case _ =>
+        false
+
+  private def isRecoveryRedeemed(event: Event): Boolean =
+    event match
+      case Event.Recovery(_: RecoveryEvent.RecoveryRedeemed) =>
         true
       case _ =>
         false

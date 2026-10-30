@@ -26,7 +26,7 @@ The integration is not a module. Its moving parts are spread across four of them
   unless host, API token and site id are all three present.
 
 | `platform/src/whitelabel/captal/platform/eventhandlers/UnifiAccessHandler.scala`
-| The post-commit event adapter. Maps `UserFinishedProcess` to authorize and `AccessExpired` to
+| The post-commit event adapter. Maps `AccessGranted` to authorize and `AccessExpired` to
   revoke, and on a successful authorize writes `Phase.Authorized` plus `accessExpiresAt` and
   enqueues the expiry job.
 
@@ -67,7 +67,8 @@ The integration is not a module. Its moving parts are spread across four of them
  5. The guest completes the flow (email → profiling → video → advertiser survey).
  6. The last answer leaves the session in `Phase.Ready`; the client routes to `/ready`.
  7. `ReadyView` mounts and issues `POST /api/finish`, which runs `FinishCommand` and emits
-    `UserEvent.UserFinishedProcess`.
+    `UserEvent.UserFinishedProcess` and `AccessEvent.AccessGranted`. A guest who left through an
+    error reaches `/ready` from `Phase.Recovered` instead, and `finish` emits `AccessGranted` alone.
  8. The transaction commits. Post-commit, `UnifiAccessHandler` calls
     `UnifiClient.authorizeGuest` with the session's `clientMac`.
       ├─ 2xx → `SessionService.setAuthorized(sessionId, expiresAt)` (phase `Authorized`,
@@ -76,9 +77,9 @@ The integration is not a module. Its moving parts are spread across four of them
       └─ failure, or no UniFi configuration → log and return; the session stays `Ready`.
  9. `/api/finish` re-reads the session and answers `phase` + `secondsRemaining`.
 10. At the deadline the `JobRunner` worker runs `ExpireAccessCommand`, which emits
-    `UserEvent.AccessExpired`.
+    `AccessEvent.AccessExpired` — the session's, with or without a user.
 11. In the same chain: `SessionExpirationHandler` resets the session row to `Welcome`
-    (transactional), `EventLogHandler` writes a `user.access_expired` row, and post-commit
+    (transactional), `EventLogHandler` writes an `access.expired` row, and post-commit
     `UnifiAccessHandler` calls `UnifiClient.revokeGuestAccess` — which unauthorizes *and*
     disconnects the client.
 ----
@@ -130,16 +131,14 @@ Two session phases carry the whole contract, and the boundary between them is th
   is written **only** by `UnifiAccessHandler`, post-commit.
 |===
 
-The matching `User` aggregate type-states are `State.Ready` and `State.Authorized`, projected from
-the session row by `UserRepository.findReadyUser` and `findAuthorizedUser`. `State.Authorized` is
-both the result type of the `finish` op and the input of the `expire` op; `expire` has no
-destination state. See xref:core.adoc[Core].
+The matching `User` aggregate type-states are `State.Ready`, projected from the session row by
+`UserRepository.findReadyUser`, and `State.Authorized`, the result type of the `finish` op. Expiry
+is not the user's: `ExpireAccessHandler` reads the session itself. See xref:core.adoc[Core].
 
 === Retry by design
 
-Because the phase stays `Ready` until the controller answers 2xx, `findReadyUser` keeps returning
-the user and a second `POST /api/finish` re-runs `finish`, re-emits `UserFinishedProcess` and
-retries the authorize call. The client exploits this directly: `ReadyView` calls `/api/finish` from
+Because the phase stays `Ready` (or `Recovered`) until the controller answers 2xx, a second
+`POST /api/finish` grants access again, re-emits `AccessGranted` and retries the authorize call. The client exploits this directly: `ReadyView` calls `/api/finish` from
 its `onMountCallback`, so a reload of `/ready` is a retry.
 
 The retry is safe because the authorize action is idempotent per MAC — the controller cancels any
@@ -191,9 +190,8 @@ layer) forks two fibers and then rehydrates:
   immediately, because the computed wait is zero.
 
 The worker swallows and logs its errors, so neither an unreachable controller nor an rqlite failure
-can kill the fiber. The staleness guard is in the command handler, not the runner: if the user was
-re-authorized in the meantime, `findAuthorizedUser` returns `None` and the command is a silent
-no-op. Details of the scheduler are in xref:platform.adoc[Platform]; the event chain is in
+can kill the fiber. The staleness guard is in the command handler, not the runner: a session no
+longer `Authorized`, or authorized again until later, makes the command a silent no-op. Details of the scheduler are in xref:platform.adoc[Platform]; the event chain is in
 xref:event-sourcing.adoc[Event sourcing].
 
 The cut therefore happens whether or not the guest still has the portal open — nothing in the
@@ -555,8 +553,8 @@ xref:infrastructure.adoc[Infrastructure].
   authorization on its own `timeLimitMinutes`. There is no second attempt.
 * **An empty `clientMac` skips the revoke** with a warning. Sessions created before V11, or without
   portal parameters, carry `''`.
-* **Both events in one batch resolve to authorize.** The handler matches `UserFinishedProcess`
-  first, so a batch carrying both it and `AccessExpired` takes the authorize branch only.
+* **Both events in one batch resolve to authorize.** The handler matches `AccessGranted` first, so
+  a batch carrying both it and `AccessExpired` takes the authorize branch only.
 * **Three definitions of "configured" coexist.** `UnifiAccess.fromRow` and the readiness resource
   require host, token and site id; `get_unifi_config` reports `host && siteId && tokenSet`;
   `list_locations` reports only whether `unifi_host` is non-blank. A location can therefore show as
@@ -580,7 +578,9 @@ the real code path and every authorization is due the instant it is granted.
 `Authorized` with `secondsRemaining`, the `/api/status` reset when the expiry is already past,
 `/api/finish` leaving the session in `Ready` when the authorize call fails, and the full scheduler
 path — authorize, then a `JobRunner`-driven expiry that resets the session, records
-`user.access_expired` and issues the revoke, all without the client asking for anything.
+`access.expired` and issues the revoke, all without the client asking for anything.
+`suites/RecoverySuite.scala` runs the same path for a session authorized through a way out before
+it had a user.
 `UnifiClient.noop` is the no-op implementation for any wiring that must never reach a controller.
 
 `UnifiClient` itself has no unit test. Its pure parts — `baseUrl`, `normalizeMac`, `extractClientId`

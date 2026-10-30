@@ -49,23 +49,38 @@ object ApiClient:
     }
     if js.Object.keys(headers.asInstanceOf[js.Object]).length > 0 then
       options.headers = headers
-    for
-      response <- dom.fetch(path, options.asInstanceOf[dom.RequestInit])
-      text     <- response.text()
-    yield
-      if response.ok then
-        parser.decode[A](text).left.map(e => ApiError.InternalError(e.getMessage))
-      else if isPaused(text) then
-        // `replace` rather than `assign`: the paused page must not enter history.
-        dom.window.location.replace(maintenanceUrl)
-        Left(ApiError.InternalError("This location is paused for maintenance."))
-      else
-        parser.decode[ApiError](text) match
-          case Right(err) =>
-            Left(err)
-          case Left(_) =>
-            Left(ApiError.InternalError(s"HTTP ${response.status}: $text"))
+    // A rejection here is the network's: answered as a `Left`, whose error view offers a retry,
+    // rather than reported as a failure of this code.
+    val exchange: js.Promise[Either[ApiError, (dom.Response, String)]] =
+      (
+        for
+          response <- dom.fetch(path, options.asInstanceOf[dom.RequestInit])
+          text     <- response.text()
+        yield Right((response, text))
+      ).recover(e => Left(ApiError.InternalError(s"Connection lost: $e")))
+    exchange.map(_.flatMap((response, text) => answer[A](response, text)))
   end fetchApi
+
+  private def answer[A: Decoder](response: dom.Response, text: String): Either[ApiError, A] =
+    if response.ok then
+      parser
+        .decode[A](text)
+        .left
+        .map: e =>
+          // Our server's answer, unreadable to our own decoder: a bug, and reported as one.
+          Recovery.clientError(e)
+          ApiError.InternalError(e.getMessage)
+    else if isPaused(text) then
+      // `replace` rather than `assign`: the paused page must not enter history.
+      dom.window.location.replace(maintenanceUrl)
+      Left(ApiError.InternalError("This location is paused for maintenance."))
+    else
+      parser.decode[ApiError](text) match
+        case Right(err) =>
+          Left(err)
+        case Left(_) =>
+          Left(ApiError.InternalError(s"HTTP ${response.status}: $text"))
+  end answer
 
   /** Whether this body is the load balancer saying the location is paused. Matches on the parsed
     * `status` field, never on the raw text.

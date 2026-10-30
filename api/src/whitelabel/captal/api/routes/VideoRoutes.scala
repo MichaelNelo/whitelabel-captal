@@ -2,6 +2,7 @@ package whitelabel.captal.api.routes
 
 import whitelabel.captal.api.session.SessionCookieConfig
 import whitelabel.captal.api.wire.given
+import whitelabel.captal.api.WireCheck.implementReadable
 import whitelabel.captal.api.{ApiBase, ApiErrors, SessionEndpoint}
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Flow, NextStep, Phase}
@@ -15,6 +16,7 @@ import whitelabel.captal.messages.{
   VideoResponse,
   VideoWatchedResponse
 }
+import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.session.{SessionContext, SessionService}
 import zio.*
 import zio.http.codec.HeaderCodec
@@ -29,7 +31,7 @@ object VideoRoutes:
   type EndPlaybackFlowType = Flow.Aux[Task, EndPlaybackCommand, Unit]
 
   type FullEnv =
-    SessionContext & SessionService & NextVideoFlowType & MarkVideoWatchedFlowType &
+    SessionContext & SessionService & QuillSqlite & NextVideoFlowType & MarkVideoWatchedFlowType &
       StartPlaybackFlowType & EndPlaybackFlowType
 
   val layer: ZLayer[SessionCookieConfig & ApiBase, Nothing, VideoRoutes] = ZLayer.fromFunction(
@@ -58,13 +60,14 @@ final class VideoRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
   /** Whatever a flow failed with, as the `ApiError` the route answers: a typed failure goes through
     * `ApiErrors`, and a defect is wrapped so its cause still reaches the log.
     */
-  private def asApiError[A](result: Task[A]): IO[ApiError, A] = result.catchAllCause: cause =>
-    ApiErrors.failWith(
-      cause.failureOrCause match
-        case Left(error) =>
-          error
-        case Right(defect) =>
-          new Exception(s"Defect: ${defect.prettyPrint}"))
+  private def asApiError[A](result: Task[A]): ZIO[QuillSqlite & SessionContext, ApiError, A] =
+    result.catchAllCause: cause =>
+      ApiErrors.failWith(
+        cause.failureOrCause match
+          case Left(error) =>
+            error
+          case Right(defect) =>
+            new Exception(s"Defect: ${defect.prettyPrint}"))
 
   private val nextVideo = Endpoint(base(Method.GET / "api" / "video" / "next"))
     .header(HeaderCodec.cookie.optional)
@@ -90,7 +93,7 @@ final class VideoRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
     .outError[ApiError](Status.BadRequest)
 
   val routes: Routes[FullEnv, Nothing] = Routes(
-    nextVideo.implement: cookie =>
+    nextVideo.implementReadable: cookie =>
       for
         current  <- session(cookie)
         flow     <- ZIO.service[NextVideoFlowType]
@@ -106,7 +109,7 @@ final class VideoRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
             case _ =>
               ZIO.unit
       yield response,
-    markWatched.implement: (cookie, request) =>
+    markWatched.implementReadable: (cookie, request) =>
       for
         _    <- session(cookie)
         flow <- ZIO.service[MarkVideoWatchedFlowType]
@@ -120,7 +123,7 @@ final class VideoRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
             .execute(command)
             .map((step: NextStep) => VideoWatchedResponse(Phase.toDbString(step.phase))))
       yield result,
-    startPlayback.implement: (cookie, request) =>
+    startPlayback.implementReadable: (cookie, request) =>
       for
         _    <- session(cookie)
         id   <- playbackId(request.playbackId)
@@ -128,7 +131,7 @@ final class VideoRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
         now  <- Clock.instant
         _    <- asApiError(flow.execute(StartPlaybackCommand(id, request.videoUrl, now)))
       yield PlaybackResponse(request.playbackId),
-    endPlayback.implement: (cookie, request) =>
+    endPlayback.implementReadable: (cookie, request) =>
       for
         _    <- session(cookie, phases = Seq.empty)
         id   <- playbackId(request.playbackId)

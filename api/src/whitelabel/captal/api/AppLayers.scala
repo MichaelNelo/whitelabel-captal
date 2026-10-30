@@ -5,6 +5,7 @@ import whitelabel.captal.api.routes.{
   AdvertiserSurveyRoutes,
   FinishRoutes,
   LocaleRoutes,
+  RecoveryRoutes,
   SurveyRoutes,
   VideoRoutes
 }
@@ -15,6 +16,7 @@ import whitelabel.captal.api.session.{
   UserLookup
 }
 import whitelabel.captal.platform.repositories.{
+  RecoveryRepositoryQuill,
   SurveyRepositoryQuill,
   UserRepositoryQuill,
   VideoRepositoryQuill
@@ -22,7 +24,7 @@ import whitelabel.captal.platform.repositories.{
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.services.{LocaleService, LocaleServiceQuill, LocationService}
 import whitelabel.captal.platform.session.{JobQueue, JobRunner, SessionContext, SessionService}
-import whitelabel.captal.platform.{RqliteDataSource, UnifiAccess, UnifiClient}
+import whitelabel.captal.platform.{BundleManifest, RqliteDataSource, UnifiAccess, UnifiClient}
 import zio.*
 import zio.http.{Client, Server}
 
@@ -43,7 +45,14 @@ private[api] object AppLayers:
       SurveyRoutes.NextSurveyFlowType & VideoRoutes.NextVideoFlowType &
       VideoRoutes.MarkVideoWatchedFlowType & VideoRoutes.StartPlaybackFlowType &
       VideoRoutes.EndPlaybackFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
-      AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType
+      AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType &
+      RecoveryRoutes & RecoveryRoutes.RequestRecoveryFlowType &
+      RecoveryRoutes.CheckRecoveryFlowType & RecoveryRoutes.RedeemRecoveryFlowType
+
+  /** The location's bundle manifest, read over HTTP when `BUNDLE_MANIFEST_URL` names it. */
+  private val bundleManifestLayer: ZLayer[ServerSettings, Nothing, BundleManifest] = ZLayer.fromZIO:
+    ZIO.serviceWithZIO[ServerSettings]: settings =>
+      settings.bundleManifestUrl.fold(ZIO.succeed(BundleManifest.absent))(BundleManifest.fromUrl(_))
 
   // ─── Location-aware ───────────────────────────────────────────────────────────
 
@@ -133,6 +142,9 @@ private[api] object AppLayers:
       VideoRoutes.layer,
       AdvertiserSurveyRoutes.layer,
       FinishRoutes.layer,
+      RecoveryRoutes.layer,
+      bundleManifestLayer,
+      RecoveryRepositoryQuill.layer,
       SurveyRepositoryQuill.layer,
       UserRepositoryQuill.layer,
       VideoRepositoryQuill.layer,
@@ -150,6 +162,9 @@ private[api] object AppLayers:
       Flows.nextAdvertiserSurveyFlowLayer,
       Flows.answerAdvertiserFlowLayer,
       Flows.finishFlowLayer,
+      Flows.requestRecoveryFlowLayer,
+      Flows.checkRecoveryFlowLayer,
+      Flows.redeemRecoveryFlowLayer,
       Flows.expireAccessFlowLayer,
       JobQueue.layer,
       JobRunner.layer,

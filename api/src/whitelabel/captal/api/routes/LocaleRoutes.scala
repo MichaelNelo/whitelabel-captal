@@ -1,11 +1,13 @@
 package whitelabel.captal.api.routes
 
+import whitelabel.captal.api.WireCheck.implementReadable
 import whitelabel.captal.api.session.SessionCookieConfig
 import whitelabel.captal.api.wire.given
-import whitelabel.captal.api.{ApiBase, SessionEndpoint}
+import whitelabel.captal.api.{ApiBase, SessionEndpoint, WireCheck}
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.messages.{ApiError, SetLocaleRequest, StatusResponse}
+import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.services.LocaleService
 import whitelabel.captal.platform.session.{SessionContext, SessionService}
 import zio.*
@@ -15,7 +17,7 @@ import zio.http.{Method, Routes, Status}
 
 object LocaleRoutes:
 
-  type FullEnv = SessionContext & SessionService & LocaleService
+  type FullEnv = SessionContext & SessionService & LocaleService & QuillSqlite
 
   val layer: ZLayer[SessionCookieConfig & ApiBase, Nothing, LocaleRoutes] = ZLayer.fromFunction(
     LocaleRoutes(_, _))
@@ -81,13 +83,12 @@ final class LocaleRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
               .as(current.copy(locale = request.locale))
           else
             ZIO.succeed(current)
-      yield (
-        StatusResponse(updated.phase, updated.locale),
-        cookieConfig.asSetCookie(updated.sessionId.asString))
+        response <- WireCheck.readable(StatusResponse(updated.phase, updated.locale))
+      yield (response, cookieConfig.asSetCookie(updated.sessionId.asString))
   )
 
   val devRoutes: Routes[FullEnv, Nothing] = Routes(
-    resetPhase.implement: cookie =>
+    resetPhase.implementReadable: cookie =>
       for
         current <- session(cookie)
         _       <- ZIO

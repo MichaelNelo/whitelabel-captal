@@ -35,9 +35,4 @@ enum Event:
       videoId: Option[video.Id],
       answeredQuestionIds: List[FullyQualifiedQuestionId],
       occurredAt: Instant)
-
-  /** The access granted by `UserFinishedProcess` reached its `accessExpiresAt`. Emitted by the
-    * expiration scheduler, not by a request.
-    */
-  case AccessExpired(userId: Id, occurredAt: Instant)
 end Event

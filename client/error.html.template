@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#6366f1">
+  <title>WiFi Gratis</title>
+  <!-- Same <base> as index.html: relative URLs, the API's among them, resolve under /<slug>/. -->
+  <script>
+    (function () {
+      var slug = location.pathname.split('/').filter(Boolean)[0];
+      if (slug && slug !== 'api' && slug !== 'error.html') {
+        var b = document.createElement('base');
+        b.href = '/' + slug + '/';
+        document.head.appendChild(b);
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="{{CSS_PATH}}">
+  <link rel="stylesheet" href="./custom-styles.css.gz" onerror="this.remove()">
+</head>
+<body>
+  <!-- The way out of an error. Static, with its own script and no part of the bundle, because the
+       bundle may be what failed. The markup is what Layout renders, so it looks like the portal.
+       Why it was opened arrives in the fragment, as JSON: `serverErrorId`, the id an API error
+       answered with; `report`, an exception the bundle caught; `retry`, part of the bundle that did
+       not load. -->
+  <div class="app-layout">
+    <div class="layout-content">
+      <div class="layout-view loaded-state">
+        <div class="view-icon">
+          <div class="brand-ring">
+            <img src="./brand-icon.svg" class="brand-icon" alt="">
+          </div>
+        </div>
+        <div class="view-content visible">
+          <div class="error-view">
+            <div class="error-content">
+              <div class="error-icon">⚠</div>
+              <h1 class="error-title" id="title"></h1>
+              <p class="error-message" id="message"></p>
+              <p class="error-message error-code" id="code" hidden></p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="layout-footer visible">
+      <button class="welcome-button" id="action" hidden></button>
+    </div>
+  </div>
+  <script>
+    (function () {
+      // Two languages, as the maintenance page has them: this page cannot count on the server for
+      // its copy.
+      var copy = (navigator.language || '').toLowerCase().indexOf('en') === 0 ? {
+        title: 'Something went wrong',
+        working: 'One moment…',
+        waiting: 'We ran into a problem with the portal. You can connect in ',
+        shared: 'Other guests ran into the same problem, so the wait is shorter.',
+        connecting: 'Connecting you…',
+        unrecoverable: "We couldn't give you access. Show this code to the staff here:",
+        loadTitle: "We couldn't load the portal",
+        load: 'Check your connection and try again.',
+        unreachable: "We couldn't reach the portal. Check your connection and try again.",
+        generic: 'Please start again.',
+        retry: 'Try again'
+      } : {
+        title: 'Algo salió mal',
+        working: 'Un momento…',
+        waiting: 'Tuvimos un problema con el portal. Vas a poder conectarte en ',
+        shared: 'A otros invitados les pasó lo mismo, así que la espera es más corta.',
+        connecting: 'Conectándote…',
+        unrecoverable: 'No pudimos darte acceso. Mostrale este código al personal del lugar:',
+        loadTitle: 'No pudimos cargar el portal',
+        load: 'Revisá tu conexión e intentá de nuevo.',
+        unreachable: 'No pudimos comunicarnos con el portal. Revisá tu conexión e intentá de nuevo.',
+        generic: 'Volvé a empezar, por favor.',
+        retry: 'Reintentar'
+      };
+
+      var title = document.getElementById('title');
+      var message = document.getElementById('message');
+      var code = document.getElementById('code');
+      var action = document.getElementById('action');
+      // The UniFi parameters travel along, in case the portal has to start a session again.
+      var portal = './' + location.search;
+
+      var reason = {};
+      try {
+        reason = JSON.parse(decodeURIComponent(location.hash.slice(1))) || {};
+      } catch (e) {}
+
+      function show(heading, text, label, onClick) {
+        title.textContent = heading;
+        message.textContent = text;
+        if (label) {
+          action.textContent = label;
+          action.onclick = onClick;
+          action.hidden = false;
+        } else {
+          action.hidden = true;
+        }
+      }
+
+      function toPortal() {
+        location.replace(portal);
+      }
+
+      // The body of an error answer is the ApiError, nested under its case's name.
+      function post(path, body) {
+        return fetch(path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        }).then(function (response) {
+          return response.text().then(function (text) {
+            var json = null;
+            try {
+              json = JSON.parse(text);
+            } catch (e) {}
+            return { ok: response.ok, json: json || {} };
+          });
+        });
+      }
+
+      function request() {
+        show(copy.title, copy.working);
+        var body = reason.serverErrorId
+          ? { serverErrorId: reason.serverErrorId }
+          : { report: reason.report };
+        post('api/recovery', body).then(function (answer) {
+          if (answer.ok) {
+            remember(answer.json);
+            countdown();
+          } else if (answer.json.Unrecoverable) {
+            show(copy.title, copy.unrecoverable);
+            code.textContent = answer.json.Unrecoverable.errorId;
+            code.hidden = false;
+          } else {
+            show(copy.title, copy.generic, copy.retry, toPortal);
+          }
+        }, function () {
+          show(copy.title, copy.unreachable, copy.retry, request);
+        });
+      }
+
+      // Into the fragment, so that reloading resumes the wait instead of reporting the error
+      // again. Timed by this device's clock against itself only: the server decides with its own.
+      // The wait over, the way out is taken at once: asking for a tap first would protect nothing,
+      // since the redeem endpoint can be called directly.
+      function remember(offer) {
+        reason = {
+          errorId: offer.errorId,
+          until: Date.now() + offer.waitSeconds * 1000,
+          recurrent: !!offer.recurrent
+        };
+        history.replaceState(
+          null,
+          '',
+          location.pathname + location.search + '#' + encodeURIComponent(JSON.stringify(reason)));
+      }
+
+      // While it waits, the page asks where its way out stands: when another device reports the
+      // same error the server shortens the wait, and the countdown jumps to the new one. Never
+      // longer: an answer that would lengthen it, or one that does not come, changes nothing.
+      var CheckEvery = 10000;
+      var lastCheck = Date.now();
+
+      function check() {
+        lastCheck = Date.now();
+        post('api/recovery/check', { errorId: reason.errorId }).then(function (answer) {
+          if (answer.ok) {
+            var until = Date.now() + answer.json.waitSeconds * 1000;
+            if (until < reason.until || answer.json.recurrent !== reason.recurrent) {
+              remember({
+                errorId: reason.errorId,
+                waitSeconds: Math.max(0, Math.min(until, reason.until) - Date.now()) / 1000,
+                recurrent: answer.json.recurrent
+              });
+            }
+          }
+        }, function () {});
+      }
+
+      function countdown() {
+        var left = Math.ceil((reason.until - Date.now()) / 1000);
+        if (left <= 0) {
+          redeem();
+        } else {
+          var seconds = left % 60;
+          show(
+            copy.title,
+            copy.waiting + Math.floor(left / 60) + ':' + (seconds < 10 ? '0' : '') + seconds + '.' +
+              (reason.recurrent ? ' ' + copy.shared : ''));
+          if (Date.now() - lastCheck >= CheckEvery) {
+            check();
+          }
+          setTimeout(countdown, 1000);
+        }
+      }
+
+      function redeem() {
+        show(copy.title, copy.connecting);
+        post('api/recovery/redeem', { errorId: reason.errorId }).then(function (answer) {
+          if (answer.ok || answer.json.RecoveryAlreadyUsed) {
+            toPortal();
+          } else if (answer.json.RecoveryNotYet) {
+            // This device's clock ran ahead of the server's: a few seconds more.
+            reason.until = Date.now() + 3000;
+            countdown();
+          } else {
+            show(copy.title, copy.generic, copy.retry, toPortal);
+          }
+        }, function () {
+          show(copy.title, copy.unreachable, copy.retry, redeem);
+        });
+      }
+
+      if (reason.retry) {
+        show(copy.loadTitle, copy.load, copy.retry, toPortal);
+      } else if (reason.errorId && typeof reason.until === 'number') {
+        countdown();
+      } else if (reason.serverErrorId || reason.report) {
+        request();
+      } else {
+        show(copy.title, copy.generic, copy.retry, toPortal);
+      }
+    })();
+  </script>
+</body>
+</html>

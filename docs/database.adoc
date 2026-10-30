@@ -146,6 +146,10 @@ by the MCP server (`mcp/resources/db/migration-mcp`, `V1` and `V2`).
 | Append-only audit trail: `event_type`, `event_data` as JSON, session, user, `occurred_at`, `created_at`. Written by `EventLogHandler`; nothing reads it in the request path.
 | via its session
 
+| `errors`
+| Every error a guest could be offered a way out of: `origin` (`server` or `client`), session, device, `message`, `detail` (a server error's stack trace; a client error's bundle version, error name and frames as JSON), and for client errors the `fingerprint` that makes two reports the same error — NULL when the report has no frame of the bundle's own — and the `verdict` on this one (`plausible`, `recurrent`, or `fabricated:` and its reasons). `available_at` is when the session may leave through it, NULL until offered; `redeemed_at`, when it did. Its `id` is what the page leaves through and what staff look an unrecoverable error up by. Rows outlive the sessions they name.
+| via its session
+
 | `migration_lock`
 | One row, `(id INTEGER PRIMARY KEY, holder TEXT NOT NULL)`. Created on demand by `Migrate.Lock`, not by a migration.
 | Global

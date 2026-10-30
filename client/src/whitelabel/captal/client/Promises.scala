@@ -12,6 +12,10 @@ object Promises:
     def flatMap[B](f: A => js.Promise[B]): js.Promise[B] = promise.`then`[B]((a: A) =>
       f(a): B | js.Thenable[B])
 
+    /** A rejection turned into a value. */
+    def recover[B >: A](f: Any => B): js.Promise[B] = promise.`catch`[B]((e: Any) =>
+      f(e): B | js.Thenable[B])
+
     /** Rejections carry `Any`, not `Throwable`: a JS promise can be rejected with anything. */
     def onFailure(f: Any => Unit): js.Promise[Unit] = promise
       .`then`[Unit]((_: A) => (): Unit | js.Thenable[Unit])

@@ -10,7 +10,8 @@ see xref:client.adoc[Client].
 
 == Per-location theming
 
-The portal's two HTML templates load two stylesheets, in order:
+The portal's HTML templates — the portal's, the maintenance page's and `error.html`'s — load two
+stylesheets, in order:
 
 [source,html]
 ----
@@ -31,7 +32,7 @@ tag removes itself rather than sitting there as a stylesheet reference to nothin
 also sets `Content-Encoding: gzip` and the same `Cache-Control: public, max-age=86400` the portal
 bundle carries, and invalidates the one CloudFront key the write touched so the change is visible
 without waiting out that cache. The brand icon (`brand-icon.svg`, referenced by `BrandLoader` and by
-the static markup in both HTML templates) follows the same store but is not a CSS property at all —
+the static markup in the HTML templates) follows the same store but is not a CSS property at all —
 `set_location_icon` replaces the file outright, after `AssetTools.validateSvg` rejects anything
 carrying a `<script>` or an `on*` handler, since the icon is served from the portal's own origin and
 would execute there.
