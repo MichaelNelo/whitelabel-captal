@@ -8,6 +8,9 @@ import whitelabel.captal.core.video
 
 enum Event:
   case UserCreated(userId: Id, email: Email, occurredAt: Instant)
+
+  /** An email answered that already belongs to a user: the session becomes that user's. */
+  case UserRecognized(userId: Id, email: Email, occurredAt: Instant)
   case SurveyAssigned(userId: Id, nextQuestion: FullyQualifiedQuestionId, occurredAt: Instant)
   case NewUserArrived(
       userId: Id,

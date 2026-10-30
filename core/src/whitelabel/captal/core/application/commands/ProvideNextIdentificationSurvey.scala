@@ -9,14 +9,25 @@ import io.circe.{Decoder, Encoder}
 import whitelabel.captal.core.Op.{convertError, convertEvent}
 import whitelabel.captal.core.application.IdentificationSurveyType.given
 import whitelabel.captal.core.application.conversions.given
-import whitelabel.captal.core.application.{FallbackPhase, IdentificationSurveyType, NextStep}
+import whitelabel.captal.core.application.{
+  Error,
+  Event,
+  FallbackPhase,
+  IdentificationSurveyType,
+  NextStep
+}
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository}
 import whitelabel.captal.core.survey.question.codecs.given
 import whitelabel.captal.core.survey.question.{FullyQualifiedQuestionId, QuestionToAnswer}
 import whitelabel.captal.core.user.ops.*
-import whitelabel.captal.core.{Op as CoreOp, survey}
+import whitelabel.captal.core.{Op as CoreOp, device, survey, user}
 
-final case class ProvideNextIdentificationSurveyCommand(occurredAt: Instant)
+/** @param deviceId
+  *   the session's device, which a user already known to the session is linked to.
+  */
+final case class ProvideNextIdentificationSurveyCommand(
+    deviceId: user.DeviceId,
+    occurredAt: Instant)
 
 final case class NextIdentificationSurvey(
     surveyId: survey.Id,
@@ -72,11 +83,20 @@ object ProvideNextIdentificationSurveyHandler:
               .assignSurvey(nextQuestion, exhausted.phase, cmd.occurredAt)
               .convertEvent
               .convertError
+              .flatMap(_ => linked(existingUser.id, cmd))
               .as(next: Response)
           case (Some(existingUser), None) =>
             existingUser
               .assignSurvey(None, exhausted.phase, cmd.occurredAt)
               .convertEvent
               .convertError
+              .flatMap(_ => linked(existingUser.id, cmd))
               .as(NextStep(exhausted.phase): Response)
+
+      /** A user the session already knows — by the cross-location cookie, or by an email answered
+        * earlier in it — is on this device.
+        */
+      private def linked(userId: user.Id, cmd: ProvideNextIdentificationSurveyCommand): Op[Unit] =
+        CoreOp.emit[Event, Error](
+          Event.Device(device.Event.DeviceLinked(userId, cmd.deviceId, cmd.occurredAt)))
 end ProvideNextIdentificationSurveyHandler

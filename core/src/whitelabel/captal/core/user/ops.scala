@@ -27,6 +27,10 @@ object ops:
     val event = Event.UserCreated(userId, email, now)
     Op.emit(event, user)
 
+  def recognize(userId: Id, email: Email, now: Instant): UserOp[User[State.WithEmail]] = Op.emit(
+    Event.UserRecognized(userId, email, now),
+    User[State.WithEmail](userId, State.WithEmail(email)))
+
   def createGuest(
       nextQuestion: Option[FullyQualifiedQuestionId],
       now: Instant): UserOp[User[State.Guest.type]] =

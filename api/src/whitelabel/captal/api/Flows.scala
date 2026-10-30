@@ -78,11 +78,15 @@ private[api] object Flows:
       case None =>
         ZIO.succeed(true)
 
-  val answerEmailFlowLayer: ZLayer[SurveyRepository[
-    Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, AnswerEmailCommand, NextStep]] =
-    ZLayer.fromFunction:
-      (surveyRepo: SurveyRepository[Task], eventHandler: EventHandler[Task, Event]) =>
-        Flow(AnswerEmailHandler(surveyRepo, nextAfterIdentification), eventHandler)
+  val answerEmailFlowLayer: ZLayer[
+    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[Task, AnswerEmailCommand, NextStep]] = ZLayer.fromFunction:
+    (
+        surveyRepo: SurveyRepository[Task],
+        userRepo: UserRepository[Task],
+        eventHandler: EventHandler[Task, Event]) =>
+      Flow(AnswerEmailHandler(surveyRepo, userRepo, nextAfterIdentification), eventHandler)
 
   val answerProfilingFlowLayer: ZLayer[
     SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],

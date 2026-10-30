@@ -107,11 +107,15 @@ object TestLayers:
     .fromFunction: (userRepo: UserRepository[Task], eventHandler: EventHandler[Task, Event]) =>
       Flow(ExpireAccessHandler(userRepo), eventHandler)
 
-  private val answerEmailFlowLayer: ZLayer[SurveyRepository[
-    Task] & EventHandler[Task, Event], Nothing, Flow.Aux[Task, AnswerEmailCommand, NextStep]] =
-    ZLayer.fromFunction:
-      (surveyRepo: SurveyRepository[Task], eventHandler: EventHandler[Task, Event]) =>
-        Flow(AnswerEmailHandler(surveyRepo, nextAfterIdentification), eventHandler)
+  private val answerEmailFlowLayer: ZLayer[
+    SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[Task, AnswerEmailCommand, NextStep]] = ZLayer.fromFunction:
+    (
+        surveyRepo: SurveyRepository[Task],
+        userRepo: UserRepository[Task],
+        eventHandler: EventHandler[Task, Event]) =>
+      Flow(AnswerEmailHandler(surveyRepo, userRepo, nextAfterIdentification), eventHandler)
 
   private val answerProfilingFlowLayer: ZLayer[
     SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],

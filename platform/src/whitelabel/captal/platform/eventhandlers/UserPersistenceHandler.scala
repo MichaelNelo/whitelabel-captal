@@ -2,6 +2,7 @@ package whitelabel.captal.platform.eventhandlers
 
 import io.getquill.*
 import whitelabel.captal.core.application.Event
+import whitelabel.captal.core.device.Event as DeviceEvent
 import whitelabel.captal.core.infrastructure.SessionData
 import whitelabel.captal.core.user
 import whitelabel.captal.core.user.Event as UserEvent
@@ -9,13 +10,14 @@ import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.session.SessionContext
-import whitelabel.captal.platform.{SessionRow, UserRow}
+import whitelabel.captal.platform.{DeviceUserRow, SessionRow, UserRow}
 import zio.*
 
+/** The session's user, as `core` resolved it: a new one is inserted, a recognized one only becomes
+  * the session's. Whether an email belongs to somebody already is `AnswerEmailHandler`'s to decide.
+  * Also the pairs of a user and a device seen together.
+  */
 object UserPersistenceHandler:
-  inline def findByEmailQuery = quote: (emailParam: user.Email) =>
-    query[UserRow].filter(_.email.contains(emailParam))
-
   inline def insertUserQuery = quote: (users: Query[UserRow]) =>
     users.foreach(u =>
       query[UserRow].insert(
@@ -33,39 +35,41 @@ object UserPersistenceHandler:
     new DbEventHandler[Event]:
       def handle(events: List[Event], quill: QuillSqlite): Task[Unit] =
         import quill.*
-        val userEvents = events.collect:
+        val identified = events.collect:
           case Event.User(e: UserEvent.UserCreated) =>
+            e.userId -> Some(e)
+          case Event.User(e: UserEvent.UserRecognized) =>
+            e.userId -> None
+        val links = events.collect:
+          case Event.Device(e: DeviceEvent.DeviceLinked) =>
             e
-        if userEvents.nonEmpty then
+        ZIO.whenDiscard(identified.nonEmpty || links.nonEmpty):
           for
             sessionData <- ctx.getOrFail
             instant     <- Clock.instant
             _           <-
-              ZIO.foreachDiscard(userEvents): event =>
+              ZIO.foreachDiscard(identified): (userId, created) =>
                 for
-                  existingUser <- run(findByEmailQuery(lift(event.email))).map(_.headOption)
-                  resolvedUserId =
-                    existingUser match
-                      case Some(existingUserRow) =>
-                        existingUserRow.id
-                      case None =>
-                        event.userId
                   _ <-
-                    existingUser match
-                      case Some(_) =>
-                        ZIO.unit
-                      case None =>
-                        val userRow = toUserRow(event, sessionData, instant.toString)
-                        run(insertUserQuery(liftQuery(List(userRow)))).unit
-                  _ <- run(
-                    updateSessionUserQuery(lift(sessionData.sessionId), lift(resolvedUserId)))
-                  _ <- ctx.set(sessionData.copy(userId = Some(resolvedUserId)))
+                    ZIO.foreachDiscard(created): event =>
+                      val userRow = toUserRow(event, sessionData, instant.toString)
+                      run(insertUserQuery(liftQuery(List(userRow)))).unit
+                  _ <- run(updateSessionUserQuery(lift(sessionData.sessionId), lift(userId)))
+                  _ <- ctx.set(sessionData.copy(userId = Some(userId)))
                 yield ()
+            _ <- ZIO.foreachDiscard(links)(link(quill, _))
           yield ()
-        else
-          ZIO.unit
-        end if
       end handle
+
+  /** Seen together again only moves `last_seen_at`. */
+  private def link(quill: QuillSqlite, event: DeviceEvent.DeviceLinked): Task[Unit] =
+    import quill.*
+    val seenAt = event.occurredAt.toString
+    val row = DeviceUserRow(event.deviceId, event.userId, seenAt, seenAt)
+    run(
+      query[DeviceUserRow]
+        .insertValue(lift(row))
+        .onConflictUpdate(_.deviceId, _.userId)((t, e) => t.lastSeenAt -> e.lastSeenAt)).unit
 
   private def toUserRow(
       event: UserEvent.UserCreated,

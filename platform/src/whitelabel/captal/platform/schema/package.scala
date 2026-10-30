@@ -35,10 +35,11 @@ package object schema:
   inline given SchemaMeta[SessionRow] = schemaMeta[SessionRow]("sessions")
 
   /** Every row type reaching a `query[...]` needs a mapping here, or Quill asks for the class name
-    * in snake case. `DeviceUserRow` and `NextIdentificationSurveyRow` have none on purpose: neither
-    * is queried, and the second is a projection rather than a table.
+    * in snake case. `NextIdentificationSurveyRow` has none on purpose: it is a projection rather
+    * than a table.
     */
   inline given SchemaMeta[DeviceRow] = schemaMeta[DeviceRow]("devices")
+  inline given SchemaMeta[DeviceUserRow] = schemaMeta[DeviceUserRow]("device_users")
   inline given SchemaMeta[SurveyRow] = schemaMeta[SurveyRow]("surveys")
   inline given SchemaMeta[QuestionRow] = schemaMeta[QuestionRow]("questions")
   inline given SchemaMeta[QuestionOptionRow] = schemaMeta[QuestionOptionRow]("question_options")

@@ -65,7 +65,8 @@ private[api] object AppLayers:
       for
         quill      <- ZIO.service[QuillSqlite]
         locationId <- resolveLocationId
-      yield SessionService(quill, locationId)
+        settings   <- ZIO.service[ServerSettings]
+      yield SessionService(quill, locationId, settings.deviceMatching)
 
   private val localeServiceLayer
       : ZLayer[QuillSqlite & LocationService & ServerSettings, Throwable, LocaleService] = ZLayer

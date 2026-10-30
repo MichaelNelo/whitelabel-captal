@@ -4,12 +4,13 @@ import java.time.Instant
 
 import cats.{Id, Parallel}
 import utest.*
+import whitelabel.captal.core.application.Event as AppEvent
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository}
 import whitelabel.captal.core.survey.question.*
 import whitelabel.captal.core.survey.{AdvertiserId, State as SurveyState, Survey}
 import whitelabel.captal.core.user.{State as UserState, User}
-import whitelabel.captal.core.{Op, survey, user, video}
+import whitelabel.captal.core.{Op, device, survey, user, video}
 
 private val testNextStep = NextStep(Phase.Ready)
 
@@ -17,6 +18,8 @@ object HandlerTests extends TestSuite:
 
   // Commands take `occurredAt` as data, so a fixed Instant keeps the handlers deterministic.
   private val FixedNow: Instant = Instant.EPOCH
+
+  private val TestDevice: user.DeviceId = user.DeviceId.generate
 
   private def makeRadioQuestion(optionId: OptionId): QuestionToAnswer = QuestionToAnswer(
     id = survey.question.Id.generate,
@@ -89,9 +92,11 @@ object HandlerTests extends TestSuite:
 
   private def mockUserRepo(
       answeringUser: Option[User[UserState.AnsweringQuestion]] = None,
-      withEmailUser: Option[User[UserState.WithEmail]] = None): UserRepository[Id] =
+      withEmailUser: Option[User[UserState.WithEmail]] = None,
+      knownEmails: Map[String, user.Id] = Map.empty): UserRepository[Id] =
     new UserRepository[Id]:
       def findWithEmail() = withEmailUser
+      def findIdByEmail(email: user.Email) = knownEmails.get(email.value)
       def findAnswering() = answeringUser
       def findWatchingVideo() = None
       def findAnsweringVideoSurvey() = None
@@ -105,8 +110,9 @@ object HandlerTests extends TestSuite:
     test("AnswerEmailHandler"):
       test("returns NoSurveyAssigned when no email survey assigned"):
         val surveyRepo = mockSurveyRepo()
-        val handler = AnswerEmailHandler(surveyRepo, testNextStep)
+        val handler = AnswerEmailHandler(surveyRepo, mockUserRepo(), testNextStep)
         val cmd = AnswerEmailCommand(
+          deviceId = TestDevice,
           answer = AnswerValue.Text("user@example.com"),
           occurredAt = FixedNow)
         val result = Op.run(handler.handle(cmd))
@@ -127,8 +133,9 @@ object HandlerTests extends TestSuite:
         val question = makeRadioQuestion(optionId)
         val emailSurvey = makeSurveyWithEmail(question)
         val surveyRepo = mockSurveyRepo(emailSurvey = Some(emailSurvey))
-        val handler = AnswerEmailHandler(surveyRepo, testNextStep)
+        val handler = AnswerEmailHandler(surveyRepo, mockUserRepo(), testNextStep)
         val cmd = AnswerEmailCommand(
+          deviceId = TestDevice,
           answer = AnswerValue.SingleChoice(optionId),
           occurredAt = FixedNow)
         val result = Op.run(handler.handle(cmd))
@@ -148,8 +155,9 @@ object HandlerTests extends TestSuite:
         val question = makeInputQuestion()
         val emailSurvey = makeSurveyWithEmail(question)
         val surveyRepo = mockSurveyRepo(emailSurvey = Some(emailSurvey))
-        val handler = AnswerEmailHandler(surveyRepo, testNextStep)
+        val handler = AnswerEmailHandler(surveyRepo, mockUserRepo(), testNextStep)
         val cmd = AnswerEmailCommand(
+          deviceId = TestDevice,
           answer = AnswerValue.Text("not-an-email"),
           occurredAt = FixedNow)
         val result = Op.run(handler.handle(cmd))
@@ -169,8 +177,9 @@ object HandlerTests extends TestSuite:
         val question = makeInputQuestion()
         val emailSurvey = makeSurveyWithEmail(question)
         val surveyRepo = mockSurveyRepo(emailSurvey = Some(emailSurvey))
-        val handler = AnswerEmailHandler(surveyRepo, testNextStep)
+        val handler = AnswerEmailHandler(surveyRepo, mockUserRepo(), testNextStep)
         val cmd = AnswerEmailCommand(
+          deviceId = TestDevice,
           answer = AnswerValue.Text("user@example.com"),
           occurredAt = FixedNow)
         val result = Op.run(handler.handle(cmd))
@@ -178,6 +187,79 @@ object HandlerTests extends TestSuite:
         val (events, nextStep) = result.toOption.get
         assert(events.nonEmpty)
         assert(nextStep == testNextStep)
+
+      test("a new email creates the user and links this device to them"):
+        val emailSurvey = makeSurveyWithEmail(makeInputQuestion())
+        val handler = AnswerEmailHandler(
+          mockSurveyRepo(emailSurvey = Some(emailSurvey)),
+          mockUserRepo(),
+          testNextStep)
+        val cmd = AnswerEmailCommand(
+          answer = AnswerValue.Text("new@example.com"),
+          deviceId = TestDevice,
+          occurredAt = FixedNow)
+        val events = Op.run(handler.handle(cmd)).toOption.get._1
+        val created = events.collectFirst { case AppEvent.User(user.Event.UserCreated(id, _, _)) =>
+          id
+        }
+        val linked = events.collectFirst {
+          case AppEvent.Device(device.Event.DeviceLinked(userId, deviceId, _)) =>
+            (userId, deviceId)
+        }
+        assert(created.isDefined, linked == created.map(_ -> TestDevice))
+
+      test("an email already answered elsewhere recognizes that user, and links them"):
+        val existing = user.Id.generate
+        val emailSurvey = makeSurveyWithEmail(makeInputQuestion())
+        val handler = AnswerEmailHandler(
+          mockSurveyRepo(emailSurvey = Some(emailSurvey)),
+          mockUserRepo(knownEmails = Map("known@example.com" -> existing)),
+          testNextStep)
+        val cmd = AnswerEmailCommand(
+          answer = AnswerValue.Text("known@example.com"),
+          deviceId = TestDevice,
+          occurredAt = FixedNow)
+        val events = Op.run(handler.handle(cmd)).toOption.get._1
+        assert(
+          events.exists {
+            case AppEvent.User(user.Event.UserRecognized(id, _, _)) =>
+              id == existing
+            case _ =>
+              false
+          },
+          !events.exists {
+            case AppEvent.User(_: user.Event.UserCreated) =>
+              true
+            case _ =>
+              false
+          },
+          // Answered when they were first identified; the same email is not answered twice.
+          !events.exists {
+            case AppEvent.Survey(_: survey.Event.QuestionAnswered) =>
+              true
+            case _ =>
+              false
+          },
+          events.contains(
+            AppEvent.Device(device.Event.DeviceLinked(existing, TestDevice, FixedNow)))
+        )
+
+    test("Device policy"):
+      import whitelabel.captal.core.device.{Fingerprint, Matching, Policy}
+      test("configuration names a policy, and none means the default"):
+        assert(
+          Policy.fromConfig(None) == Right(Policy.ByClickId),
+          Policy.fromConfig(Some("ByMac")) == Right(Policy.ByMac),
+          Policy.fromConfig(Some("ByFoo")).isLeft)
+      test("each policy compares what it says, and only fingerprints carrying it"):
+        val known = Fingerprint("aa:bb", "click-1")
+        assert(
+          Matching.ByClickId.matches(known, Fingerprint("cc:dd", "click-1")),
+          !Matching.ByMac.matches(known, Fingerprint("cc:dd", "click-1")),
+          Matching.ByMacAndClickId.matches(known, Fingerprint("aa:bb", "click-1")),
+          !Policy.ByClickId.covers(Fingerprint("aa:bb", "")),
+          Policy.ByMac.covers(Fingerprint("aa:bb", ""))
+        )
 
     test("AnswerProfilingHandler"):
       test("returns UserNotIdentified when user does not exist"):

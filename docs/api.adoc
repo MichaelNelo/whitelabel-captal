@@ -90,6 +90,13 @@ See xref:database.adoc[Database].
 `ClientSSLConfig.Default` and, when set, `Proxy(url)`. An unparseable URL fails layer construction.
 See xref:unifi.adoc[UniFi integration].
 
+|`DEVICE_MATCHING`
+|`device.matching`
+|`""` → `ByClickId`
+|Which fingerprint fields make two sessions the same device: `ByClickId`, `ByMac` or
+`ByMacAndClickId`. Read at startup; a name that is not a policy stops the server. See
+xref:core.adoc[Core] for the policies.
+
 |`PROVISION_DIR`
 |`provision.dir`
 |`""`

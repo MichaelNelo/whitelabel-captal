@@ -25,7 +25,8 @@ object AnswerPersistenceHandler:
         _.questionId  -> a.questionId,
         _.answerValue -> a.answerValue,
         _.answeredAt  -> a.answeredAt,
-        _.createdAt   -> a.createdAt
+        _.createdAt   -> a.createdAt,
+        _.deviceId    -> a.deviceId
       ))
 
   def apply(ctx: SessionContext): DbEventHandler[Event] =
@@ -35,7 +36,9 @@ object AnswerPersistenceHandler:
         for
           sessionData <- ctx.getOrFail
           instant     <- Clock.instant
-          answers = events.flatMap(toAnswerRow(_, sessionData.sessionId, instant.toString))
+          answers = events
+            .flatMap(toAnswerRow(_, sessionData.sessionId, instant.toString))
+            .map(_.copy(deviceId = Some(sessionData.deviceId)))
           _ <-
             if answers.nonEmpty then
               run(insertAnswersQuery(liftQuery(answers))).unit.orDie
@@ -47,9 +50,7 @@ object AnswerPersistenceHandler:
     event match
       case Event.Survey(SurveyEvent.QuestionAnswered(_, questionEvent)) =>
         Some(questionEventToRow(questionEvent, sessionId, now))
-      case Event.User(_) =>
-        None
-      case Event.Video(_) =>
+      case Event.User(_) | Event.Video(_) | Event.Device(_) =>
         None
 
   private def questionEventToRow(

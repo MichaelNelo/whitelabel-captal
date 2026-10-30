@@ -2,6 +2,7 @@ package whitelabel.captal.platform.session
 
 import io.getquill.*
 import whitelabel.captal.core.application.Phase
+import whitelabel.captal.core.device.{Fingerprint, Matching, Policy}
 import whitelabel.captal.core.infrastructure.SessionData
 import whitelabel.captal.core.survey.AdvertiserId
 import whitelabel.captal.core.survey.question.FullyQualifiedQuestionId
@@ -130,12 +131,73 @@ object SessionService:
         _.accessExpiresAt     -> None
       )
 
-  def apply(quill: QuillSqlite, locationId: Option[String] = None): SessionService =
+  /** @param devices
+    *   which fingerprint fields make two sessions the same device.
+    */
+  def apply(
+      quill: QuillSqlite,
+      locationId: Option[String] = None,
+      devices: Policy = Policy.Default): SessionService =
     new SessionService:
       import quill.*
 
       def findById(sessionId: user.SessionId): Task[Option[SessionData]] =
         run(findByIdQuery(lift(sessionId))).map(_.headOption.map(toSessionData)).orDie
+
+      /** The device a fingerprint is, found by the database with the configured policy; a new one
+        * when none matches, or when the fingerprint lacks what the policy compares.
+        */
+      private def resolveDevice(
+          portalParams: CaptivePortalParams,
+          userAgent: String,
+          now: String): Task[user.DeviceId] =
+        val seen = Fingerprint(portalParams.clientMac, portalParams.clickId)
+        val found: Task[Option[user.DeviceId]] =
+          if !devices.covers(seen) then
+            ZIO.none
+          else
+            devices match
+              case Policy.ByClickId =>
+                deviceMatching(Matching.ByClickId, seen)
+              case Policy.ByMac =>
+                deviceMatching(Matching.ByMac, seen)
+              case Policy.ByMacAndClickId =>
+                deviceMatching(Matching.ByMacAndClickId, seen)
+        found
+          .flatMap:
+            case Some(deviceId) =>
+              // The fields the policy did not compare move with the device: a MAC randomized per
+              // network, a click id the shortener reissued.
+              run(
+                query[DeviceRow]
+                  .filter(_.id == lift(deviceId))
+                  .update(
+                    _.userAgent -> lift(userAgent),
+                    _.clientMac -> lift(seen.clientMac),
+                    _.clickId   -> lift(seen.clickId),
+                    _.updatedAt -> lift(now))).as(deviceId)
+            case None =>
+              val row = DeviceRow(
+                id = user.DeviceId.generate,
+                userAgent = userAgent,
+                createdAt = now,
+                updatedAt = now,
+                clientMac = seen.clientMac,
+                clickId = seen.clickId)
+              run(query[DeviceRow].insertValue(lift(row))).as(row.id)
+          .orDie
+      end resolveDevice
+
+      private inline def deviceMatching(
+          inline m: Matching,
+          seen: Fingerprint): Task[Option[user.DeviceId]] = run(
+        query[DeviceRow]
+          .filter(d =>
+            m.matches(
+              Fingerprint(d.clientMac, d.clickId),
+              Fingerprint(lift(seen.clientMac), lift(seen.clickId))))
+          .map(_.id)
+          .take(1)).map(_.headOption)
 
       def create(
           userAgent: String,
@@ -146,19 +208,7 @@ object SessionService:
           instant <- Clock.instant
           now       = instant.toString
           sessionId = user.SessionId.generate
-          deviceId  = user.DeviceId.fromUserAgent(userAgent)
-          deviceRow = DeviceRow(
-            id = deviceId,
-            userAgent = userAgent,
-            createdAt = now,
-            updatedAt = now)
-          _ <-
-            run(
-              query[DeviceRow]
-                .insertValue(lift(deviceRow))
-                .onConflictUpdate(_.id)(
-                  (t, e) => t.userAgent -> e.userAgent,
-                  (t, _) => t.updatedAt -> lift(now))).orDie
+          deviceId <- resolveDevice(portalParams, userAgent, now)
           sessionRow = SessionRow(
             id = sessionId,
             userId = None,
@@ -199,6 +249,7 @@ object SessionService:
               )).orDie
         yield SessionData(
           sessionId,
+          deviceId,
           None,
           locale,
           phase,
@@ -224,19 +275,7 @@ object SessionService:
           instant <- Clock.instant
           now       = instant.toString
           sessionId = user.SessionId.generate
-          deviceId  = user.DeviceId.fromUserAgent(userAgent)
-          deviceRow = DeviceRow(
-            id = deviceId,
-            userAgent = userAgent,
-            createdAt = now,
-            updatedAt = now)
-          _ <-
-            run(
-              query[DeviceRow]
-                .insertValue(lift(deviceRow))
-                .onConflictUpdate(_.id)(
-                  (t, e) => t.userAgent -> e.userAgent,
-                  (t, _) => t.updatedAt -> lift(now))).orDie
+          deviceId <- resolveDevice(portalParams, userAgent, now)
           sessionRow = SessionRow(
             id = sessionId,
             userId = Some(userId),
@@ -277,6 +316,7 @@ object SessionService:
               )).orDie
         yield SessionData(
           sessionId,
+          deviceId,
           Some(userId),
           locale,
           phase,
@@ -336,6 +376,7 @@ object SessionService:
           None
     SessionData(
       row.id,
+      row.deviceId,
       row.userId,
       row.locale,
       row.phase,

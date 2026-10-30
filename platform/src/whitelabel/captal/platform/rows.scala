@@ -91,7 +91,8 @@ final case class AnswerRow(
     questionId: survey.question.Id,
     answerValue: String,
     answeredAt: String,
-    createdAt: String)
+    createdAt: String,
+    deviceId: Option[user.DeviceId] = None)
 
 final case class UserSurveyProgressRow(
     id: String,
@@ -191,13 +192,19 @@ final case class VideoViewRow(
     durationWatchedSeconds: Int,
     completed: Int,
     viewedAt: String,
-    createdAt: String)
+    createdAt: String,
+    deviceId: Option[user.DeviceId] = None)
 
+/** A device, found again by the fingerprint UniFi's redirect carries. `userAgent` is the latest one
+  * seen, for diagnosis: it does not identify anything.
+  */
 final case class DeviceRow(
     id: user.DeviceId,
     userAgent: String,
     createdAt: String,
-    updatedAt: String)
+    updatedAt: String,
+    clientMac: String,
+    clickId: String)
 
 final case class DeviceUserRow(
     deviceId: user.DeviceId,

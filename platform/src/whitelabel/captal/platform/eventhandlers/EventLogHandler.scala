@@ -7,6 +7,7 @@ import io.circe.Json
 import io.circe.syntax.*
 import io.getquill.*
 import whitelabel.captal.core.application.Event
+import whitelabel.captal.core.device.Event as DeviceEvent
 import whitelabel.captal.core.survey.Event as SurveyEvent
 import whitelabel.captal.core.survey.question.Event as QuestionEvent
 import whitelabel.captal.core.survey.question.codecs.given
@@ -64,6 +65,15 @@ object EventLogHandler:
         extractSurveyEvent(e)
       case Event.Video(e) =>
         extractVideoEvent(e)
+      case Event.Device(DeviceEvent.DeviceLinked(userId, deviceId, occurredAt)) =>
+        Some(
+          (
+            "device.linked",
+            Json.obj(
+              "userId"     -> Json.fromString(userId.asString),
+              "deviceId"   -> Json.fromString(deviceId.asString),
+              "occurredAt" -> Json.fromString(occurredAt.toString)),
+            occurredAt))
 
   private def extractUserEvent(event: UserEvent): Option[(String, Json, Instant)] =
     event match
@@ -71,6 +81,15 @@ object EventLogHandler:
         Some(
           (
             "user.created",
+            Json.obj(
+              "userId"     -> Json.fromString(userId.asString),
+              "email"      -> Json.fromString(email.value),
+              "occurredAt" -> Json.fromString(occurredAt.toString)),
+            occurredAt))
+      case UserEvent.UserRecognized(userId, email, occurredAt) =>
+        Some(
+          (
+            "user.recognized",
             Json.obj(
               "userId"     -> Json.fromString(userId.asString),
               "email"      -> Json.fromString(email.value),

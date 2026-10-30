@@ -83,11 +83,11 @@ by the MCP server (`mcp/resources/db/migration-mcp`, `V1` and `V2`).
 | `location_id`
 
 | `devices`
-| One row per device, keyed by a UUIDv5 derived from the User-Agent.
+| One row per device, found again by its fingerprint: `client_mac` and `click_id`, both from UniFi's redirect. Which of them a match compares is configuration (`DEVICE_MATCHING`). `user_agent` is the latest one seen, for diagnosis only. Rows from before V27 have neither field and match nothing.
 | Global
 
 | `device_users`
-| Many-to-many between devices and users, with first/last seen timestamps. Composite primary key.
+| Many-to-many between devices and users: written each time a user is identified on a device, with first/last seen timestamps. Composite primary key.
 | Global
 
 | `surveys`
@@ -107,7 +107,7 @@ by the MCP server (`mcp/resources/db/migration-mcp`, `V1` and `V2`).
 | via its question
 
 | `answers`
-| One row per answered question: user, session, question, `answer_value` as JSON, `answered_at`. `idx_answers_user_question` is UNIQUE on `(user_id, question_id)`, so a user answers each question once.
+| One row per answered question: user, session, device, question, `answer_value` as JSON, `answered_at`. `idx_answers_user_question` is UNIQUE on `(user_id, question_id)`, so a user answers each question once. `device_id` is NULL on rows from before V27.
 | via its session
 
 | `user_survey_progress`
@@ -135,7 +135,7 @@ by the MCP server (`mcp/resources/db/migration-mcp`, `V1` and `V2`).
 | via its session
 
 | `video_views`
-| One row per view: session, user, video, `duration_watched_seconds`, `completed`, `viewed_at`.
+| One row per view: session, user, device, video, `duration_watched_seconds`, `completed`, `viewed_at`. `device_id` is NULL on rows from before V27.
 | via its session
 
 | `locations`

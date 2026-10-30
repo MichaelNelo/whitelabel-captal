@@ -57,6 +57,11 @@ object UserRepositoryQuill:
             case None =>
               ZIO.none
 
+      def findIdByEmail(email: user.Email): Task[Option[user.Id]] =
+        run(query[UserRow].filter(_.email.contains(lift(email))).map(_.id).take(1))
+          .map(_.headOption)
+          .orDie
+
       def findAnswering(): Task[Option[User[State.AnsweringQuestion]]] = ctx
         .getOrFail
         .flatMap: sessionData =>

@@ -156,6 +156,20 @@ object TestHelpers:
   def createSession(backend: SttpBackend[Task, Any]): Task[String] = getStatus(backend, None).map(
     r => extractSessionCookie(r).get)
 
+  /** A new session from a device the redirect describes differently: its own click id and MAC. */
+  def createSessionFrom(
+      backend: SttpBackend[Task, Any],
+      clickId: String,
+      mac: String): Task[String] =
+    val headers = defaultPortalHeaders ++ Map("X-Click-Id" -> clickId, "X-Client-Mac" -> mac)
+    headers
+      .foldLeft(basicRequest.get(uri"http://test/api/status").response(asStringAlways)) {
+        case (req, (k, v)) =>
+          req.header(k, v)
+      }
+      .send(backend)
+      .map(r => extractSessionCookie(r).get)
+
   def getLocales(backend: SttpBackend[Task, Any]) = basicRequest
     .get(uri"http://test/api/locales")
     .response(asStringAlways)

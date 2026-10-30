@@ -207,11 +207,11 @@ All under `core/src/whitelabel/captal/core/application/commands/`. Every command
 |===
 | Command | Handler | Result | Repositories | Events emitted
 
-| `AnswerEmailCommand(answer, occurredAt)`
+| `AnswerEmailCommand(answer, deviceId, occurredAt)`
 | `AnswerEmailHandler`
 | `NextStep`
-| `SurveyRepository`
-| `UserCreated`, `QuestionAnswered(EmailQuestionAnswered)`
+| `SurveyRepository`, `UserRepository`
+| a new email: `UserCreated` and `QuestionAnswered(EmailQuestionAnswered)`; one already answered: `UserRecognized` alone, since the answer is the one they gave then. Either way `DeviceLinked`
 
 | `AnswerProfilingCommand(answer, occurredAt)`
 | `AnswerProfilingHandler`
@@ -231,11 +231,11 @@ All under `core/src/whitelabel/captal/core/application/commands/`. Every command
 | `SurveyRepository`, `UserRepository`
 | `QuestionAnswered(AdvertiserQuestionAnswered)`
 
-| `ProvideNextIdentificationSurveyCommand(occurredAt)`
+| `ProvideNextIdentificationSurveyCommand(deviceId, occurredAt)`
 | `ProvideNextIdentificationSurveyHandler`
 | `NextIdentificationSurvey` or `NextStep`
 | `SurveyRepository`, `UserRepository`
-| `NewUserArrived`, `SurveyAssigned`, `IdentificationCompleted`
+| `NewUserArrived`; for a user the session already knows, `SurveyAssigned` or `IdentificationCompleted` and `DeviceLinked`
 
 | `ProvideNextVideoCommand(occurredAt)`
 | `ProvideNextVideoHandler`
@@ -343,6 +343,7 @@ Each aggregate is one package holding `Id`, `Event`, `Error`, a `State`, a case 
 | Operation | Receiver state | Emits | Returns
 
 | `createWithEmail(email, now)` | — | `UserCreated` | `User[WithEmail]`
+| `recognize(userId, email, now)` | — | `UserRecognized` | `User[WithEmail]`
 | `createGuest(nextQuestion, now)` | — | `NewUserArrived` | `User[Guest.type]`
 | `assignSurvey(nextQuestion, terminalPhase, now)` | `WithEmail` | `SurveyAssigned` or `IdentificationCompleted` | `User[AnsweringQuestion]` or `NextStep`
 | `assignVideo(videoId, advertiserId, videoType, now)` | `WithEmail` | `VideoAssigned` | `User[WatchingVideo]`
@@ -474,6 +475,23 @@ NOTE: the rule codecs describe the same shape as `question_rules.rule_config`, w
 | `Event` | `VideoVisualized(sessionId, userId, videoId, advertiserId, videoType, durationWatched, completed, occurredAt)`, `PlaybackStarted(playbackId, sessionId, videoId, fileUrl, occurredAt)`, `PlaybackEnded(playbackId, sessionId, occurredAt)`
 | `Error` | `VideoNotFound(videoId)`, `NoVideoAvailable`, `StaleFile(videoId, fileUrl)`
 |===
+
+=== device
+
+What the network says about the device a session runs on, and the rule for finding it again.
+
+|===
+| Type | Contents
+
+| `Fingerprint` | `clientMac` and `clickId`, both from UniFi's redirect; the click id is the link shortener's, which tracks devices
+| `Matching` | `inline def matches(known, seen)`, implemented by `ByClickId`, `ByMac` and `ByMacAndClickId`. Inline so a repository can splice it into its query and the database finds the device: Quill reduces it to a `WHERE` at compile time, and it runs as plain Scala everywhere else. It cannot be called through the trait — the compiler refuses to inline it there — only on a concrete policy
+| `Policy` | which `Matching` configuration names, `ByClickId` by default. `covers(seen)` says whether a fingerprint carries what it compares; one that does not is a new device, since an empty click id would match every other empty one
+| `Event` | `DeviceLinked(userId, deviceId, occurredAt)`
+|===
+
+A configured policy reaches the query through a `match` where the query is written, one branch per
+policy, each compiling its own static query. A `match` inside `core` handing the policy to a lambda
+does not compile: the lambda's parameter is typed as the trait, and the concrete policy is lost.
 
 == Repository traits
 

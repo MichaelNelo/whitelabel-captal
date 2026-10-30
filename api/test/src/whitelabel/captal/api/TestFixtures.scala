@@ -363,6 +363,16 @@ object TestFixtures:
       sessions: List[SessionRow],
       progress: List[UserSurveyProgressRow])
 
+  def getDeviceLinks
+      : ZIO[QuillSqlite, Throwable, List[DeviceUserRow]] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
+    import quill.*
+    run(query[DeviceUserRow])
+
+  def getDevices: ZIO[QuillSqlite, Throwable, List[DeviceRow]] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
+      import quill.*
+      run(query[DeviceRow])
+
   def queryDbState: ZIO[QuillSqlite, Throwable, DbState] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*
     for
@@ -419,6 +429,8 @@ object TestFixtures:
         stmt.execute("DELETE FROM user_survey_progress")
         stmt.execute("DELETE FROM answers")
         stmt.execute("DELETE FROM sessions")
+        stmt.execute("DELETE FROM device_users")
+        stmt.execute("DELETE FROM devices")
         stmt.execute("DELETE FROM localized_texts")
         stmt.execute("DELETE FROM question_rules")
         stmt.execute("DELETE FROM question_options")

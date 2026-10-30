@@ -54,6 +54,10 @@ A failed command emits nothing, by construction: `Op` only carries events on its
 | `userId`, `email`
 | `user.created`
 
+| `UserRecognized`
+| `userId`, `email` — an email already answered: the session becomes that user's
+| `user.recognized`
+
 | `NewUserArrived`
 | `userId`, `nextQuestion: Option[FullyQualifiedQuestionId]`
 | `user.new_arrived`
@@ -100,6 +104,19 @@ A failed command emits nothing, by construction: `Op` only carries events on its
 |===
 
 The logged `answer` is the `AnswerValue` encoded with the same circe codec the browser used to send it.
+
+=== Device events
+
+[cols="2,3,2"]
+|===
+| Event | Payload | `event_log.event_type`
+
+| `DeviceLinked`
+| `userId`, `deviceId`, `occurredAt` — a user identified on the session's device: by an email answered, or by a user the session already knew asking for the next identification question. Emitted every time, not only the first; being seen together again moves `last_seen_at`
+| `device.linked`
+|===
+
+The device itself is not an event: `SessionService.create` resolves it from the fingerprint before the session exists, and the commands that link it carry its id, taken from the session by the route.
 
 === Video events
 
@@ -175,12 +192,12 @@ All eight run inside one transaction, in this order. All live in `platform/src/w
 | one `answers` row per answer, in a single batch insert; `answer_value` is the circe encoding of the `AnswerValue`
 
 | `UserPersistenceHandler`
-| `UserCreated`
-| looks the email up first and reuses the existing `users.id` when it is already registered, otherwise inserts the row; then sets `sessions.user_id`, and updates the ambient `SessionContext` so later handlers and the route see the resolved user id
+| `UserCreated`, `UserRecognized`, `DeviceLinked`
+| inserts the user on `UserCreated` only — whether an email is already someone's is decided in `core`, by `AnswerEmailHandler` — then sets `sessions.user_id` and updates the ambient `SessionContext` so later handlers and the route see the id; upserts the `device_users` pair on `DeviceLinked`
 
 | `SessionPhaseHandler`
-| `IdentificationCompleted`, any identification answer, `VideoSurveyAssigned`, `VideoVisualized`
-| `sessions.phase`. First match wins: the first two cases set the phase after identification (`AdvertiserVideo`), `VideoSurveyAssigned` sets `AdvertiserVideoSurvey`, `VideoVisualized` sets the configured phase after a video (also `AdvertiserVideoSurvey`). It has no case for `AccessExpired`.
+| `IdentificationCompleted`, any identification answer, `UserRecognized`, `VideoSurveyAssigned`, `VideoVisualized`
+| `sessions.phase`. First match wins: the first two cases set the phase after identification (`AdvertiserVideo`), and so does `UserRecognized` — the email question met by a user who answered it before, which records no answer but moves on all the same. `VideoSurveyAssigned` sets `AdvertiserVideoSurvey`, `VideoVisualized` sets the configured phase after a video (also `AdvertiserVideoSurvey`). It has no case for `AccessExpired`.
 
 | `SessionSurveyHandler`
 | `SurveyAssigned`, `NewUserArrived` with a next question, `VideoSurveyAssigned`

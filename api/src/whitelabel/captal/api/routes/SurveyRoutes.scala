@@ -157,11 +157,13 @@ final class SurveyRoutes(
   val routes: Routes[FullEnv, Nothing] = Routes(
     answerEmail.implement: (cookie, request) =>
       for
-        _          <- identifying(cookie)
+        session    <- identifying(cookie)
         answerFlow <- ZIO.service[AnswerEmailFlowType]
         now        <- Clock.instant
         result     <- asApiError(
-          answerFlow.execute(AnswerEmailCommand(request.answer, now)).map(SurveyResponse.from))
+          answerFlow
+            .execute(AnswerEmailCommand(request.answer, session.deviceId, now))
+            .map(SurveyResponse.from))
         // After flow, SessionContext is updated with the resolved userId by
         // UserPersistenceHandler. Read it to set the cross-location user cookie.
         updated <- SessionContext.get
@@ -207,7 +209,9 @@ final class SurveyRoutes(
         flow   <- ZIO.service[NextSurveyFlowType]
         now    <- Clock.instant
         result <- asApiError(
-          flow.execute(ProvideNextIdentificationSurveyCommand(now)).map(SurveyResponse.from))
+          flow
+            .execute(ProvideNextIdentificationSurveyCommand(session.deviceId, now))
+            .map(SurveyResponse.from))
         // When the response carries a NextStep, the route propagates the phase to the session:
         // SessionPhaseHandler only reacts to domain events that imply progress
         // (IdentificationCompleted, etc.), and a fallback NextStep emits no such event.

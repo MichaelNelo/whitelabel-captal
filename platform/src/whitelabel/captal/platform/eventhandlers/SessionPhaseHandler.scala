@@ -64,6 +64,9 @@ object SessionPhaseHandler:
         end for
       end handle
 
+  /** An identification question answered, or the email question met by a user it recognized — who
+    * answered it before and records no new answer, but moves on all the same.
+    */
   private def isIdentificationAnswer(event: Event): Boolean =
     event match
       case Event.Survey(SurveyEvent.QuestionAnswered(_, questionEvent)) =>
@@ -76,6 +79,8 @@ object SessionPhaseHandler:
             true
           case _ =>
             false
+      case Event.User(_: UserEvent.UserRecognized) =>
+        true
       case _ =>
         false
 

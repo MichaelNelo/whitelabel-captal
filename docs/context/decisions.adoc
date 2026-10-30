@@ -255,6 +255,31 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
 * **`users` has no `location_id`; everything else does.** A user is identified once and recognised
   across every location's portal via the cross-location `captal_user` cookie; sessions, surveys,
   advertiser videos and localized texts are all scoped.
+* **A device is its fingerprint, and identity is resolved in `core`** (V27, 2026-10-30).
+  `devices.id` was a hash of the User-Agent, so every phone of one model and browser version was
+  one "device", and a laptop could be a new one by switching browsers. It is now found by the
+  fingerprint UniFi's redirect carries: the click id of the link shortener in front of the portal,
+  which tracks devices, and the client MAC. Which one a match compares is configuration
+  (`DEVICE_MATCHING`, `ByClickId` by default). The MAC validates itself — access is granted to
+  it, so claiming another authorizes somebody else — and is there for when that matters more.
+  ** *Matched in the database, decided in `core`.* `Matching` is an inline method on a concrete
+     policy object, so the repository splices it into its `filter` and Quill compiles it to a
+     `WHERE`. Calling it through the trait does not compile, so a runtime choice is a `match` in the
+     repository, one static query per branch. A `match` inside `core` handing the policy to a
+     lambda was tried and does not compile: the lambda parameter is typed as the trait.
+  ** *Who an email belongs to is `core`'s to say.* `UserPersistenceHandler` used to look the email
+     up and swap the session to the existing user, after `core` had already emitted its events with
+     a fresh id — so the email answer was stored under a user that was never created, which is
+     also why a returning user answering it again never hit the unique index on
+     `(user_id, question_id)`. Now `AnswerEmailHandler` asks `UserRepository.findIdByEmail`: a new
+     email emits `UserCreated` and its answer; a known one emits `UserRecognized` alone, because
+     the answer is the one they gave the first time. `SessionPhaseHandler` moves the session on
+     for `UserRecognized` as for an answer.
+  ** *Linked each time, trusted per pair.* `DeviceLinked` is emitted whenever a user is identified
+     on a device, and `answers` and `video_views` record the device. What a user has done on a
+     device is what earns them trust there, so typing someone else's email on your own laptop
+     starts at nothing. Both survive the sessions being cleaned up, which the history in
+     `sessions` would not.
 * **Video files: one row and one key per file, deleted when no playback of it is open** (V25,
   2026-10-30). A replaced file first overwrote the object under the same key and took the video
   out of rotation while it uploaded. A guest's player fetches a video in ranges for as long as it

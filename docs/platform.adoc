@@ -280,7 +280,7 @@ directly rather than going through the service.
 | Operation | Effect on `sessions`
 
 | `findById` | one row, mapped to `core`'s `SessionData`
-| `create` | upserts a `devices` row (`onConflictUpdate` on the id) then inserts the session with the captive-portal parameters
+| `create` | resolves the device — the `devices` row the fingerprint matches under the configured `Policy`, or a new one — then inserts the session with it and the captive-portal parameters
 | `createForUser` | the same, with `user_id` pre-populated for a recognised returning user
 | `setPhase`, `setLocale` | one column
 | `setCurrentQuestion` / `clearCurrentQuestion` | `current_survey_id` + `current_question_id`
@@ -400,7 +400,7 @@ every handler sees every event.
 
 | `EventLogHandler` | one `event_log` row per event: a stable `event_type` string (`user.created`, `user.survey_assigned`, `user.video_assigned`, …) and the event's fields as JSON in `event_data`, plus session id, user id and both timestamps
 | `AnswerPersistenceHandler` | one `answers` row per answered question, with `answer_value` encoded through `surveySchemas.encode`
-| `UserPersistenceHandler` | looks `users` up by email; inserts the row only when the email is new, then sets `sessions.user_id` to the resolved id and writes the resolved id back into `SessionContext`
+| `UserPersistenceHandler` | the user `core` resolved: inserts the row on `UserCreated`, not on `UserRecognized`; on both sets `sessions.user_id` and writes the id back into `SessionContext`. On `DeviceLinked`, upserts the `device_users` pair, moving `last_seen_at` when it exists
 | `SessionPhaseHandler` | `sessions.phase`, chosen from which event shape is present: identification answer or identification completed → the configured next phase; video survey assigned → `AdvertiserVideoSurvey`; video visualized → the configured post-video phase
 | `SessionSurveyHandler` | `sessions.current_survey_id` + `current_question_id` from `SurveyAssigned`, `NewUserArrived` and `VideoSurveyAssigned`
 | `SessionVideoHandler` | `sessions.current_video_id` and `current_advertiser_id` on assignment; one `video_views` row per `VideoVisualized`
