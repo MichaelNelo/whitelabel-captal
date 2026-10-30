@@ -207,8 +207,8 @@ is ambient, which is what lets the same repository serve a request and a schedul
 | `repositories/VideoRepositoryQuill.scala`
 | `advertiser_videos` for `findById`, and for `findNextForUser` a weighted-random ad selection
   joining `advertisers` and filtering on `surveys`/`questions`/`answers` for an unanswered
-  follow-up survey, falling back to the promo rotation ordered by `(priority, created_at)` from the
-  session's `last_promo_video_id` cursor. Localized title and description come from
+  follow-up survey, falling back to the session's location's promo the user has watched least
+  (`video_views`), ties broken by `(priority, created_at)`. Localized title and description come from
   `localized_texts`.
 |===
 
@@ -402,7 +402,7 @@ every handler sees every event.
 | `UserPersistenceHandler` | looks `users` up by email; inserts the row only when the email is new, then sets `sessions.user_id` to the resolved id and writes the resolved id back into `SessionContext`
 | `SessionPhaseHandler` | `sessions.phase`, chosen from which event shape is present: identification answer or identification completed → the configured next phase; video survey assigned → `AdvertiserVideoSurvey`; video visualized → the configured post-video phase
 | `SessionSurveyHandler` | `sessions.current_survey_id` + `current_question_id` from `SurveyAssigned`, `NewUserArrived` and `VideoSurveyAssigned`
-| `SessionVideoHandler` | `sessions.current_video_id` and `current_advertiser_id` on assignment; one `video_views` row per `VideoVisualized`; advances `sessions.last_promo_video_id` only for promos — ads are drawn at weighted random and keep no cursor
+| `SessionVideoHandler` | `sessions.current_video_id` and `current_advertiser_id` on assignment; one `video_views` row per `VideoVisualized`
 | `SessionExpirationHandler` | on `AccessExpired`, the single `resetForExpirationQuery` UPDATE. `users` and the cross-location cookie survive, so a returning guest skips the questions they already answered
 | `SurveyProgressHandler` | upserts `user_survey_progress` (insert or bump `updated_at`), then runs `SurveyService.isSurveyCompleteQuery` and sets `completed_at` when every active question has an answer
 |===

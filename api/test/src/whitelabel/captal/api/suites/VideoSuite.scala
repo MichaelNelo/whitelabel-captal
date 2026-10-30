@@ -3,6 +3,7 @@ package whitelabel.captal.api.suites
 import whitelabel.captal.api.TestFixtures
 import whitelabel.captal.api.TestHelpers.*
 import whitelabel.captal.core.application.Phase
+import whitelabel.captal.core.user
 import zio.test.*
 
 object VideoSuite:
@@ -114,5 +115,62 @@ object VideoSuite:
             parsed.get.videoUrl == promo.videoUrl,
             parsed.get.title.contains("House promo")
           )
+        ,
+        test("promos take turns per user, across that user's sessions"):
+          for
+            _      <- TestFixtures.seedEmailSurvey
+            first  <- TestFixtures.seedPromoVideo(videoUrl = "https://cdn.example.com/first.mp4")
+            second <- TestFixtures.seedPromoVideo(
+              videoUrl = "https://cdn.example.com/second.mp4",
+              priority = 2)
+            backend <- testBackend
+            a1      <- watchPromo(backend, "rotation-a@example.com")
+            a2      <- watchPromo(backend, "rotation-a@example.com")
+            a3      <- watchPromo(backend, "rotation-a@example.com")
+            b1      <- watchPromo(backend, "rotation-b@example.com")
+          yield assertTrue(
+            // Each visit is a new session: the rotation follows the user, not the session.
+            a1.contains(first.videoUrl),
+            a2.contains(second.videoUrl),
+            a3.contains(first.videoUrl),
+            // Another user starts from the first, whatever the first user has watched.
+            b1.contains(first.videoUrl)
+          )
+        ,
+        test("a session is served only its own location's promos"):
+          for
+            _ <- TestFixtures.seedEmailSurvey
+            _ <- TestFixtures.seedLocation("promo-elsewhere")
+            _ <- TestFixtures.seedLocation("promo-here")
+            // Earlier in rotation order, but another location's.
+            _ <- TestFixtures.seedPromoVideo(
+              videoUrl = "https://cdn.example.com/elsewhere.mp4",
+              locationId = Some("promo-elsewhere"))
+            here <- TestFixtures.seedPromoVideo(
+              videoUrl = "https://cdn.example.com/here.mp4",
+              priority = 2,
+              locationId = Some("promo-here"))
+            backend <- testBackend
+            served  <- watchPromo(backend, "located@example.com", Some("promo-here"))
+          yield assertTrue(served.contains(here.videoUrl))
       )
+
+  /** One visit by `email` in a new session, placed at `locationId` when given: identify, take the
+    * video served, watch it. The url served, which is what identifies the video.
+    */
+  private def watchPromo(
+      backend: sttp.client3.SttpBackend[zio.Task, Any],
+      email: String,
+      locationId: Option[String] = None) =
+    for
+      cookie <- createSession(backend)
+      _      <-
+        zio
+          .ZIO
+          .foreachDiscard(locationId)(TestFixtures.placeSessionAt(user.SessionId.unsafe(cookie), _))
+      _         <- getNextSurvey(backend, cookie)
+      _         <- postEmailAnswer(backend, cookie, email)
+      videoResp <- getNextVideo(backend, cookie)
+      _         <- postMarkVideoWatched(backend, cookie, 10, completed = true)
+    yield parseNextVideo(videoResp.body).map(_.videoUrl)
 end VideoSuite

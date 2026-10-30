@@ -19,7 +19,6 @@ final case class SessionRow(
     currentSurveyId: Option[survey.Id],
     currentQuestionId: Option[survey.question.Id],
     currentVideoId: Option[video.Id],
-    lastPromoVideoId: Option[video.Id],
     currentAdvertiserId: Option[String],
     locationId: Option[String],
     createdAt: String,

@@ -13,7 +13,6 @@ final case class SessionData(
     phase: application.Phase,
     currentQuestion: Option[FullyQualifiedQuestionId],
     currentVideoId: Option[video.Id],
-    lastPromoVideoId: Option[video.Id],
     currentAdvertiserId: Option[AdvertiserId] = None,
     locationId: Option[String] = None,
     clientMac: String = "",

@@ -92,12 +92,6 @@ object SessionService:
   inline def clearCurrentVideoQuery = quote: (sessionIdParam: user.SessionId) =>
     query[SessionRow].filter(_.id == sessionIdParam).update(_.currentVideoId -> None)
 
-  inline def updateLastPromoVideoQuery = quote:
-    (sessionIdParam: user.SessionId, videoIdParam: video.Id) =>
-      query[SessionRow]
-        .filter(_.id == sessionIdParam)
-        .update(_.lastPromoVideoId -> Some(videoIdParam))
-
   inline def updateCurrentAdvertiserQuery = quote:
     (sessionIdParam: user.SessionId, advertiserIdParam: String) =>
       query[SessionRow]
@@ -174,7 +168,6 @@ object SessionService:
             currentSurveyId = None,
             currentQuestionId = None,
             currentVideoId = None,
-            lastPromoVideoId = None,
             currentAdvertiserId = None,
             locationId = locationId,
             createdAt = now,
@@ -195,7 +188,6 @@ object SessionService:
                 _.currentSurveyId     -> lift(sessionRow.currentSurveyId),
                 _.currentQuestionId   -> lift(sessionRow.currentQuestionId),
                 _.currentVideoId      -> lift(sessionRow.currentVideoId),
-                _.lastPromoVideoId    -> lift(sessionRow.lastPromoVideoId),
                 _.currentAdvertiserId -> lift(sessionRow.currentAdvertiserId),
                 _.locationId          -> lift(sessionRow.locationId),
                 _.createdAt           -> lift(sessionRow.createdAt),
@@ -254,7 +246,6 @@ object SessionService:
             currentSurveyId = None,
             currentQuestionId = None,
             currentVideoId = None,
-            lastPromoVideoId = None,
             currentAdvertiserId = None,
             locationId = locationId,
             createdAt = now,
@@ -275,7 +266,6 @@ object SessionService:
                 _.currentSurveyId     -> lift(sessionRow.currentSurveyId),
                 _.currentQuestionId   -> lift(sessionRow.currentQuestionId),
                 _.currentVideoId      -> lift(sessionRow.currentVideoId),
-                _.lastPromoVideoId    -> lift(sessionRow.lastPromoVideoId),
                 _.currentAdvertiserId -> lift(sessionRow.currentAdvertiserId),
                 _.locationId          -> lift(sessionRow.locationId),
                 _.createdAt           -> lift(sessionRow.createdAt),
@@ -351,7 +341,6 @@ object SessionService:
       row.phase,
       currentQuestion,
       row.currentVideoId,
-      row.lastPromoVideoId,
       row.currentAdvertiserId.flatMap(AdvertiserId.fromString),
       row.locationId,
       row.clientMac,

@@ -180,7 +180,7 @@ All eight run inside one transaction, in this order. All live in `platform/src/w
 
 | `SessionVideoHandler`
 | `VideoAssigned`, `VideoVisualized`
-| on assignment, `sessions.current_video_id` plus `current_advertiser_id` when there is one; on visualisation, a `video_views` row, and `sessions.last_promo_video_id` when the video was a promo (advertiser videos are drawn at weighted random and keep no cursor). It never clears `current_video_id` — the advertiser-survey phase still needs it.
+| on assignment, `sessions.current_video_id` plus `current_advertiser_id` when there is one; on visualisation, a `video_views` row, which is also what the promo rotation counts. It never clears `current_video_id` — the advertiser-survey phase still needs it.
 
 | `SessionExpirationHandler`
 | `AccessExpired`
@@ -258,7 +258,7 @@ One pass through the portal, with the endpoint, the phase it requires, the event
 | 5. Report it watched
 | `POST /api/video/watched`
 | `AdvertiserVideo`
-| `VideoVisualized` → a `video_views` row, the promo cursor advanced if it was a promo, and `sessions.phase` = `AdvertiserVideoSurvey`.
+| `VideoVisualized` → a `video_views` row and `sessions.phase` = `AdvertiserVideoSurvey`.
 
 | 6. Ask for the video's question
 | `GET /api/survey/advertiser/next`

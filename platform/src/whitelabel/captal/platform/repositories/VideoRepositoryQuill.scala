@@ -16,8 +16,7 @@ import whitelabel.captal.platform.schema.{
   nullif,
   sqliteAbs,
   sqliteLog,
-  sqliteRandom,
-  strGt
+  sqliteRandom
 }
 import whitelabel.captal.platform.session.SessionContext
 import zio.*
@@ -36,15 +35,20 @@ object VideoRepositoryQuill:
     .headOption
     .map(t => LocalizedText(t.value, t.locale))
 
-  /** The first promo video in rotation order. `promoParam` is always `VideoType.Promo`, passed as a
-    * parameter because an enum reaches a query through `lift`, which an object-level quote cannot
-    * call.
+  /** A location's promo videos in rotation order, every location's when `locationIdParam` is empty.
+    * `promoParam` is always `VideoType.Promo`, passed as a parameter because an enum reaches a
+    * query through `lift`, which an object-level quote cannot call.
     */
-  inline def firstPromoQuery = quote: (promoParam: VideoType) =>
+  inline def promosQuery = quote: (locationIdParam: Option[String], promoParam: VideoType) =>
     query[AdvertiserVideoRow]
-      .filter(v => v.status == VideoStatus.Active && v.videoType == promoParam)
+      .filter(v =>
+        v.status == VideoStatus.Active && v.videoType == promoParam &&
+          locationIdParam.forall(lid => v.locationId.contains(lid)))
       .sortBy(v => (v.priority, v.createdAt))(Ord.asc)
-      .take(1)
+
+  /** The videos a user has watched, once per view. */
+  inline def viewsByUserQuery = quote: (userIdParam: user.Id) =>
+    query[VideoViewRow].filter(_.userId.contains(userIdParam)).map(_.videoId)
 
   // Weighted random ad selection — authenticated user (with EXISTS for unanswered surveys)
   inline def nextAdQueryAuthenticated = quote:
@@ -102,9 +106,7 @@ object VideoRepositoryQuill:
               case Some(_) =>
                 ZIO.succeed(ad)
               case None =>
-                // The promo cursor lives on the session row; SessionVideoHandler advances it
-                // whenever a promo is watched.
-                findNextPromo(sessionData.lastPromoVideoId, locale)
+                findNextPromo(userId, sessionData.locationId, locale)
         yield result
 
       private def findNextAd(userId: user.Id, locale: String): Task[Option[VideoToWatch]] =
@@ -121,58 +123,26 @@ object VideoRepositoryQuill:
                 fetchLocalizedTexts(rows.head, locale).map(Some(_))
         yield result
 
+      /** The location's promo this user has watched the fewest times, the earliest in rotation
+        * order among those: with each one watched in turn, they alternate.
+        */
       private def findNextPromo(
-          lastPromoVideoId: Option[video.Id],
+          userId: user.Id,
+          locationId: Option[String],
           locale: String): Task[Option[VideoToWatch]] =
-        lastPromoVideoId match
-          case Some(lastId) =>
-            val program =
-              for
-                currentOpt <- run(query[AdvertiserVideoRow].filter(_.id == lift(lastId))).map(
-                  _.headOption)
-                candidates <-
-                  currentOpt match
-                    case Some(currentVideo) =>
-                      findNextPromoAfter(currentVideo.priority, currentVideo.createdAt)
-                    case None =>
-                      run(firstPromoQuery(lift(VideoType.Promo)))
-                // Fallback to first promo when the cursor walked off the end
-                finalRows <-
-                  if candidates.isEmpty then
-                    run(firstPromoQuery(lift(VideoType.Promo)))
-                  else
-                    ZIO.succeed(candidates)
-                result <-
-                  finalRows.headOption match
-                    case Some(row) =>
-                      fetchLocalizedTexts(row, locale).map(Some(_))
-                    case None =>
-                      ZIO.none
-              yield result
-            program.orDie
-
-          case None =>
-            run(firstPromoQuery(lift(VideoType.Promo)))
-              .flatMap:
-                case Nil =>
-                  ZIO.none
-                case rows =>
-                  fetchLocalizedTexts(rows.head, locale).map(Some(_))
-              .orDie
-
-      // Plain parameters, so Quill can parse the lift() calls.
-      private def findNextPromoAfter(
-          priority: Int,
-          createdAt: String): Task[List[AdvertiserVideoRow]] = run(
-        query[AdvertiserVideoRow]
-          // `lift` on the status, unlike the quotes above: Quill folds an `inline val` inside a
-          // quoted `inline def` but not inside a `run` written out here.
-          .filter(v => v.status == lift(VideoStatus.Active) && v.videoType == lift(VideoType.Promo))
-          .filter(v =>
-            v.priority > lift(priority) ||
-              (v.priority == lift(priority) && strGt(v.createdAt, lift(createdAt))))
-          .sortBy(v => (v.priority, v.createdAt))(using Ord.asc)
-          .take(1))
+        val program =
+          for
+            promos <- run(promosQuery(lift(locationId), lift(VideoType.Promo)))
+            views  <-
+              if promos.isEmpty then
+                ZIO.succeed(Nil)
+              else
+                run(viewsByUserQuery(lift(userId)))
+            watched = views.groupMapReduce(identity)(_ => 1)(_ + _)
+            next    = promos.minByOption(promo => watched.getOrElse(promo.id, 0))
+            result <- ZIO.foreach(next)(fetchLocalizedTexts(_, locale))
+          yield result
+        program.orDie
 
       // Fetch localized texts for a video (title and description)
       private def fetchLocalizedTexts(

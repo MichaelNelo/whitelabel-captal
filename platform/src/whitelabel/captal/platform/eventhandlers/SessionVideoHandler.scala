@@ -6,7 +6,7 @@ import io.getquill.*
 import whitelabel.captal.core.application.Event
 import whitelabel.captal.core.survey.AdvertiserId
 import whitelabel.captal.core.user.Event as UserEvent
-import whitelabel.captal.core.video.{Event as VideoEvent, VideoType}
+import whitelabel.captal.core.video.Event as VideoEvent
 import whitelabel.captal.platform.VideoViewRow
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
@@ -62,18 +62,8 @@ object SessionVideoHandler:
                   createdAt = now
                 )
                 _ <- run(query[VideoViewRow].insertValue(lift(viewRow))).orDie
-                // Don't clear currentVideoId — it's needed during AdvertiserVideoSurvey phase
-                // It will be overwritten when a new video is assigned
-                // Advance the promo rotation cursor. Only promos have one: advertiser videos are
-                // drawn at weighted random and keep no position.
-                _ <-
-                  if viz.videoType == VideoType.Promo then
-                    run(
-                      SessionService.updateLastPromoVideoQuery(
-                        lift(sessionData.sessionId),
-                        lift(viz.videoId))).orDie
-                  else
-                    ZIO.unit
+              // Don't clear currentVideoId — it's needed during AdvertiserVideoSurvey phase
+              // It will be overwritten when a new video is assigned
               yield ()
         yield ()
         end for
@@ -83,7 +73,6 @@ object SessionVideoHandler:
       sessionId: whitelabel.captal.core.user.SessionId,
       userId: Option[whitelabel.captal.core.user.Id],
       videoId: whitelabel.captal.core.video.Id,
-      videoType: VideoType,
       durationWatched: Int,
       completed: Boolean,
       occurredAt: java.time.Instant)
@@ -104,7 +93,7 @@ object SessionVideoHandler:
               userId,
               videoId,
               _,
-              videoType,
+              _,
               durationWatched,
               completed,
               occurredAt)) =>
@@ -113,7 +102,6 @@ object SessionVideoHandler:
             sessionId,
             userId,
             videoId,
-            videoType,
             durationWatched,
             completed,
             occurredAt))

@@ -319,6 +319,26 @@ object TestFixtures:
     import quill.*
     run(query[SessionRow].filter(_.id == lift(sessionId)).update(_.phase -> lift(phase))).unit
 
+  /** A location row whose id, slug and name are all `locationId`. */
+  def seedLocation(locationId: String): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[
+    QuillSqlite]: quill =>
+    import quill.*
+    val location = LocationRow(locationId, locationId, locationId, 1, FixedNow, FixedNow, None)
+    run(query[LocationRow].insertValue(lift(location))).unit
+
+  /** Moves a session to a location, as if the API serving it were that location's: the tests' own
+    * API serves none.
+    */
+  def placeSessionAt(
+      sessionId: user.SessionId,
+      locationId: String): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
+      import quill.*
+      run(
+        query[SessionRow]
+          .filter(_.id == lift(sessionId))
+          .update(_.locationId -> lift(Option(locationId)))).unit
+
   // ─────────────────────────────────────────────────────────────────────────────
   // Query Helpers
   // ─────────────────────────────────────────────────────────────────────────────
@@ -598,42 +618,43 @@ object TestFixtures:
       videoUrl: String = "https://cdn.example.com/promo.mp4",
       videoTitle: String = "Promo Video",
       durationSeconds: Int = 10,
-      priority: Int = 1)
-      : ZIO[QuillSqlite, Throwable, VideoFixture] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
-    import quill.*
-    val now = FixedNow
-    val videoId = video.Id.generate
+      priority: Int = 1,
+      locationId: Option[String] = None): ZIO[QuillSqlite, Throwable, VideoFixture] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      val now = FixedNow
+      val videoId = video.Id.generate
 
-    val videoRow = AdvertiserVideoRow(
-      id = videoId,
-      advertiserId = None,
-      videoType = video.VideoType.Promo,
-      videoUrl = videoUrl,
-      durationSeconds = durationSeconds,
-      minWatchSeconds = 5,
-      showCountdown = 0,
-      noRepeatSeconds = None,
-      locationId = None,
-      status = VideoStatus.Active,
-      priority = priority,
-      createdAt = now,
-      updatedAt = now
-    )
+      val videoRow = AdvertiserVideoRow(
+        id = videoId,
+        advertiserId = None,
+        videoType = video.VideoType.Promo,
+        videoUrl = videoUrl,
+        durationSeconds = durationSeconds,
+        minWatchSeconds = 5,
+        showCountdown = 0,
+        noRepeatSeconds = None,
+        locationId = locationId,
+        status = VideoStatus.Active,
+        priority = priority,
+        createdAt = now,
+        updatedAt = now
+      )
 
-    // Localized text for video title
-    val titleRow = LocalizedTextRow(
-      id = UUID.randomUUID.toString,
-      entityId = videoId.asString,
-      locale = "en",
-      value = videoTitle,
-      category = "backend",
-      createdAt = now,
-      updatedAt = now)
+      // Localized text for video title
+      val titleRow = LocalizedTextRow(
+        id = UUID.randomUUID.toString,
+        entityId = videoId.asString,
+        locale = "en",
+        value = videoTitle,
+        category = "backend",
+        createdAt = now,
+        updatedAt = now)
 
-    for
-      _ <- run(query[AdvertiserVideoRow].insertValue(lift(videoRow)))
-      _ <- run(query[LocalizedTextRow].insertValue(lift(titleRow)))
-    yield VideoFixture("", videoId, videoUrl, durationSeconds, Some(videoTitle))
+      for
+        _ <- run(query[AdvertiserVideoRow].insertValue(lift(videoRow)))
+        _ <- run(query[LocalizedTextRow].insertValue(lift(titleRow)))
+      yield VideoFixture("", videoId, videoUrl, durationSeconds, Some(videoTitle))
 
   def getVideoViews
       : ZIO[QuillSqlite, Throwable, List[VideoViewRow]] = ZIO.serviceWithZIO[QuillSqlite]: quill =>

@@ -159,11 +159,12 @@ unrelated algorithms:
   that the survey is skipped, the video itself stops being selectable.
 
 | Promo
-| Not random: ascending `(priority, created_at)`, resumed from `sessions.last_promo_video_id` (a
-  cursor the session carries, advanced only when a promo is watched — ads are drawn fresh every
-  time and keep no cursor) and wrapping back to the first promo once the rotation runs out. A promo
-  is served whether or not it has a survey, and whether or not that survey is exhausted — unlike an
-  ad, having nothing left to ask is not a reason to skip a promo.
+| Not random, and per guest: the location's promo this user has watched fewest times (counted in
+  `video_views`, across every session of theirs), the earliest by ascending `(priority,
+  created_at)` among those. With each promo watched in turn they alternate, and a promo added later
+  comes next for everyone who has not seen it. A promo is served whether or not it has a survey, and
+  whether or not that survey is exhausted — unlike an ad, having nothing left to ask is not a reason
+  to skip a promo.
 |===
 
 Both are filtered to the session's own location (`sessions.location_id`, via

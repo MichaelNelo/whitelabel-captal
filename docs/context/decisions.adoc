@@ -234,6 +234,17 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
   the *video type* values for a different reason: `publicidad`/`propaganda` (the DB's literal
   values) had disagreed with the column's own name (`last_promo_video_id`) since V5, and that one
   genuinely needed fixing, not decoupling.
+* **Promos rotate per user and location, by fewest views** (`findNextPromo` in
+  `VideoRepositoryQuill`, 2026-10-30). The rotation used to be a cursor on the session row,
+  `sessions.last_promo_video_id`: a new session always started from the first promo, and nearly every
+  guest of a captive portal is a new session, so a second promo was almost never served. Now: the
+  session's location's promo this user has watched fewest times in `video_views`, ties by
+  `(priority, created_at)`. Rejected: "the one after the last watched", because it needs the latest
+  view, and views are stamped from the ZIO clock — frozen in the suites and equal on ties — so the
+  order was not deterministic; counting is. Its cost, accepted: a promo added later is served to a
+  returning user until it has caught up with the others. The cursor's column stays, unused: SQLite
+  refuses `DROP COLUMN` on a column with a foreign key (`REFERENCES advertiser_videos(id)`, V4), and
+  removing it means rebuilding `sessions`.
 * **IDs are random UUIDs, not deterministic `uuid5`-from-a-seed.** The deterministic scheme existed
   so re-applying the same YAML was an upsert rather than a duplicate; with explicit CRUD through
   the MCP tools that purpose is gone, so `IdGenerator`'s old role (implicit guardian of every

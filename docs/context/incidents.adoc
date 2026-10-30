@@ -234,6 +234,15 @@ none was the pairing the driver targets.
   format under test is provably the format served. **Lesson:** a wire-contract test that
   constructs its own codec configuration, even "the same" configuration by separate construction,
   is testing a coincidence, not a contract.
+* **Only the first promo was ever served.** An operator added a second promo to `dummy-cafe` and,
+  through five visits, saw the first one five times: 19 sessions, the first promo viewed in 5 of
+  them, the second never. The rotation cursor lived on the session and every visit was a new
+  session. The same queries took promos from every location, although the documentation said they
+  were filtered to the session's — only the ad query was. **Fix:** per user and location, by fewest
+  views (see `decisions.adoc`, "Data model"), with `VideoSuite` tests for a user across sessions and
+  for a session at one location with another location's promo earlier in rotation order — both fail
+  against the cursor. **Lesson:** a rotation keyed to something that is new on nearly every visit
+  never rotates.
 
 == MCP schema generation
 

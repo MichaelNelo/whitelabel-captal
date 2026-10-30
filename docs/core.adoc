@@ -479,7 +479,7 @@ NOTE: the rule codecs describe the same shape as `question_rules.rule_config`, w
 | `SurveyRepository.findNextIdentificationSurvey()` | `NextIdentificationSurvey`
 | `SurveyRepository.findNextAdvertiserSurvey(videoId)` | `NextAdvertiserSurvey`
 | `VideoRepository.findById(id)` | `video.AdvertiserVideo`
-| `VideoRepository.findNextForUser(userId)` | `video.VideoToWatch` — an advertiser video when one qualifies, otherwise a promo; the promo rotation cursor lives on the session row and is read by the implementation, not passed in
+| `VideoRepository.findNextForUser(userId)` | `video.VideoToWatch` — an advertiser video when one qualifies, otherwise the session's location's promo this user has watched least; the implementation reads the location from the session, it is not passed in
 |===
 
 `infrastructure/Session.scala` holds `SessionData`, the session projection the handlers and `MarkVideoWatchedHandler.withSession` read: `sessionId`, `userId: Option`, `locale`, `phase`, `currentQuestion: Option[FullyQualifiedQuestionId]`, `currentVideoId`, `lastPromoVideoId`, `currentAdvertiserId`, `locationId`, `clientMac`, `apMac`, `redirectUrl`, `ssid`, `clickId`, `accessExpiresAt: Option[Instant]`.

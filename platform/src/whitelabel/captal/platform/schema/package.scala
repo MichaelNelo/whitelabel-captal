@@ -27,9 +27,6 @@ package object schema:
   inline def datetimeMinusSeconds(inline seconds: Int): Quoted[String] =
     sql"datetime('now', '-' || $seconds || ' seconds')".as[String]
 
-  // String comparison for Quill, avoiding the augmentString it cannot parse.
-  inline def strGt(inline a: String, inline b: String): Quoted[Boolean] = sql"$a > $b".as[Boolean]
-
   // ─────────────────────────────────────────────────────────────────────────────
   // Schema Meta - Row types
   // ─────────────────────────────────────────────────────────────────────────────

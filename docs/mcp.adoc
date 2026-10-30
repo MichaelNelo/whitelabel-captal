@@ -496,8 +496,8 @@ never be drawn. Duration is never accepted as input; it is read from the uploade
 |`content:write`
 |No advertiser. A survey is created only if questions are given — an empty survey would be worse
 than none, since the portal would then ask for a survey whose first question does not exist.
-Promos rotate by ascending priority and creation date, not weighted at random like advertiser
-videos.
+Promos rotate per guest — each user is served the location's promo they have watched least, by
+ascending priority and creation date among equals — not weighted at random like advertiser videos.
 
 |`list_videos`
 |read-only
