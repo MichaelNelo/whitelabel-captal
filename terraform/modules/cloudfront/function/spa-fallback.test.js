@@ -73,6 +73,23 @@ test('rewrites an extensionless path under a slug to its index', () => {
   assert.strictEqual(handler(request('/cafe-centro/video/')).uri, '/cafe-centro/index.html');
 });
 
+console.log('spa-fallback: videos');
+
+test('passes a video through untouched, though it has no extension', () => {
+  // `<slug>/videos/<id>` is the key VideoTools stores the file under. Taken for a route, it was
+  // redirected to `/<id>/` and then answered with the portal's index.html instead of the video.
+  const uri = '/cafe-centro/videos/aef73785-848c-437a-a01d-c8922b31ff04';
+  const out = handler(request(uri));
+  assert.strictEqual(out.uri, uri);
+  assert.strictEqual(out.statusCode, undefined);
+});
+
+test('keeps the portal\'s own video route a route', () => {
+  // The SPA's view is `video`, singular, and a bare `videos/` is no file either.
+  assert.strictEqual(handler(request('/cafe-centro/video/')).uri, '/cafe-centro/index.html');
+  assert.strictEqual(handler(request('/cafe-centro/videos/')).uri, '/cafe-centro/index.html');
+});
+
 test('redirects a slug with no trailing slash, keeping the query string', () => {
   // The captive portal lands guests on `/<slug>?id=…&ap=…`, and the SPA reads those to build the
   // headers `/api/status` resolves a session from. Dropping them is a session that never resolves.

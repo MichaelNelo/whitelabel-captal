@@ -20,7 +20,15 @@ function handler(event) {
     };
   }
 
-  var lastSegment = uri.split('/').pop();
+  var parts = uri.split('/');
+
+  // A location's video, `/<slug>/videos/<id>`: stored without an extension, its object carrying its
+  // own Content-Type, so the checks below would take it for a portal route.
+  if (parts.length === 4 && parts[2] === 'videos' && parts[3]) {
+    return event.request;
+  }
+
+  var lastSegment = parts[parts.length - 1];
 
   // File request (has extension): pass through unchanged.
   if (lastSegment && lastSegment.indexOf('.') !== -1) {
@@ -43,7 +51,6 @@ function handler(event) {
   }
 
   // /<slug>/... with no extension: rewrite to /<slug>/index.html for SPA fallback.
-  var parts = uri.split('/');
   if (parts.length >= 2 && parts[1]) {
     event.request.uri = '/' + parts[1] + '/index.html';
   }

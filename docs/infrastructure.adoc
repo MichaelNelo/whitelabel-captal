@@ -300,8 +300,9 @@ One function, `function/spa-fallback.js`, does two jobs, the first ahead of the 
   earlier one back) — with a `403` before the extension check below would otherwise
   let a direct request straight through to a 200, since the bucket policy grants CloudFront the
   whole bucket.
-* **SPA fallback and the slug redirect.** A request with a file extension passes through unchanged;
-  `/<slug>` with no trailing slash gets a `301` to `/<slug>/` with the query string preserved
+* **SPA fallback and the slug redirect.** A request with a file extension passes through unchanged,
+  and so does a video, `/<slug>/videos/<id>`, which is stored without one (its object carries its
+  `Content-Type`); `/<slug>` with no trailing slash gets a `301` to `/<slug>/` with the query string preserved
   (UniFi's captive portal lands a guest on `/<slug>?id=…&ap=…&click_id=…&ssid=…`, and dropping those
   on the redirect leaves the SPA with no portal context for its first `/api/status` call); anything
   else without an extension rewrites to `/<slug>/index.html`.
