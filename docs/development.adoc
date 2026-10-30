@@ -216,14 +216,11 @@ stream sending a comment every 30 seconds stayed open well past Cloudflare's 100
 only counts silence. Nothing guarantees it, though, and quick tunnels also cap a tunnel at 200
 in-flight requests and carry no uptime guarantee.
 
-The backoffice starts on port 8081 with a **fixed** admin token, `dev-token` — not generated, because
-it is meant to be copied once into an MCP host's configuration by hand, and a token that changed
-every run would be miscopied more often than it would ever be stolen. With `--tunnel` that no longer
-holds. The server is public and `dev-token` is written here, so the token is random instead, and new
-on every run even when the tunnel's address is not. Seeding replaces the admin row in place, so
-`dev-token` stops working until the next run without the flag.
-`--token <value>` overrides either. The task prints a ready-to-paste block, addressed to the tunnel
-when there is one:
+The backoffice starts on port 8081 with a **fixed** admin token, `dev-token`, with or without
+`--tunnel`, so a connector registered against a tunnel keeps working for as long as the tunnel does.
+With `--tunnel` the server is public and the token is written here: anyone who finds the tunnel's
+address gets in. `--token <value>` overrides it. The task prints a ready-to-paste block, addressed to
+the tunnel when there is one:
 
 [source,json]
 ----

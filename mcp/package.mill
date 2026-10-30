@@ -118,8 +118,8 @@ object `package` extends BaseModule with Released:
     * build; `mill mcp.stop` stops it, `devenv processes logs mcp` shows its log.
     *
     * `--tunnel` exposes the server and LocalStack through Cloudflare quick tunnels, which stay open
-    * between runs, and the admin token is then random. `--token` overrides it. Usage: mill mcp.dev,
-    * or mill mcp.dev --tunnel
+    * between runs. The admin token is `dev-token` either way; `--token` overrides it. Usage: mill
+    * mcp.dev, or mill mcp.dev --tunnel
     */
   def dev(
       port: Int = devPort,
@@ -192,13 +192,7 @@ object `package` extends BaseModule with Released:
         println("[dev]   no --tunnel, so the server answers on localhost only")
 
     val resourceUri = s"${publicUrl.getOrElse(s"http://localhost:$port")}/mcp"
-    val adminToken = token.getOrElse:
-      if tunnel.value then
-        val bytes = new Array[Byte](32)
-        java.security.SecureRandom().nextBytes(bytes)
-        java.util.HexFormat.of().formatHex(bytes)
-      else
-        "dev-token"
+    val adminToken = token.getOrElse("dev-token")
 
     println(s"[dev] Step 6/6: Starting the MCP backoffice on :$port...")
 
@@ -391,7 +385,7 @@ object `package` extends BaseModule with Released:
       */
     def tofuSources: T[Seq[PathRef]] = Task.Sources(moduleDir / os.up / os.up / "terraform")
 
-    /** Hash of the OpenTofu configuration's `.tf` and `.tfvars` files, so that an edit re-applies.
+    /** Hash of the files the OpenTofu configuration reads, so that an edit re-applies.
       * Cannot be derived from [[tofuSources]], which does not cover a `CAPTAL_TERRAFORM_DIR` override.
       */
     private def tofuConfig: T[Int] = Task.Input:
@@ -399,8 +393,11 @@ object `package` extends BaseModule with Released:
       if !os.exists(dir) then
         0
       else
-        os.walk(dir)
-          .filter(p => os.isFile(p) && (p.last.endsWith(".tf") || p.last.endsWith(".tfvars")))
+        // Everything the configuration reads: the CloudFront function's and the Lambda's code too.
+        os.walk(dir, skip = _.last == ".terraform")
+          .filter(p =>
+            os.isFile(p) && Seq(".tf", ".tfvars", ".js", ".py").exists(p.last.endsWith) &&
+              !p.last.endsWith(".test.js"))
           .sorted
           .map(p => (p.relativeTo(dir).toString, os.read(p)).hashCode)
           .sum

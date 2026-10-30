@@ -610,6 +610,10 @@ GET /api/health              -> 200 {"status":"ok"}
   container and database (`E2E_DB_URL`, `migratedE2eUrl` in `mcp/package.mill`). **Lesson:** isolating
   suites by module is not enough when a single module's suites share tables.
 
+* **A change to the CloudFront function did not re-apply locally.** `tofuConfig` hashed `.tf` and
+  `.tfvars` only, so `mcp.dev` and `mcp.test` kept LocalStack on the old function until something else
+  changed. **Fix:** it hashes the function's and the Lambda's code too.
+
 == Long-running local processes
 
 Found while moving them under devenv, on 2026-10-29, with devenv 2.1.2 on WSL 2.
@@ -722,3 +726,11 @@ then reverted in its entirety once actually wired into the published bundle.
   that hadn't faded out yet. All three were fixed together: the `<video>` element is now
   Laminar-managed and rendered exactly once, the intro keeps its overlay class, and playback starts
   on dismissal rather than on mount.
+* **Videos were served as the portal's HTML.** A guest got past identification and the player got
+  `index.html` instead of the file. `VideoTools.storageKey` stores a video at `<slug>/videos/<id>`,
+  with no extension and its `Content-Type` on the object, and the CloudFront function took any path
+  whose last segment has no dot for a portal route: a `301` to `/<slug>/videos/<id>/`, then the
+  rewrite to `/<slug>/index.html`. Found against LocalStack on 2026-10-30; production runs the same
+  function and the same keys. **Fix:** `spa-fallback.js` passes `/<slug>/videos/<id>` through, with a
+  test. A browser that already followed the `301` keeps it cached. **Lesson:** a rule keyed on "has an
+  extension" is a rule about every key scheme in the bucket.

@@ -627,7 +627,11 @@ rule are in `incidents.adoc`, section "The Mill build".
 * **Local dev tooling has its own choices.** `--tunnel` uses Cloudflare quick tunnels, because they need
   no account and no configuration (`mill-build/src/millbuild/Tunnels.scala`); a tunnel's URL is kept for
   as long as its process runs, which is why a running tunnel is reused rather than reopened. With a
-  tunnel the admin token is random, since the server is public. Without one it is the fixed
+  tunnel the admin token is the same fixed `dev-token` (2026-10-30): a token random on every run
+  forced the connector to be registered again on every restart, even with the tunnel's address kept.
+  Accepted knowingly — the server is public and the token is in the repository — for a dev-only server
+  holding dev data; a token derived by HMAC from a secret in `.env` and the tunnel's host was proposed
+  and deferred. Without a tunnel it is the fixed
   `dev-token`, which is copied by hand into `.mcp.json`, and a token that changed every run would be
   copied wrong more often than it would be secure. Two tunnels, for the server and for LocalStack,
   because the MCP App pages render on the host's public origin and load scripts from, and upload to,

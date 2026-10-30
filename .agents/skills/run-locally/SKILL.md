@@ -50,11 +50,12 @@ Six steps, in order:
    `https://<random>.trycloudflare.com` URLs. A tunnel already open is reused, so the URLs stay the
    same between runs until `mill mcp.stop`. No account or token is needed. The MCP App pages load their scripts and PUT uploads through
    LocalStack's tunnel (`SCRIPT_BASE_URL`, `PRESIGN_ENDPOINT_URL`), since a page rendered by a hosted
-   client may not reach localhost. The tunnels close when the server exits. Without the flag the
-   step is skipped.
-6. Starts the backoffice on `:8081` with a **fixed** admin token, `dev-token`. With `--tunnel` the
-   server is public, so the admin token is random and printed instead, and the server's address is
-   the tunnel URL. `--token <value>` overrides either.
+   client may not reach localhost. The tunnels stay open after the task returns, until `mill
+   mcp.stop`. Without the flag the step stops any that are open.
+6. Starts the backoffice on `:8081`, as the devenv process `mcp`, with a **fixed** admin token,
+   `dev-token`, also with `--tunnel` — so a connector registered against the tunnel keeps working
+   across runs. With `--tunnel` the server's address is the tunnel URL, and the server is public with
+   a token written in this repository. `--token <value>` overrides it.
 
 The backoffice's own `Main` then runs `McpMigrate` itself as part of its boot, after checking the API
 schema is already at the version it requires — that check is what fails loudly if `platform.Migrate`
