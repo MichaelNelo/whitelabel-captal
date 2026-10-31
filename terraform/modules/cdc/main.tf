@@ -99,7 +99,9 @@ resource "aws_service_discovery_service" "cdc" {
     routing_policy = "MULTIVALUE"
   }
 
-  health_check_custom_config {}
+  # No `health_check_custom_config`: the task has no health check to report through it, and ECS
+  # deregisters a task that stops. LocalStack also drops an empty one, which would replace this
+  # resource on every apply.
 }
 
 # One task. A second would split rqlite's posts from the subscriptions: the leader posts to

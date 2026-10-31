@@ -128,9 +128,8 @@ address and every subscriber has to follow the relay that receives those posts. 
 `ingest_url`, which the root passes to rqlite as its `cdc_endpoint`, and `feed_address`, which it
 passes to the backoffice as `CDC_FEED_ADDRESS`. See xref:infrastructure.adoc[Infrastructure].
 
-Locally `cdc_desired_count` is `0`: `mill mcp.dev` runs the relay on the host as the devenv process
-`cdc`, on `8090` and `9090`, and the local tfvars point rqlite at
-`http://host.docker.internal:8090/cdc`. See xref:development.adoc[Local development].
+Locally it runs the same way, as a task in LocalStack that `mill mcp.dev` releases, and rqlite and
+the backoffice reach it as `cdc.captal.local`. See xref:development.adoc[Local development].
 
 The relay is released like the other images: `docker/cdc.Dockerfile`, the `captal-cdc` ECR
 repository, its version from `cdc/cliff.toml` and `cdc/v*` tags, passed to the configuration as

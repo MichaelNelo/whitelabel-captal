@@ -13,8 +13,20 @@ variable "aws_region" {
   type        = string
 }
 
-variable "aws_endpoint_url" {
-  description = "LocalStack endpoint, or empty against AWS. Empty means the variable is left out of the container definition entirely rather than set to an empty string -- the server reads it as an Option, and `Some(\"\")` would point every AWS client at nothing."
+variable "public_origin" {
+  description = "Scheme, host and port clients reach the server at, when not its hostname or the load balancer: a tunnel to a local one. Empty derives it."
+  type        = string
+  default     = ""
+}
+
+variable "public_port" {
+  description = "Port the load balancer answers on from outside, when not the scheme's own: LocalStack's gateway port. 0 leaves it out of the derived address."
+  type        = number
+  default     = 0
+}
+
+variable "assets_endpoint_url" {
+  description = "Where an operator's browser reaches the assets bucket directly: LocalStack's gateway, or a tunnel to it. The server loads its pages' scripts from `<this>/<bucket>` and presigns uploads against it. Empty, it uses the distribution and the S3 endpoint, as in AWS."
   type        = string
   default     = ""
 }

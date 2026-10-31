@@ -74,7 +74,7 @@ object ci extends Module:
     *
     * With `AWS_ENDPOINT_URL` set to this build's LocalStack it releases there and tags nothing, which is
     * how it runs on a dev machine: `CAPTAL_ENV=local AWS_ENDPOINT_URL=http://localhost:4567 mill ci.run`.
-    * `mcp.dev` runs the first four steps without waiting for the locations to settle.
+    * `mcp.dev` runs the first four steps, as [[release]], without waiting for the locations to settle.
     *
     * Usage: `mill ci.run`
     */
@@ -82,7 +82,7 @@ object ci extends Module:
     val target = ReleaseTarget.fromEnv(Task.env)
     val workDir =
       if target.local then
-        localStackWorkDir(target, Task.env)
+        localStackWorkDir(target.endpoint.get, Task.env)
       else
         Task.dest
     val workspace = moduleDir / os.up
@@ -108,32 +108,17 @@ object ci extends Module:
           case Some(previous) if release.changed => s"$previous -> ${release.tag}"
           case Some(previous)                     => s"$previous, which nothing since moves"
         }")
-    println(s"[ci] Steps 1-2/5: Images built; applying the ${target.environment} configuration...")
-    val (outputs, published) = applyConfiguration(target, configDir, workDir, tags): registries =>
-      publishImages(target, configDir, registries, built, tags)
-    val apiImage = published.getOrElse(sys.error("[ci] the API image was not published"))
-    def output(name: String) = outputs.getOrElse(
-      name,
-      sys.error(s"[ci] the configuration has no $name output"))
-    val cluster = output("ecs_cluster_name")
-
-    println("[ci] Step 3/5: Moving every location onto the API image...")
-    val locations = locationServices(target, cluster)
-    rollLocations(target, cluster, locations, apiImage, await = true)
-
-    // Published once per version: skipped when the bucket holds it already. Locally it is always published.
-    val bucket = output("assets_bucket_name")
-    if !target.local && clientPublished(target, bucket, clientVersion) then
-      println(s"[ci] Step 4/5: The client's $clientVersion is published already")
-    else
-      println(s"[ci] Step 4/5: Publishing the client's $clientVersion to every location...")
-      publishClient(
-        target,
-        bundle,
-        clientVersion,
-        bucket,
-        output("cloudfront_distribution_id"),
-        locations)
+    println(s"[ci] Steps 1-4/5: Images built; releasing them and the client to ${target.environment}...")
+    val _ = release(
+      target,
+      configDir,
+      workDir,
+      tags,
+      built,
+      bundle,
+      clientVersion,
+      variables = Nil,
+      awaitLocations = true)
 
     val moved = versions.filter(_.changed).map(_.tag)
     if moved.isEmpty then
@@ -150,20 +135,5 @@ object ci extends Module:
       moved.foreach: tag =>
         git("tag", tag)
         git("push", "origin", s"refs/tags/$tag")
-
-  /** For a release to LocalStack: starts this build's container if needed and returns the state
-    * directory that `mcp.dev` shares.
-    */
-  private def localStackWorkDir(target: ReleaseTarget, env: Map[String, String]): os.Path =
-    val port = java.net.URI(target.endpoint.get).getPort
-    if port != localStackPort then
-      sys.error(
-        s"[ci] AWS_ENDPOINT_URL names port $port, and this build's LocalStack listens on $localStackPort")
-    if localStackToken(env).isEmpty then
-      sys.error(
-        "[ci] the release needs ECS, which LocalStack runs only with a licence. Set LOCALSTACK_AUTH_TOKEN in .env.")
-    ensureLocalStack(localStackContainer, localStackPort, env)
-    localStackStateDir(localStackContainerId().getOrElse(
-      sys.error(s"[ci] '$localStackContainer' is not running after starting it; `docker logs $localStackContainer` says why")))
 end ci
 

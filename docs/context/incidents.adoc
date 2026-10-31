@@ -760,3 +760,21 @@ then reverted in its entirety once actually wired into the published bundle.
   image with the file before deploying it, 2026-10-30. **Fix:** `1` and `60000000000`, with a comment
   in the entrypoint. **Lesson:** the guide describes the fields, the struct decides their types —
   check a config file against the version that will read it.
+* **The local database was emptied by an apply that changed rqlite's task definition.** Pointing
+  `RQLITE_CDC_ENDPOINT` at the relay replaced every rqlite task, and the new nodes restored nothing:
+  the backup bucket held no version from the cluster before, which had run 31 hours with
+  `-auto-backup` every five minutes; the new cluster uploads backups as configured. Why the old one
+  never did was not found — its containers went with the replacement. Found 2026-10-31.
+  **Lesson:** a change to rqlite's task definition replaces every node in any environment, and the
+  data survives only through the S3 backup; check that the bucket holds a recent version before
+  applying one, in production above all.
+* **LocalStack's load balancer kept sending requests to a task that was gone.** After the
+  backoffice's service replaced a task, its target group still held the old one, and the load
+  balancer sent every request to the first target it held: `500` from LocalStack, connection
+  refused, while the new task answered `ok` on its own port. LocalStack registers a task that starts
+  and never deregisters one that stops; the first registration also named the host gateway and a
+  published port (`192.168.65.254:53553`), the later ones the task's address and the container port.
+  Found 2026-10-31, with `mcp.dev` first releasing the backoffice into LocalStack. **Fix:**
+  `syncLocalTargets` (`mill-build/src/millbuild/Release.scala`) leaves a service's target group
+  holding its running tasks alone, and `mcp.dev` waits for the backoffice's service to settle and
+  syncs it. A location's service rolled by the release is not synced yet.

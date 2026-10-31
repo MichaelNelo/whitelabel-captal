@@ -440,8 +440,8 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
   `shutdownNow`.
 * **One relay task.** rqlite's leader posts to the address `cdc.<namespace>` resolves to, and a
   subscriber follows the one it resolved; two tasks would split the posts from the subscriptions.
-* **Locally the relay runs on the host**, as the devenv process `cdc` beside the backoffice, as the
-  backoffice itself does; LocalStack's rqlite reaches it through `host.docker.internal`.
+* **Locally the relay runs as a task in LocalStack**, as in AWS, released by `mcp.dev`; rqlite and the
+  backoffice reach it as `cdc.captal.local`.
 
 == Client and bundle
 
@@ -817,18 +817,29 @@ rule are in `incidents.adoc`, section "The Mill build".
   hosted zone. Without a licence only `s3` is started.
 * **Local dev tooling has its own choices.** `--tunnel` uses Cloudflare quick tunnels, because they need
   no account and no configuration (`mill-build/src/millbuild/Tunnels.scala`); a tunnel's URL is kept for
-  as long as its process runs, which is why a running tunnel is reused rather than reopened. With a
-  tunnel the admin token is the same fixed `dev-token` (2026-10-30): a token random on every run
-  forced the connector to be registered again on every restart, even with the tunnel's address kept.
-  Accepted knowingly — the server is public and the token is in the repository — for a dev-only server
-  holding dev data; a token derived by HMAC from a secret in `.env` and the tunnel's host was proposed
-  and deferred. Without a tunnel it is the fixed
-  `dev-token`, which is copied by hand into `.mcp.json`, and a token that changed every run would be
-  copied wrong more often than it would be secure. Two tunnels, for the server and for LocalStack,
-  because the MCP App pages render on the host's public origin and load scripts from, and upload to,
-  LocalStack directly. Scripts are read from the bucket rather than the distribution, because LocalStack's
-  gateway refuses a distribution request carrying an `Origin` it does not know, and a page in a host's
-  frame always sends one.
+  as long as its process runs, which is why a running tunnel is reused rather than reopened. The
+  admin token is the one the configuration generates into Secrets Manager, as in production
+  (2026-10-31), read and printed by `mcp.dev`. It replaced a fixed `dev-token` written in the
+  repository, chosen when a token random on every run forced the connector to be registered again on
+  every restart; the generated one is kept for as long as the LocalStack container, which is what
+  that needed. Two tunnels, for the server and for LocalStack, because the MCP App pages render on
+  the host's public origin and load scripts from, and upload to, LocalStack directly. Scripts are
+  read from the bucket rather than the distribution, because LocalStack's gateway refuses a
+  distribution request carrying an `Origin` it does not know, and a page in a host's frame always
+  sends one. The backoffice's tunnel goes to LocalStack's port with the load balancer's `Host`,
+  since the backoffice runs there as a task.
+* **`mcp.dev` releases into LocalStack instead of running the backoffice on the host** (2026-10-31),
+  at the user's direction: the backoffice, the relay and the locations run as tasks from their
+  images, released with `ci.run`'s own `release`. What it costs: a change reaches the backoffice only
+  through an image build and a task restart, and its logs are CloudWatch's in LocalStack rather than
+  a devenv process's. What it buys: the local path is the deployed one, including images,
+  service discovery and the task definitions' environment. Measured on LocalStack 2026.9.1 before
+  choosing it: a task gets `secrets` injected from Secrets Manager; LocalStack sets its own
+  `AWS_ENDPOINT_URL` (its container's address) and the account's own credentials (key
+  `000000000000`), not the task role's, so the backoffice's IAM policy is not exercised by its task;
+  Cloud Map names resolve through LocalStack's DNS; `localhost.localstack.cloud` resolves to `::1`
+  inside a task, despite the documentation; a listener rule whose target group has no target answers
+  `200 {}`.
 * **`ReleaseTarget` is read from the environment, not from a file** (`mill-build/src/millbuild/Release.scala`).
   `CAPTAL_ENV` names the environment; `AWS_ENDPOINT_URL` set means LocalStack, and the region falls back
   from `AWS_REGION` to `AWS_DEFAULT_REGION` to `us-east-1`. Outside LocalStack, `ci.run` runs under the

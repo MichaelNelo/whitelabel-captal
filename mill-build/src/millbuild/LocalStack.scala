@@ -176,6 +176,27 @@ def terraformDir(env: Map[String, String], repoRoot: os.Path): os.Path = env
 /** The OpenTofu state directory of one LocalStack container, shared by every apply against it. */
 def localStackStateDir(containerId: String): os.Path = localStackStates / containerId
 
+/** For a release to the LocalStack at `endpoint`: starts this build's container if needed, and answers
+  * the state directory `ci.run`, `mcp.dev` and the local suite share. Needs the licence, since a release
+  * runs ECS.
+  */
+def localStackWorkDir(endpoint: String, env: Map[String, String]): os.Path =
+  val port = java.net.URI(endpoint).getPort
+  if port != localStackPort then
+    sys.error(
+      s"[release] AWS_ENDPOINT_URL names port $port, and this build's LocalStack listens on $localStackPort")
+  if localStackToken(env).isEmpty then
+    sys.error(
+      "[release] a release needs ECS, which LocalStack runs only with a licence. Set LOCALSTACK_AUTH_TOKEN in .env.")
+  val _ = ensureLocalStack(localStackContainer, localStackPort, env)
+  localStackStateDir(localStackContainerId().getOrElse(
+    sys.error(s"[release] '$localStackContainer' is not running after starting it; `docker logs $localStackContainer` says why")))
+
+/** The local load balancer's address, as LocalStack names it: after the load balancer, which
+  * `modules/alb` names `<project>-<environment>`.
+  */
+val localLoadBalancerHost = "captal-local.elb.localhost.localstack.cloud"
+
 /** Beside devenv's state rather than under `out/`, so that `mill clean` cannot drop a state whose resources
   * LocalStack still holds.
   */

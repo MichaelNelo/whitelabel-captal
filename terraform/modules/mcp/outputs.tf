@@ -1,6 +1,6 @@
 output "url" {
   description = "Where the MCP endpoint is reached — the value the server also advertises as its resource URI"
-  value       = local.dns_enabled ? "https://${var.hostname}/mcp" : "http://${var.alb_dns_name}/mcp"
+  value       = "${local.origin}/mcp"
 }
 
 output "service_name" {

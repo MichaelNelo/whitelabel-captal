@@ -14,8 +14,6 @@ let
   # runs, with what, and when it has to start over.
   managedProcesses = [
     "localstack"
-    "mcp"
-    "cdc"
     "api"
     "tunnel-mcp"
     "tunnel-localstack"

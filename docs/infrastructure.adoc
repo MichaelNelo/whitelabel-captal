@@ -133,12 +133,14 @@ apply would hang — CloudFront falls back to its own default certificate and ge
 `enable_tailscale` (the provider would call Tailscale's real API, and reaching into the network from
 a laptop is what `docker exec` already does here), and `enable_global_accelerator` (not emulated,
 and it brings the portal-dispatcher Lambda with it, which exists only for real captive-portal
-hardware). `rqlite_desired_count` and `mcp_desired_count` are both `0`: what the suite needs from
-this configuration is the things a location deploy *attaches to* — the cluster, the listener, the
-security groups, the roles, the assets bucket, the distribution — not the services themselves. The
-suite runs the backoffice in-process and rqlite as a plain container, because the database has to be
-migrated before any of this exists; the resources these variables would otherwise size are still
-created, which is the point — a target group the server registers against is a real target group.
+hardware). Everything else runs as in AWS: three rqlite tasks, the change data capture relay and the
+backoffice, released by `mill mcp.dev` (see xref:development.adoc[Local development]). Two variables
+give the addresses LocalStack serves things at: `public_port = 4567`, the gateway port the load
+balancer and the distribution answer on, which the backoffice's `MCP_RESOURCE_URI` and
+`PUBLIC_BASE_URL` name; and `assets_endpoint_url`, the bucket as the operator's browser reaches it,
+for the backoffice's page scripts and uploads. The suite runs its own backoffice in-process against
+the same resources: what it needs from this configuration is what a location deploy *attaches to* —
+the cluster, the listener, the security groups, the roles, the assets bucket, the distribution.
 
 Three operational facts, each costly to rediscover:
 
@@ -288,9 +290,7 @@ durations in nanoseconds. rqlited refuses to start on the names and duration str
 shows.
 
 The root passes `rqlite_cdc_endpoint`, or the relay's `ingest_url`,
-`http://cdc.<namespace>:<container_port>/cdc`, when it is empty. Locally the relay runs on the host,
-so `local` sets `rqlite_cdc_endpoint` to `http://host.docker.internal:8090/cdc`, which every
-container Docker starts can resolve.
+`http://cdc.<namespace>:<container_port>/cdc`, when it is empty, as it is in every environment.
 
 === Change data capture relay
 
@@ -306,8 +306,7 @@ tell it. While the new task starts rqlite retries its posts, and the subscribers
 get a gap. `CDC_BUFFER` (1000) is how many change sets it keeps for subscribers that reconnect.
 
 The module outputs `ingest_url`, passed to rqlite, and `feed_address`, `cdc.<namespace>:9090`,
-passed to the backoffice as `CDC_FEED_ADDRESS`. `local` sets `cdc_desired_count = 0`: `mill mcp.dev`
-runs the relay on the host.
+passed to the backoffice as `CDC_FEED_ADDRESS`.
 
 See xref:context/pending.adoc[Pending work] for two risks this shape carries that have not yet been
 settled — production's `FARGATE_SPOT` choice sharing a single reclamation signal across all three

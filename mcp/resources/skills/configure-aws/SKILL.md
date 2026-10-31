@@ -48,9 +48,10 @@ something a tool would otherwise discover halfway through a write.
 | `TASK_DB_URL` | optional, default `DB_URL` | The database URL a deployed location's task is given, for a server that reaches the database by another name than its tasks do |
 | `CDC_FEED_ADDRESS` | `cdc.<namespace>:9090` | `host:port` of the change data capture relay, followed to hear of playbacks starting and ending. Without it the server starts with a warning, and only replacements and its own startup collect replaced files |
 
-Locally, `mill mcp.dev` supplies all of them from the local configuration applied to LocalStack —
-its rqlite, bucket, distribution and cluster — with `dev-token` as the admin token, or a random one
-when it is started with `--tunnel`.
+Locally, `mill mcp.dev` runs this server as a task in LocalStack, with the same task definition the
+configuration gives it in AWS: its rqlite, bucket, distribution, cluster and relay, the admin token
+from Secrets Manager, and `SCRIPT_BASE_URL` and `PRESIGN_ENDPOINT_URL` at the bucket as the
+operator's browser reaches it. LocalStack sets `AWS_ENDPOINT_URL` itself.
 
 ## AWS credentials
 

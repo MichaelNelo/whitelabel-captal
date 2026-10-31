@@ -149,7 +149,9 @@ The repository is built by Mill. The build is a set of modules: one `package.mil
 
 These start processes that keep running after the command returns, under devenv's process manager. xref:development.adoc#processes[Local processes] explains how.
 
-`mill mcp.dev [--tunnel] [--token T] [--port P]`:: Applies the local configuration to LocalStack, releases the build into it, and starts the backoffice on `:8081`, with Cloudflare quick tunnels when asked.
+`mill mcp.dev [--tunnel]`:: Releases the build into LocalStack as `ci.run` releases it to AWS — images, the local configuration, the client — migrates its database, and returns once the backoffice, a task there, serves; with Cloudflare quick tunnels when asked.
+
+`mill mcp.stop`:: Scales the backoffice and the relay in LocalStack to zero and stops the tunnels.
 
 `mill api.dev [--slug S]`:: Migrates the local configuration's database and serves one location's API on `:8080`.
 

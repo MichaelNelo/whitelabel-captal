@@ -14,13 +14,23 @@ locals {
 
   dns_enabled = var.hostname != "" && var.zone_id != ""
 
-  # Left out entirely when empty rather than set to "". The server reads it with `System.env`, so
-  # an empty string is `Some("")`, which becomes `endpointOverride(URI.create(""))` and points
-  # every AWS client at nothing -- a failure with no message that names the cause.
-  endpoint_env = var.aws_endpoint_url == "" ? [] : [{
-    name  = "AWS_ENDPOINT_URL"
-    value = var.aws_endpoint_url
-  }]
+  # Where clients reach the server: the given origin, else its hostname, else the load balancer on
+  # the port it answers on from outside.
+  origin = (
+    var.public_origin != "" ? var.public_origin :
+    local.dns_enabled ? "https://${var.hostname}" :
+    "http://${var.alb_dns_name}${var.public_port == 0 ? "" : ":${var.public_port}"}"
+  )
+
+  # No `AWS_ENDPOINT_URL`: AWS needs none, and LocalStack gives every task it runs its own, the
+  # address of its container, which is the one a task reaches it at.
+
+  # Left out when empty rather than set to "": the server reads both with `System.env`, and
+  # `Some("")` would name no address at all.
+  assets_endpoint_env = var.assets_endpoint_url == "" ? [] : [
+    { name = "SCRIPT_BASE_URL", value = "${var.assets_endpoint_url}/${var.assets_bucket_name}" },
+    { name = "PRESIGN_ENDPOINT_URL", value = var.assets_endpoint_url },
+  ]
 
   # Not read by this server: `deploy_location` forwards it into every location's task definition.
   unifi_proxy_env = var.unifi_proxy_url == "" ? [] : [{
@@ -30,7 +40,7 @@ locals {
 
   environment = concat([
     { name = "MCP_PORT", value = tostring(var.container_port) },
-    { name = "MCP_RESOURCE_URI", value = "${local.dns_enabled ? "https://${var.hostname}" : "http://${var.alb_dns_name}"}/mcp" },
+    { name = "MCP_RESOURCE_URI", value = "${local.origin}/mcp" },
 
     { name = "AWS_REGION", value = var.aws_region },
     { name = "DB_URL", value = var.db_url },
@@ -51,7 +61,7 @@ locals {
     { name = "TASK_EXECUTION_ROLE_ARN", value = var.execution_role_arn },
     { name = "TASK_ROLE_ARN", value = var.location_task_role_arn },
     { name = "API_IMAGE", value = var.api_image },
-  ], local.endpoint_env, local.unifi_proxy_env)
+  ], local.assets_endpoint_env, local.unifi_proxy_env)
 }
 
 # ─── The admin token ────────────────────────────────────────────────────────

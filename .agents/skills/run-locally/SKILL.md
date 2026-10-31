@@ -11,9 +11,11 @@ version: 3.1.0
 1. **The local configuration** — the same OpenTofu configuration production uses, applied to
    LocalStack by `mcp.dev`: rqlite, the assets bucket and distribution, and the cluster a deploy
    attaches to. Needs a LocalStack licence (`LOCALSTACK_AUTH_TOKEN` in `.env`).
-2. **MCP backoffice** (`mill mcp.dev`) — the only writer of content. Applies the configuration,
-   migrates its rqlite, publishes the portal, the MCP App scripts and the API image, and serves the
-   backoffice on `:8081`.
+2. **MCP backoffice** (`mill mcp.dev`) — the only writer of content. Releases the build into
+   LocalStack as `ci.run` releases it to AWS: the images, the configuration, the client; migrates
+   rqlite; and returns once the backoffice, a task there, answers at
+   `http://captal-local.elb.localhost.localstack.cloud:4567/mcp`. The change data capture relay runs
+   there too, as a task.
 3. **The portal** — `deploy_location` stands a location up in LocalStack as production does, at
    `https://<id>.cloudfront.localhost.localstack.cloud:4567/<slug>/`. Or `mill api.dev --slug
    <slug>` for the faster loop on `:8080`. Either needs a location row to already exist.
@@ -30,55 +32,49 @@ mill mcp.dev            # localhost only
 mill mcp.dev --tunnel   # also public, through Cloudflare quick tunnels
 ```
 
-Six steps, in order:
+Five steps, in order:
 
-1. Ensures a `localstack-dev` container on port 4567.
-2. **Applies the `local` terraform environment** against it: builds and pushes the rqlite image,
-   then the rqlite service (three nodes), the assets bucket with its CORS rule, the distribution,
-   and the cluster, subnets, listener and roles. On a fresh container it is **minutes, not
-   seconds** — it is not hung. Without a LocalStack licence it stops here and says so.
-3. Waits for that rqlite to have a leader on `localhost:5001`, then runs `platform.Migrate`.
-4. Runs the release `mill ci.run` makes, with LocalStack's variables: builds and pushes the API and
-   backoffice images under their next versions (`mill show api.releaseVersion`; git-cliff, from the
-   conventional commits since each one's last tag), moves every deployed location onto the
-   new API image, and publishes the client — `bundle/` and `ui/` — and copies it under every
-   deployed location's prefix. So a deploy from here runs the real API, and what is already
-   deployed runs the build being run. To run that release on its own, waiting for the locations as
-   CodeBuild does: `CAPTAL_ENV=local AWS_ENDPOINT_URL=http://localhost:4567 mill ci.run`.
-5. With `--tunnel`, opens two Cloudflare quick tunnels, to `:8081` and to LocalStack on `:4567`,
-   as the devenv processes `tunnel-mcp` and `tunnel-localstack`, and waits for their
-   `https://<random>.trycloudflare.com` URLs. A tunnel already open is reused, so the URLs stay the
-   same between runs until `mill mcp.stop`. No account or token is needed. The MCP App pages load their scripts and PUT uploads through
-   LocalStack's tunnel (`SCRIPT_BASE_URL`, `PRESIGN_ENDPOINT_URL`), since a page rendered by a hosted
-   client may not reach localhost. The tunnels stay open after the task returns, until `mill
-   mcp.stop`. Without the flag the step stops any that are open.
-6. Starts the change data capture relay as the devenv process `cdc`, HTTP on `:8090` (rqlite in
-   LocalStack posts there through `host.docker.internal`) and gRPC on `:9090`, then the backoffice
-   on `:8081`, as the devenv process `mcp`, following the relay, with a **fixed** admin token,
-   `dev-token`, also with `--tunnel` — so a connector registered against the tunnel keeps working
-   across runs. With `--tunnel` the server's address is the tunnel URL, and the server is public with
-   a token written in this repository. `--token <value>` overrides it.
-
-The backoffice's own `Main` then runs `McpMigrate` itself as part of its boot, after checking the API
-schema is already at the version it requires — that check is what fails loudly if `platform.Migrate`
-above didn't run.
+1. Ensures a `localstack-dev` container on port 4567. Without a LocalStack licence it stops here and
+   says so.
+2. With `--tunnel`, opens two Cloudflare quick tunnels to LocalStack on `:4567`, as the devenv
+   processes `tunnel-mcp` (with the load balancer's `Host`, so it reaches the backoffice) and
+   `tunnel-localstack`, and waits for their `https://<random>.trycloudflare.com` URLs. A tunnel
+   already open is reused, so the URLs stay the same between runs until `mill mcp.stop`. No account
+   or token is needed. Their URLs are applied in step 3: the backoffice's becomes its address, and
+   the MCP App pages load their scripts and PUT uploads through LocalStack's
+   (`SCRIPT_BASE_URL`, `PRESIGN_ENDPOINT_URL`), since a page rendered by a hosted client may not
+   reach localhost. Without the flag the step stops any that are open.
+3. Runs the release `mill ci.run` makes, with LocalStack's variables: builds and pushes the rqlite,
+   API, backoffice and relay images under their versions (`mill show api.releaseVersion`;
+   git-cliff, from the conventional commits since each one's last tag), **applies the `local`
+   terraform environment** — rqlite (three nodes), the relay, the backoffice, the assets bucket, the
+   distribution, the cluster, subnets, listener and roles — restarts the backoffice and the relay
+   when their image was rebuilt under the same tag, moves every deployed location onto the API
+   image, and publishes the client. On a fresh container it is **minutes, not seconds** — it is not
+   hung. To run that release on its own, waiting for the locations as CodeBuild does:
+   `CAPTAL_ENV=local AWS_ENDPOINT_URL=http://localhost:4567 mill ci.run`.
+4. Waits for rqlite to have a leader on `localhost:5001`, then runs `platform.Migrate`. The
+   backoffice checks the API schema is at the version it requires before it starts.
+5. Waits for the backoffice to answer `ok` on `/health` through the load balancer; after a minute
+   without it, tells its service to start a fresh task once.
 
 Every token the task reads lives in `.env`, which `.envrc` sources and `.gitignore` ignores.
 `.env.example` lists the names. Nothing is read from a tracked file.
 
-The database is the configuration's three-node rqlite in LocalStack. The backoffice and `api.dev`
-reach it on `localhost:5001`, the port one of its tasks publishes; a deployed location's task
-reaches it as `rqlite.captal.local:5001`, by service discovery as in production, which `mcp.dev`
-passes the server as `TASK_DB_URL`. It lives in LocalStack's tasks, so recreating the container
-empties it.
+The database is the configuration's three-node rqlite in LocalStack. `mcp.dev`'s migrations and
+`api.dev` reach it on `localhost:5001`, the port one of its tasks publishes; the backoffice and every
+deployed location's task reach it as `rqlite.captal.local:5001`, by service discovery as in
+production. It lives in LocalStack's tasks, so recreating the container empties it.
 
-It prints a ready-to-paste MCP client config:
+It prints a ready-to-paste MCP client config, with the admin token the configuration generated into
+Secrets Manager (it lasts as long as the LocalStack container), and how to follow the backoffice's
+and the relay's logs (`docker exec localstack-dev awslocal logs tail /ecs/captal-local-mcp --follow`):
 
 ```json
 "captal": {
   "command": "npx",
-  "args": ["mcp-remote", "http://localhost:8081/mcp",
-           "--header", "Authorization: Bearer dev-token"]
+  "args": ["mcp-remote", "http://captal-local.elb.localhost.localstack.cloud:4567/mcp",
+           "--header", "Authorization: Bearer <token>"]
 }
 ```
 

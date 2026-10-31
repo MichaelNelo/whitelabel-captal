@@ -33,6 +33,24 @@ variable "mcp_image_tag" {
   type        = string
 }
 
+variable "mcp_public_origin" {
+  description = "Scheme, host and port clients reach the backoffice at, when not `backoffice.<domain_name>` or the load balancer: a tunnel to a local one, which `mill mcp.dev --tunnel` passes. Empty derives it."
+  type        = string
+  default     = ""
+}
+
+variable "public_port" {
+  description = "Port the load balancer and the distribution answer on from outside, when not the scheme's own. LocalStack serves both on its gateway port; 0 everywhere else."
+  type        = number
+  default     = 0
+}
+
+variable "assets_endpoint_url" {
+  description = "Where an operator's browser reaches the assets bucket directly rather than through the distribution: LocalStack's gateway, or a tunnel to it. The backoffice's pages load their scripts from it and upload to it. Empty in AWS."
+  type        = string
+  default     = ""
+}
+
 variable "mcp_desired_count" {
   description = "How many backoffice tasks. One in a deployed environment -- it holds no state of its own and a second would duplicate the scheduled-job rehydration at boot. Zero for `local`, where the suite runs the server in-process and only needs the resources it attaches to."
   type        = number

@@ -372,8 +372,10 @@ module "mcp" {
   project_name = var.project_name
   environment  = var.environment
   aws_region   = var.aws_region
-  # Passed through so the server's own AWS clients resolve where this configuration does.
-  aws_endpoint_url = var.aws_endpoint_url
+
+  public_origin       = var.mcp_public_origin
+  public_port         = var.public_port
+  assets_endpoint_url = var.assets_endpoint_url
 
   cluster_id          = module.ecs.cluster_id
   cluster_name        = module.ecs.cluster_name
@@ -403,7 +405,7 @@ module "mcp" {
   assets_bucket_arn           = module.cloudfront.assets_bucket_arn
   cloudfront_distribution_id  = module.cloudfront.distribution_id
   cloudfront_distribution_arn = module.cloudfront.distribution_arn
-  public_base_url             = var.enable_dns ? "https://${var.cloudfront_domain}" : "https://${module.cloudfront.distribution_domain_name}"
+  public_base_url             = var.enable_dns ? "https://${var.cloudfront_domain}" : "https://${module.cloudfront.distribution_domain_name}${var.public_port == 0 ? "" : ":${var.public_port}"}"
 
   # What the deploy tools hand to a location: one image for all of them, the task role a location's
   # API runs as -- which is not the server's own -- and the proxy it reaches its venue's gateway

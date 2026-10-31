@@ -39,13 +39,14 @@ container_port = 8080
 
 # The tag the build pushes rqlite under, read from this line so what it pushes and what the task
 # definitions pull cannot drift apart. It goes up with the apply, before the service that pulls it
-# exists; bump it with the Dockerfile or the entrypoint. `image_tag` (the API) and `mcp_image_tag`
-# (the backoffice) are not set here: they are each module's version, which the build passes.
+# exists; bump it with the Dockerfile or the entrypoint. `image_tag` (the API), `mcp_image_tag` (the
+# backoffice) and `cdc_image_tag` (the relay) are not set here: they are each module's version, which
+# the build passes.
 rqlite_image_tag = "1.0.7"
 
 # Off 4001/4002, which the test suites' own rqlite containers sit beside. LocalStack publishes an
 # ECS task's ports on the host, and the first node to start takes 5001: that is how `mill mcp.dev`
-# and `mill api.dev` reach the cluster from the host. Its nodes and the locations' tasks find it by
+# migrates it and `mill api.dev` reaches it from the host. Its nodes and every task find it by
 # service discovery inside LocalStack's own network.
 rqlite_http_port = 5001
 rqlite_raft_port = 5002
@@ -55,24 +56,28 @@ rqlite_raft_port = 5002
 # in a deployed environment. LocalStack runs an ECS task as a real container, which is what makes
 # that worth doing and also why the image has to be in ECR first.
 #
-# It is the database everything local uses: the backoffice on the host through port 5001, and every
-# deployed location's task as `rqlite.captal.local`.
+# It is the database everything local uses: the backoffice and every deployed location's task reach
+# it as `rqlite.captal.local`.
 rqlite_desired_count = 3
 rqlite_cpu           = 256
 rqlite_memory        = 512
 
-# The service is declared and its image published, but it runs no task: the backoffice runs on the
-# host, with `mill mcp.dev`. Raising this runs the published image here instead.
-mcp_desired_count = 0
+# The backoffice and the change data capture relay run here as tasks, from their published images,
+# as they do in AWS: `mill mcp.dev` releases them with `ci.run`'s steps. rqlite reaches the relay,
+# and the backoffice reaches rqlite and the relay, by service discovery.
+mcp_desired_count = 1
+cdc_desired_count = 1
 
-# The change data capture relay likewise: declared and published, run on the host by `mill mcp.dev`
-# beside the backoffice that follows it.
-cdc_desired_count = 0
+# LocalStack serves the load balancer and the distribution on its gateway port, so the addresses the
+# backoffice is given name it: `http://captal-local.elb.localhost.localstack.cloud:4567/mcp`, and
+# `https://<id>.cloudfront.localhost.localstack.cloud:4567` for the assets.
+public_port = 4567
 
-# So rqlite's change data capture reaches that relay on the host rather than a task named `cdc` that
-# is not running. Docker gives every container `host.docker.internal`, and 8090 is the port
-# `mill mcp.dev` runs the relay's HTTP on. Empty this when raising `cdc_desired_count`.
-rqlite_cdc_endpoint = "http://host.docker.internal:8090/cdc"
+# The bucket straight from the operator's browser, for the backoffice's pages' scripts and its
+# uploads. Not the distribution: LocalStack's gateway refuses a request to one carrying an `Origin`
+# it does not know, which a page in a host's frame always sends; the bucket answers with its CORS
+# rule. `mill mcp.dev --tunnel` replaces it with LocalStack's tunnel.
+assets_endpoint_url = "http://localhost:4567"
 
 # The identity the suite runs as, and the reason `ENFORCE_IAM` can do anything here. LocalStack
 # accepts any key pair and allows everything when enforcement is off, so a suite passing

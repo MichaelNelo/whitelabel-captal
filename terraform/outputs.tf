@@ -175,6 +175,18 @@ output "mcp_log_group_name" {
   value       = module.mcp.log_group_name
 }
 
+# ─── Change data capture relay ──────────────────────────────────────────────
+
+output "cdc_service_name" {
+  description = "ECS service name of the relay, for `aws ecs update-service --force-new-deployment` after pushing a new image"
+  value       = module.cdc.service_name
+}
+
+output "cdc_log_group_name" {
+  description = "Where the relay's output lands"
+  value       = module.cdc.log_group_name
+}
+
 # The local suite's credentials. Null in every AWS environment, because `mcp_create_test_user` is
 # only ever true for `local` -- see the resource in modules/mcp for why the secret is safe to
 # produce there and is absent everywhere else.

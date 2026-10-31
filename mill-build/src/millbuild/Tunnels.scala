@@ -3,8 +3,16 @@ package millbuild
 /** A Cloudflare quick tunnel to a local port, run as the devenv process `name` and reused while it
   * runs, so its address stays the same across runs. Answers its `https://….trycloudflare.com` address,
   * which cloudflared publishes on its metrics endpoint at `metricsPort`.
+  *
+  * `hostHeader` replaces the `Host` of every request it forwards: LocalStack's gateway tells a load
+  * balancer from its own API by the host a request names.
   */
-def quickTunnel(env: Map[String, String], name: String, port: Int, metricsPort: Int): String =
+def quickTunnel(
+    env: Map[String, String],
+    name: String,
+    port: Int,
+    metricsPort: Int,
+    hostHeader: Option[String] = None): String =
   val metrics = s"http://127.0.0.1:$metricsPort/quicktunnel"
   val spec = Processes.Spec(
     command = Seq(
@@ -14,7 +22,7 @@ def quickTunnel(env: Map[String, String], name: String, port: Int, metricsPort: 
       "--metrics",
       s"127.0.0.1:$metricsPort",
       "--url",
-      s"http://localhost:$port"),
+      s"http://localhost:$port") ++ hostHeader.toSeq.flatMap(host => Seq("--http-host-header", host)),
     ready = Some(s"curl -sf -m 1 $metrics | grep -q trycloudflare.com")
   )
   val _ = Processes.start(env, name, spec)
