@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package captal.cdc.v1;
+
+option java_package = "whitelabel.captal.cdc.protocol";
+
+// Every change set rqlite commits, handed to every subscriber.
+service ChangeFeed {
+  // Every change set from now on and, with `since`, first those after it the relay still keeps.
+  rpc Subscribe(SubscribeRequest) returns (stream Delivery);
+}
+
+message SubscribeRequest {
+  // The Raft index of the last change set seen, to resume after it.
+  optional uint64 since = 1;
+}
+
+message Delivery {
+  // The relay that sent it. Another one than before means the relay restarted, and change sets may
+  // be missing: take it as a gap.
+  string instance = 1;
+
+  oneof kind {
+    ChangeSet change = 2;
+    Gap gap = 3;
+  }
+}
+
+// One change set as rqlite committed it.
+message ChangeSet {
+  // Its Raft index: what a subscriber resumes after.
+  uint64 index = 1;
+
+  // The change set exactly as rqlite posted it, {"index": n, "events": [...]}: rows stay as rqlite
+  // wrote them, numbers included, and the relay has no need to understand them.
+  string json = 2;
+}
+
+// Change sets were dropped: whatever a subscriber keeps from them, it has to rebuild from the
+// database.
+message Gap {}

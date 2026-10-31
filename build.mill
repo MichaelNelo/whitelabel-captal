@@ -1,5 +1,6 @@
 //| mvnDeps:
 //|   - com.goyeau::mill-scalafix::0.6.0
+//|   - com.lihaoyi::mill-contrib-scalapblib:$MILL_VERSION
 package build
 import com.goyeau.mill.scalafix.ScalafixModule
 import mill.*, scalalib.*, scalafmt.*, scalajslib.*

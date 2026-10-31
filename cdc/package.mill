@@ -1,0 +1,50 @@
+package build.cdc
+
+import com.goyeau.mill.scalafix.ScalafixModule
+import mill.*, scalalib.*, scalafmt.*
+import millbuild.*
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CDC: the relay between rqlite's change data capture and whoever subscribes. Its own deployable,
+// internal: no route on the load balancer. `cdc.protocol` is what it speaks to subscribers.
+// ─────────────────────────────────────────────────────────────────────────────
+
+object `package` extends BaseModule with Released:
+  def mainClass = Some("whitelabel.captal.cdc.Main")
+
+  /** Empty, as the backoffice's: the image runs `java -jar`. */
+  def prependShellScript = ""
+
+  def moduleDeps = Seq(build.cdc.protocol)
+
+  // zio-http at the version `platform` uses, for the one route rqlite posts to.
+  def mvnDeps = Seq(mvn"dev.zio::zio-http:3.0.1")
+
+  /** Files counted in this module's version besides its sources: the Dockerfile. */
+  override def versionFiles: T[Seq[PathRef]] = Task(Seq(dockerfile()))
+
+  def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "docker" / "cdc.Dockerfile")
+
+  /** Builds `captal-cdc:<tag>` from the assembly jar. Usage: `mill cdc.image --tag v1.0.0` */
+  def image(tag: String = "latest") = Task.Command:
+    val context = Task.dest / "context"
+    os.makeDir.all(context)
+    os.copy.over(assembly().path, context / "cdc.jar")
+    os.copy.over(dockerfile().path, context / "Dockerfile")
+    val name = s"captal-cdc:$tag"
+    val built = os
+      .proc("docker", "build", "-t", name, ".")
+      .call(cwd = context, check = false, stdout = os.Inherit, stderr = os.Inherit)
+    if built.exitCode != 0 then
+      sys.error("[image] docker build failed")
+    println(s"[image] built $name")
+    name
+
+  /** Pushes [[image]] to a registry that must already exist. */
+  def imagePush(registry: String, repository: String, tag: String = "latest") = Task.Command:
+    pushImage(image(tag)(), s"$registry/$repository:$tag")
+
+  object test extends ScalaTests with ScalafmtModule with ScalafixModule:
+    def mvnDeps = Seq(mvn"dev.zio::zio-test:2.1.26", mvn"dev.zio::zio-test-sbt:2.1.26")
+    def testFramework = "zio.test.sbt.ZTestFramework"
+end `package`

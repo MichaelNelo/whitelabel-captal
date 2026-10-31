@@ -1,0 +1,44 @@
+package build.cdc.protocol
+
+import mill.*, scalalib.*
+import mill.contrib.scalapblib.*
+import millbuild.*
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The change feed's protocol: `protobuf/cdc.proto`, the code ScalaPB and zio-grpc generate from it,
+// and what a subscriber needs to follow the relay. The relay serves it; the API and the backoffice
+// subscribe.
+// ─────────────────────────────────────────────────────────────────────────────
+
+object `package` extends BaseModule with ScalaPBModule:
+  // The version zio-grpc's code generator is built against.
+  def scalaPBVersion = "0.11.21"
+  def scalaPBFlatPackage = true
+  def scalaPBScala3Sources = true
+
+  /** zio-grpc's service traits and clients, beside ScalaPB's messages. It reads ScalaPB's options
+    * too: without `flat_package` it names a package the messages are not in.
+    */
+  def scalaPBGenerators = Seq(Generator.ScalaGen, Generator.CustomGen("--zio_out", true))
+
+  /** zio-grpc's generator runs inside ScalaPBC, so it is loaded from ScalaPBC's own classpath. */
+  def scalaPBAdditionalArgs = Seq("--custom-gen=zio=scalapb.zio_grpc.ZioCodeGenerator")
+
+  /** ScalaPBC and zio-grpc's code generator, both for Scala 2.13, which is what they run on. */
+  override def scalaPBClasspath: T[Seq[PathRef]] = Task:
+    val scala213 = "2.13.1"
+    defaultResolver().classpath(
+      Seq(
+        mvn"com.thesamet.scalapb::scalapbc:${scalaPBVersion()}",
+        mvn"com.thesamet.scalapb.zio-grpc::zio-grpc-codegen:${zioGrpc}")
+        .map(Lib.depToBoundDep(_, scala213)),
+      resolutionParamsMapOpt = Some(_.withScalaVersion(scala213))
+    )
+
+  private val zioGrpc = "0.6.4"
+
+  // The shaded transport: its own Netty, so it cannot collide with the one zio-http brings.
+  override def mvnDeps = super.mvnDeps() ++ Seq(
+    mvn"com.thesamet.scalapb.zio-grpc::zio-grpc-core:$zioGrpc",
+    mvn"io.grpc:grpc-netty-shaded:1.84.2")
+end `package`

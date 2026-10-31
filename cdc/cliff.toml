@@ -1,0 +1,19 @@
+# The change data capture relay's version: git-cliff's next version from the conventional commits
+# since the last `cdc/v*` tag that touch this module, the modules it depends on (its protocol), or
+# its Dockerfile. `mill cdc.releaseVersion` passes those paths, from the build's own module graph.
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+tag_pattern = "^cdc/v[0-9]"
+# Types that change nothing the relay runs, skipped so they do not bump. `fix` and `perf` bump the
+# patch, `feat` the minor, and `!` the major, on any type.
+commit_parsers = [
+  { message = "^(docs|refactor|tests?|chore|build|lint|style|ci|release)(\\(.*\\))?:", skip = true },
+]
+
+[bump]
+features_always_bump_minor = true
+breaking_always_bump_major = true
+# The version released before any tag exists.
+initial_tag = "cdc/v1.0.0"
