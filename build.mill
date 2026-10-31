@@ -86,14 +86,15 @@ object ci extends Module:
         Task.dest
     val workspace = moduleDir / os.up
     val configDir = terraformDir(Task.env, workspace)
-    val versions = Seq(api.releaseVersion(), mcp.releaseVersion(), client.releaseVersion())
+    val versions =
+      Seq(build.api.releaseVersion(), build.mcp.releaseVersion(), build.client.releaseVersion())
     val tags = ImageTags(api = versions(0).version, mcp = versions(1).version)
     val clientVersion = versions(2).version
     val built = BuiltImages(
       rqlite = Some(rqlite.image()()),
-      api = Some(api.image()()),
-      mcp = Some(mcp.image()()))
-    val bundle = client.bundle().path
+      api = Some(build.api.image()()),
+      mcp = Some(build.mcp.image()()))
+    val bundle = build.client.bundle().path
 
     versions.foreach: release =>
       println(s"[ci] ${release.previousTag match

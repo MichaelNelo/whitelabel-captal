@@ -59,6 +59,9 @@ in
   # https://devenv.sh/languages/
   languages.scala.enable = true;
   languages.scala.mill.enable = true;
+  # The version `.mill-version` names; the launcher runs its own version whatever that file says.
+  languages.scala.mill.package =
+    (import inputs.nixpkgs-unstable { system = pkgs.stdenv.system; }).mill;
 
   # https://devenv.sh/processes/
   processes = lib.genAttrs managedProcesses (name: {
