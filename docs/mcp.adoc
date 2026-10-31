@@ -91,20 +91,19 @@ xref:platform.adoc[Platform] for the two-history arrangement in general.
 |`HistoryTable` |`"flyway_schema_history_mcp"`
 |===
 
-Before migrating, it checks the *other* schema's version:
+It runs every migration this server needs, in order: the API's first —
+`Migrate.migrateTo(url, "db/migration", Migrate.ApiHistoryTable)`, from the `platform` scripts this
+server was built with — then its own, `Migrate.migrateTo(url, Location, HistoryTable)`. So it starts
+on an empty database as on one a location's API already migrated. That is what lets a new
+environment come up at all: its first location is created through this server, and before that
+there is no API to migrate anything. Each set takes `Migrate`'s lock, so an API starting beside it
+does not race it; whichever migrates first leaves the other nothing to do. A release builds both
+images from one commit, so both carry the same API scripts.
 
-[source,scala]
-----
-val RequiredApiVersion = 21
-----
-
-`Migrate.highestApplied(url, Migrate.ApiHistoryTable)` returning `None` fails with "No API
-migrations have run against this database. Start the API first…"; a version below 21 fails naming
-both the version found and the one required. Only once the API schema is new enough does it run
-`Migrate.migrateTo(url, Location, HistoryTable)`. This is detection, not prevention — the comment on
-it says so plainly: "Deployment order between the two services cannot be enforced here." It is what
-makes a backoffice deployed ahead of the API fail loudly at boot rather than failing one tool call
-at a time on a column that is not there yet.
+A database that does not answer — rqlite's nodes are replaced whenever its task definition changes,
+and a release can start this server meanwhile — is waited for: a refused connection is tried again
+every five seconds for up to five minutes, with a warning each time. Any other failure stops the
+start at once.
 
 == Writing to rqlite
 

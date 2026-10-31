@@ -75,11 +75,9 @@ the API's version moves, and release with `mill ci.run`, which moves every locat
 Every location task that starts on the new image runs `Migrate` as part of its own boot; it's
 idempotent, so a location still on the old image and one already moved over both end up correct.
 
-If the backoffice now depends on this column (a tool reads or writes it immediately), bump
-`RequiredApiVersion` in `mcp/src/whitelabel/captal/mcp/McpMigrate.scala` to this migration's number.
-`McpMigrate` checks the API's highest applied version at its own startup and refuses to serve
-otherwise — that's what turns "the backoffice was deployed ahead of the API" into a loud boot
-failure instead of a tool call failing on a column that isn't there yet.
+The backoffice runs it too: `McpMigrate` applies the API's migrations before its own, from the same
+`platform` scripts, so a backoffice released with this migration has the column whether or not a
+location's API started first.
 
 ## Verification
 

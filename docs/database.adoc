@@ -250,15 +250,12 @@ side would let deactivating an answered question close a survey that still has u
 Both run through `Migrate.migrateTo(url, location, historyTable)` (see
 xref:platform.adoc[Platform]), differing only in those two arguments.
 
-The dependency between them is one-way and checked, not assumed. `mcp/src/whitelabel/captal/mcp/McpMigrate.scala`
-reads the API's highest applied version with `Migrate.highestApplied` and refuses to start unless it
-is at or past `RequiredApiVersion` (**21** today — `V20` added the `is_active` columns the backoffice
-writes, `V21` the video `status` that several tools branch on). The two failure messages are explicit:
-a version behind means "deploy the API first", and no history at all means "the API creates every
-table the backoffice reads, and this server deliberately does not".
+The backoffice needs both. `mcp/src/whitelabel/captal/mcp/McpMigrate.scala` runs the API's set and
+then its own, so it starts on an empty database: a new environment's first location is created
+through the backoffice, before any API exists to migrate anything. The API runs its own set as it
+starts too; both take the migration lock, and whichever comes second finds nothing to do.
 
-`McpMigrate` is also a `ZIOAppDefault`, so the backoffice schema can be laid down without starting a
-server.
+`McpMigrate` is also a `ZIOAppDefault`, so both schemas can be laid down without starting a server.
 
 === Migrations are append-only
 
@@ -296,8 +293,8 @@ so of N concurrent inserts of the same key exactly one takes effect and every no
 mechanics, the 2-second poll, the 10-minute timeout and the manual-cleanup caveat for an abandoned
 lock are in xref:platform.adoc[Platform].
 
-The two histories need no lock between them: they are different tables, and the ordering is enforced
-by `McpMigrate`'s version check rather than by mutual exclusion.
+The two histories need no lock between them, being different tables; `McpMigrate` runs the API's
+before its own, so the order holds in the one process that runs both.
 
 == Write verification
 

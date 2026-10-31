@@ -546,9 +546,17 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
   unnoticed — see `incidents.adoc`).
 * **Migration and server start share one `CMD`.** A failed migration stops the container instead
   of starting a server against a schema it wasn't written for.
-* **The MCP server migrates its own history table (`db/migration-mcp`), not the API's.** Two
-  processes migrating one shared history table race on startup; `Migrate.migrateTo` takes the
-  table name as a parameter specifically so the two schemas can stay apart.
+* **The MCP server keeps its own history table (`db/migration-mcp`) apart from the API's.**
+  `Migrate.migrateTo` takes the table name as a parameter specifically so the two schemas stay
+  apart.
+* **The MCP server runs every migration it needs, the API's included** (2026-10-31), at the user's
+  direction. It used to check the API's highest applied version (`RequiredApiVersion`) and refuse to
+  start below it, the API owning its migrations alone. That deadlocked a new environment: no
+  location, so no API to migrate; no schema, so no backoffice; no backoffice, so no first location.
+  `mcp.dev` got around it by migrating from the host, which `ci.run` and the end-to-end features
+  could not. Now `McpMigrate` runs the API's set from the `platform` scripts it was built with, then
+  its own, each under `Migrate.Lock`. Rejected: a one-off migration task that `ci.run` would launch
+  before the services — the user chose that the backoffice migrate what it needs.
 * **Migration serialisation uses a lock built on rqlite itself (`Migrate.Lock`), not Flyway's own
   locking, not S3, not EFS, not etcd — for now.** Flyway's lock needs a transaction to hold it and
   rqlite had none usable for most of this project's life (see `incidents.adoc`); even with

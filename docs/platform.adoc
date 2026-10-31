@@ -493,13 +493,9 @@ def migrateTo(url: String, location: String, historyTable: String): Task[Int]
 It builds an `Fly4s` over `RqliteDataSource.create(url)` with `group = false`, `mixed = true`,
 `baselineOnMigrate = true` and `baselineVersion = 0`, and returns the number of migrations executed.
 `Migrate.ApiHistoryTable` exposes Flyway's default table name so other callers can refer to the
-portal's history without hardcoding it. `mcp` calls `migrateTo` with its own location and history
-table — see xref:database.adoc[Database] for the two-history arrangement.
-
-`Migrate.highestApplied(url, historyTable)` reads the greatest numeric `version` with `success = 1`
-out of a history table over plain JDBC, returning `None` when the table does not exist. Plain JDBC
-rather than Flyway, because constructing a Flyway instance can create or baseline the very history
-it is being asked about.
+portal's history without hardcoding it. `mcp` calls `migrateTo` twice: with the API's location and
+this table, then with its own location and history table — see xref:database.adoc[Database] for the
+two-history arrangement.
 
 === `Migrate.Lock`
 

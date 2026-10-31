@@ -27,9 +27,8 @@ import zio.http.{Method, Response, Routes, Server, handler}
 
 /** Entry point for the backoffice MCP server.
   *
-  * Stateless routes, so it can sit behind an ALB with more than one task and no sticky sessions. It
-  * does not migrate the API's schema — [[McpMigrate]] lays down this server's own and checks the
-  * API has already run.
+  * Stateless routes, so it can sit behind an ALB with more than one task and no sticky sessions.
+  * [[McpMigrate]] lays down every schema it needs, the API's included, before it serves.
   */
 object Main extends ZIOAppDefault:
   private val DefaultPort = 8081
@@ -102,8 +101,8 @@ object Main extends ZIOAppDefault:
         LocationTools.all.size + I18nTools.all.size + AdvertiserTools.all.size +
           SurveyTools.all.size + AssetTools.all.size + UnifiTools.all(uiOrigin).size +
           TokenTools.all.size + SkillTools.all.size + VideoTools.all.size + Readiness.all.size
-      // Its own schema, and a check that the API has already laid down the rest. Before anything
-      // is served: the first request would otherwise arrive at a tokens table that is not there.
+      // The API's schema and its own. Before anything is served: the first request would otherwise
+      // arrive at a tokens table that is not there.
       _ <- McpMigrate.run
       _ <- ZIO
         // `Option[InfraStore]`: a deployment that only edits content has no cluster configured and

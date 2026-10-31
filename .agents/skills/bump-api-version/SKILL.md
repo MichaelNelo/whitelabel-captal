@@ -66,8 +66,9 @@ CAPTAL_ENV=local AWS_ENDPOINT_URL=http://localhost:4567 mill ci.run
 
 ## Migrate
 
-Nothing to do by hand. Every task — the backoffice's and every location's API — runs `Migrate` (or
-`McpMigrate`) as part of its own startup, guarded by `Migrate.Lock` so concurrent starts don't race.
+Nothing to do by hand. Every task runs its migrations as part of its own startup — a location's API
+`Migrate`, the backoffice `McpMigrate`, which applies the API's set and then its own — guarded by
+`Migrate.Lock` so concurrent starts don't race.
 
 ## Verification
 

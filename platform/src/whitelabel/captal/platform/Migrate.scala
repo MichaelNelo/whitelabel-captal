@@ -150,37 +150,6 @@ object Migrate extends ZIOAppDefault:
         }-${java.util.UUID.randomUUID()}"
   end Lock
 
-  /** The highest successfully applied version in a history table, or None when the table is not
-    * there yet. Plain JDBC: building a Flyway instance can create or baseline the history it is
-    * asked about.
-    */
-  def highestApplied(url: String, historyTable: String): Task[Option[Int]] = ZIO
-    .attemptBlocking:
-      val connection = RqliteDataSource.create(url).getConnection()
-      try
-        val statement = connection.createStatement()
-        try
-          val results = statement.executeQuery(
-            s"SELECT version FROM $historyTable WHERE success = 1")
-          var highest = Option.empty[Int]
-          while results.next() do
-            val version = Option(results.getString("version")).flatMap(_.toIntOption)
-            highest =
-              (highest, version) match
-                case (Some(a), Some(b)) =>
-                  Some(a.max(b))
-                case (a, b) =>
-                  a.orElse(b)
-          highest
-        finally
-          statement.close()
-      finally
-        connection.close()
-    .catchSome:
-      // No history table means nothing has migrated yet.
-      case _: java.sql.SQLException =>
-        ZIO.none
-
   override val run: ZIO[Any, Throwable, Unit] = ZIO
     .attempt:
       val config = ConfigFactory.load()
