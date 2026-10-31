@@ -28,7 +28,7 @@ The dependency set, from `build.mill`:
 |===
 | Dependency | Version | What it is here for
 
-| `dev.zio::zio` | 2.1.14 | effect type for every signature in the module
+| `dev.zio::zio` | 2.1.26 | effect type for every signature in the module
 | `dev.zio::zio-http` | 3.0.1 | the HTTP client `UnifiClient` uses
 | `io.getquill::quill-jdbc-zio` | 4.8.6 | compile-time SQL generation and the `ZIO`-native runner
 | `com.github.geirolz::fly4s` | 1.0.8 | cats-effect wrapper over Flyway, used by `Migrate`

@@ -128,8 +128,8 @@ object `package` extends BaseModule with Released:
   object test extends ScalaTests with ScalafmtModule with ScalafixModule:
     // sttp-client (`SttpBackendStub`), used directly by the suites.
     def mvnDeps = Seq(
-      mvn"dev.zio::zio-test:2.1.14",
-      mvn"dev.zio::zio-test-sbt:2.1.14",
+      mvn"dev.zio::zio-test:2.1.26",
+      mvn"dev.zio::zio-test-sbt:2.1.26",
       mvn"com.softwaremill.sttp.client3::core:3.10.2")
     def testFramework = "zio.test.sbt.ZTestFramework"
 

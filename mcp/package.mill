@@ -291,7 +291,7 @@ object `package` extends BaseModule with Released:
     pushImage(image(tag)(), s"$registry/$repository:$tag")
 
   object test extends ScalaTests with ScalafmtModule with ScalafixModule:
-    // zio-test 2.1.26, to match zio-http-mcp; the rest of the build stays on 2.1.14.
+    // zio-test 2.1.26, the ZIO the whole build is on: zio-http-mcp and zio-grpc both pull it in.
     def mvnDeps = Seq(
       mvn"dev.zio::zio-test:2.1.26",
       mvn"dev.zio::zio-test-sbt:2.1.26",

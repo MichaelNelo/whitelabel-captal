@@ -643,8 +643,10 @@ rule are in `incidents.adoc`, section "The Mill build".
   on Scala 3.10's pre-upgrade list. Its breakage is invisible at compile time: it supplies `Tag`, so a
   mismatch surfaces as a `ZLayer` that cannot find a service at runtime. The rest of that list is
   either already current (zio 2.1.26, pulled in by 0.10.0) or absent (zio-blocks, neotype).
-* **`zio-test` is 2.1.26 in `mcp.test` and 2.1.14 everywhere else.** 2.1.26 matches what
-  `zio-http-mcp` pulls in, and Scala 3.10's notes name it too, so both reasons agree.
+* **ZIO is 2.1.26 across the build** (2026-10-31). It was 2.1.14 everywhere but `mcp.test`, which
+  took 2.1.26 to match what `zio-http-mcp` pulls in. zio-grpc 0.6.4, which the change data capture
+  relay and its subscribers speak, requires 2.1.26 too, so every module moved to it rather than
+  carry two versions of the runtime.
 * **`zio-http-mcp` versions and what they bought.** 0.8.3 added MCP Apps: `ResourceContents` gained
   the `_meta` that carries the CSP, without which the upload page's PUT is refused as `blocked:csp`;
   `McpApps` replaced a hand-rolled `_meta` decorator. 0.10.0 added `TaskExecution`: the tool declares
