@@ -128,7 +128,7 @@ output "mcp_image_repository_url" {
 
 output "api_image" {
   description = "The API image by digest: what every location's task definition is moved onto"
-  value       = module.images.references["api"]
+  value       = module.api_image.reference
 }
 
 output "cdc_image_repository_url" {

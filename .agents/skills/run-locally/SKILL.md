@@ -12,8 +12,8 @@ version: 3.1.0
    LocalStack by `mcp.dev`: rqlite, the assets bucket and distribution, and the cluster a deploy
    attaches to. Needs a LocalStack licence (`LOCALSTACK_AUTH_TOKEN` in `.env`).
 2. **MCP backoffice** (`mill mcp.dev`) — the only writer of content. Releases the build into
-   LocalStack as `ci.run` releases it to AWS: the images, the configuration, the client; migrates
-   rqlite; and returns once the backoffice, a task there, answers at
+   LocalStack as `ci.run` releases it to AWS: the images, the configuration, the client; and returns
+   once the backoffice, a task there that migrates the database as it starts, answers at
    `http://captal-local.elb.localhost.localstack.cloud:4567/mcp`. The change data capture relay runs
    there too, as a task.
 3. **The portal** — `deploy_location` stands a location up in LocalStack as production does, at
@@ -32,7 +32,7 @@ mill mcp.dev            # localhost only
 mill mcp.dev --tunnel   # also public, through Cloudflare quick tunnels
 ```
 
-Five steps, in order:
+Four steps, in order:
 
 1. Ensures a `localstack-dev` container on port 4567. Without a LocalStack licence it stops here and
    says so.
@@ -54,16 +54,15 @@ Five steps, in order:
    deployed location onto the API image, and publishes the client. On a fresh container it is **minutes, not seconds** — it is not
    hung. To run that release on its own, waiting for the locations as CodeBuild does:
    `CAPTAL_ENV=local AWS_ENDPOINT_URL=http://localhost:4567 mill ci.run`.
-4. Waits for rqlite to have a leader on `localhost:5001`, then runs `platform.Migrate`. The
-   backoffice checks the API schema is at the version it requires before it starts.
-5. Waits for the backoffice to answer `ok` on `/health` through the load balancer; after a minute
-   without it, tells its service to start a fresh task once.
+4. Waits for the backoffice's service to settle and answer `ok` on `/health` through the load
+   balancer. It runs every migration as it starts, the API's included, so an empty database needs
+   nothing else.
 
 Every token the task reads lives in `.env`, which `.envrc` sources and `.gitignore` ignores.
 `.env.example` lists the names. Nothing is read from a tracked file.
 
-The database is the configuration's three-node rqlite in LocalStack. `mcp.dev`'s migrations and
-`api.dev` reach it on `localhost:5001`, the port one of its tasks publishes; the backoffice and every
+The database is the configuration's three-node rqlite in LocalStack. `api.dev` reaches it on
+`localhost:5001`, the port one of its tasks publishes; the backoffice and every
 deployed location's task reach it as `rqlite.captal.local:5001`, by service discovery as in
 production. It lives in LocalStack's tasks, so recreating the container empties it.
 

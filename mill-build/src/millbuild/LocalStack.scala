@@ -197,6 +197,56 @@ def localStackWorkDir(endpoint: String, env: Map[String, String]): os.Path =
   */
 val localLoadBalancerHost = "captal-local.elb.localhost.localstack.cloud"
 
+/** Waits for the backoffice's service in LocalStack to settle on its current task definition
+  * ([[settledLocally]]), then for the server's own `ok` from its health check through the load
+  * balancer, which answers `200 {}` for a target group with nobody in it. Five minutes at most.
+  * Meanwhile the names of the services it reaches, `discovered`, are kept naming their running
+  * tasks alone ([[syncLocalDiscovery]]): the database's, which the backoffice migrates as it starts.
+  *
+  * LocalStack, unlike ECS, stops starting tasks for a service whose tasks keep exiting, and leaves
+  * it running none. After a minute with no task running or starting, the service is told to start a
+  * fresh one, once.
+  */
+def awaitLocalBackoffice(
+    target: ReleaseTarget,
+    cluster: String,
+    service: String,
+    discovered: Seq[String]): Unit =
+  val health = s"http://$localLoadBalancerHost:$localStackPort/health"
+  def serving: Boolean =
+    discovered.foreach(syncLocalDiscovery(target, cluster, _))
+    settledLocally(target, cluster, service, replaced = Set.empty) &&
+      scala
+        .util
+        .Try(os.proc("curl", "-s", "-m", "2", health).call(check = false).out.text().trim == "ok")
+        .getOrElse(false)
+  def idle: Boolean =
+    val described =
+      awsJson(target, "ecs", "describe-services", "--cluster", cluster, "--services", service)(
+        "services")(0)
+    described("runningCount").num == 0 && described("pendingCount").num == 0
+  val started = System.nanoTime
+  def elapsed = (System.nanoTime - started) / 1_000_000_000L
+  var nudged = false
+  while !serving && elapsed < 300 do
+    if !nudged && elapsed >= 60 && idle then
+      val _ = awsJson(
+        target,
+        "ecs",
+        "update-service",
+        "--cluster",
+        cluster,
+        "--service",
+        service,
+        "--force-new-deployment")
+      println(s"[release] $service ran no task after a minute; told to start a fresh one")
+      nudged = true
+    Thread.sleep(2000)
+  if !serving then
+    sys.error(
+      s"[release] the backoffice did not answer $health within five minutes. Its log group, `/ecs/$service`, says why.")
+  println(s"[release] the backoffice serves, after ${elapsed}s")
+
 /** Beside devenv's state rather than under `out/`, so that `mill clean` cannot drop a state whose resources
   * LocalStack still holds.
   */

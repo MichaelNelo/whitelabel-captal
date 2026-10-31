@@ -94,20 +94,14 @@ object ci extends Module:
       build.cdc.releaseVersion(),
       build.client.releaseVersion())
     // A release to LocalStack tags by what went into each image as well: see `ImageTags.local`.
+    val local = localTags()
     val tags =
       if target.local then
-        ImageTags(
-          api = ImageTags.local(versions(0).version, build.api.assembly(), build.api.dockerfile()),
-          mcp = ImageTags.local(versions(1).version, build.mcp.assembly(), build.mcp.dockerfile()),
-          cdc = ImageTags.local(versions(2).version, build.cdc.assembly(), build.cdc.dockerfile()))
+        local
       else
         ImageTags(api = versions(0).version, mcp = versions(1).version, cdc = versions(2).version)
     val clientVersion = versions(3).version
-    // Built here, as `captal-<name>:latest`; the apply pushes each one whose tag changed.
-    rqlite.image()()
-    build.api.image()()
-    build.mcp.image()()
-    build.cdc.image()()
+    images()()
     val bundle = build.client.bundle().path
 
     versions.foreach: release =>
@@ -142,5 +136,35 @@ object ci extends Module:
       moved.foreach: tag =>
         git("tag", tag)
         git("push", "origin", s"refs/tags/$tag")
+
+  /** The images a release pushes, built as `captal-<name>:latest`: what the apply pushes when a tag
+    * changed. `ci.run`, `mcp.dev` and `e2e.cucumber` build them through this.
+    */
+  def images() = Task.Command:
+    rqlite.image()()
+    build.api.image()()
+    build.mcp.image()()
+    build.cdc.image()()
+    ()
+
+  /** The tags a release to LocalStack applies: each version with a hash of what went into its image
+    * ([[ImageTags.local]]). The same build gives the same tags to `ci.run`, `mcp.dev`, `e2e.cucumber`
+    * and the local suite, so none of them moves a service another released.
+    */
+  def localTags: T[ImageTags] = Task:
+    ImageTags(
+      api = ImageTags.local(
+        build.api.releaseVersion().version,
+        build.api.assembly(),
+        build.api.dockerfile()),
+      mcp = ImageTags.local(
+        build.mcp.releaseVersion().version,
+        build.mcp.assembly(),
+        build.mcp.dockerfile()),
+      cdc = ImageTags.local(
+        build.cdc.releaseVersion().version,
+        build.cdc.assembly(),
+        build.cdc.dockerfile())
+    )
 end ci
 

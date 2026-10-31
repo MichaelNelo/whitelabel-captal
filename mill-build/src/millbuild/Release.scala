@@ -48,6 +48,7 @@ end ReleaseTarget
   * changes: their [[ReleaseVersion.version]]s, or [[ImageTags.local]] ones.
   */
 final case class ImageTags(api: String, mcp: String, cdc: String)
+    derives upickle.default.ReadWriter
 
 object ImageTags:
   /** A local build's tag: the version, and a hash of what goes into the image. Locally the version
@@ -188,32 +189,6 @@ def applyConfiguration(
   outputs()
 end applyConfiguration
 
-/** The string outputs of the configuration as the last apply in `workDir` left them, staged and
-  * initialised there by [[applyConfiguration]]. Local only: elsewhere the state is in the backend.
-  */
-def localOutputs(workDir: os.Path): Map[String, String] =
-  val result = os
-    .proc(
-      "tofu",
-      s"-chdir=${workDir / "config"}",
-      "output",
-      "-json",
-      s"-state=${workDir / "terraform.tfstate"}")
-    .call(
-      env = Map("TF_DATA_DIR" -> (workDir / ".terraform").toString, "TF_CLI_ARGS" -> "-no-color"),
-      check = false,
-      stderr = os.Pipe)
-  if result.exitCode != 0 then
-    sys.error(
-      s"[tofu] no outputs in $workDir: ${result.err.trim()}. Release into LocalStack first: `mill mcp.dev`.")
-  ujson
-    .read(result.out.text())
-    .obj
-    .collect { case (name, output) if output.obj("value").strOpt.exists(_.nonEmpty) =>
-      name -> output.obj("value").str
-    }
-    .toMap
-
 /** `ci.run`'s first four operations, which `mcp.dev` runs against LocalStack: applies the configuration,
   * which pushes the images whose tags changed and points the services at them, moves every location onto
   * the API image, and publishes the client. The images have to be built first. Answers the
@@ -303,6 +278,54 @@ def syncLocalTargets(target: ReleaseTarget, cluster: String, service: String): U
           (Seq("elbv2", "register-targets", "--target-group-arn", group, "--targets") ++
             targets(missing))*)
 end syncLocalTargets
+
+/** Leaves `service`'s records in its private DNS zone naming its running tasks alone. For LocalStack,
+  * which writes a record per task that starts, keyed by the task, and never removes one for a task
+  * that stopped, while its DNS answers the name with all of them: once a service's tasks are
+  * replaced, a client can be sent to an address nobody answers on.
+  */
+def syncLocalDiscovery(target: ReleaseTarget, cluster: String, service: String): Unit =
+  val registries =
+    awsJson(target, "ecs", "describe-services", "--cluster", cluster, "--services", service)(
+      "services")(0)("serviceRegistries").arr
+  registries
+    .headOption
+    .foreach: registry =>
+      val discovery = awsJson(
+        target,
+        "servicediscovery",
+        "get-service",
+        "--id",
+        registry("registryArn").str.split('/').last)("Service")
+      val namespace = awsJson(
+        target,
+        "servicediscovery",
+        "get-namespace",
+        "--id",
+        discovery("NamespaceId").str)("Namespace")
+      val zone = namespace("Properties")("DnsProperties")("HostedZoneId").str
+      val name = s"${discovery("Name").str}.${namespace("Name").str}."
+      val running = runningTasks(target, cluster, service).map(_("taskArn").str.split('/').last).toSet
+      val stale = awsJson(target, "route53", "list-resource-record-sets", "--hosted-zone-id", zone)(
+        "ResourceRecordSets")
+        .arr
+        .filter(record =>
+          record("Name").str == name && record("Type").str == "A" &&
+            record.obj.get("SetIdentifier").exists(id => !running.contains(id.str)))
+      if stale.nonEmpty then
+        val changes = ujson.Obj(
+          "Changes" -> ujson.Arr.from(
+            stale.map(record => ujson.Obj("Action" -> "DELETE", "ResourceRecordSet" -> record))))
+        val _ = awsJson(
+          target,
+          "route53",
+          "change-resource-record-sets",
+          "--hosted-zone-id",
+          zone,
+          "--change-batch",
+          ujson.write(changes))
+        println(s"[release] $service: removed ${stale.size} name record(s) of tasks that are gone")
+end syncLocalDiscovery
 
 /** `service`'s tasks that are running, as ECS describes them. */
 def runningTasks(target: ReleaseTarget, cluster: String, service: String): Seq[ujson.Value] =

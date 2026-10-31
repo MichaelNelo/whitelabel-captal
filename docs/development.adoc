@@ -127,11 +127,10 @@ it does not hold Mill while the server runs.
 
 [source]
 ----
-[dev] Step 1/5: Ensuring LocalStack...
-[dev] Step 2/5: Opening the Cloudflare tunnels...
-[dev] Step 3/5: Releasing the images, the configuration and the client into LocalStack...
-[dev] Step 4/5: Waiting for rqlite, then running the API's migrations...
-[dev] Step 5/5: Waiting for the backoffice behind the load balancer...
+[dev] Step 1/4: Ensuring LocalStack...
+[dev] Step 2/4: Opening the Cloudflare tunnels...
+[dev] Step 3/4: Releasing the images, the configuration and the client into LocalStack...
+[dev] Step 4/4: Waiting for the backoffice behind the load balancer...
 ----
 
 `mcp.dev` releases this build into LocalStack the way `ci.run` releases it to AWS (see <<release>>),
@@ -163,16 +162,12 @@ inside it:
 * the client: the portal's bundle under `bundle/` and the MCP App pages' scripts under `ui/`, the
   bundle copied under every deployed location's prefix, and one invalidation.
 
-Step 4 waits for rqlite to have a leader, on the host port the local tfvars give it
-(`rqlite_http_port`, 5001), then runs `whitelabel.captal.platform.Migrate` against it. The backoffice
-refuses to start on a database the API has not migrated, and on a new one nothing else has. `api.dev`
-uses the same database — deliberately, since the backoffice writes the content a location's API later
-reads.
-
-Step 5 waits for the backoffice's own `ok` from `/health` through the load balancer,
-`http://captal-local.elb.localhost.localstack.cloud:4567`; LocalStack answers `200 {}` for a target
-group with nobody in it, so the status alone says nothing. A task that started before step 4 has
-exited; after a minute the service is told to start a fresh one, once.
+Step 4 waits for the backoffice's service to settle and for its own `ok` from `/health` through the
+load balancer, `http://captal-local.elb.localhost.localstack.cloud:4567`; LocalStack answers
+`200 {}` for a target group with nobody in it, so the status alone says nothing. The backoffice
+migrates the database itself as it starts, the API's schema included, so a new container needs
+nothing else. `api.dev` uses the same database — deliberately, since the backoffice writes the
+content a location's API later reads.
 
 The task definitions differ from production only in the addresses `environments/local` gives them:
 

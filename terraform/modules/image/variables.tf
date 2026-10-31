@@ -1,14 +1,20 @@
-variable "images" {
-  description = "Each image by name: the registry it goes into, the tag it goes up under (its version), and the local image the build made."
-  type = map(object({
-    repository_url = string
-    tag            = string
-    local          = string
-  }))
+variable "repository_url" {
+  description = "Registry the image goes into"
+  type        = string
+}
+
+variable "tag" {
+  description = "Tag it goes up under: its version. The push runs when this changes."
+  type        = string
+}
+
+variable "local_image" {
+  description = "The image the build made, `captal-<name>:latest`"
+  type        = string
 }
 
 variable "aws_region" {
-  description = "Region of the registries"
+  description = "Region of the registry"
   type        = string
 }
 

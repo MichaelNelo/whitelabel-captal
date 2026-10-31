@@ -769,6 +769,24 @@ then reverted in its entirety once actually wired into the published bundle.
   itself works. **Lesson:** a change to rqlite's task definition replaces every node in any environment, and the
   data survives only through the S3 backup; check that the bucket holds a recent version before
   applying one, in production above all.
+* **Every image's digest waited for any push, and rqlite's nodes were replaced with the API's.**
+  The digests in `modules/images` were read with `depends_on = [terraform_data.push]`, the whole
+  set: a push of the API's or the backoffice's new tag deferred every digest to the apply, so every
+  task definition came out unknown and was replaced, rqlite's included, and its nodes with it. The
+  backoffice then crash-looped against a database that was coming back, until LocalStack stopped
+  starting it. Found 2026-10-31 by the end-to-end run, before any apply to AWS. Reading each tag
+  through its own push's `output` instead changed nothing: a reference to `push[each.key]` is a
+  dependency on the whole block too. **Fix:** `modules/image`, one call per image. **Lesson:**
+  terraform tracks dependencies between resource blocks, not between their `for_each` instances.
+* **LocalStack kept answering a service's name with the addresses of tasks that were gone.** After
+  rqlite's nodes were replaced, the backoffice's migrations got connection refused from
+  `rqlite.captal.local` for minutes, while every node answered on its own address. Cloud Map listed
+  only the live instances, but the namespace's hosted zone held an `A` record per task that had ever
+  run — 38 of them stale — and LocalStack's DNS answered with all of them. Found 2026-10-31.
+  **Fix:** `syncLocalDiscovery` (`mill-build/src/millbuild/Release.scala`) deletes the records of
+  tasks that no longer run, for rqlite and the relay, while a local release waits for the backoffice;
+  and `McpMigrate` waits up to five minutes for a database that does not answer instead of exiting,
+  which LocalStack, unlike ECS, stops restarting after enough tries.
 * **LocalStack's load balancer kept sending requests to a task that was gone.** After the
   backoffice's service replaced a task, its target group still held the old one, and the load
   balancer sent every request to the first target it held: `500` from LocalStack, connection

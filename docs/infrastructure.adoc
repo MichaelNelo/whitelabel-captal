@@ -542,17 +542,20 @@ custom rqlite build from its own repository inside `modules/rqlite` (keep the la
 tag). `docker/cdc.Dockerfile` is single-stage like the API's and the backoffice's, runs the relay
 alone and has no migrations; see xref:cdc.adoc[Change data capture relay].
 
-The apply pushes them. `modules/images` holds one `terraform_data` per image, whose
-`triggers_replace` is its repository and tag: the state keeps the tag pushed, and when the build
-passes another — a version git-cliff moved, or a new `rqlite_image_tag` — its `local-exec` tags the
-image the build made (`captal-<name>:latest`) and pushes it. Against AWS it logs in to ECR with the
-`aws` CLI and leaves a tag already in its registry alone, since that tag is a release. Each push
-depends on its repository; a `data "aws_ecr_image"` read after it gives the digest, and every task
-definition, and the backoffice's `API_IMAGE`, names its image as `<repository>@<digest>`
-(`module.images.references`, and the root output `api_image`). So no service is pointed at an image
-before it is in its registry, and what a service runs cannot change under a tag pushed over later.
-An apply needs Docker and the images built wherever it runs; without them it fails at the push,
-before any service changes.
+The apply pushes them. `modules/image` is called once per image (`rqlite_image`, `api_image`,
+`mcp_image`, `cdc_image`) and holds a `terraform_data` whose `triggers_replace` is its repository
+and tag: the state keeps the tag pushed, and when the build passes another — a version git-cliff
+moved, or a new `rqlite_image_tag` — its `local-exec` tags the image the build made
+(`captal-<name>:latest`) and pushes it. Against AWS it logs in to ECR with the `aws` CLI and leaves a
+tag already in its registry alone, since that tag is a release. Each push depends on its repository;
+a `data "aws_ecr_image"` read after it gives the digest, and every task definition, and the
+backoffice's `API_IMAGE`, names its image as `<repository>@<digest>` (each call's `reference`, and
+the root output `api_image`). So no service is pointed at an image before it is in its registry, and
+what a service runs cannot change under a tag pushed over later. One call per image rather than one
+with `for_each`, because terraform tracks a dependency on a resource block, not on one of its
+instances: a single block made every digest wait for any push, and replaced every task definition,
+rqlite's nodes included, whenever one image changed. An apply needs Docker and the images built
+wherever it runs; without them it fails at the push, before any service changes.
 `docker/api.Dockerfile` and `docker/mcp.Dockerfile` are both single-stage — `FROM
 eclipse-temurin:21-jre-noble`, `COPY` one
 pre-built jar, run it — rather than compiling inside the image, which is the pattern that existed
@@ -562,8 +565,8 @@ and `mcp.image` (Mill tasks) stage the already-assembled jar beside the Dockerfi
 context is two files, not the whole repository. Both images run migrations and the server as one
 `CMD`, so a failed migration stops the container rather than starting a server against a schema it
 was not written for — `whitelabel.captal.platform.Migrate` for the API, `whitelabel.captal.mcp
-.McpMigrate` for the backoffice, each owning its own history table (`db/migration` versus
-`db/migration-mcp`). Both set a 5-second positive DNS cache TTL with no negative caching
+.McpMigrate` for the backoffice, which runs the API's migrations and then its own, each set with
+its own history table (`db/migration` versus `db/migration-mcp`). Both set a 5-second positive DNS cache TTL with no negative caching
 (`-Dnetworkaddress.cache.ttl=5 -Dnetworkaddress.cache.negative.ttl=0`), because rqlite is reached
 through a Cloud Map service-discovery name whose answer changes whenever its task rotates, and the
 JDK's 30-second default positive / 10-second negative caching would otherwise pin the JDBC client to

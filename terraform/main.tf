@@ -96,35 +96,46 @@ module "ecr" {
 }
 
 # Every image pushed by the apply when its version changes, and named by digest from then on. The
-# build makes each one first, as `captal-<name>:latest`: `mill <module>.image`.
-module "images" {
-  source = "./modules/images"
+# build makes each one first, as `captal-<name>:latest`: `mill <module>.image`. One call each, so
+# a new version of one replaces only its own task definition.
+module "rqlite_image" {
+  source = "./modules/image"
 
+  repository_url   = module.rqlite.ecr_repository_url
+  tag              = var.rqlite_image_tag
+  local_image      = "captal-rqlite:latest"
   aws_region       = var.aws_region
   aws_endpoint_url = var.aws_endpoint_url
+}
 
-  images = {
-    rqlite = {
-      repository_url = module.rqlite.ecr_repository_url
-      tag            = var.rqlite_image_tag
-      local          = "captal-rqlite:latest"
-    }
-    api = {
-      repository_url = module.ecr.api_repository_url
-      tag            = var.image_tag
-      local          = "captal-api:latest"
-    }
-    mcp = {
-      repository_url = module.ecr.mcp_repository_url
-      tag            = var.mcp_image_tag
-      local          = "captal-mcp:latest"
-    }
-    cdc = {
-      repository_url = module.ecr.cdc_repository_url
-      tag            = var.cdc_image_tag
-      local          = "captal-cdc:latest"
-    }
-  }
+module "api_image" {
+  source = "./modules/image"
+
+  repository_url   = module.ecr.api_repository_url
+  tag              = var.image_tag
+  local_image      = "captal-api:latest"
+  aws_region       = var.aws_region
+  aws_endpoint_url = var.aws_endpoint_url
+}
+
+module "mcp_image" {
+  source = "./modules/image"
+
+  repository_url   = module.ecr.mcp_repository_url
+  tag              = var.mcp_image_tag
+  local_image      = "captal-mcp:latest"
+  aws_region       = var.aws_region
+  aws_endpoint_url = var.aws_endpoint_url
+}
+
+module "cdc_image" {
+  source = "./modules/image"
+
+  repository_url   = module.ecr.cdc_repository_url
+  tag              = var.cdc_image_tag
+  local_image      = "captal-cdc:latest"
+  aws_region       = var.aws_region
+  aws_endpoint_url = var.aws_endpoint_url
 }
 
 # `cli_releases` was here: a public bucket holding versioned `captal` CLI artifacts for operators to
@@ -188,7 +199,7 @@ module "rqlite" {
   desired_count                    = var.rqlite_desired_count
   container_cpu                    = var.rqlite_cpu
   container_memory                 = var.rqlite_memory
-  image                            = module.images.references["rqlite"]
+  image                            = module.rqlite_image.reference
   http_port                        = var.rqlite_http_port
   raft_port                        = var.rqlite_raft_port
   # The relay by its service discovery name, unless the configuration says otherwise.
@@ -216,7 +227,7 @@ module "cdc" {
   rqlite_security_group_id         = module.rqlite.security_group_id
   subscriber_security_group_id     = aws_security_group.ecs_tasks.id
 
-  image            = module.images.references["cdc"]
+  image            = module.cdc_image.reference
   http_port        = var.container_port
   container_cpu    = var.cdc_cpu
   container_memory = var.cdc_memory
@@ -418,7 +429,7 @@ module "mcp" {
   execution_role_arn  = module.ecs.execution_role_arn
   execution_role_name = module.ecs.execution_role_name
 
-  image            = module.images.references["mcp"]
+  image            = module.mcp_image.reference
   container_port   = var.container_port
   container_cpu    = var.mcp_cpu
   container_memory = var.mcp_memory
@@ -443,7 +454,7 @@ module "mcp" {
   # What the deploy tools hand to a location: one image for all of them, the task role a location's
   # API runs as -- which is not the server's own -- and the proxy it reaches its venue's gateway
   # through.
-  api_image              = module.images.references["api"]
+  api_image              = module.api_image.reference
   location_task_role_arn = module.ecs.task_role_arn
   unifi_proxy_url        = var.enable_tailscale ? module.tailscale_proxy[0].proxy_url : ""
 

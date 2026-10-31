@@ -112,18 +112,16 @@ object `package` extends BaseModule with Released:
       s"[destroy] removed ${removedContainers.size} container(s) and ${removedImages.size} image id(s); the next run rebuilds what it needs")
 
   /** Releases this build into LocalStack as `ci.run` releases it to AWS, and returns once the backoffice
-    * serves: the images and the configuration, the client, every location moved onto the API image, then
-    * the API's migrations, which the backoffice needs before it starts. The backoffice and the change data
-    * capture relay run there as tasks, from their images, as they do in AWS. Needs a licence.
+    * serves: the images and the configuration, the client, every location moved onto the API image. The
+    * backoffice and the change data capture relay run there as tasks, from their images, as they do in
+    * AWS, and the backoffice migrates the database itself. Needs a licence.
     *
     * `--tunnel` exposes the backoffice and LocalStack through Cloudflare quick tunnels, which stay open
     * between runs, and applies the configuration with their addresses. `mill mcp.stop` stops the
     * backoffice, the relay and the tunnels. Usage: mill mcp.dev, or mill mcp.dev --tunnel
     */
   def dev(tunnel: mainargs.Flag = mainargs.Flag()) = Task.Command:
-    val migrationCp = build.platform.runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
-
-    println("[dev] Step 1/5: Ensuring LocalStack...")
+    println("[dev] Step 1/4: Ensuring LocalStack...")
     val endpoint = ensureLocalStack(localStackContainer, localStackPort, Task.env)
     // The state `ci.run` and the suite apply with: two states over one container diverge.
     val workDir = localStackWorkDir(endpoint, Task.env)
@@ -134,7 +132,7 @@ object `package` extends BaseModule with Released:
     // Before the apply, which gives the backoffice their addresses. Two: the MCP App pages run on the
     // host's public origin, so LocalStack needs an address too. The backoffice's goes to the load
     // balancer, which LocalStack's gateway tells apart by the host a request names.
-    println("[dev] Step 2/5: Opening the Cloudflare tunnels...")
+    println("[dev] Step 2/4: Opening the Cloudflare tunnels...")
     val tunnels = Option.when(tunnel.value):
       (
         quickTunnel(
@@ -156,47 +154,26 @@ object `package` extends BaseModule with Released:
       Seq(s"-var=mcp_public_origin=$server", s"-var=assets_endpoint_url=$assets")
 
     // `ci.run`'s release, against LocalStack. Locations are not waited for.
-    println("[dev] Step 3/5: Releasing the images, the configuration and the client into LocalStack...")
-    // Built here, as `captal-<name>:latest`, for the apply to push whichever of them it has to.
-    build.rqlite.image()()
-    build.api.image()()
-    image()()
-    build.cdc.image()()
+    println("[dev] Step 3/4: Releasing the images, the configuration and the client into LocalStack...")
+    build.ci.images()()
     val outputs = release(
       target,
       configDir,
       workDir,
-      ImageTags(
-        ImageTags.local(
-          build.api.releaseVersion().version,
-          build.api.assembly(),
-          build.api.dockerfile()),
-        ImageTags.local(releaseVersion().version, assembly(), dockerfile()),
-        ImageTags.local(
-          build.cdc.releaseVersion().version,
-          build.cdc.assembly(),
-          build.cdc.dockerfile())
-      ),
+      build.ci.localTags(),
       build.client.bundle().path,
       build.client.releaseVersion().version,
       variables,
       awaitLocations = false
     )
-    val backoffice = outputs("mcp_service_name")
 
-    // The backoffice refuses to start on a database the API has not migrated, and on a new one nothing
-    // else has: a location's task migrates it, and none is deployed yet.
-    println("[dev] Step 4/5: Waiting for rqlite, then running the API's migrations...")
+    println("[dev] Step 4/4: Waiting for the backoffice behind the load balancer...")
+    awaitLocalBackoffice(
+      target,
+      outputs("ecs_cluster_name"),
+      outputs("mcp_service_name"),
+      Seq(outputs("rqlite_service_name"), outputs("cdc_service_name")))
     val dbUrl = localDbUrl(configDir)
-    awaitLocalDb(dbUrl)
-    val migration = os
-      .proc("java", "-cp", migrationCp, "whitelabel.captal.platform.Migrate")
-      .call(env = Map("DB_URL" -> dbUrl), check = false, stdout = os.Inherit, stderr = os.Inherit)
-    if migration.exitCode != 0 then
-      sys.error("[dev] Migrations failed; the backoffice would not start against the database.")
-
-    println("[dev] Step 5/5: Waiting for the backoffice behind the load balancer...")
-    awaitBackoffice(target, outputs("ecs_cluster_name"), backoffice)
     val resourceUri = outputs("mcp_url")
     val adminToken = awsText(
       target,
@@ -238,44 +215,6 @@ object `package` extends BaseModule with Released:
       |$seeded[dev] Its log: `${logs(outputs("mcp_log_group_name"))}`; the relay's: `${logs(
         outputs("cdc_log_group_name"))}`.
       |[dev] Stop both with `mill mcp.stop`.""".stripMargin)
-
-  /** Waits for the backoffice's service to settle on its current task definition
-    * ([[settledLocally]]), then for the server's own `ok` from its health check through the local load
-    * balancer, which answers `200 {}` for a target group with nobody in it. A task that started before
-    * the API's migrations had run has exited, so after a minute the service is told to start a fresh
-    * one, once.
-    */
-  private def awaitBackoffice(target: ReleaseTarget, cluster: String, service: String): Unit =
-    val health = s"http://$localLoadBalancerHost:$localStackPort/health"
-    var replacing = Set.empty[String]
-    def serving: Boolean =
-      settledLocally(target, cluster, service, replacing) &&
-        scala
-          .util
-          .Try(os.proc("curl", "-s", "-m", "2", health).call(check = false).out.text().trim == "ok")
-          .getOrElse(false)
-    val started = System.nanoTime
-    def elapsed = (System.nanoTime - started) / 1_000_000_000L
-    var restarted = false
-    while !serving && elapsed < 300 do
-      if !restarted && elapsed >= 60 then
-        replacing = runningTasks(target, cluster, service).map(_("taskArn").str).toSet
-        val _ = awsJson(
-          target,
-          "ecs",
-          "update-service",
-          "--cluster",
-          cluster,
-          "--service",
-          service,
-          "--force-new-deployment")
-        println(s"[dev]   not serving after a minute; $service told to start a fresh task")
-        restarted = true
-      Thread.sleep(2000)
-    if !serving then
-      sys.error(
-        s"[dev] the backoffice did not answer $health within five minutes. Its log group, `/ecs/$service`, says why.")
-    println(s"[dev]   serving after ${elapsed}s")
 
   /** Stops the backoffice and the relay in LocalStack, and the tunnels. The next `mcp.dev` starts them
     * again: its apply sets their task count back.
@@ -448,26 +387,10 @@ object `package` extends BaseModule with Released:
       tofuSources()
       val licensed = parts(2).toBoolean
       val configDir = terraformDir(Task.env, moduleDir / os.up / os.up)
-      // Built here, as `captal-<name>:latest`, for the apply to push whichever of them it has to.
-      build.rqlite.image()()
-      build.api.image()()
-      build.mcp.image()()
-      build.cdc.image()()
-      // `mcp.dev`'s tags for the same build, so this apply moves no service it released.
-      val tags = ImageTags(
-        ImageTags.local(
-          build.api.releaseVersion().version,
-          build.api.assembly(),
-          build.api.dockerfile()),
-        ImageTags.local(
-          build.mcp.releaseVersion().version,
-          build.mcp.assembly(),
-          build.mcp.dockerfile()),
-        ImageTags.local(
-          build.cdc.releaseVersion().version,
-          build.cdc.assembly(),
-          build.cdc.dockerfile())
-      )
+      // Built here, for the apply to push whichever of them it has to, under `mcp.dev`'s tags for
+      // the same build, so this apply moves no service it released.
+      build.ci.images()()
+      val tags = build.ci.localTags()
       // The state lies outside `dest`, the only place Mill lets a task write: the checker is off for this.
       mill.api.BuildCtx.withFilesystemCheckerDisabled:
         ensureLocalStackTofu(
