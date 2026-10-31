@@ -130,9 +130,32 @@ variable "rqlite_image_tag" {
 }
 
 variable "rqlite_cdc_endpoint" {
-  description = "Where rqlite posts changes to video_playbacks. Empty means the backoffice by its service discovery name, which is right wherever it runs as a task beside rqlite."
+  description = "Where rqlite posts its change data capture. Empty means the relay by its service discovery name, which is right wherever it runs as a task beside rqlite."
   type        = string
   default     = ""
+}
+
+variable "cdc_image_tag" {
+  description = "Tag of the captal-cdc image the change data capture relay runs: the relay's version, which the build passes from its `cdc/v*` git tags and is set in no tfvars. No default, as for the other images: a floating tag changes the deployed version with nobody deciding it."
+  type        = string
+}
+
+variable "cdc_desired_count" {
+  description = "How many relay tasks: one in a deployed environment, since rqlite posts to one address and every subscriber has to follow that same relay. Zero for `local`, where `mill mcp.dev` runs it on the host."
+  type        = number
+  default     = 1
+}
+
+variable "cdc_cpu" {
+  description = "Fargate CPU units for the relay"
+  type        = number
+  default     = 256
+}
+
+variable "cdc_memory" {
+  description = "Fargate memory in MiB for the relay: the JVM, and the change sets it keeps for subscribers that reconnect"
+  type        = number
+  default     = 512
 }
 
 variable "tailscale_proxy_desired_count" {

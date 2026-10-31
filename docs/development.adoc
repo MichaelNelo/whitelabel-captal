@@ -132,12 +132,16 @@ holds Mill while the servers run.
 [dev] Step 3/6: Waiting for rqlite, then running migrations...
 [dev] Step 4/6: Publishing the portal, the MCP App scripts and the images...
 [dev] Step 5/6: Opening the Cloudflare tunnels...
-[dev] Step 6/6: Starting the MCP backoffice on :8081...
+[dev] Step 6/6: Starting the change data capture relay on :8090 and :9090, then the MCP backoffice on :8081...
 ----
 
-The task returns once the backoffice serves; it keeps running as the devenv process `mcp`. A run
-restarts it on the current build, `mill mcp.stop` stops it with its tunnels, and `devenv processes
-logs mcp` shows its log.
+The task returns once the backoffice serves; it keeps running as the devenv process `mcp`, beside
+the change data capture relay it follows, the devenv process `cdc` (see xref:cdc.adoc[Change data
+capture relay]). rqlite's leader, in LocalStack, posts to the relay through
+`host.docker.internal:8090`; the backoffice follows it on `localhost:9090`. A run restarts both on
+the current build, `mill mcp.stop` stops them with the tunnels, and `devenv processes logs mcp` (or
+`cdc`) shows a log. A manager started before `cdc` was declared in `devenv.nix` does not know it:
+`devenv processes down`, and run again.
 
 Everything the backoffice runs against is the local configuration's, applied to LocalStack: the
 same OpenTofu configuration production uses, so nothing here is a resource the build made on the
@@ -297,13 +301,14 @@ defaults to `latest`.
 What CodeBuild runs to release a build to an AWS environment, in five operations. `mcp.dev` runs
 the first four against LocalStack:
 
-. **Images.** `rqlite.image`, `api.image` and `mcp.image`, built before anything else.
+. **Images.** `rqlite.image`, `api.image`, `mcp.image` and `cdc.image`, built before anything else.
 . **The configuration.** `tofu init` against the environment's backend
-  (`environments/<env>/backend.tfvars`), the image registries applied alone, the three images
+  (`environments/<env>/backend.tfvars`), the image registries applied alone, the four images
   pushed into them — Docker logged in to ECR first — then a plan of everything saved and that plan
   applied. The registries and the images go first because the task definitions name images, and an
-  image has to be in its registry before a service pulls it. The API and backoffice images go up
-  under their versions (see <<versions>>), passed to the plan as `image_tag` and `mcp_image_tag`;
+  image has to be in its registry before a service pulls it. The API, backoffice and relay images go
+  up under their versions (see <<versions>>), passed to the plan as `image_tag`, `mcp_image_tag` and
+  `cdc_image_tag`;
   rqlite's under the tfvars' `rqlite_image_tag`, since the engine changes deliberately rather than
   per commit. A version is published once: a tag already in its registry is that release and is not
   pushed again, which is also how a module whose version did not move goes out unchanged. The
@@ -375,8 +380,9 @@ same state, `.devenv/state/localstack/tofu/<container-id>/` — so a release fro
 [[versions]]
 === Versions
 
-The API, the backoffice and the client are versioned apart, each by its git tags — `api/v1.3.0`,
-`mcp/v0.4.0`, `client/v2.1.0` — and its next version is computed, not chosen:
+The API, the backoffice, the change data capture relay and the client are versioned apart, each by
+its git tags — `api/v1.3.0`, `mcp/v0.4.0`, `cdc/v1.0.0`, `client/v2.1.0` — and its next version is
+computed, not chosen:
 https://git-cliff.org[git-cliff] reads the conventional commits since the module's last tag and
 bumps it. `feat:` bumps the minor, `fix:` and `perf:` the patch, `!` after the type the major, and
 the rest (`docs`, `refactor`, `tests`, `chore`, `build`, `lint`) nothing. `mill show
@@ -384,7 +390,8 @@ api.releaseVersion` prints the tag the next release goes out under and the last 
 same when nothing since moves it. The client carries its own as `BuildInfo.version`.
 
 Only commits touching the module count: its own folder and its source folders, those of the
-modules it depends on (`core`, `messages` and `platform` for the API; `core` and `messages`, through
+modules it depends on (`core`, `messages` and `platform` for the API; `cdc.protocol` for the relay
+and the backoffice; `core` and `messages`, through
 `core-js` and `messages-js`, for the client), and the files it lists as `versionFiles` — the
 Dockerfile of an image, and the portal stylesheet the backoffice carries. Source folders as well as
 module folders because `core-js` and `messages-js` have none of their own: their sources are
@@ -394,7 +401,7 @@ starts depending on another counts that one's commits without anyone listing it.
 commits touching them change other modules, so a change there that only alters how a module is built
 needs a `fix:` in the module itself, or it is not released.
 
-The rules are each module's `cliff.toml` — `api/cliff.toml`, `mcp/cliff.toml`,
+The rules are each module's `cliff.toml` — `api/cliff.toml`, `mcp/cliff.toml`, `cdc/cliff.toml`,
 `client/cliff.toml` — including its tag pattern and the `initial_tag` released before any tag
 exists. Two things there are written around
 git-cliff rather than with it, both checked on 2.13 (what devenv installs) and 2.14:

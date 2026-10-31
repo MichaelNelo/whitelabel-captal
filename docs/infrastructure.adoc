@@ -96,11 +96,12 @@ validation {
 ----
 
 See xref:context/incidents.adoc[Incidents] for the drift that validation exists to stop.
-`mcp_image_tag` carries no default at all, for the same reason. Neither is set in any
-`terraform.tfvars`: they are the API's and the backoffice's versions, computed from git tags, and
-the build passes them with `-var` — see xref:development.adoc#versions[Versions]. A plan run by
-hand has to pass the released ones too, `-var=image_tag=<api version> -var=mcp_image_tag=<mcp
-version>`, which `git describe --tags --abbrev=0 --match 'api/v*'` (and `mcp/v*`) names.
+`mcp_image_tag` and `cdc_image_tag` carry no default at all, for the same reason. None is set in
+any `terraform.tfvars`: they are the API's, the backoffice's and the relay's versions, computed from
+git tags, and the build passes them with `-var` — see xref:development.adoc#versions[Versions]. A
+plan run by hand has to pass the released ones too, `-var=image_tag=<api version>
+-var=mcp_image_tag=<mcp version> -var=cdc_image_tag=<cdc version>`, which `git describe --tags
+--abbrev=0 --match 'api/v*'` (and `mcp/v*`, `cdc/v*`) names.
 
 Per-environment sizing, as committed:
 
@@ -182,9 +183,9 @@ replacements a real `tofu apply` would trigger against deployed `dev`.
 `backend.tfvars` points the backend at — two paths that name the same *kind* of bucket without being
 cross-wired in code.
 
-`modules/ecr` creates two repositories, `captal-api` and `captal-mcp`, each keeping the last 10
-images tagged with a `v` prefix and expiring untagged images after 7 days. A third image — the
-custom rqlite build — gets its own repository inside `modules/rqlite` instead, with a simpler
+`modules/ecr` creates three repositories, `captal-api`, `captal-mcp` and `captal-cdc`, each keeping
+the last 10 images tagged with a `v` prefix and expiring untagged images after 7 days. A fourth
+image — the custom rqlite build — gets its own repository inside `modules/rqlite` instead, with a simpler
 keep-last-5 policy; see <<Images and releases>>. Two now-removed repositories,
 `captal-provision`/`captal-shared`-style per-location images from the deleted CLI, are not declared
 here any more — their emptying and removal is a `tofu apply`, not something a build task can do; see
@@ -275,26 +276,38 @@ authoritative `ingress` blocks would revoke those external rules on every apply.
 
 ==== Change data capture
 
-The leader posts every change to `video_playbacks` to `cdc_endpoint`, which is how the backoffice
-learns that a replaced video file may have nobody left playing it, and that a playback started
-whose page might never say it ended (see xref:mcp.adoc#replaced-files[Replaced files]). Whole rows,
-not `row_ids_only`: the timer needs the playback's own id, and a row id is SQLite's. The entrypoint
-writes the `-cdc-config` file only when `RQLITE_CDC_ENDPOINT` is set, so an image from `1.0.7` on is
-what turns it on as described here. Retries are bounded —
-ten, backing off exponentially to a minute — because with the backoffice down unbounded retries
-grow the on-disk queue until the disk is full; a change it never hears about is caught by the pass
-it runs at startup. In the config file the retry policy and the backoff are numbers: `1` for
-exponential, durations in nanoseconds. rqlited refuses to start on the names and duration strings
-the guide shows.
+The leader posts every change to `video_playbacks` to `cdc_endpoint`: the change data capture relay,
+which hands each change set to the services that follow it (see xref:cdc.adoc[Change data capture
+relay]). Whole rows, not `row_ids_only`: subscribers read the rows' own ids, and a row id is
+SQLite's. The entrypoint writes the `-cdc-config` file only when `RQLITE_CDC_ENDPOINT` is set, so an
+image from `1.0.7` on is what turns it on as described here. Retries are bounded — ten, backing off
+exponentially to a minute — because with the relay down unbounded retries grow the on-disk queue
+until the disk is full; a subscriber that misses changes is told so by a gap and rebuilds from the
+database. In the config file the retry policy and the backoff are numbers: `1` for exponential,
+durations in nanoseconds. rqlited refuses to start on the names and duration strings the guide
+shows.
 
-The root passes `rqlite_cdc_endpoint`, or `http://mcp.<namespace>:<container_port>/cdc/video-playbacks`
-when it is empty. That name exists because `modules/mcp` registers the backoffice in Cloud Map,
-and the post gets through because of `mcp_from_rqlite_cdc`, an ingress rule on the shared
-`ecs_tasks` group from rqlite's — separate rather than inline, since rqlite's group already names
-`ecs_tasks` and the reverse would be a cycle, and with the same `ignore_changes = [ingress]` the
-rqlite group carries. Locally the backoffice runs on the host, so `local` sets
-`rqlite_cdc_endpoint` to `host.docker.internal:8081`, which every container Docker starts can
-resolve.
+The root passes `rqlite_cdc_endpoint`, or the relay's `ingest_url`,
+`http://cdc.<namespace>:<container_port>/cdc`, when it is empty. Locally the relay runs on the host,
+so `local` sets `rqlite_cdc_endpoint` to `http://host.docker.internal:8090/cdc`, which every
+container Docker starts can resolve.
+
+=== Change data capture relay
+
+`modules/cdc` runs the relay: one Fargate task with a public address (to pull from ECR) and no load
+balancer, registered in Cloud Map as `cdc.<namespace>`. Its own security group admits rqlite's group
+on the HTTP port (`container_port`) and the shared `ecs_tasks` group on the gRPC port (`9090`); both
+inline, since neither of those groups names this one. One task, because rqlite posts to one address
+and every subscriber has to follow the relay that receives the posts — and deployed stop-then-start
+(`deployment_minimum_healthy_percent = 0`, `deployment_maximum_percent = 100`, with the circuit
+breaker rolling back), so a deploy never leaves two tasks behind the name: a subscriber that
+reached the new one while rqlite still posted to the old would miss those change sets with no gap to
+tell it. While the new task starts rqlite retries its posts, and the subscribers reconnect to it and
+get a gap. `CDC_BUFFER` (1000) is how many change sets it keeps for subscribers that reconnect.
+
+The module outputs `ingest_url`, passed to rqlite, and `feed_address`, `cdc.<namespace>:9090`,
+passed to the backoffice as `CDC_FEED_ADDRESS`. `local` sets `cdc_desired_count = 0`: `mill mcp.dev`
+runs the relay on the host.
 
 See xref:context/pending.adoc[Pending work] for two risks this shape carries that have not yet been
 settled — production's `FARGATE_SPOT` choice sharing a single reclamation signal across all three
@@ -521,9 +534,11 @@ portal no longer serves.
 
 == Images and releases
 
-Three images, three ECR repositories: `captal-api` and `captal-mcp` from the shared `modules/ecr`
-(keep the last 10 `v`-tagged images, expire untagged ones after 7 days), and the custom rqlite build
-from its own repository inside `modules/rqlite` (keep the last 5 images, any tag).
+Four images, four ECR repositories: `captal-api`, `captal-mcp` and `captal-cdc` from the shared
+`modules/ecr` (keep the last 10 `v`-tagged images, expire untagged ones after 7 days), and the
+custom rqlite build from its own repository inside `modules/rqlite` (keep the last 5 images, any
+tag). `docker/cdc.Dockerfile` is single-stage like the API's and the backoffice's, runs the relay
+alone and has no migrations; see xref:cdc.adoc[Change data capture relay].
 `docker/api.Dockerfile` and `docker/mcp.Dockerfile` are both single-stage — `FROM
 eclipse-temurin:21-jre-noble`, `COPY` one
 pre-built jar, run it — rather than compiling inside the image, which is the pattern that existed
@@ -540,11 +555,12 @@ through a Cloud Map service-discovery name whose answer changes whenever its tas
 JDK's 30-second default positive / 10-second negative caching would otherwise pin the JDBC client to
 an address that is gone.
 
-None of the three image-tag variables (`image_tag`, `mcp_image_tag`, `rqlite_image_tag`) default to
-or tolerate `latest` in the shared variable (`image_tag` is validated against it directly); see
-xref:context/incidents.adoc[Incidents] for the rqlite version drift that made the point concretely.
-The first two are the modules' versions, which the build passes; `rqlite_image_tag` is the one an
-environment's tfvars names, since the engine changes deliberately rather than per commit.
+None of the four image-tag variables (`image_tag`, `mcp_image_tag`, `cdc_image_tag`,
+`rqlite_image_tag`) default to or tolerate `latest` in the shared variable (`image_tag` is validated
+against it directly); see xref:context/incidents.adoc[Incidents] for the rqlite version drift that
+made the point concretely. The first three are the modules' versions, which the build passes;
+`rqlite_image_tag` is the one an environment's tfvars names, since the engine changes deliberately
+rather than per commit.
 
 The SPA bundle and the MCP-UI apps are not released through Tofu or through ECR: `client.bundle`,
 `client.publishS3` and `client.publish` (Mill tasks, detailed in xref:client.adoc[Client]) write

@@ -52,7 +52,9 @@ Six steps, in order:
    LocalStack's tunnel (`SCRIPT_BASE_URL`, `PRESIGN_ENDPOINT_URL`), since a page rendered by a hosted
    client may not reach localhost. The tunnels stay open after the task returns, until `mill
    mcp.stop`. Without the flag the step stops any that are open.
-6. Starts the backoffice on `:8081`, as the devenv process `mcp`, with a **fixed** admin token,
+6. Starts the change data capture relay as the devenv process `cdc`, HTTP on `:8090` (rqlite in
+   LocalStack posts there through `host.docker.internal`) and gRPC on `:9090`, then the backoffice
+   on `:8081`, as the devenv process `mcp`, following the relay, with a **fixed** admin token,
    `dev-token`, also with `--tunnel` — so a connector registered against the tunnel keeps working
    across runs. With `--tunnel` the server's address is the tunnel URL, and the server is public with
    a token written in this repository. `--token <value>` overrides it.

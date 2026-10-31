@@ -5,7 +5,6 @@ import java.time.Instant
 import io.getquill.*
 import whitelabel.captal.core.video.Playback
 import whitelabel.captal.platform.schema.QuillSqlite
-import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.{VideoFileRow, VideoFiles, VideoPlaybackRow}
 import zio.*
@@ -13,14 +12,14 @@ import zio.*
 /** Closes the playbacks whose page never said they ended — the captive-portal browser closed, the
   * phone left the WiFi, the tab died before `pagehide` — so the file they hold can go.
   *
-  * One fiber per playback, started when rqlite reports it inserted and, at startup, for every
-  * playback still open: timers live in memory, so a restart would otherwise forget the ones it had.
-  * Each sleeps until [[Playback.expiresAt]] and then closes the playback if it is still open. The
-  * deadline is read from the database, never from the post: the route is not authenticated, and an
-  * id that names no open playback schedules nothing.
+  * One fiber per playback, started when the change feed reports it inserted and, at startup or
+  * after a gap in the feed, for every playback still open: timers live in memory, so a restart
+  * would otherwise forget the ones it had. Each sleeps until [[Playback.expiresAt]] and then closes
+  * the playback if it is still open. The deadline is read from the database, never from the change
+  * set, and an id that names no open playback schedules nothing.
   *
   * A playback that ends any other way — the page's beacon, the watched report — has its timer
-  * cancelled when rqlite reports the update, rather than left asleep until a deadline that would
+  * cancelled when the feed reports the update, rather than left asleep until a deadline that would
   * find nothing to close. Either way the timer leaves the list as its fiber ends.
   */
 object PlaybackExpiry:
@@ -31,11 +30,15 @@ object PlaybackExpiry:
     *   stops it, for a playback that ended; nothing for one with no timer.
     * @param pending
     *   the playbacks with a timer running.
+    * @param resync
+    *   a timer for every playback the database has open and for none other, as at startup: for when
+    *   changes may have been missed.
     */
   final case class Timers(
       start: String => UIO[Unit],
       cancel: String => UIO[Unit],
-      pending: UIO[Set[String]])
+      pending: UIO[Set[String]],
+      resync: UIO[Unit])
 
   def make(asked: Queue[Unit]): ZIO[QuillSqlite & Scope, Nothing, Timers] =
     for
@@ -60,11 +63,20 @@ object PlaybackExpiry:
         (id: String) =>
           running.updateZIO: timers =>
             ZIO.foreachDiscard(timers.get(id))(_.interruptFork).as(timers - id)
-      open <- ZIO.serviceWithZIO[QuillSqlite]: quill =>
-        import quill.*
-        run(query[VideoPlaybackRow].filter(_.endedAt.isEmpty).map(_.id)).orDie
-      _ <- ZIO.foreachDiscard(open)(start)
-    yield Timers(start, cancel, running.get.map(_.keySet))
+      resync =
+        for
+          open <- openPlaybacks.provideEnvironment(env)
+          ran  <- running.get.map(_.keySet)
+          _    <- ZIO.foreachDiscard(ran -- open)(cancel)
+          _    <- ZIO.foreachDiscard(open)(start)
+        yield ()
+      _ <- resync
+    yield Timers(start, cancel, running.get.map(_.keySet), resync)
+
+  private def openPlaybacks: URIO[QuillSqlite, Set[String]] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
+      import quill.*
+      run(query[VideoPlaybackRow].filter(_.endedAt.isEmpty).map(_.id)).orDie.map(_.toSet)
 
   private def expireWhenDue(id: String, asked: Queue[Unit]): URIO[QuillSqlite, Unit] = deadlineOf(
     id).flatMap(ZIO.foreachDiscard(_)(expireAt(id, _, asked)))

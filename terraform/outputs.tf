@@ -126,6 +126,11 @@ output "mcp_image_repository_url" {
   value       = module.ecr.mcp_repository_url
 }
 
+output "cdc_image_repository_url" {
+  description = "ECR repo URL for captal-cdc, the change data capture relay"
+  value       = module.ecr.cdc_repository_url
+}
+
 # ─── CloudFront + S3 assets ─────────────────────────────────────────────────
 
 output "cloudfront_distribution_id" {

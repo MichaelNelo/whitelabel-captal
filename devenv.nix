@@ -15,6 +15,7 @@ let
   managedProcesses = [
     "localstack"
     "mcp"
+    "cdc"
     "api"
     "tunnel-mcp"
     "tunnel-localstack"

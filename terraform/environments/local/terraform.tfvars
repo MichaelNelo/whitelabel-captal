@@ -65,10 +65,14 @@ rqlite_memory        = 512
 # host, with `mill mcp.dev`. Raising this runs the published image here instead.
 mcp_desired_count = 0
 
-# So rqlite's change data capture reaches that backoffice on the host rather than a task named `mcp`
-# that is not running. Docker gives every container `host.docker.internal`, and 8081 is the port
-# `mill mcp.dev` serves on. Empty this when raising `mcp_desired_count`.
-rqlite_cdc_endpoint = "http://host.docker.internal:8081/cdc/video-playbacks"
+# The change data capture relay likewise: declared and published, run on the host by `mill mcp.dev`
+# beside the backoffice that follows it.
+cdc_desired_count = 0
+
+# So rqlite's change data capture reaches that relay on the host rather than a task named `cdc` that
+# is not running. Docker gives every container `host.docker.internal`, and 8090 is the port
+# `mill mcp.dev` runs the relay's HTTP on. Empty this when raising `cdc_desired_count`.
+rqlite_cdc_endpoint = "http://host.docker.internal:8090/cdc"
 
 # The identity the suite runs as, and the reason `ENFORCE_IAM` can do anything here. LocalStack
 # accepts any key pair and allows everything when enforcement is off, so a suite passing

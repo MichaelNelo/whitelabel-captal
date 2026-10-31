@@ -32,6 +32,9 @@ codebase.
 | xref:mcp/readme.adoc[`mcp/`]
 | The backoffice. Where locations, questions, videos, advertisers and translations are created.
 
+| xref:cdc/readme.adoc[`cdc/`]
+| How the services that react to changes in the database hear of them as they happen.
+
 | xref:terraform/readme.adoc[`terraform/`]
 | The cloud footprint a deployment runs on.
 |===

@@ -1,14 +1,10 @@
-# Two images, because nothing builds the others any more.
+# The images this build releases besides rqlite's, which its own module holds: the API every
+# location runs, the backoffice, and the change data capture relay.
 #
-# `captal-provision` went with the declarative provisioning system. `captal-shared` and
-# `captal-locations` held images the CLI derived on `captal locations push`; the CLI is gone and
-# `deploy_location` registers every location's task definition against one `API_IMAGE`, so there is
-# no per-location image to store.
-#
-# Removing them from this configuration asks AWS to delete the repositories, which fails while they
-# still hold images. Empty them first, or set `force_delete` for one apply.
+# Removing one from this list asks AWS to delete the repository, which fails while it still holds
+# images. Empty it first, or set `force_delete` for one apply.
 locals {
-  base_repos = ["captal-api", "captal-mcp"]
+  base_repos = ["captal-api", "captal-mcp", "captal-cdc"]
 }
 
 resource "aws_ecr_repository" "repos" {

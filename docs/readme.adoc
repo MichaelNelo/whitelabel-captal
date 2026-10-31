@@ -73,6 +73,10 @@ describes, it is architecture; if it stops making sense, it was context.
 | The controller contract, the authorize and revoke flows, per-location configuration, the network
   path to an on-premise controller, and the known caveats. Not a module: it lives in `platform`.
 
+| xref:cdc.adoc[Change data capture relay]
+| The service between rqlite's change data capture and the services that react to changes: the
+  gRPC contract, deduplication and replay by Raft index, gaps, following the feed, its subscribers.
+
 | xref:infrastructure.adoc[Infrastructure]
 | The deployed topology, the terraform modules, the environments, the CloudFront edge, the portal
   dispatcher, the rqlite cluster, images and releases, and the operator runbook.

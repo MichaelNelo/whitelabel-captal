@@ -34,6 +34,7 @@ locals {
 
     { name = "AWS_REGION", value = var.aws_region },
     { name = "DB_URL", value = var.db_url },
+    { name = "CDC_FEED_ADDRESS", value = var.cdc_feed_address },
 
     # Assets and the edge in front of them.
     { name = "ASSETS_BUCKET", value = var.assets_bucket_name },
@@ -401,25 +402,6 @@ resource "aws_lb_listener_rule" "mcp_http" {
   }
 }
 
-# `mcp.<namespace>` inside the VPC: where rqlite posts its change data capture, without leaving the
-# VPC for the public hostname.
-resource "aws_service_discovery_service" "mcp" {
-  name = "mcp"
-
-  dns_config {
-    namespace_id = var.service_discovery_namespace_id
-
-    dns_records {
-      ttl  = 10
-      type = "A"
-    }
-
-    routing_policy = "MULTIVALUE"
-  }
-
-  health_check_custom_config {}
-}
-
 resource "aws_ecs_service" "mcp" {
   name            = local.name
   cluster         = var.cluster_id
@@ -441,10 +423,6 @@ resource "aws_ecs_service" "mcp" {
     target_group_arn = aws_lb_target_group.mcp.arn
     container_name   = "mcp"
     container_port   = var.container_port
-  }
-
-  service_registries {
-    registry_arn = aws_service_discovery_service.mcp.arn
   }
 
   # `createService` with a `loadBalancers` block fails with "no associated load balancer" when the

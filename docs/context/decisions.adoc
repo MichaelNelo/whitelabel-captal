@@ -405,8 +405,43 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
      writes, not reads. The same deferral is why `PlaybackHandler` runs after the commit.
   ** *Told by rqlite's change data capture.* A playback ending is what frees a file, and only the
      database sees every one. CDC is configured on rqlited at startup, not registered by the
-     backoffice; retries are bounded so a backoffice that is down cannot fill rqlite's disk, and
-     the backoffice runs a pass at startup and on every confirm for what it did not hear about.
+     backoffice; retries are bounded so a relay that is down cannot fill rqlite's disk, and the
+     backoffice runs a pass at startup, on every confirm and on every gap in the feed for what it
+     did not hear about.
+
+== The change data capture relay
+
+* **A relay of its own between rqlite and the services that react to changes** (2026-10-31).
+  rqlite 10.6.1 takes one CDC endpoint and one `table_filter` per node: `-cdc-config` is a single
+  string flag, and the node runs one `cdc.Service`. The second consumer (the API, to shorten
+  recovery waits when an error recurs) could not be added to rqlite. Rejected: having the
+  backoffice, which received the posts, forward them to the API — it couples the API to the
+  backoffice being up and makes the backoffice a broker it is not. Rejected: ZeroMQ — ZIO has no
+  official binding (only `zio2-zmq` 0.0.x, from unit-finance/zio-raft) and it would still need a
+  process to own the socket. The relay is internal (no route on the ALB), fans out to every
+  subscriber, and leaves filtering per subscriber for later.
+* **gRPC, one server-streaming method** (`ChangeFeed.Subscribe`), at the user's direction: one
+  service exposing one method that returns a stream of events. Generated with Mill's ScalaPB
+  contrib module and zio-grpc 0.6.4 (`ScalaPBC` loads `scalapb.zio_grpc.ZioCodeGenerator` through
+  `--custom-gen`; `CustomGen("--zio_out", true)` keeps it in the flat package, without which it
+  writes to `...protocol.cdc` and nothing compiles).
+* **Change sets travel as the JSON rqlite posted** (`ChangeSet.json`), not as protobuf rows: the
+  relay reinterprets nothing and a subscriber reads tables and columns as it would from rqlite.
+  Only the Raft `index` is lifted out, since it orders, deduplicates and resumes.
+* **Deduplicated and resumed by Raft index; a `Gap` when that cannot be honoured.** rqlite
+  delivers at least once without ordering guarantees, so the relay publishes an index only above
+  the last one and sorts each post. A bounded buffer (`CDC_BUFFER`, 1000) replays what a
+  reconnecting subscriber missed; beyond it, or across a relay restart (told by `instance`), the
+  subscriber gets a `Gap` and rebuilds from the database. Persisting the buffer was rejected: a gap
+  is already handled by every subscriber, and a restart of the relay is rare.
+* **Not zio-grpc's `ScopedServer`.** Its release calls `shutdown` and `awaitTermination`, which
+  waits for every call to end, and a subscription never ends: the relay never stopped and the test
+  that replaces it hung. The relay builds grpc-java's server itself and releases it with
+  `shutdownNow`.
+* **One relay task.** rqlite's leader posts to the address `cdc.<namespace>` resolves to, and a
+  subscriber follows the one it resolved; two tasks would split the posts from the subscriptions.
+* **Locally the relay runs on the host**, as the devenv process `cdc` beside the backoffice, as the
+  backoffice itself does; LocalStack's rqlite reaches it through `host.docker.internal`.
 
 == Client and bundle
 

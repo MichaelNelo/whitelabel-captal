@@ -1,0 +1,144 @@
+= Change data capture relay
+:toc:
+:toclevels: 2
+
+The `cdc` module is a service of its own between rqlite's change data capture and the services that
+react to changes in the database. rqlite's leader posts every change set it commits to the relay
+over HTTP; subscribers follow the relay over gRPC, each with one server-streaming call.
+
+[source]
+----
+rqlite leader ──POST /cdc──▶ relay ──ChangeFeed.Subscribe──▶ backoffice
+                                   └─ChangeFeed.Subscribe──▶ ...
+----
+
+== Why a relay
+
+rqlite takes one change data capture configuration per node: one `endpoint`, one `table_filter`.
+A second service that wants the same changes cannot be added to rqlite; it has to be added
+downstream of whatever rqlite posts to. The relay is that place, so that no subscriber receives
+rqlite's posts for another, and none depends on another being up.
+
+== Modules
+
+`cdc.protocol`:: The contract, `cdc/protocol/protobuf/cdc.proto`, compiled by Mill's ScalaPB
+contrib module with the zio-grpc generator, and `ChangeFeedFollower`, what a subscriber uses to
+follow the feed. A subscriber depends on this module and on nothing else of the relay's.
+
+`cdc`:: The relay itself: `Relay`, `RelayRoutes` (HTTP), `ChangeFeedService` (gRPC) and `Main`.
+
+== The contract
+
+[source,proto]
+----
+service ChangeFeed { rpc Subscribe(SubscribeRequest) returns (stream Delivery); }
+
+message SubscribeRequest { optional uint64 since = 1; }
+message Delivery { string instance = 1; oneof kind { ChangeSet change = 2; Gap gap = 3; } }
+message ChangeSet { uint64 index = 1; string json = 2; }
+message Gap {}
+----
+
+`ChangeSet.json` is one entry of the `payload` rqlite posted, unchanged:
+`{"index": n, "events": [{"op": "INSERT", "table": "...", "before": {...}, "after": {...}}]}`. The
+relay does not reinterpret rows; a subscriber reads the tables and columns it cares about from the
+JSON, as it would from rqlite.
+
+`index` is the Raft log index of the change set. It is what orders change sets and what a
+subscriber resumes from: `since` asks for the change sets after that index. `instance` identifies
+the relay process that sent the delivery; it changes when the relay restarts.
+
+== The relay
+
+`POST /cdc` takes rqlite's post, `{"node_id": "...", "payload": [...]}`, and answers `200` for any
+body, since a refusal would only make rqlite retry it. Each entry of `payload` with an `index` is a
+change set. rqlite delivers at least once and does not guarantee order, so the relay publishes a
+change set only if its index is above the last one it published, and sorts each post's change sets
+by index first. Posts are taken one at a time.
+
+The relay keeps the last `CDC_BUFFER` change sets (1000 unless set). A subscription with `since`
+gets, in order:
+
+. a `Gap` if change sets after `since` were already evicted from what it keeps;
+. the change sets it keeps after `since`;
+. every change set published from then on.
+
+Without `since`, a subscription starts with what is published from then on. The live part comes
+from a sliding `Hub` the subscription joins before reading what is kept, so a change set published
+in between arrives either way, and the index filter drops the copy.
+
+`GET /health` answers `ok`. Neither HTTP nor gRPC is authenticated: the relay's security group
+admits rqlite on the HTTP port and the shared ECS tasks group on the gRPC port, and nothing else.
+
+The gRPC server is built directly on grpc-java's Netty server rather than zio-grpc's
+`ScopedServer`, whose release waits for every call to end; a subscription never ends on its own.
+The relay's release calls `shutdownNow`, which ends the subscriptions, and the subscribers
+reconnect. It permits keepalive pings every 10 seconds, also without calls in flight.
+
+== Following the feed
+
+`ChangeFeedFollower.follow(address)` is a `ZStream` of `Changed(index, json)` and `Gap` that never
+fails and never ends:
+
+* It opens a channel to `address` (`host:port`), with keepalive pings every 30 seconds so a relay
+  that went away is noticed on a quiet stream.
+* It subscribes with the last index it saw, and when the stream drops it logs a warning, waits two
+  seconds and subscribes again from there.
+* When a delivery comes from a different `instance` than the last one, after it had already seen a
+  change set, it emits a `Gap` first: a restarted relay kept nothing, and its indexes say nothing
+  about what the previous one sent.
+
+A `Gap` means change sets may have been missed. A subscriber that keeps state derived from changes
+rebuilds it from the database when it gets one, and carries on.
+
+== Subscribers
+
+[cols="1,3"]
+|===
+| Subscriber | What it does with a change set
+
+| Backoffice (`mcp`)
+| `VideoFileCollector` reads `video_playbacks` events: an `INSERT` of an open row starts a
+  `PlaybackExpiry` timer, an `UPDATE` that sets `ended_at` or a `DELETE` cancels it, and every
+  change set asks for a collection pass. A `Gap` resyncs the timers with the open playbacks in the
+  database and asks for a pass. It follows `CDC_FEED_ADDRESS`; without it, it logs a warning and
+  only runs the passes and timers of startup and replacements. See
+  xref:mcp.adoc#replaced-files[Replaced files].
+|===
+
+Which tables reach the relay is rqlite's `table_filter`, set in `docker/rqlite-entrypoint.sh`.
+
+== Configuration
+
+[cols="1,1,3"]
+|===
+| Variable | Default | Meaning
+
+| `CDC_PORT` | `8090` | HTTP port rqlite posts to. The image sets `8080`, the `container_port` every
+  service uses.
+| `CDC_GRPC_PORT` | `9090` | gRPC port subscribers follow.
+| `CDC_BUFFER` | `1000` | Change sets kept for subscribers that reconnect.
+|===
+
+== Deployment
+
+`terraform/modules/cdc`: one Fargate task with no load balancer, registered in Cloud Map as
+`cdc.<namespace>`, with its own security group. One task, because rqlite's leader posts to one
+address and every subscriber has to follow the relay that receives those posts. The module outputs
+`ingest_url`, which the root passes to rqlite as its `cdc_endpoint`, and `feed_address`, which it
+passes to the backoffice as `CDC_FEED_ADDRESS`. See xref:infrastructure.adoc[Infrastructure].
+
+Locally `cdc_desired_count` is `0`: `mill mcp.dev` runs the relay on the host as the devenv process
+`cdc`, on `8090` and `9090`, and the local tfvars point rqlite at
+`http://host.docker.internal:8090/cdc`. See xref:development.adoc[Local development].
+
+The relay is released like the other images: `docker/cdc.Dockerfile`, the `captal-cdc` ECR
+repository, its version from `cdc/cliff.toml` and `cdc/v*` tags, passed to the configuration as
+`cdc_image_tag`. See xref:development.adoc#versions[Versions].
+
+== Tests
+
+`cdc/test`, `RelaySpec`: deduplication across posts, resuming from an index, the `Gap` after
+eviction, bodies that are not rqlite's, and, over gRPC on a free port, a follower receiving change
+sets and a follower whose relay is replaced by another on the same port getting a `Gap` and carrying
+on. Run with `mill cdc.test`; it needs no container.

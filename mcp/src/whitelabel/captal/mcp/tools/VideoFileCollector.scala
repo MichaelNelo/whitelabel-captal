@@ -1,6 +1,7 @@
 package whitelabel.captal.mcp.tools
 
 import io.getquill.*
+import whitelabel.captal.cdc.protocol.ChangeFeedFollower
 import whitelabel.captal.core.video
 import whitelabel.captal.mcp.aws.AssetStore
 import whitelabel.captal.platform.schema.QuillSqlite
@@ -8,22 +9,16 @@ import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.{VideoFileRow, VideoFiles, VideoPlaybackRow}
 import zio.*
-import zio.http.*
+import zio.stream.ZStream
 
 /** Deletes the objects of replaced video files once nobody is playing them.
   *
   * Run when a replacement is confirmed, since the previous file may have no playback left already;
-  * on every change rqlite reports to `video_playbacks`, since a playback ending can be what frees
-  * one; when [[PlaybackExpiry]] closes a playback its page never ended; and once at startup, for
-  * whatever changed while this server was not there to hear it.
+  * on every change set the change feed relays, since a playback ending can be what frees one; when
+  * [[PlaybackExpiry]] closes a playback its page never ended; and once at startup, for whatever
+  * changed while this server was not there to hear it.
   */
 object VideoFileCollector:
-
-  /** Where rqlite's change data capture posts. Not authenticated, and it does not need to be: a
-    * post only asks for a pass, and a pass deletes nothing the database does not itself say may go;
-    * the ids it names only start timers, which read their deadline from the database.
-    */
-  val CdcPath: String = "/cdc/video-playbacks"
 
   /** The objects deleted, for `videoId` alone or for every video. */
   def collect(videoId: Option[video.Id]): ZIO[QuillSqlite & AssetStore, Nothing, Int] = ZIO
@@ -67,12 +62,10 @@ object VideoFileCollector:
             .ignore)
     yield marked
 
-  /** What the change data capture route drives: a collection pass, and a timer per playback that
-    * started.
-    */
+  /** What the change feed drives: a collection pass, and a timer per playback that started. */
   final case class Running(asked: Queue[Unit], timers: PlaybackExpiry.Timers)
 
-  /** What a change data capture post says happened to a playback. */
+  /** What a change set says happened to a playback. */
   enum PlaybackChange:
     case Started(id: String)
     case Ended(id: String)
@@ -95,31 +88,33 @@ object VideoFileCollector:
       timers <- PlaybackExpiry.make(asked)
     yield Running(asked, timers)
 
-  /** Every change asks for a pass; a playback starting starts its timer, and one ending cancels it.
-    * A body that is not rqlite's is still a request for a pass, and is answered 200 all the same: a
-    * refusal would only have rqlite retry it.
-    */
-  def routes(running: Running): Routes[Any, Nothing] = Routes(
-    Method.POST / "cdc" / "video-playbacks" ->
-      handler: (request: Request) =>
-        request
-          .body
-          .asString
-          .orElseSucceed("")
-          .flatMap(body =>
-            ZIO.foreachDiscard(playbackChanges(body)):
-              case PlaybackChange.Started(id) =>
-                running.timers.start(id)
-              case PlaybackChange.Ended(id) =>
-                running.timers.cancel(id))
-          .zipRight(running.asked.offer(()))
-          .as(Response.ok))
+  /** Follows the change feed for as long as it runs: see [[changed]]. */
+  def follow(running: Running, feed: ZStream[Any, Nothing, ChangeFeedFollower.Event]): UIO[Unit] =
+    feed.foreach(changed(running, _))
 
-  /** What a change data capture post reports for `video_playbacks`, in order: an insert of an open
-    * row starts a playback; an update that sets `ended_at`, or a delete, ends one. Read from the
-    * rows themselves, which rqlite sends only with `row_ids_only` off.
+  /** Every change set asks for a pass; a playback starting starts its timer, and one ending cancels
+    * it. A gap — change sets that may never arrive — resyncs the timers with the database, as at
+    * startup, and asks for a pass too.
     */
-  def playbackChanges(body: String): List[PlaybackChange] =
+  def changed(running: Running, event: ChangeFeedFollower.Event): UIO[Unit] =
+    event match
+      case ChangeFeedFollower.Event.Changed(_, json) =>
+        ZIO
+          .foreachDiscard(playbackChanges(json)):
+            case PlaybackChange.Started(id) =>
+              running.timers.start(id)
+            case PlaybackChange.Ended(id) =>
+              running.timers.cancel(id)
+          .zipRight(running.asked.offer(()))
+          .unit
+      case ChangeFeedFollower.Event.Gap =>
+        running.timers.resync *> running.asked.offer(()).unit
+
+  /** What a change set reports for `video_playbacks`, in order: an insert of an open row starts a
+    * playback; an update that sets `ended_at`, or a delete, ends one. Read from the rows
+    * themselves, which rqlite sends only with `row_ids_only` off.
+    */
+  def playbackChanges(changeSet: String): List[PlaybackChange] =
     import zio.json.ast.Json
     def field(json: Json, name: String): Option[Json] = json.asObject.flatMap(_.get(name))
     def items(json: Option[Json]): List[Json] = json.flatMap(_.asArray).map(_.toList).getOrElse(Nil)
@@ -127,11 +122,10 @@ object VideoFileCollector:
     def ended(row: Option[Json]): Boolean = row.flatMap(field(_, "ended_at")).exists(_ != Json.Null)
     Json
       .decoder
-      .decodeJson(body)
+      .decodeJson(changeSet)
       .toOption
       .toList
-      .flatMap(post => items(field(post, "payload")))
-      .flatMap(entry => items(field(entry, "events")))
+      .flatMap(set => items(field(set, "events")))
       .filter(event => field(event, "table").flatMap(_.asString).contains("video_playbacks"))
       .flatMap: event =>
         val before = field(event, "before")

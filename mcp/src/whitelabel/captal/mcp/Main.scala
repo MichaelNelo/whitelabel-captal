@@ -1,6 +1,7 @@
 package whitelabel.captal.mcp
 
 import io.getquill.jdbczio.Quill
+import whitelabel.captal.cdc.protocol.ChangeFeedFollower
 import whitelabel.captal.mcp.access.{Auth, OauthMetadata, Tokens}
 import whitelabel.captal.mcp.apps.{RunRoutes, UiRoutes}
 import whitelabel.captal.mcp.aws.{AssetStore, DeployTargets, InfraStore}
@@ -22,7 +23,7 @@ import whitelabel.captal.mcp.tools.{
 import whitelabel.captal.platform.RqliteDataSource
 import whitelabel.captal.platform.schema.QuillSqlite
 import zio.*
-import zio.http.Server
+import zio.http.{Method, Response, Routes, Server, handler}
 
 /** Entry point for the backoffice MCP server.
   *
@@ -60,6 +61,28 @@ object Main extends ZIOAppDefault:
       else
         s":${parsed.getPort}"
     s"${parsed.getScheme}://${parsed.getHost}$port"
+
+  /** Follows the change feed at `CDC_FEED_ADDRESS` (`host:port`) for the collector, for as long as
+    * the server runs. A warning and not a failure without it: the collector still runs at startup
+    * and on every replacement, and playbacks open at startup still expire; only playbacks that
+    * start or end afterwards go unheard.
+    */
+  private def followChanges(collector: VideoFileCollector.Running): URIO[Scope, Unit] = System
+    .env("CDC_FEED_ADDRESS")
+    .orDie
+    .map(_.map(_.trim).filter(_.nonEmpty))
+    .flatMap:
+      case Some(address) =>
+        ZIO.logInfo(s"Following the change feed at $address") *>
+          VideoFileCollector.follow(collector, ChangeFeedFollower.follow(address)).forkScoped.unit
+      case None =>
+        ZIO.logWarning(
+          "No CDC_FEED_ADDRESS: playbacks that start or end from now on are not heard of until the next restart")
+
+  /** The load balancer's health check, `GET /health` answering `ok`: served once the server is, so
+    * a task still migrating or one that failed to start is not sent requests.
+    */
+  private val health = Routes(Method.GET / "health" -> handler(Response.text("ok")))
 
   def run: ZIO[Any, Throwable, Unit] =
     for
@@ -116,14 +139,13 @@ object Main extends ZIOAppDefault:
             // Startup, not a request: a server that cannot name the origin its own upload page
             // must reach would serve a page whose PUT the browser blocks, and nothing would say so.
             .mapError(new IllegalStateException(_))
-            .zip(VideoFileCollector.runner)
-            .flatMap: (origin, collector) =>
+            .zipLeft(VideoFileCollector.runner.flatMap(followChanges))
+            .flatMap: origin =>
               // Read off the same store, so the origin the pages declare and the URL they name
               // cannot disagree.
               val scriptOrigin = env.get[AssetStore].scriptOrigin
               Server.serve(
-                UiRoutes.routes ++ RunRoutes.routes ++ OauthMetadata.routes(uiOrigin) ++
-                  VideoFileCollector.routes(collector) ++
+                health ++ UiRoutes.routes ++ RunRoutes.routes ++ OauthMetadata.routes(uiOrigin) ++
                   CaptalMcp
                     .server(
                       Auth.mcpAuth(resource),

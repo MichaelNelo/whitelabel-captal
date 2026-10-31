@@ -214,7 +214,12 @@ def ensureLocalStackTofu(
   // versions, so this apply, `mcp.dev` and `ci.run` agree on the task definitions.
   val target = ReleaseTarget.localStack(endpoint)
   val (outputs, _) = applyConfiguration(target, configDir, stateDir, tags): registries =>
-    publishImages(target, configDir, registries, BuiltImages(Some(rqliteImage), None, None), tags)
+    publishImages(
+      target,
+      configDir,
+      registries,
+      BuiltImages(Some(rqliteImage), None, None, None),
+      tags)
 
   def output(name: String): String = outputs.getOrElse(
     name,
@@ -252,6 +257,7 @@ def ensureLocalStackTofu(
     "CLOUDFRONT_DOMAIN_NAME" -> output("cloudfront_domain_name"),
     "API_IMAGE_REPOSITORY_URL" -> output("api_image_repository_url"),
     "MCP_IMAGE_REPOSITORY_URL" -> output("mcp_image_repository_url"),
+    "CDC_IMAGE_REPOSITORY_URL" -> output("cdc_image_repository_url"),
     "RQLITE_URL" -> output("rqlite_url"),
     // An image already on the machine: LocalStack runs tasks as real containers, and would retry a pull that cannot succeed.
     "API_IMAGE" -> s"rqlite/rqlite:$rqliteVersion"

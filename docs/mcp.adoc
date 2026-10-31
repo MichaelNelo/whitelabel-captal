@@ -68,7 +68,10 @@ up environment reaches this before `client.publish` has ever run, and the warnin
 once it has.
 . `Tokens.seedAdmin(token, "admin")` — idempotent; logs whether the admin row was created, rotated
 in place, or already current.
-. Serves `UiRoutes.routes ++ OauthMetadata.routes(uiOrigin) ++ CaptalMcp.server(...).statelessRoutes`.
+. Follows the change data capture relay at `CDC_FEED_ADDRESS` (see <<replaced-files>>), in the
+background for as long as it serves.
+. Serves `GET /health` (`ok`, the load balancer's health check) `++ UiRoutes.routes ++ RunRoutes.routes
+++ OauthMetadata.routes(uiOrigin) ++ CaptalMcp.server(...).statelessRoutes`.
 
 The final startup log line counts skills, resources and tools by *summing* `.all.size` across every
 tool object rather than a hardcoded figure, "so the number tracks the lists," and appends `(no
@@ -561,11 +564,11 @@ the delete keeps its file.
 A pass runs on three occasions:
 
 * `confirm_video_upload`, for that video: the previous file may have nobody left on it already.
-* A `POST` to `/cdc/video-playbacks`, which rqlite's change data capture sends on every change to
-  `video_playbacks` (see xref:infrastructure.adoc[Infrastructure]). The route is not
-  authenticated: a post only asks for a pass, and a pass deletes nothing the database does not
-  allow. Posts queue in a one-slot sliding queue, so a burst costs two passes. A body that is not
-  rqlite's is still answered `200`; a refusal would only have rqlite retry it.
+* Every change set the change feed relays, and every gap in it (see xref:cdc.adoc[Change data
+  capture relay]). The server follows the relay at `CDC_FEED_ADDRESS` for as long as it runs; a
+  change set only asks for a pass, and a pass deletes nothing the database does not allow. Requests
+  queue in a one-slot sliding queue, so a burst costs two passes. Without `CDC_FEED_ADDRESS` the
+  server logs a warning and starts anyway.
 * Startup, for whatever changed while the server was not there to hear it.
 * A playback expiring (below).
 
@@ -574,16 +577,18 @@ deleted, the object is garbage.
 
 A page that dies without `pagehide` reaching the server — the captive-portal browser closed, the
 phone left the WiFi — leaves its playback open, and its file would be kept for ever.
-`PlaybackExpiry` closes those: one fiber per playback, started for each `INSERT` the change data
-capture post reports (read from the row in `after`) and, at startup, for every playback still open,
+`PlaybackExpiry` closes those: one fiber per playback, started for each `INSERT` of an open row a
+change set reports (read from the row in `after`) and, at startup, for every playback still open,
 since timers live in memory and a restart would forget them. Each sleeps until
 `Playback.expiresAt` — the start plus the file's length plus ten minutes, so a long video is not cut
 short — and then sets `ended_at` and `expired = 1` if the playback is still open, and asks for a
-pass. The deadline is read from the database, never from the post; an id that names no open
+pass. The deadline is read from the database, never from the change set; an id that names no open
 playback schedules nothing, and a repeated one schedules once.
 
-A playback that ends any other way has its timer cancelled when the post reports it: an `UPDATE`
-whose `after` sets `ended_at`, or a `DELETE`, whose row is only in `before`. The timers are a map of
+A playback that ends any other way has its timer cancelled when a change set reports it: an
+`UPDATE` whose `after` sets `ended_at`, or a `DELETE`, whose row is only in `before`. A gap in the
+feed resyncs the timers as at startup: a timer for every playback the database has open, and none
+for any other. The timers are a map of
 playback id to fiber in a `Ref.Synchronized`, and a fiber leaves it when it ends, whether it
 expired its playback, found it already closed, or was cancelled. Cancelling interrupts with
 `interruptFork`: the fiber's own removal needs the lock the cancel holds, and waiting for it there

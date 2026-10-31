@@ -24,7 +24,7 @@ object `package` extends BaseModule with Released:
     */
   def prependShellScript = ""
   // platform's UnifiClient needs zio-http 3.0.1, not the 3.11.3 used here: align versions before using it.
-  def moduleDeps = Seq(build.core, build.platform)
+  def moduleDeps = Seq(build.core, build.platform, build.cdc.protocol)
   def mvnDeps = Seq(
     // zio-http-mcp 0.10.0: TaskExecution, McpApps, and the skills primitives.
     mvn"com.jamesward::zio-http-mcp:0.10.0",
@@ -66,6 +66,10 @@ object `package` extends BaseModule with Released:
     super.resources() ++ Seq(PathRef(Task.dest))
 
   private val devPort = 8081
+
+  /** The relay `mcp.dev` runs beside it: HTTP, which the local tfvars point rqlite at, and gRPC. */
+  private val cdcPort = 8090
+  private val cdcGrpcPort = 9090
 
   def localStackSetup() = Task.Command:
     ensureLocalStack(localStackContainer, localStackPort, Task.env)
@@ -127,6 +131,7 @@ object `package` extends BaseModule with Released:
       tunnel: mainargs.Flag = mainargs.Flag()) = Task.Command:
     val migrationCp = build.platform.runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
     val cp = runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
+    val cdcCp = build.cdc.runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
 
     println("[dev] Step 1/6: Ensuring LocalStack...")
     val endpoint = ensureLocalStack(localStackContainer, localStackPort, Task.env)
@@ -159,9 +164,17 @@ object `package` extends BaseModule with Released:
       configDir,
       Map(
         "api_image_repository_url" -> infra("API_IMAGE_REPOSITORY_URL"),
-        "mcp_image_repository_url" -> infra("MCP_IMAGE_REPOSITORY_URL")),
-      BuiltImages(rqlite = None, api = Some(build.api.image()()), mcp = Some(image()())),
-      ImageTags(build.api.releaseVersion().version, releaseVersion().version)
+        "mcp_image_repository_url" -> infra("MCP_IMAGE_REPOSITORY_URL"),
+        "cdc_image_repository_url" -> infra("CDC_IMAGE_REPOSITORY_URL")),
+      BuiltImages(
+        rqlite = None,
+        api = Some(build.api.image()()),
+        mcp = Some(image()()),
+        cdc = Some(build.cdc.image()())),
+      ImageTags(
+        build.api.releaseVersion().version,
+        releaseVersion().version,
+        build.cdc.releaseVersion().version)
     ).getOrElse(sys.error("[dev] the API image was not published"))
     val locations = locationServices(release, cluster)
     rollLocations(release, cluster, locations, published, await = false)
@@ -194,7 +207,19 @@ object `package` extends BaseModule with Released:
     val resourceUri = s"${publicUrl.getOrElse(s"http://localhost:$port")}/mcp"
     val adminToken = token.getOrElse("dev-token")
 
-    println(s"[dev] Step 6/6: Starting the MCP backoffice on :$port...")
+    // Before the backoffice, which follows it from its first change. rqlite posts to it through
+    // `host.docker.internal` (the local tfvars' `rqlite_cdc_endpoint`).
+    println(s"[dev] Step 6/6: Starting the change data capture relay on :$cdcPort and :$cdcGrpcPort, then the MCP backoffice on :$port...")
+    val _ = Processes.start(
+      Task.env,
+      "cdc",
+      Processes.Spec(
+        command = Seq("java", "-cp", cdcCp, "whitelabel.captal.cdc.Main"),
+        env = Map("CDC_PORT" -> cdcPort.toString, "CDC_GRPC_PORT" -> cdcGrpcPort.toString),
+        ready = Some(portOpen(cdcGrpcPort))),
+      always = true
+    )
+    Processes.await("cdc", 60, s"starting the relay on :$cdcGrpcPort")(listening(cdcGrpcPort))
 
     // Configuration outputs (bucket, distribution, cluster, credentials) come from `infra`.
     val env =
@@ -206,6 +231,8 @@ object `package` extends BaseModule with Released:
           "TASK_DB_URL" -> infra("RQLITE_URL"),
           "API_IMAGE"   -> apiImage,
           "MCP_PORT"    -> port.toString,
+          // The relay started below, on this host.
+          "CDC_FEED_ADDRESS" -> s"localhost:$cdcGrpcPort",
           // The address clients reach: the tunnel when there is one.
           "MCP_RESOURCE_URI" -> resourceUri,
           // Seeds the admin token row; other tokens are issued from it with `create_token`.
@@ -259,9 +286,9 @@ object `package` extends BaseModule with Released:
       |
       |$seeded[dev] Its log: `devenv processes logs mcp`. Stop it with `mill mcp.stop`.""".stripMargin)
 
-  /** Stops the backoffice `mcp.dev` started, and its tunnels. */
+  /** Stops the backoffice `mcp.dev` started, its relay and its tunnels. */
   def stop() = Task.Command:
-    ("mcp" +: tunnelProcesses).foreach(Processes.stop)
+    (Seq("mcp", "cdc") ++ tunnelProcesses).foreach(Processes.stop)
 
   def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "docker" / "mcp.Dockerfile")
 
@@ -416,7 +443,10 @@ object `package` extends BaseModule with Released:
       val tag = if licensed && os.exists(configDir) then rqliteImageTag(configDir, "local") else ""
       // Default tag: the push retags it. Mill forbids passing a value defined here to a task call.
       val built = if tag.isEmpty then "" else build.rqlite.image()()
-      val tags = ImageTags(build.api.releaseVersion().version, build.mcp.releaseVersion().version)
+      val tags = ImageTags(
+        build.api.releaseVersion().version,
+        build.mcp.releaseVersion().version,
+        build.cdc.releaseVersion().version)
       // The state lies outside `dest`, the only place Mill lets a task write: the checker is off for this.
       mill.api.BuildCtx.withFilesystemCheckerDisabled:
         ensureLocalStackTofu(

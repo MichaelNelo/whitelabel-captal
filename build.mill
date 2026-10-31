@@ -64,7 +64,7 @@ object `messages-js` extends BaseJSModule:
 object ci extends Module:
 
   /** Releases this build to the environment named by `CAPTAL_ENV`, in five steps: builds the rqlite,
-    * API and backoffice images; applies the configuration with their versions; moves every deployed
+    * API, backoffice and relay images; applies the configuration with their versions; moves every deployed
     * location onto the API image and waits for them to settle; publishes the client and invalidates;
     * tags the commit with each version that moved. Versions come from [[Released]].
     *
@@ -87,14 +87,19 @@ object ci extends Module:
         Task.dest
     val workspace = moduleDir / os.up
     val configDir = terraformDir(Task.env, workspace)
-    val versions =
-      Seq(build.api.releaseVersion(), build.mcp.releaseVersion(), build.client.releaseVersion())
-    val tags = ImageTags(api = versions(0).version, mcp = versions(1).version)
-    val clientVersion = versions(2).version
+    val versions = Seq(
+      build.api.releaseVersion(),
+      build.mcp.releaseVersion(),
+      build.cdc.releaseVersion(),
+      build.client.releaseVersion())
+    val tags =
+      ImageTags(api = versions(0).version, mcp = versions(1).version, cdc = versions(2).version)
+    val clientVersion = versions(3).version
     val built = BuiltImages(
       rqlite = Some(rqlite.image()()),
       api = Some(build.api.image()()),
-      mcp = Some(build.mcp.image()()))
+      mcp = Some(build.mcp.image()()),
+      cdc = Some(build.cdc.image()()))
     val bundle = build.client.bundle().path
 
     versions.foreach: release =>

@@ -43,10 +43,11 @@ object ReleaseTarget:
     Map("CAPTAL_ENV" -> "local", "AWS_REGION" -> "us-east-1", "AWS_ENDPOINT_URL" -> endpoint))
 end ReleaseTarget
 
-/** The tags the API and backoffice images go up under, their [[ReleaseVersion.version]]s, which the
-  * configuration's task definitions are applied with as `image_tag` and `mcp_image_tag`.
+/** The tags the API, backoffice and relay images go up under, their [[ReleaseVersion.version]]s,
+  * which the configuration's task definitions are applied with as `image_tag`, `mcp_image_tag` and
+  * `cdc_image_tag`.
   */
-final case class ImageTags(api: String, mcp: String)
+final case class ImageTags(api: String, mcp: String, cdc: String)
 
 /** One AWS CLI call: `awslocal` inside LocalStack's container for a local target, `aws` otherwise. */
 def awsCall(target: ReleaseTarget, args: String*): os.CommandResult =
@@ -130,7 +131,10 @@ def applyConfiguration[A](
   val variables =
     Seq(s"-var-file=environments/${target.environment}/terraform.tfvars") ++
       target.endpoint.map(endpoint => s"-var=aws_endpoint_url=$endpoint") ++
-      Seq(s"-var=image_tag=${tags.api}", s"-var=mcp_image_tag=${tags.mcp}") ++
+      Seq(
+        s"-var=image_tag=${tags.api}",
+        s"-var=mcp_image_tag=${tags.mcp}",
+        s"-var=cdc_image_tag=${tags.cdc}") ++
       stateArgs
 
   def outputs(): Map[String, String] =
@@ -181,7 +185,11 @@ end applyConfiguration
 /** The images a release builds, by their local names. `None` for one this caller does not publish:
   * the local suite publishes rqlite alone.
   */
-final case class BuiltImages(rqlite: Option[String], api: Option[String], mcp: Option[String])
+final case class BuiltImages(
+    rqlite: Option[String],
+    api: Option[String],
+    mcp: Option[String],
+    cdc: Option[String])
 
 /** What [[publishImages]] put up for the API: its address, and whether that tag now names a different build. */
 final case class PublishedApi(image: String, changed: Boolean)
@@ -236,6 +244,7 @@ def publishImages(
       local,
       s"${repository("rqlite_ecr_repository_url")}:${rqliteImageTag(configDir, target.environment)}"))
   built.mcp.foreach(local => push(local, s"${repository("mcp_image_repository_url")}:${tags.mcp}"))
+  built.cdc.foreach(local => push(local, s"${repository("cdc_image_repository_url")}:${tags.cdc}"))
   built.api.map: local =>
     val remote = s"${repository("api_image_repository_url")}:${tags.api}"
     val before = digest(remote)

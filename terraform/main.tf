@@ -1,7 +1,6 @@
 locals {
   name_prefix                 = "${var.project_name}-${var.environment}"
   service_discovery_namespace = "${var.project_name}.local"
-  mcp_cdc_endpoint            = "http://mcp.${local.service_discovery_namespace}:${var.container_port}/cdc/video-playbacks"
 }
 
 # ECS tasks security group (created here for shared reference by app and rqlite modules)
@@ -30,23 +29,12 @@ resource "aws_security_group" "ecs_tasks" {
     Name = "${local.name_prefix}-ecs-tasks-sg"
   }
 
-  # `mcp_from_rqlite_cdc` attaches its ingress as a separate rule. It cannot be inline: rqlite's
-  # group names this one in its own ingress, so naming rqlite's here would be a cycle. Without this,
-  # the authoritative inline `ingress` above would revoke that rule on every apply.
+  # Ingress beyond the load balancer's goes in separate `aws_vpc_security_group_ingress_rule`s, as
+  # on rqlite's group: a group that names this one cannot be named inline here without a cycle, and
+  # the authoritative inline list would revoke a separate rule on every apply.
   lifecycle {
     ignore_changes = [ingress]
   }
-}
-
-# rqlite's change data capture posting to the backoffice, which shares this group with every
-# location's API task.
-resource "aws_vpc_security_group_ingress_rule" "mcp_from_rqlite_cdc" {
-  security_group_id            = aws_security_group.ecs_tasks.id
-  description                  = "Backoffice from rqlite change data capture"
-  ip_protocol                  = "tcp"
-  from_port                    = var.container_port
-  to_port                      = var.container_port
-  referenced_security_group_id = module.rqlite.security_group_id
 }
 
 # S3 Backend for Terraform state
@@ -170,12 +158,36 @@ module "rqlite" {
   image_tag                        = var.rqlite_image_tag
   http_port                        = var.rqlite_http_port
   raft_port                        = var.rqlite_raft_port
-  # The backoffice by its service discovery name, unless the configuration says otherwise: locally
-  # it runs on the host, outside LocalStack's network.
-  cdc_endpoint = coalesce(var.rqlite_cdc_endpoint, local.mcp_cdc_endpoint)
+  # The relay by its service discovery name, unless the configuration says otherwise: locally it
+  # runs on the host, outside LocalStack's network.
+  cdc_endpoint = coalesce(var.rqlite_cdc_endpoint, module.cdc.ingest_url)
   # Public subnets and no NAT, so a task without an address of its own cannot reach ECR. See the
   # `data "aws_vpc" "default"` block for why the private option is gone.
   assign_public_ip = true
+}
+
+# The change data capture relay between rqlite and the services that follow it. Internal: rqlite
+# and the subscribers reach it by its service discovery name, and nothing on the load balancer.
+module "cdc" {
+  source = "./modules/cdc"
+
+  project_name                     = var.project_name
+  environment                      = var.environment
+  aws_region                       = var.aws_region
+  cluster_id                       = module.ecs.cluster_id
+  vpc_id                           = local.vpc_id
+  subnet_ids                       = local.workload_subnet_ids
+  service_discovery_namespace_id   = aws_service_discovery_private_dns_namespace.main.id
+  service_discovery_namespace_name = local.service_discovery_namespace
+  execution_role_arn               = module.ecs.execution_role_arn
+  rqlite_security_group_id         = module.rqlite.security_group_id
+  subscriber_security_group_id     = aws_security_group.ecs_tasks.id
+
+  image            = "${module.ecr.cdc_repository_url}:${var.cdc_image_tag}"
+  http_port        = var.container_port
+  container_cpu    = var.cdc_cpu
+  container_memory = var.cdc_memory
+  desired_count    = var.cdc_desired_count
 }
 
 # Debug ingress: let the Tailscale proxy (acting as VPC subnet router) reach rqlite's HTTP API.
@@ -363,14 +375,13 @@ module "mcp" {
   # Passed through so the server's own AWS clients resolve where this configuration does.
   aws_endpoint_url = var.aws_endpoint_url
 
-  cluster_id                     = module.ecs.cluster_id
-  cluster_name                   = module.ecs.cluster_name
-  vpc_id                         = local.vpc_id
-  subnet_ids                     = local.workload_subnet_ids
-  security_group_id              = aws_security_group.ecs_tasks.id
-  service_discovery_namespace_id = aws_service_discovery_private_dns_namespace.main.id
-  execution_role_arn             = module.ecs.execution_role_arn
-  execution_role_name            = module.ecs.execution_role_name
+  cluster_id          = module.ecs.cluster_id
+  cluster_name        = module.ecs.cluster_name
+  vpc_id              = local.vpc_id
+  subnet_ids          = local.workload_subnet_ids
+  security_group_id   = aws_security_group.ecs_tasks.id
+  execution_role_arn  = module.ecs.execution_role_arn
+  execution_role_name = module.ecs.execution_role_name
 
   image            = "${module.ecr.mcp_repository_url}:${var.mcp_image_tag}"
   container_port   = var.container_port
@@ -387,6 +398,7 @@ module "mcp" {
   zone_id            = var.enable_dns ? module.route53[0].zone_id : ""
 
   db_url                      = module.rqlite.http_url
+  cdc_feed_address            = module.cdc.feed_address
   assets_bucket_name          = module.cloudfront.assets_bucket_name
   assets_bucket_arn           = module.cloudfront.assets_bucket_arn
   cloudfront_distribution_id  = module.cloudfront.distribution_id
