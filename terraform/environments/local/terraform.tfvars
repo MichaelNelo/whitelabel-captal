@@ -42,7 +42,7 @@ container_port = 8080
 # exists; bump it with the Dockerfile or the entrypoint. `image_tag` (the API), `mcp_image_tag` (the
 # backoffice) and `cdc_image_tag` (the relay) are not set here: they are each module's version, which
 # the build passes.
-rqlite_image_tag = "1.0.7"
+rqlite_image_tag = "1.0.8"
 
 # Off 4001/4002, which the test suites' own rqlite containers sit beside. LocalStack publishes an
 # ECS task's ports on the host, and the first node to start takes 5001: that is how `mill mcp.dev`

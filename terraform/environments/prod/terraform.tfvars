@@ -12,3 +12,8 @@ cloudfront_domain = "captal.centauroads.com"
 rqlite_desired_count = 3
 rqlite_cpu           = 256
 rqlite_memory        = 512
+
+# The tag the build pushes rqlite under, read from this line, as in `local`. Changing it replaces
+# every node: the data survives through the S3 backup alone, so check the backup bucket holds a
+# recent version before applying a new one.
+rqlite_image_tag = "1.0.8"

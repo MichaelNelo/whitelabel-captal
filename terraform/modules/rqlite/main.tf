@@ -426,10 +426,16 @@ resource "aws_ecs_task_definition" "rqlite" {
           name  = "RQLITE_BACKUP_INTERVAL"
           value = var.backup_interval
         }
-        ], var.cdc_endpoint == "" ? [] : [{
+        ], var.cdc_endpoint == "" ? [] : [
+        {
           name  = "RQLITE_CDC_ENDPOINT"
           value = var.cdc_endpoint
-      }])
+        },
+        {
+          name  = "RQLITE_CDC_TABLE_FILTER"
+          value = var.cdc_table_filter
+        }
+      ])
 
       portMappings = [
         {

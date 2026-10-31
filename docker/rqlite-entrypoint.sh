@@ -136,29 +136,35 @@ else
 fi
 
 # ─── Change data capture ─────────────────────────────────────────────────────
-# Every change to video_playbacks is posted to the backoffice, which deletes a replaced video file
-# once its last playback has ended, and starts a timer for each playback inserted. Whole rows, not
-# row ids: the timer needs the playback's own id, and a row id is SQLite's. Only the leader posts;
-# the others queue on disk so a new leader carries on. Off when RQLITE_CDC_ENDPOINT is empty.
+# Every change to the tables RQLITE_CDC_TABLE_FILTER matches (a regular expression) is posted to
+# the change data capture relay, which hands it to the services that follow it. Whole rows, not row
+# ids: subscribers read the rows' own ids, and a row id is SQLite's. Only the leader posts; the
+# others queue on disk so a new leader carries on. Off when RQLITE_CDC_ENDPOINT is empty.
 #
-# Retries are bounded: with the backoffice down, unbounded retries grow the queue until the disk is
-# full. A change it never hears about is caught by the pass it runs when it starts.
+# Retries are bounded: with the relay down, unbounded retries grow the queue until the disk is full.
+# A subscriber that misses changes is told so and rebuilds from the database.
 #
 # The policy and the backoff are numbers, not the names and duration strings the guide shows: 1 is
 # ExponentialRetryPolicy and durations are nanoseconds. rqlited refuses to start on the strings.
 if [ -n "$RQLITE_CDC_ENDPOINT" ]; then
+  if [ -z "$RQLITE_CDC_TABLE_FILTER" ]; then
+    echo "RQLITE_CDC_ENDPOINT is set but RQLITE_CDC_TABLE_FILTER is not: name the tables to capture" >&2
+    exit 1
+  fi
+  # Escaped for the JSON string it goes into: a backslash in a regular expression is common.
+  TABLE_FILTER=$(printf '%s' "$RQLITE_CDC_TABLE_FILTER" | sed 's/\\/\\\\/g; s/"/\\"/g')
   CDC_CFG=/tmp/cdc.json
   cat > "$CDC_CFG" <<EOF
 {
   "endpoint": "$RQLITE_CDC_ENDPOINT",
-  "table_filter": "^video_playbacks\$",
+  "table_filter": "$TABLE_FILTER",
   "transmit_retry_policy": 1,
   "transmit_max_retries": 10,
   "transmit_max_backoff": 60000000000
 }
 EOF
   set -- "$@" -cdc-config "$CDC_CFG"
-  echo "Change data capture to $RQLITE_CDC_ENDPOINT"
+  echo "Change data capture of $RQLITE_CDC_TABLE_FILTER to $RQLITE_CDC_ENDPOINT"
 fi
 
 exec rqlited "$@" \

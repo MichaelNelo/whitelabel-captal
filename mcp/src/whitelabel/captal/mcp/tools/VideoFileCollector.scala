@@ -92,52 +92,60 @@ object VideoFileCollector:
   def follow(running: Running, feed: ZStream[Any, Nothing, ChangeFeedFollower.Event]): UIO[Unit] =
     feed.foreach(changed(running, _))
 
-  /** Every change set asks for a pass; a playback starting starts its timer, and one ending cancels
-    * it. A gap — change sets that may never arrive — resyncs the timers with the database, as at
+  /** Every change set that touches `video_playbacks` asks for a pass; a playback starting starts
+    * its timer, and one ending cancels it. A change set of any other table is not this collector's.
+    * A gap — change sets that may never arrive — resyncs the timers with the database, as at
     * startup, and asks for a pass too.
     */
   def changed(running: Running, event: ChangeFeedFollower.Event): UIO[Unit] =
     event match
       case ChangeFeedFollower.Event.Changed(_, json) =>
         ZIO
-          .foreachDiscard(playbackChanges(json)):
-            case PlaybackChange.Started(id) =>
-              running.timers.start(id)
-            case PlaybackChange.Ended(id) =>
-              running.timers.cancel(id)
-          .zipRight(running.asked.offer(()))
+          .when(playbackEvents(json).nonEmpty)(
+            ZIO
+              .foreachDiscard(playbackChanges(json)):
+                case PlaybackChange.Started(id) =>
+                  running.timers.start(id)
+                case PlaybackChange.Ended(id) =>
+                  running.timers.cancel(id)
+              .zipRight(running.asked.offer(())))
           .unit
       case ChangeFeedFollower.Event.Gap =>
         running.timers.resync *> running.asked.offer(()).unit
+
+  import zio.json.ast.Json
+
+  private def field(json: Json, name: String): Option[Json] = json.asObject.flatMap(_.get(name))
+
+  /** The events of a change set on `video_playbacks`; none for one that is not rqlite's. */
+  private def playbackEvents(changeSet: String): List[Json] = Json
+    .decoder
+    .decodeJson(changeSet)
+    .toOption
+    .flatMap(field(_, "events"))
+    .flatMap(_.asArray)
+    .map(_.toList)
+    .getOrElse(Nil)
+    .filter(event => field(event, "table").flatMap(_.asString).contains("video_playbacks"))
 
   /** What a change set reports for `video_playbacks`, in order: an insert of an open row starts a
     * playback; an update that sets `ended_at`, or a delete, ends one. Read from the rows
     * themselves, which rqlite sends only with `row_ids_only` off.
     */
   def playbackChanges(changeSet: String): List[PlaybackChange] =
-    import zio.json.ast.Json
-    def field(json: Json, name: String): Option[Json] = json.asObject.flatMap(_.get(name))
-    def items(json: Option[Json]): List[Json] = json.flatMap(_.asArray).map(_.toList).getOrElse(Nil)
     def id(row: Option[Json]): Option[String] = row.flatMap(field(_, "id")).flatMap(_.asString)
     def ended(row: Option[Json]): Boolean = row.flatMap(field(_, "ended_at")).exists(_ != Json.Null)
-    Json
-      .decoder
-      .decodeJson(changeSet)
-      .toOption
-      .toList
-      .flatMap(set => items(field(set, "events")))
-      .filter(event => field(event, "table").flatMap(_.asString).contains("video_playbacks"))
-      .flatMap: event =>
-        val before = field(event, "before")
-        val after = field(event, "after")
-        field(event, "op").flatMap(_.asString) match
-          case Some("INSERT") if !ended(after) =>
-            id(after).map(PlaybackChange.Started(_))
-          case Some("UPDATE") if ended(after) && !ended(before) =>
-            id(after).map(PlaybackChange.Ended(_))
-          case Some("DELETE") =>
-            id(before).map(PlaybackChange.Ended(_))
-          case _ =>
-            None
+    playbackEvents(changeSet).flatMap: event =>
+      val before = field(event, "before")
+      val after = field(event, "after")
+      field(event, "op").flatMap(_.asString) match
+        case Some("INSERT") if !ended(after) =>
+          id(after).map(PlaybackChange.Started(_))
+        case Some("UPDATE") if ended(after) && !ended(before) =>
+          id(after).map(PlaybackChange.Ended(_))
+        case Some("DELETE") =>
+          id(before).map(PlaybackChange.Ended(_))
+        case _ =>
+          None
   end playbackChanges
 end VideoFileCollector

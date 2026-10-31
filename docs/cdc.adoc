@@ -106,7 +106,9 @@ rebuilds it from the database when it gets one, and carries on.
   xref:mcp.adoc#replaced-files[Replaced files].
 |===
 
-Which tables reach the relay is rqlite's `table_filter`, set in `docker/rqlite-entrypoint.sh`.
+Which tables reach the relay is rqlite's `table_filter`: the root variable `rqlite_cdc_table_filter`,
+`^(video_playbacks|errors)$`, which reaches the entrypoint as `RQLITE_CDC_TABLE_FILTER`. Changing it
+changes rqlite's task definition, which replaces every node.
 
 == Configuration
 

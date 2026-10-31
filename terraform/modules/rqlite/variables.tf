@@ -102,7 +102,13 @@ variable "image_tag" {
 }
 
 variable "cdc_endpoint" {
-  description = "Where the leader posts every change to video_playbacks (rqlite change data capture). Empty turns it off."
+  description = "Where the leader posts every change to the tables `cdc_table_filter` matches (rqlite change data capture). Empty turns it off."
+  type        = string
+  default     = ""
+}
+
+variable "cdc_table_filter" {
+  description = "Regular expression naming the tables whose changes are posted to `cdc_endpoint`. Read by the image's entrypoint from 1.0.8 on."
   type        = string
   default     = ""
 }

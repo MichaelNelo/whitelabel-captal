@@ -160,7 +160,8 @@ module "rqlite" {
   raft_port                        = var.rqlite_raft_port
   # The relay by its service discovery name, unless the configuration says otherwise: locally it
   # runs on the host, outside LocalStack's network.
-  cdc_endpoint = coalesce(var.rqlite_cdc_endpoint, module.cdc.ingest_url)
+  cdc_endpoint     = coalesce(var.rqlite_cdc_endpoint, module.cdc.ingest_url)
+  cdc_table_filter = var.rqlite_cdc_table_filter
   # Public subnets and no NAT, so a task without an address of its own cannot reach ECR. See the
   # `data "aws_vpc" "default"` block for why the private option is gone.
   assign_public_ip = true

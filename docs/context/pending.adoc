@@ -142,11 +142,12 @@ Covering it means running the contract's values through the decoders on Scala.js
 
 == Nothing pins the images prod would run
 
-`prod/terraform.tfvars` does not set `rqlite_image_tag`, so it falls to the variable's default
-`1.0.0` — two entrypoint revisions behind `local`, chosen by omission rather than by anyone.
-`image_tag` and `mcp_image_tag` are the modules' versions now, which `ci.run` passes, but no release
-has run against AWS: no `api/v*` or `mcp/v*` tag exists, and every image in a deployed environment
-was pushed by hand.
+`prod/terraform.tfvars` names `rqlite_image_tag = "1.0.8"`, as `local` does (2026-10-31), but no
+release has run against AWS: what prod's rqlite runs is whatever was last applied by hand, likely the
+variable's old default `1.0.0`, which captures no changes at all. `image_tag`, `mcp_image_tag` and
+`cdc_image_tag` are the modules' versions, which `ci.run` passes; no `api/v*`, `mcp/v*` or `cdc/v*`
+tag exists, and every image in a deployed environment was pushed by hand. The first `ci.run`
+against prod replaces every rqlite node: check the backup bucket holds a recent version first.
 
 == First paint on slow links waits on brand-icon.svg
 

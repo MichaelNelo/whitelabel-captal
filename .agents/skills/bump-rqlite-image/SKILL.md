@@ -37,15 +37,16 @@ These drifted once already: the suite ran 8.36.2 while the Dockerfile said `:lat
 pulls cannot drift. Bump it there:
 
 ```hcl
-rqlite_image_tag = "1.0.6"
+rqlite_image_tag = "1.0.8"
 ```
 
 Bump it on **every** entrypoint or Dockerfile change, even a one-line one. The tag is what changes
 the task definition revision; without a new revision ECS has nothing to roll and the cluster keeps
 running the old image.
 
-`prod` does not set it at all, so it falls to the variable's default `1.0.0` — behind `local`, chosen
-by omission. Set it explicitly when you next touch prod.
+Both `local` and `prod` set it. A new revision replaces every node, and the nodes keep no data of
+their own: what survives is what the S3 backup restores. Before applying one to `prod`, check the
+backup bucket (`captal-prod-rqlite-backup`) holds a recent version.
 
 ## Locally, the apply does it for you
 

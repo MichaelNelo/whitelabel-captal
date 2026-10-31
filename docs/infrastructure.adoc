@@ -278,11 +278,14 @@ authoritative `ingress` blocks would revoke those external rules on every apply.
 
 ==== Change data capture
 
-The leader posts every change to `video_playbacks` to `cdc_endpoint`: the change data capture relay,
-which hands each change set to the services that follow it (see xref:cdc.adoc[Change data capture
-relay]). Whole rows, not `row_ids_only`: subscribers read the rows' own ids, and a row id is
-SQLite's. The entrypoint writes the `-cdc-config` file only when `RQLITE_CDC_ENDPOINT` is set, so an
-image from `1.0.7` on is what turns it on as described here. Retries are bounded — ten, backing off
+The leader posts every change to the tables `rqlite_cdc_table_filter` matches —
+`^(video_playbacks|errors)$` — to `cdc_endpoint`: the change data capture relay, which hands each
+change set to the services that follow it (see xref:cdc.adoc[Change data capture relay]). Whole
+rows, not `row_ids_only`: subscribers read the rows' own ids, and a row id is SQLite's. The
+entrypoint writes the `-cdc-config` file only when `RQLITE_CDC_ENDPOINT` is set, and refuses to start
+when it is set without `RQLITE_CDC_TABLE_FILTER`, which it reads from image `1.0.8` on; both
+environments name that image in their tfvars. Changing either variable changes the task definition,
+which replaces every node. Retries are bounded — ten, backing off
 exponentially to a minute — because with the relay down unbounded retries grow the on-disk queue
 until the disk is full; a subscriber that misses changes is told so by a gap and rebuilds from the
 database. In the config file the retry policy and the backoff are numbers: `1` for exponential,

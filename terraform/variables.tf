@@ -153,6 +153,12 @@ variable "rqlite_cdc_endpoint" {
   default     = ""
 }
 
+variable "rqlite_cdc_table_filter" {
+  description = "The tables whose changes rqlite posts to the relay, as a regular expression: `video_playbacks`, which the backoffice follows to collect replaced video files, and `errors`, which a location's API follows to shorten a recovery wait when an error recurs. Changing it changes rqlite's task definition, which replaces every node."
+  type        = string
+  default     = "^(video_playbacks|errors)$"
+}
+
 variable "cdc_image_tag" {
   description = "Tag of the captal-cdc image the change data capture relay runs: the relay's version, which the build passes from its `cdc/v*` git tags and is set in no tfvars. No default, as for the other images: a floating tag changes the deployed version with nobody deciding it."
   type        = string

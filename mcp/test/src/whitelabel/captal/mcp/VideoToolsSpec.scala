@@ -83,9 +83,11 @@ object VideoToolsSpec extends ZIOSpecDefault:
           uiOf(VideoTools.createPromo).contains("ui://upload-video"),
           uiOf(VideoTools.createPromo) == uiOf(VideoTools.create))
       ,
-      // What the change feed reaches: every change set asks for a pass, and a burst asks for one;
-      // a playback starting starts its timer, one ending cancels it, and a gap resyncs them all.
-      test("a change set asks for one pass and starts and cancels timers; a gap resyncs them"):
+      // What the change feed reaches: a change set of `video_playbacks` asks for a pass, and a
+      // burst asks for one; a playback starting starts its timer, one ending cancels it, and a gap
+      // resyncs them all. A change set of another table asks for nothing.
+      test(
+        "a playbacks change set asks for one pass and starts and cancels timers; a gap resyncs them"):
         import whitelabel.captal.cdc.protocol.ChangeFeedFollower.Event
         for
           asked <- zio.Queue.sliding[Unit](1)
@@ -105,9 +107,18 @@ object VideoToolsSpec extends ZIOSpecDefault:
                 Event.Changed(3, InsertThenEnd),
                 Event.Changed(4, "not what rqlite sends"),
                 Event.Gap))
+          afterPlaybacks <- asked.size
+          // Drained, so what follows shows whether a change set of another table asks for one.
+          _ <- asked.takeAll
+          _ <- VideoFileCollector.follow(
+            running,
+            zio.stream.ZStream(Event.Changed(5, ErrorInserted)))
           queued <- asked.size
           made   <- calls.get
-        yield assertTrue(queued == 1, made == List("start p-1", "cancel p-1", "resync"))
+        yield assertTrue(
+          afterPlaybacks == 1,
+          queued == 0,
+          made == List("start p-1", "cancel p-1", "resync"))
         end for
       ,
       test("a playback starts on an open insert and ends on an update that ends it or a delete"):
@@ -127,6 +138,10 @@ object VideoToolsSpec extends ZIOSpecDefault:
     */
   private val InsertThenEnd =
     """{"index":3,"events":[{"op":"INSERT","table":"video_playbacks","new_row_id":1,"after":{"ended_at":null,"file_id":"f-1","id":"p-1","session_id":"s-1","started_at":"2026-10-30T10:00:00.000000000Z"}},{"op":"UPDATE","table":"video_playbacks","new_row_id":1,"old_row_id":1,"before":{"ended_at":null,"file_id":"f-1","id":"p-1","session_id":"s-1","started_at":"2026-10-30T10:00:00.000000000Z"},"after":{"ended_at":"2026-10-30T10:01:00.000000000Z","file_id":"f-1","id":"p-1","session_id":"s-1","started_at":"2026-10-30T10:00:00.000000000Z"}}]}"""
+
+  /** A change set of another table the relay hands on: a guest's error recorded. */
+  private val ErrorInserted =
+    """{"index":5,"events":[{"op":"INSERT","table":"errors","new_row_id":1,"after":{"id":"e-1","kind":"client"}}]}"""
 
   /** The same for an insert and then a delete: a delete carries the row only in `before`. */
   private val InsertThenDelete =
