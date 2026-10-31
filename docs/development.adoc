@@ -150,15 +150,16 @@ Step 3 is `ci.run`'s release (`release` in `mill-build/src/millbuild/Release.sca
 `CAPTAL_ENV=local` and `AWS_ENDPOINT_URL` at the container, which turns every AWS call into `awslocal`
 inside it:
 
-* the rqlite, API, backoffice and relay images, pushed into the configuration's repositories under
-  each one's version (see <<versions>>), the registries applied alone first;
+* the rqlite, API, backoffice and relay images, built as `captal-<name>:latest`;
 * a plan of everything and that plan applied — rqlite, the relay, the backoffice, the assets bucket
   with its CORS rule, the distribution, and the cluster, subnets, listener and roles a deploy
-  attaches to. On a fresh container this is minutes, not seconds;
-* the backoffice and the relay restarted when their push replaced the build their tag named: until a
-  commit moves a version, every run reuses its tag, so the task definition does not change and the
-  service has to be told to start fresh tasks;
-* every deployed location moved onto the API image, the same way, and not waited for;
+  attaches to. The apply pushes each image whose tag changed and points its service at the digest it
+  left (see <<release>>). Locally a tag is the version and a hash of the image's jar and Dockerfile,
+  `1.0.0-local.3f2a9c1e`, since the version moves only with a releasing commit and every change to
+  the code has to reach LocalStack; a run that changed nothing pushes and restarts nothing. rqlite's is
+  the tfvars' `rqlite_image_tag` alone, here too: a new rqlite image replaces every node, and with it
+  the database. On a fresh container this is minutes, not seconds;
+* every deployed location moved onto the API image's digest, and not waited for;
 * the client: the portal's bundle under `bundle/` and the MCP App pages' scripts under `ui/`, the
   bundle copied under every deployed location's prefix, and one invalidation.
 
@@ -304,22 +305,24 @@ defaults to `latest`.
 What CodeBuild runs to release a build to an AWS environment, in five operations. `mcp.dev` runs
 the first four against LocalStack:
 
-. **Images.** `rqlite.image`, `api.image`, `mcp.image` and `cdc.image`, built before anything else.
+. **Images.** `rqlite.image`, `api.image`, `mcp.image` and `cdc.image`, built before anything else, as
+  `captal-<name>:latest`.
 . **The configuration.** `tofu init` against the environment's backend
-  (`environments/<env>/backend.tfvars`), the image registries applied alone, the four images
-  pushed into them — Docker logged in to ECR first — then a plan of everything saved and that plan
-  applied. The registries and the images go first because the task definitions name images, and an
-  image has to be in its registry before a service pulls it. The API, backoffice and relay images go
-  up under their versions (see <<versions>>), passed to the plan as `image_tag`, `mcp_image_tag` and
-  `cdc_image_tag`;
-  rqlite's under the tfvars' `rqlite_image_tag`, since the engine changes deliberately rather than
-  per commit. A version is published once: a tag already in its registry is that release and is not
-  pushed again, which is also how a module whose version did not move goes out unchanged. The
-  apply is what moves the backoffice onto its new image, and its `API_IMAGE` onto the new API, so a
-  location deployed afterwards gets it too.
+  (`environments/<env>/backend.tfvars`), then a plan of everything saved and that plan applied. The
+  API, backoffice and relay versions (see <<versions>>) are passed to it as `image_tag`,
+  `mcp_image_tag` and `cdc_image_tag`; rqlite's is the tfvars' `rqlite_image_tag`, since the engine
+  changes deliberately rather than per commit. `terraform/modules/images` pushes each image when its
+  tag changes — the tag is what its `terraform_data` keeps in the state — after its registry exists
+  and before any service is pointed at it; then reads the digest the push left, and every task
+  definition names its image by that digest. A version is published once: against AWS, a tag already
+  in its registry is that release and is not pushed again, which is also how a module whose version
+  did not move goes out unchanged. The apply is what moves the backoffice onto its new image, and its
+  `API_IMAGE` onto the new API, so a location deployed afterwards gets it too. It needs Docker, the
+  images built and, against AWS, the `aws` CLI for the ECR login, wherever it runs: a `tofu apply`
+  run by hand without them fails at the push, before any service changes.
 . **Locations.** Every location's service — the ones whose task runs a single container named
-  `api`, which is how `deploy_location` registers them — gets a new revision of its task
-  definition differing only in the image, and is pointed at it. Environment, roles and sizes carry
+  `api`, which is how `deploy_location` registers them — not already on the API image's digest gets a
+  new revision of its task definition differing only in the image, and is pointed at it. Environment, roles and sizes carry
   over as the last deploy registered them, so a change to those is still a `deploy_location`. The
   service keeps its task count: a paused location stays paused and runs the new image when it is
   resumed. `ci.run` waits for every moved service to settle and fails naming the ones that did not.

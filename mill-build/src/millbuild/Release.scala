@@ -43,11 +43,19 @@ object ReleaseTarget:
     Map("CAPTAL_ENV" -> "local", "AWS_REGION" -> "us-east-1", "AWS_ENDPOINT_URL" -> endpoint))
 end ReleaseTarget
 
-/** The tags the API, backoffice and relay images go up under, their [[ReleaseVersion.version]]s,
-  * which the configuration's task definitions are applied with as `image_tag`, `mcp_image_tag` and
-  * `cdc_image_tag`.
+/** The tags the API, backoffice and relay images go up under, which the configuration is applied with
+  * as `image_tag`, `mcp_image_tag` and `cdc_image_tag`, and pushes each image under when its tag
+  * changes: their [[ReleaseVersion.version]]s, or [[ImageTags.local]] ones.
   */
 final case class ImageTags(api: String, mcp: String, cdc: String)
+
+object ImageTags:
+  /** A local build's tag: the version, and a hash of what goes into the image. Locally the version
+    * moves only with the commits that release, while every change to the code has to reach LocalStack;
+    * the same inputs give the same tag, so a build that changed nothing pushes nothing.
+    */
+  def local(version: String, inputs: mill.api.PathRef*): String =
+    f"$version-local.${inputs.map(_.sig).hashCode}%08x"
 
 /** One AWS CLI call: `awslocal` inside LocalStack's container for a local target, `aws` otherwise. */
 def awsCall(target: ReleaseTarget, args: String*): os.CommandResult =
@@ -76,21 +84,21 @@ def awsText(target: ReleaseTarget, args: String*): Option[String] =
     .when(result.exitCode == 0)(result.out.text().trim)
     .filter(text => text.nonEmpty && text != "None")
 
-/** Applies the configuration to the target: `init`, the image registries, `pushImages` into them, then a
-  * full plan and its apply. Answers the string outputs and what `pushImages` answered.
+/** Applies the configuration to the target: `init`, a plan of everything and its apply. Answers the
+  * string outputs.
   *
-  * The registries go first: a service cannot pull an image that is not yet pushed. The configuration is
-  * staged into `workDir`, so `terraform/` stays untouched. Locally `backend.tf` is omitted (its bucket is
-  * created by this configuration), and the state lives in `workDir`. `extraVariables` are `-var` arguments
-  * added to the environment's tfvars and the image tags.
+  * The images have to be built first, as `captal-<name>:latest`: the apply pushes each one whose tag
+  * changed before any service is pointed at it (`terraform/modules/images`). The configuration is
+  * staged into `workDir`, so `terraform/` stays untouched. Locally `backend.tf` is omitted (its bucket
+  * is created by this configuration), and the state lives in `workDir`. `extraVariables` are `-var`
+  * arguments added to the environment's tfvars and the image tags.
   */
-def applyConfiguration[A](
+def applyConfiguration(
     target: ReleaseTarget,
     configDir: os.Path,
     workDir: os.Path,
     tags: ImageTags,
-    extraVariables: Seq[String] = Nil)(pushImages: Map[String, String] => A)
-    : (Map[String, String], A) =
+    extraVariables: Seq[String] = Nil): Map[String, String] =
   val staged = workDir / "config"
   val state = workDir / "terraform.tfstate"
   val plan = workDir / "release.tfplan"
@@ -162,19 +170,7 @@ def applyConfiguration[A](
   if initialised.exitCode != 0 then
     fail("init", initialised)
 
-  println("[tofu] applying the image registries first")
-  val registries = tofu(
-    Seq(
-      "apply",
-      "-auto-approve",
-      "-input=false",
-      "-target=module.ecr",
-      "-target=module.rqlite.aws_ecr_repository.rqlite") ++ variables*)
-  if registries.exitCode != 0 then
-    fail("the registry apply", registries)
-
-  val pushed = pushImages(outputs())
-
+  // The images go up inside the apply, so its output carries the pushes' lines.
   println(s"[tofu] planning the ${target.environment} environment (minutes, on a fresh LocalStack)")
   val planned = tofu(Seq("plan", "-input=false", s"-out=$plan") ++ variables*)
   if planned.exitCode != 0 then
@@ -183,101 +179,19 @@ def applyConfiguration[A](
   val applied = tofu(Seq("apply", "-input=false") ++ stateArgs ++ Seq(plan.toString)*)
   if applied.exitCode != 0 then
     fail("apply", applied)
-  (outputs(), pushed)
+  // What a push printed, not tofu's echo of the command, which contains the same words.
+  applied
+    .out
+    .lines()
+    .flatMap(line => "\\(local-exec\\): (\\[image\\] .*)".r.findFirstMatchIn(line).map(_.group(1)))
+    .foreach(println)
+  outputs()
 end applyConfiguration
 
-/** The images a release builds, by their local names. `None` for one this caller does not publish:
-  * the local suite publishes rqlite alone.
-  */
-final case class BuiltImages(
-    rqlite: Option[String],
-    api: Option[String],
-    mcp: Option[String],
-    cdc: Option[String])
-
-/** What [[publishImages]] put up for the API: its address, and whether that tag now names a different build. */
-final case class PublishedApi(image: String, changed: Boolean)
-
-/** What [[publishImages]] put up: the API, and which of the backoffice and the relay went up over a tag
-  * that already named another build. Only a local target pushes over a tag; a service whose tag did not
-  * move keeps its task definition, so it has to be told to start fresh tasks.
-  */
-final case class Published(api: Option[PublishedApi], rebuiltMcp: Boolean, rebuiltCdc: Boolean)
-
-/** Pushes the built images into the configuration's registries under the tags its task definitions pull.
-  * Outside LocalStack a tag already in its registry is left as it is, since it is that release. Locally
-  * every build replaces the tag.
-  */
-def publishImages(
-    target: ReleaseTarget,
-    configDir: os.Path,
-    outputs: Map[String, String],
-    built: BuiltImages,
-    tags: ImageTags): Published =
-  def repository(output: String) = outputs.getOrElse(
-    output,
-    sys.error(s"[image] the configuration has no $output output, so there is nowhere to push to"))
-
-  // The digest a tag points at in its registry, to tell a rebuilt image from an unchanged one.
-  def digest(remote: String): Option[String] =
-    val (repositoryUrl, imageTagValue) = remote.splitAt(remote.lastIndexOf(':'))
-    awsText(
-      target,
-      "ecr",
-      "describe-images",
-      "--repository-name",
-      repositoryUrl.split('/').last,
-      "--image-ids",
-      s"imageTag=${imageTagValue.drop(1)}",
-      "--query",
-      "imageDetails[0].imageDigest")
-
-  // Answers whether the push replaced a build the tag already named.
-  def push(local: String, remote: String): Boolean =
-    val before = digest(remote)
-    if target.local then
-      val _ = pushImage(local, remote)
-      before.isDefined && digest(remote) != before
-    else if before.isDefined then
-      println(s"[image] $remote is already published")
-      false
-    else
-      val registry = remote.takeWhile(_ != '/')
-      val password = awsText(target, "ecr", "get-login-password").getOrElse(
-        sys.error(s"[image] could not get an ECR login for $registry"))
-      val login = os
-        .proc("docker", "login", "--username", "AWS", "--password-stdin", registry)
-        .call(stdin = password, check = false, stderr = os.Pipe)
-      if login.exitCode != 0 then
-        sys.error(s"[image] docker login to $registry failed: ${login.err.trim()}")
-      val _ = pushImage(local, remote)
-      false
-
-  // rqlite's tag comes from the tfvars: the engine changes deliberately, not on every commit.
-  built.rqlite.foreach(local =>
-    push(
-      local,
-      s"${repository("rqlite_ecr_repository_url")}:${rqliteImageTag(configDir, target.environment)}"))
-  val rebuiltMcp = built.mcp.exists(local =>
-    push(local, s"${repository("mcp_image_repository_url")}:${tags.mcp}"))
-  val rebuiltCdc = built.cdc.exists(local =>
-    push(local, s"${repository("cdc_image_repository_url")}:${tags.cdc}"))
-  val api = built.api.map: local =>
-    val remote = s"${repository("api_image_repository_url")}:${tags.api}"
-    val before = digest(remote)
-    val _ = push(local, remote)
-    PublishedApi(remote, changed = before != digest(remote))
-  Published(api, rebuiltMcp, rebuiltCdc)
-end publishImages
-
-/** What [[release]] did: the configuration's outputs, and the services it told to start fresh tasks,
-  * each with the tasks it ran until then.
-  */
-final case class ReleaseResult(outputs: Map[String, String], restarted: Map[String, Set[String]])
-
-/** `ci.run`'s first four operations, which `mcp.dev` runs against LocalStack: applies the configuration
-  * with `built` pushed into its registries, restarts the backoffice and the relay where a local push
-  * rebuilt them under the same tag, moves every location onto the API image, and publishes the client.
+/** `ci.run`'s first four operations, which `mcp.dev` runs against LocalStack: applies the configuration,
+  * which pushes the images whose tags changed and points the services at them, moves every location onto
+  * the API image, and publishes the client. The images have to be built first. Answers the
+  * configuration's outputs.
   *
   * `variables` are passed to the plan beside the environment's tfvars. With `awaitLocations`, it waits for
   * the locations to settle and fails naming the ones that did not.
@@ -287,42 +201,20 @@ def release(
     configDir: os.Path,
     workDir: os.Path,
     tags: ImageTags,
-    built: BuiltImages,
     bundle: os.Path,
     clientVersion: String,
     variables: Seq[String],
-    awaitLocations: Boolean): ReleaseResult =
-  println(s"[release] Applying the ${target.environment} configuration with the images...")
-  val (outputs, published) = applyConfiguration(target, configDir, workDir, tags, variables):
-    registries => publishImages(target, configDir, registries, built, tags)
+    awaitLocations: Boolean): Map[String, String] =
+  println(s"[release] Applying the ${target.environment} configuration, which pushes the images...")
+  val outputs = applyConfiguration(target, configDir, workDir, tags, variables)
   def output(name: String) = outputs.getOrElse(
     name,
     sys.error(s"[release] the configuration has no $name output"))
   val cluster = output("ecs_cluster_name")
 
-  val restarted = Seq(
-    published.rebuiltMcp -> output("mcp_service_name"),
-    published.rebuiltCdc -> output("cdc_service_name"))
-    .collect { case (true, service) => service }
-    .map: service =>
-      val replaced = runningTasks(target, cluster, service).map(_("taskArn").str).toSet
-      awsJson(
-        target,
-        "ecs",
-        "update-service",
-        "--cluster",
-        cluster,
-        "--service",
-        service,
-        "--force-new-deployment")
-      println(s"[release] $service restarted on its rebuilt image")
-      service -> replaced
-    .toMap
-
   println("[release] Moving every location onto the API image...")
-  val api = published.api.getOrElse(sys.error("[release] the API image was not published"))
   val locations = locationServices(target, cluster)
-  rollLocations(target, cluster, locations, api, await = awaitLocations)
+  rollLocations(target, cluster, locations, output("api_image"), await = awaitLocations)
 
   // Published once per version: skipped when the bucket holds it already. Locally it is always published.
   val bucket = output("assets_bucket_name")
@@ -337,7 +229,7 @@ def release(
       bucket,
       output("cloudfront_distribution_id"),
       locations)
-  ReleaseResult(outputs, restarted)
+  outputs
 end release
 
 /** Leaves `service`'s target group holding its running tasks and nothing else. For LocalStack, which
@@ -398,21 +290,24 @@ def runningTasks(target: ReleaseTarget, cluster: String, service: String): Seq[u
     awsJson(target, (Seq("ecs", "describe-tasks", "--cluster", cluster, "--tasks") ++ arns)*)(
       "tasks").arr.filter(_("lastStatus").str == "RUNNING").toSeq
 
-/** Whether `service` runs as many tasks as it wants and none of `replaced`, the tasks it ran before it
-  * was told to start fresh ones. Once it does, its target group is left holding them alone
-  * ([[syncLocalTargets]]). Tasks are told apart by their ARNs rather than by when they started:
-  * LocalStack's clock is its VM's, not this machine's.
+/** Whether `service` runs as many tasks as it wants, all on its current task definition and none of
+  * `replaced`, the tasks it ran before it was told to start fresh ones on the same definition. Once it
+  * does, its target group is left holding them alone ([[syncLocalTargets]]). Tasks are told apart by
+  * their ARNs rather than by when they started: LocalStack's clock is its VM's, not this machine's.
   */
 def settledLocally(
     target: ReleaseTarget,
     cluster: String,
     service: String,
     replaced: Set[String]): Boolean =
-  val desired =
+  val described =
     awsJson(target, "ecs", "describe-services", "--cluster", cluster, "--services", service)(
-      "services")(0)("desiredCount").num.toInt
-  val running = runningTasks(target, cluster, service).map(_("taskArn").str)
-  val settled = running.size == desired && running.forall(arn => !replaced.contains(arn))
+      "services")(0)
+  val running = runningTasks(target, cluster, service)
+  val settled = running.size == described("desiredCount").num.toInt &&
+    running.forall(task =>
+      task("taskDefinitionArn").str == described("taskDefinition").str &&
+        !replaced.contains(task("taskArn").str))
   if settled then
     syncLocalTargets(target, cluster, service)
   settled
@@ -477,9 +372,9 @@ val RegisterableFields = Seq(
   "runtimePlatform"
 )
 
-/** Moves every location onto `api`: a new task definition revision that differs only in the image, and its
-  * service pointed at it. The service keeps its task count, so a paused location stays paused and runs the
-  * new image on resume. A location already on the image is restarted only when the image behind the tag changed.
+/** Moves every location onto `api`, the API image by digest: a new task definition revision that differs only
+  * in the image, and its service pointed at it. The service keeps its task count, so a paused location stays
+  * paused and runs the new image on resume. A location already on that digest is left as it is.
   *
   * With `await`, waits for the moved services to settle and fails naming the ones that did not.
   */
@@ -487,13 +382,13 @@ def rollLocations(
     target: ReleaseTarget,
     cluster: String,
     locations: Seq[LocationService],
-    api: PublishedApi,
+    api: String,
     await: Boolean): Unit =
   val moved = locations.flatMap: location =>
-    if location.image != api.image then
+    if location.image != api then
       val input = ujson.Obj.from(RegisterableFields.flatMap(field =>
         location.taskDefinition.obj.get(field).filterNot(_.isNull).map(field -> _)))
-      input("containerDefinitions")(0)("image") = api.image
+      input("containerDefinitions")(0)("image") = api
       val registered = awsJson(
         target,
         "ecs",
@@ -512,18 +407,6 @@ def rollLocations(
         registered)
       println(s"[release] ${location.slug} -> ${registered.split('/').last}")
       Some(location.name)
-    else if api.changed then
-      awsJson(
-        target,
-        "ecs",
-        "update-service",
-        "--cluster",
-        cluster,
-        "--service",
-        location.name,
-        "--force-new-deployment")
-      println(s"[release] ${location.slug} restarted on the rebuilt ${api.image.split('/').last}")
-      Some(location.name)
     else
       None
   if moved.isEmpty then
@@ -539,7 +422,7 @@ def rollLocations(
         if settled.exitCode != 0 then
           sys.error(
             s"[release] did not settle on the new image: ${batch.mkString(", ")}. Their tasks' log groups say why.")
-    println(s"[release] ${moved.size} location(s) settled on ${api.image.split('/').last}")
+    println(s"[release] ${moved.size} location(s) settled on ${api.split('/').last}")
 end rollLocations
 
 /** Where a client release is kept: its bundle as published. */

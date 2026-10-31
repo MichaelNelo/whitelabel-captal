@@ -48,9 +48,10 @@ and `messages` too. Its release publishes the bundle once, keeps it under
 
 `mill ci.run` is the release, the one CodeBuild runs with `CAPTAL_ENV=<env>`:
 
-1. builds the rqlite, API and backoffice images;
-2. applies the configuration with `image_tag` and `mcp_image_tag` set to the versions, pushing each
-   image whose version is not in its registry yet — a published version is never pushed again;
+1. builds the rqlite, API, backoffice and relay images;
+2. applies the configuration with `image_tag`, `mcp_image_tag` and `cdc_image_tag` set to the
+   versions: the apply pushes each image whose version changed and is not in its registry yet — a
+   published version is never pushed again — and points every service at the digest it left;
 3. moves every deployed location onto the API image (a new task definition revision differing only
    in the image) and waits for them to settle;
 4. publishes the client and copies it under every location's prefix;

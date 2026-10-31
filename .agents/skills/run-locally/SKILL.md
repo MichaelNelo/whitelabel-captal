@@ -44,13 +44,14 @@ Five steps, in order:
    the MCP App pages load their scripts and PUT uploads through LocalStack's
    (`SCRIPT_BASE_URL`, `PRESIGN_ENDPOINT_URL`), since a page rendered by a hosted client may not
    reach localhost. Without the flag the step stops any that are open.
-3. Runs the release `mill ci.run` makes, with LocalStack's variables: builds and pushes the rqlite,
-   API, backoffice and relay images under their versions (`mill show api.releaseVersion`;
+3. Runs the release `mill ci.run` makes, with LocalStack's variables: builds the rqlite, API,
+   backoffice and relay images, tagged by their versions (`mill show api.releaseVersion`;
    git-cliff, from the conventional commits since each one's last tag), **applies the `local`
    terraform environment** — rqlite (three nodes), the relay, the backoffice, the assets bucket, the
-   distribution, the cluster, subnets, listener and roles — restarts the backoffice and the relay
-   when their image was rebuilt under the same tag, moves every deployed location onto the API
-   image, and publishes the client. On a fresh container it is **minutes, not seconds** — it is not
+   distribution, the cluster, subnets, listener and roles — whose apply pushes each image whose tag
+   changed (locally the version plus a hash of the jar and Dockerfile, so every code change goes
+   up and an unchanged build does not) and points its service at the new digest; moves every
+   deployed location onto the API image, and publishes the client. On a fresh container it is **minutes, not seconds** — it is not
    hung. To run that release on its own, waiting for the locations as CodeBuild does:
    `CAPTAL_ENV=local AWS_ENDPOINT_URL=http://localhost:4567 mill ci.run`.
 4. Waits for rqlite to have a leader on `localhost:5001`, then runs `platform.Migrate`. The

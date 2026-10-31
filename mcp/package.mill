@@ -157,25 +157,31 @@ object `package` extends BaseModule with Released:
 
     // `ci.run`'s release, against LocalStack. Locations are not waited for.
     println("[dev] Step 3/5: Releasing the images, the configuration and the client into LocalStack...")
-    val released = release(
+    // Built here, as `captal-<name>:latest`, for the apply to push whichever of them it has to.
+    build.rqlite.image()()
+    build.api.image()()
+    image()()
+    build.cdc.image()()
+    val outputs = release(
       target,
       configDir,
       workDir,
       ImageTags(
-        build.api.releaseVersion().version,
-        releaseVersion().version,
-        build.cdc.releaseVersion().version),
-      BuiltImages(
-        rqlite = Some(build.rqlite.image()()),
-        api = Some(build.api.image()()),
-        mcp = Some(image()()),
-        cdc = Some(build.cdc.image()())),
+        ImageTags.local(
+          build.api.releaseVersion().version,
+          build.api.assembly(),
+          build.api.dockerfile()),
+        ImageTags.local(releaseVersion().version, assembly(), dockerfile()),
+        ImageTags.local(
+          build.cdc.releaseVersion().version,
+          build.cdc.assembly(),
+          build.cdc.dockerfile())
+      ),
       build.client.bundle().path,
       build.client.releaseVersion().version,
       variables,
       awaitLocations = false
     )
-    val outputs = released.outputs
     val backoffice = outputs("mcp_service_name")
 
     // The backoffice refuses to start on a database the API has not migrated, and on a new one nothing
@@ -190,11 +196,7 @@ object `package` extends BaseModule with Released:
       sys.error("[dev] Migrations failed; the backoffice would not start against the database.")
 
     println("[dev] Step 5/5: Waiting for the backoffice behind the load balancer...")
-    awaitBackoffice(
-      target,
-      outputs("ecs_cluster_name"),
-      backoffice,
-      released.restarted.getOrElse(backoffice, Set.empty))
+    awaitBackoffice(target, outputs("ecs_cluster_name"), backoffice)
     val resourceUri = outputs("mcp_url")
     val adminToken = awsText(
       target,
@@ -237,18 +239,15 @@ object `package` extends BaseModule with Released:
         outputs("cdc_log_group_name"))}`.
       |[dev] Stop both with `mill mcp.stop`.""".stripMargin)
 
-  /** Waits for the backoffice's service to settle without the tasks in `replaced` ([[settledLocally]]),
-    * then for the server's own `ok` from its health check through the local load balancer, which answers
-    * `200 {}` for a target group with nobody in it. A task that started before the API's migrations had
-    * run has exited, so after a minute the service is told to start a fresh one, once.
+  /** Waits for the backoffice's service to settle on its current task definition
+    * ([[settledLocally]]), then for the server's own `ok` from its health check through the local load
+    * balancer, which answers `200 {}` for a target group with nobody in it. A task that started before
+    * the API's migrations had run has exited, so after a minute the service is told to start a fresh
+    * one, once.
     */
-  private def awaitBackoffice(
-      target: ReleaseTarget,
-      cluster: String,
-      service: String,
-      replaced: Set[String]): Unit =
+  private def awaitBackoffice(target: ReleaseTarget, cluster: String, service: String): Unit =
     val health = s"http://$localLoadBalancerHost:$localStackPort/health"
-    var replacing = replaced
+    var replacing = Set.empty[String]
     def serving: Boolean =
       settledLocally(target, cluster, service, replacing) &&
         scala
@@ -449,14 +448,26 @@ object `package` extends BaseModule with Released:
       tofuSources()
       val licensed = parts(2).toBoolean
       val configDir = terraformDir(Task.env, moduleDir / os.up / os.up)
-      // Built here and pushed inside the apply, which owns the registry. Skipped unlicensed: no ECS.
-      val tag = if licensed && os.exists(configDir) then rqliteImageTag(configDir, "local") else ""
-      // Default tag: the push retags it. Mill forbids passing a value defined here to a task call.
-      val built = if tag.isEmpty then "" else build.rqlite.image()()
+      // Built here, as `captal-<name>:latest`, for the apply to push whichever of them it has to.
+      build.rqlite.image()()
+      build.api.image()()
+      build.mcp.image()()
+      build.cdc.image()()
+      // `mcp.dev`'s tags for the same build, so this apply moves no service it released.
       val tags = ImageTags(
-        build.api.releaseVersion().version,
-        build.mcp.releaseVersion().version,
-        build.cdc.releaseVersion().version)
+        ImageTags.local(
+          build.api.releaseVersion().version,
+          build.api.assembly(),
+          build.api.dockerfile()),
+        ImageTags.local(
+          build.mcp.releaseVersion().version,
+          build.mcp.assembly(),
+          build.mcp.dockerfile()),
+        ImageTags.local(
+          build.cdc.releaseVersion().version,
+          build.cdc.assembly(),
+          build.cdc.dockerfile())
+      )
       // The state lies outside `dest`, the only place Mill lets a task write: the checker is off for this.
       mill.api.BuildCtx.withFilesystemCheckerDisabled:
         ensureLocalStackTofu(
@@ -464,7 +475,6 @@ object `package` extends BaseModule with Released:
           licensed = licensed,
           configDir = configDir,
           stateDir = localStackStateDir(parts(0)),
-          rqliteImage = built,
           tags = tags)
 
     /** Stops LocalStack and removes its state, so the next run creates both together. */

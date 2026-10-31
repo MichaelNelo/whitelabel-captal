@@ -95,10 +95,9 @@ variable "backup_interval" {
   default     = "1m"
 }
 
-variable "image_tag" {
-  description = "Tag of the rqlite image to deploy from the project ECR repo. Bump when shipping a new entrypoint/Dockerfile change so the task definition revision changes and ECS rolls cleanly. Avoid 'latest' — it caches in surprising ways across redeploys."
+variable "image" {
+  description = "The rqlite image the nodes run, from this module's repository, by digest. A new one changes the task definition, which replaces every node."
   type        = string
-  default     = "1.0.0"
 }
 
 variable "cdc_endpoint" {

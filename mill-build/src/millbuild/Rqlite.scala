@@ -68,12 +68,3 @@ def awaitLocalDb(dbUrl: String): Unit =
     sys.error(
       s"[rqlite] nothing ready at $ready after three minutes. It is the local configuration's rqlite service, which `mill mcp.dev` applies; start that first.")
   println(s"[rqlite] ready at ${dbUrl.stripPrefix("jdbc:rqlite:")}")
-
-/** The rqlite image tag that `environments/<env>/terraform.tfvars` names. The same value the task definition pulls.
-  */
-def rqliteImageTag(configDir: os.Path, environment: String): String =
-  val file = configDir / "environments" / environment / "terraform.tfvars"
-  """(?m)^\s*rqlite_image_tag\s*=\s*"([^"]+)"""".r
-    .findFirstMatchIn(os.read(file))
-    .map(_.group(1))
-    .getOrElse(sys.error(s"[image] $file sets no rqlite_image_tag, so there is no tag to push"))

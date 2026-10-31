@@ -764,8 +764,9 @@ then reverted in its entirety once actually wired into the published bundle.
   `RQLITE_CDC_ENDPOINT` at the relay replaced every rqlite task, and the new nodes restored nothing:
   the backup bucket held no version from the cluster before, which had run 31 hours with
   `-auto-backup` every five minutes; the new cluster uploads backups as configured. Why the old one
-  never did was not found — its containers went with the replacement. Found 2026-10-31.
-  **Lesson:** a change to rqlite's task definition replaces every node in any environment, and the
+  never did was not found — its containers went with the replacement. Found 2026-10-31. The next
+  replacement, hours later, restored the database from the new cluster's backup, so the restore
+  itself works. **Lesson:** a change to rqlite's task definition replaces every node in any environment, and the
   data survives only through the S3 backup; check that the bucket holds a recent version before
   applying one, in production above all.
 * **LocalStack's load balancer kept sending requests to a task that was gone.** After the

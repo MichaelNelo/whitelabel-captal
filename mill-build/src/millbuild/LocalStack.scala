@@ -212,14 +212,13 @@ def localStackContainerId(): Option[String] =
   *
   * The state in `stateDir` and the LocalStack container must be born together: if they diverge, the apply
   * fails with `AlreadyExists`, and [[resetLocalStack]] recreates both. Every run plans and applies, through
-  * [[applyConfiguration]].
+  * [[applyConfiguration]], which pushes the images whose tags changed: the caller builds them first.
   */
 def ensureLocalStackTofu(
     endpoint: String,
     licensed: Boolean,
     configDir: os.Path,
     stateDir: os.Path,
-    rqliteImage: String,
     tags: ImageTags): Map[String, String] =
   // Unlicensed: no `ECS_CLUSTER`, so the deploy tools are not registered and the end-to-end test skips itself.
   if !licensed then
@@ -231,16 +230,9 @@ def ensureLocalStackTofu(
     sys.error(
       s"[tofu] no OpenTofu configuration at $configDir. Set CAPTAL_TERRAFORM_DIR if it lives elsewhere.")
 
-  // Only rqlite's image is built here: building the others would slow every run. Their tags are the release
-  // versions, so this apply, `mcp.dev` and `ci.run` agree on the task definitions.
+  // The tags are `mcp.dev`'s and `ci.run`'s for the same build, so an apply after either changes no service.
   val target = ReleaseTarget.localStack(endpoint)
-  val (outputs, _) = applyConfiguration(target, configDir, stateDir, tags): registries =>
-    publishImages(
-      target,
-      configDir,
-      registries,
-      BuiltImages(Some(rqliteImage), None, None, None),
-      tags)
+  val outputs = applyConfiguration(target, configDir, stateDir, tags)
 
   def output(name: String): String = outputs.getOrElse(
     name,

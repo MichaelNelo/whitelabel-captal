@@ -64,9 +64,10 @@ object `messages-js` extends BaseJSModule:
 object ci extends Module:
 
   /** Releases this build to the environment named by `CAPTAL_ENV`, in five steps: builds the rqlite,
-    * API, backoffice and relay images; applies the configuration with their versions; moves every deployed
-    * location onto the API image and waits for them to settle; publishes the client and invalidates;
-    * tags the commit with each version that moved. Versions come from [[Released]].
+    * API, backoffice and relay images; applies the configuration with their versions, which pushes each
+    * image whose version moved and points the services at it by digest; moves every deployed location
+    * onto the API image and waits for them to settle; publishes the client and invalidates; tags the
+    * commit with each version that moved. Versions come from [[Released]].
     *
     * A module whose version did not move is not republished; the configuration is applied every time.
     * Credentials come from the CodeBuild role (see [[ReleaseTarget]]). Needs Docker (privileged), `tofu`,
@@ -92,14 +93,21 @@ object ci extends Module:
       build.mcp.releaseVersion(),
       build.cdc.releaseVersion(),
       build.client.releaseVersion())
+    // A release to LocalStack tags by what went into each image as well: see `ImageTags.local`.
     val tags =
-      ImageTags(api = versions(0).version, mcp = versions(1).version, cdc = versions(2).version)
+      if target.local then
+        ImageTags(
+          api = ImageTags.local(versions(0).version, build.api.assembly(), build.api.dockerfile()),
+          mcp = ImageTags.local(versions(1).version, build.mcp.assembly(), build.mcp.dockerfile()),
+          cdc = ImageTags.local(versions(2).version, build.cdc.assembly(), build.cdc.dockerfile()))
+      else
+        ImageTags(api = versions(0).version, mcp = versions(1).version, cdc = versions(2).version)
     val clientVersion = versions(3).version
-    val built = BuiltImages(
-      rqlite = Some(rqlite.image()()),
-      api = Some(build.api.image()()),
-      mcp = Some(build.mcp.image()()),
-      cdc = Some(build.cdc.image()()))
+    // Built here, as `captal-<name>:latest`; the apply pushes each one whose tag changed.
+    rqlite.image()()
+    build.api.image()()
+    build.mcp.image()()
+    build.cdc.image()()
     val bundle = build.client.bundle().path
 
     versions.foreach: release =>
@@ -114,7 +122,6 @@ object ci extends Module:
       configDir,
       workDir,
       tags,
-      built,
       bundle,
       clientVersion,
       variables = Nil,

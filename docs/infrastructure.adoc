@@ -168,7 +168,7 @@ every `.tf` and `.tfvars` in the tree.
 
 == Module inventory
 
-The root module (`terraform/main.tf`) wires twelve child modules together. The account's networking
+The root module (`terraform/main.tf`) wires fourteen child modules together. The account's networking
 is a data source rather than a module — `data "aws_vpc" "default"` and `data "aws_subnets" "default"`
 resolve the account's default VPC and its one-per-AZ default subnets, which are public and
 auto-assign addresses, letting every Fargate task reach ECR without a NAT gateway. A `modules/vpc`
@@ -541,6 +541,18 @@ Four images, four ECR repositories: `captal-api`, `captal-mcp` and `captal-cdc` 
 custom rqlite build from its own repository inside `modules/rqlite` (keep the last 5 images, any
 tag). `docker/cdc.Dockerfile` is single-stage like the API's and the backoffice's, runs the relay
 alone and has no migrations; see xref:cdc.adoc[Change data capture relay].
+
+The apply pushes them. `modules/images` holds one `terraform_data` per image, whose
+`triggers_replace` is its repository and tag: the state keeps the tag pushed, and when the build
+passes another — a version git-cliff moved, or a new `rqlite_image_tag` — its `local-exec` tags the
+image the build made (`captal-<name>:latest`) and pushes it. Against AWS it logs in to ECR with the
+`aws` CLI and leaves a tag already in its registry alone, since that tag is a release. Each push
+depends on its repository; a `data "aws_ecr_image"` read after it gives the digest, and every task
+definition, and the backoffice's `API_IMAGE`, names its image as `<repository>@<digest>`
+(`module.images.references`, and the root output `api_image`). So no service is pointed at an image
+before it is in its registry, and what a service runs cannot change under a tag pushed over later.
+An apply needs Docker and the images built wherever it runs; without them it fails at the push,
+before any service changes.
 `docker/api.Dockerfile` and `docker/mcp.Dockerfile` are both single-stage — `FROM
 eclipse-temurin:21-jre-noble`, `COPY` one
 pre-built jar, run it — rather than compiling inside the image, which is the pattern that existed

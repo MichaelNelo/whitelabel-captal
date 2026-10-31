@@ -142,9 +142,8 @@ variable "rqlite_raft_port" {
 }
 
 variable "rqlite_image_tag" {
-  description = "Tag of the custom rqlite image in ECR. Bump after each entrypoint/Dockerfile change so the ECS task definition changes and triggers a clean rolling deploy."
+  description = "Tag of the custom rqlite image in ECR, which every environment's tfvars sets. Bump it with each entrypoint or Dockerfile change: the apply pushes the image when it changes, and the new digest replaces every node."
   type        = string
-  default     = "1.0.0"
 }
 
 variable "rqlite_cdc_endpoint" {

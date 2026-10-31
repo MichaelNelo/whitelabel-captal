@@ -729,15 +729,30 @@ rule are in `incidents.adoc`, section "The Mill build".
   module such as `core-js` has no folder of its own; its sources are `core`'s. `api` and `mcp` add
   their Dockerfiles, and `mcp` also its stylesheet, because both go into the image or the jar, so a
   change to either is a change to the service.
-* **Outside LocalStack a version is published once** (`publishImages`). A tag already in its registry
-  is that release, built from the commit it was cut from, and is left alone. Locally every build
-  replaces the tag, because the local tag is the version being worked towards.
-* **A reused tag is invisible to ECS, so locations are restarted** (`rollLocations`). When the digest
-  behind the API tag has changed but the tag has not, services already on it are force-redeployed.
-  A paused location keeps its task count, so it runs the new image when resumed.
+* **The apply pushes the images** (`terraform/modules/images`, 2026-10-31), at the user's direction:
+  one `terraform_data` per image whose `triggers_replace` is the tag, so the state keeps the version
+  pushed and the push runs when git-cliff moves it; a `local-exec` tags and pushes the image Mill
+  built. It replaced a two-phase apply in Mill — the registries alone (`-target=module.ecr`), a push
+  from Mill, then the rest — which ordered things only when the build ran it: a `tofu apply` by hand
+  could point a service at a tag never pushed, and the relay, deployed stop-then-start, would have
+  stayed down. Now the push depends on its registry and every task definition on the push. Rejected:
+  triggering on the image's id, since Docker builds the same inputs to a different id every time, so
+  every release would have pushed and redeployed everything, rqlite's nodes included.
+* **Task definitions name images by digest**, read with `data "aws_ecr_image"` after the push. What a
+  service runs cannot change under a tag pushed over later, and a new image under an unchanged tag
+  changes the task definition, so ECS deploys it like any other change: the forced redeploys of the
+  backoffice, the relay and the locations are gone. `rollLocations` moves a location whose image is
+  not the API's digest.
+* **Outside LocalStack a version is published once.** A tag already in its registry is that release,
+  built from the commit it was cut from, and the push leaves it alone.
+* **Locally a tag is the version and a hash of the image's inputs** (`ImageTags.local`: the jar's and the
+  Dockerfile's `PathRef` signatures). The version moves only with a releasing commit, and every change
+  to the code has to reach LocalStack; the hash leaves a build that changed nothing with the same tag,
+  so it pushes and restarts nothing, and `mcp.dev`, `ci.run` and the suite agree. rqlite's tag is the
+  tfvars' alone, locally too: a new rqlite image replaces every node, and locally the database with
+  them.
 * **The configuration is applied on every release and is never versioned** (`ci.run`). Only the images
-  and the client carry versions. The registries are applied first (`-target=module.ecr`, the rqlite
-  repository) because a service cannot pull an image that is not yet pushed; then a full plan.
+  and the client carry versions.
 * **Client releases are archived, and each location gets a copy** (`publishClient`). The bundle goes to
   `releases/client/<version>`, then to `bundle/`; rolling back is copying an earlier release back. Each
   location receives `bundle/` except `maintenance.html`, and except its own `brand-icon.svg` when that
@@ -883,8 +898,8 @@ rule are in `incidents.adoc`, section "The Mill build".
   `persistent` worker is possible only by subclassing `Task.Worker` and memoizing it with
   `cachedTask` by hand, outside the macro — `Task(persistent = true).Worker` does not exist.
 * **OpenTofu stays in Mill.** An apply ends, it is part of the release CodeBuild runs without devenv,
-  and it is interleaved with tasks Mill owns: the image tags are the versions git-cliff computes, and
-  the registries are applied, the images pushed into them, then the rest.
+  and it is interleaved with tasks Mill owns: the images are built first, and their tags are the
+  versions git-cliff computes.
 * **A process is alive when the pid its launcher recorded is, not when devenv says so.** devenv 2.1.2
   keeps reporting `exited` after `devenv processes restart` until the restarted process first passes its
   readiness check, and forever without one; `devenv processes start` on an exited process does nothing.

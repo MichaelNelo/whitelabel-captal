@@ -48,13 +48,13 @@ Both `local` and `prod` set it. A new revision replaces every node, and the node
 their own: what survives is what the S3 backup restores. Before applying one to `prod`, check the
 backup bucket (`captal-prod-rqlite-backup`) holds a recent version.
 
-## Locally, the apply does it for you
+## The apply pushes it
 
-`mill mcp.dev` and `mill mcp.test` build and push the image as part of applying the `local`
-environment. The ordering matters and is already handled: the ECR repository is created by a targeted
-apply first, the image is pushed into it, and only then does the full apply create the service that
-pulls it. LocalStack runs an ECS task as a real container, so a service pointed at an empty
-repository would sit retrying forever — which looks like a broken cluster and is a missing image.
+`mill mcp.dev`, `mill mcp.test` and `mill ci.run` build the image as `captal-rqlite:latest`, and the
+apply pushes it when `rqlite_image_tag` changed (`terraform/modules/images`): after the repository
+exists and before the task definition, which names the image by the digest the push left. A
+`tofu apply` by hand needs the image built and Docker; against AWS also the `aws` CLI, for the ECR
+login. A tag already in an AWS registry is never pushed over.
 
 To build or push by hand:
 

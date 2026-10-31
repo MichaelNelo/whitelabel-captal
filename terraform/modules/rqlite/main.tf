@@ -375,7 +375,7 @@ resource "aws_ecs_task_definition" "rqlite" {
   container_definitions = jsonencode([
     {
       name      = "rqlite"
-      image     = "${aws_ecr_repository.rqlite.repository_url}:${var.image_tag}"
+      image     = var.image
       essential = true
 
       mountPoints = local.single_node ? [
