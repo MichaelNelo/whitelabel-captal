@@ -1,0 +1,11 @@
+= e2e
+
+Every other test checks one piece. These check the product as it is used: an operator setting a
+location up through the backoffice and deploying it, and guests on their phones going through its
+portal, on the same infrastructure production runs on, emulated on this machine.
+
+Each feature describes what someone does and what they get, in plain sentences, so that what is
+covered can be read without reading code, and a scenario that breaks says which promise to a guest
+or an operator it broke.
+
+How to run them, and what they need: xref:../docs/testing.adoc#end-to-end[docs/testing.adoc].

@@ -31,6 +31,9 @@ The repository is built by Mill. The build is a set of modules: one `package.mil
 | `cdc/package.mill`, `cdc/protocol/package.mill`
 | The `cdc` module, the change data capture relay, with its test suite, `image` and `imagePush`; and `cdc.protocol`, its gRPC contract, compiled with Mill's ScalaPB contrib module (`mill-contrib-scalapblib`, in `build.mill`'s header).
 
+| `e2e/package.mill`
+| The `e2e` module: the Cucumber features in `e2e/features/`, their steps, and the `cucumber` command that runs them against LocalStack.
+
 | `mcp/package.mill`
 | The `mcp` module: the backoffice server, on Scala 3.10, with its test suite, `image` and `imagePush`.
 
@@ -94,6 +97,10 @@ The repository is built by Mill. The build is a set of modules: one `package.mil
 | 3.8.0, JVM
 | `cdc.protocol`.
 
+| `e2e`
+| 3.10.0, JVM; not a test module, so `mill __.test` leaves it out
+| `mcp`, for its tools' request types and its client.
+
 | `rqlite`
 | none
 | Only the Dockerfile and entrypoint in `docker/`.
@@ -152,6 +159,8 @@ These start processes that keep running after the command returns, under devenv'
 `mill mcp.dev [--tunnel]`:: Releases the build into LocalStack as `ci.run` releases it to AWS — images, the local configuration, the client — migrates its database, and returns once the backoffice, a task there, serves; with Cloudflare quick tunnels when asked.
 
 `mill mcp.stop`:: Scales the backoffice and the relay in LocalStack to zero and stops the tunnels.
+
+`mill e2e.cucumber [--tags T]`:: Runs the end-to-end features against what `mcp.dev` released into LocalStack. See xref:testing.adoc#end-to-end[the end-to-end features].
 
 `mill api.dev [--slug S]`:: Migrates the local configuration's database and serves one location's API on `:8080`.
 

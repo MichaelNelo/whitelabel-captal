@@ -1,0 +1,158 @@
+package whitelabel.captal.e2e
+
+import scala.collection.concurrent.TrieMap
+
+import whitelabel.captal.core.i18n.{I18n, I18nSchema}
+import whitelabel.captal.mcp.tools.{
+  AdvertiserTools,
+  AnswerFormat,
+  DeployTools,
+  I18nTools,
+  IdentificationCategory,
+  LocalizedText,
+  LocationTools,
+  SurveyTools,
+  UnifiTools,
+  VideoTools
+}
+
+/** The locations the features stand up through the backoffice, as an operator would, and deploy.
+  * One per name for the whole run, so every scenario that names it shares it: a deploy takes
+  * minutes. Each run creates its own, under a slug of its own, in the local configuration's
+  * database, which other runs and a developer's own content share.
+  *
+  * Their UniFi calls are off: there is no controller here, and a stand-in would test the stand-in.
+  */
+object Locations:
+  final case class Deployed(slug: String, name: String):
+    /** The portal as UniFi sends a guest to it, from the device `mac` behind the access point. */
+    def portal(mac: String, clickId: String): String =
+      val back = java.net.URLEncoder.encode("http://example.com", "UTF-8")
+      s"${Run.setting(
+          "E2E_PORTAL")}/$slug/?id=$mac&ap=AA:BB:CC:DD:EE:01&ssid=E2E&url=$back&click_id=$clickId"
+
+    def api(path: String): String = s"${Run.setting("E2E_PORTAL")}/$slug/api/$path"
+
+  /** Every text a guest sees, in both locales, as `text <key>`: a step finds a button by its key.
+    */
+  val Locales = List("en", "es")
+
+  def text(key: String): String = s"text $key"
+
+  private val deployed = TrieMap.empty[String, Deployed]
+
+  /** `name`, with an advertiser video and the survey asked after it, deployed. */
+  def withAdvertiserVideo(name: String): Deployed = deployed.getOrElseUpdate(name, create(name))
+
+  private def create(name: String): Deployed =
+    val run = scala.util.Random.alphanumeric.filter(_.isLetterOrDigit).take(4).mkString.toLowerCase
+    val location = Deployed(s"e2e-$name-$run", s"E2E $name")
+    import location.slug
+    Backoffice.tool[LocationTools.CreateRequest, LocationTools.CreateResponse](
+      "create_location",
+      LocationTools.CreateRequest(slug, location.name))
+    Backoffice.tool[UnifiTools.SetEnabledRequest, UnifiTools.StatusResponse](
+      "set_unifi_enabled",
+      UnifiTools.SetEnabledRequest(slug, enabled = false))
+    ensureIdentification()
+    val advertiser =
+      Backoffice
+        .tool[AdvertiserTools.CreateRequest, AdvertiserTools.CreateResponse](
+          "create_advertiser",
+          AdvertiserTools.CreateRequest(s"E2E advertiser $slug", 10))
+        .id
+    val video = Backoffice.tool[VideoTools.CreateVideoRequest, VideoTools.CreateVideoResponse](
+      "create_advertiser_video",
+      VideoTools.CreateVideoRequest(
+        slug = slug,
+        advertiserId = advertiser,
+        title = texts("E2E spot"),
+        description = None,
+        minWatchSeconds = None,
+        priority = Some(1),
+        questions = List(
+          VideoTools.VideoQuestion(
+            text = texts("Did you like it?"),
+            answer = AnswerFormat.Input(None),
+            required = Some(true),
+            points = Some(1))),
+        productCampaignId = None
+      )
+    )
+    upload(video.uploadUrl)
+    Backoffice.tool[VideoTools.ConfirmUploadRequest, VideoTools.ConfirmUploadResponse](
+      "confirm_video_upload",
+      VideoTools.ConfirmUploadRequest(video.videoId, 6))
+    Locales.foreach: locale =>
+      Backoffice.tool[I18nTools.SetTranslationsRequest, I18nTools.SetTranslationsResponse](
+        "set_translations",
+        I18nTools.SetTranslationsRequest(
+          slug = slug,
+          locale = locale,
+          entries = I18nSchema.keys[I18n].map(key => I18nTools.Translation(key, text(key))))
+      )
+    Backoffice.awaitRun(
+      Backoffice.tool[DeployTools.DeployRequest, DeployTools.RunView](
+        "deploy_location",
+        DeployTools.DeployRequest(slug)))
+    Portal.awaitServing(location)
+    location
+  end create
+
+  private def texts(value: String) = Locales.map(LocalizedText(_, value))
+
+  /** The email, profiling and location surveys belong to the whole deployment, one active each:
+    * created only when missing, with one question, for a guest to be identified at all.
+    */
+  private def ensureIdentification(): Unit =
+    val present =
+      Backoffice
+        .tool[SurveyTools.ListRequest, SurveyTools.ListResponse](
+          "list_surveys",
+          SurveyTools.ListRequest())
+        .surveys
+        .filter(survey => survey.locationSlug.isEmpty && survey.questions.nonEmpty)
+        .map(_.category)
+        .toSet
+    IdentificationCategory
+      .values
+      .filterNot(category => present.contains(category.stored))
+      .foreach: category =>
+        val survey = Backoffice.tool[
+          SurveyTools.CreateIdentificationSurveyRequest,
+          SurveyTools.CreateSurveyResponse](
+          "create_identification_survey",
+          SurveyTools.CreateIdentificationSurveyRequest(category, Some(s"E2E ${category.stored}")))
+        Backoffice.tool[SurveyTools.CreateQuestionRequest, SurveyTools.CreateQuestionResponse](
+          "create_identification_question",
+          SurveyTools.CreateQuestionRequest(
+            surveyId = survey.surveyId,
+            text = texts(s"Your ${category.stored}?"),
+            answer = AnswerFormat.Input(None),
+            description = None,
+            placeholder = None,
+            required = Some(true),
+            points = None,
+            hierarchyLevel = None
+          )
+        )
+  end ensureIdentification
+
+  /** What the upload page does with the URL a tool hands it: the file, with its own type. */
+  private def upload(url: String): Unit =
+    val connection = java
+      .net
+      .URI(url)
+      .toURL
+      .openConnection()
+      .asInstanceOf[java.net.HttpURLConnection]
+    connection.setRequestMethod("PUT")
+    connection.setDoOutput(true)
+    connection.setRequestProperty("Content-Type", "video/webm")
+    val out = connection.getOutputStream
+    try out.write(java.nio.file.Files.readAllBytes(java.nio.file.Path.of(Run.setting("E2E_SPOT"))))
+    finally out.close()
+    val status = connection.getResponseCode
+    if status / 100 != 2 then
+      throw AssertionError(s"Uploading the spot to $url answered $status")
+end Locations

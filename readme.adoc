@@ -35,6 +35,9 @@ codebase.
 | xref:cdc/readme.adoc[`cdc/`]
 | How the services that react to changes in the database hear of them as they happen.
 
+| xref:e2e/readme.adoc[`e2e/`]
+| The product checked as it is used: an operator and guests, on the deployed stack.
+
 | xref:terraform/readme.adoc[`terraform/`]
 | The cloud footprint a deployment runs on.
 |===

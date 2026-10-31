@@ -1,0 +1,74 @@
+package build.e2e
+
+import com.goyeau.mill.scalafix.ScalafixModule
+import mill.*, scalalib.*, scalafmt.*
+import millbuild.*
+
+// ─────────────────────────────────────────────────────────────────────────────
+// End to end: the features in `features/`, run against what `mcp.dev` released into LocalStack.
+// An operator through the backoffice, guests through a browser. Not part of `mill __.test`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+object `package` extends BaseModule:
+  // The backoffice's: the steps call its tools with its own request types.
+  def scalaVersion = "3.10.0"
+  def scalafixConfig = Task(Some(build.mcp.moduleDir / ".scalafix.conf"))
+
+  def moduleDeps = Seq(build.mcp)
+
+  def mvnDeps = Seq(
+    mvn"io.cucumber::cucumber-scala:9.2.1",
+    mvn"io.cucumber:cucumber-core:8.0.4",
+    mvn"com.microsoft.playwright:playwright:1.64.0"
+  )
+
+  def features: T[PathRef] = Task.Source(moduleDir / "features")
+
+  /** The video every location of these features plays. */
+  def spot: T[PathRef] = Task.Source(moduleDir / "resources" / "spot.webm")
+
+  /** Runs the features against LocalStack, where `mill mcp.dev` released this build: the backoffice
+    * at its load balancer address, with the admin token the configuration generated, and the
+    * portal at the distribution. Each feature deploys the locations it needs; a run leaves them
+    * deployed. Usage: `mill e2e.cucumber`, or `mill e2e.cucumber --tags @first-visit`
+    */
+  def cucumber(tags: String = "") = Task.Command:
+    val endpoint = s"http://localhost:$localStackPort"
+    val target = ReleaseTarget.localStack(endpoint)
+    val outputs = localOutputs(localStackWorkDir(endpoint, Task.env))
+    val token = awsText(
+      target,
+      "secretsmanager",
+      "get-secret-value",
+      "--secret-id",
+      outputs("mcp_admin_token_secret_arn"),
+      "--query",
+      "SecretString").getOrElse(sys.error("[e2e] could not read the admin token"))
+    val classpath = runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
+    val ran = os
+      .proc(
+        "java",
+        "-cp",
+        classpath,
+        "io.cucumber.core.cli.Main",
+        "--glue",
+        "whitelabel.captal.e2e",
+        "--plugin",
+        "pretty",
+        Option.when(tags.nonEmpty)(Seq("--tags", tags)).toSeq.flatten,
+        features().path.toString
+      )
+      .call(
+        env = Map(
+          "E2E_MCP_URL"   -> outputs("mcp_url"),
+          "E2E_MCP_TOKEN" -> token,
+          "E2E_PORTAL"    -> s"https://${outputs("cloudfront_domain_name")}:$localStackPort",
+          "E2E_SPOT"      -> spot().path.toString
+        ),
+        check = false,
+        stdout = os.Inherit,
+        stderr = os.Inherit
+      )
+    if ran.exitCode != 0 then
+      sys.error("[e2e] some scenarios failed")
+end `package`

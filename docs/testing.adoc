@@ -36,6 +36,11 @@ wire-protocol end-to-end spec covering both.
 |`client`
 |none
 |Scala.js; see <<What is deliberately not covered>> for exactly where that boundary falls.
+
+|everything, deployed
+|`e2e` (Cucumber, Playwright)
+|Features run against what `mcp.dev` released into LocalStack: an operator through the backoffice,
+guests through a browser and the distribution. See <<end-to-end>>.
 |===
 
 == api.test — the end-to-end suite against real rqlite
@@ -262,18 +267,61 @@ policy on a condition key (`ecs:cluster`, `iam:PassedToService`) that LocalStack
 the policy itself. An unexpected denial outside that set fails the suite rather than being silently
 tolerated, so widening the tolerated set is a deliberate edit, not a side effect of a flaky run.
 
+[[end-to-end]]
+== e2e — features against the deployed stack
+
+`e2e/features/*.feature` describe what an operator and guests do, in Gherkin, in English;
+`e2e/src/whitelabel/captal/e2e/` holds the steps, written with `cucumber-scala` (`ScalaDsl with
+EN`). They run against LocalStack as `mill mcp.dev` left it: nothing is run in-process.
+
+[source,bash]
+----
+mill mcp.dev                          # release this build into LocalStack first
+mill e2e.cucumber                     # every feature
+mill e2e.cucumber --tags @first-visit # one
+----
+
+`e2e.cucumber` reads the local configuration's outputs from its state (`localOutputs`) and the
+admin token from Secrets Manager, and runs Cucumber's CLI (`io.cucumber.core.cli.Main`) on the
+module's classpath with `E2E_MCP_URL`, `E2E_MCP_TOKEN`, `E2E_PORTAL` (the distribution on
+LocalStack's port) and `E2E_SPOT` set. The module is Scala 3.10, the backoffice's, because the
+steps call its tools with its own request types; it is not a test module, so `mill __.test` does
+not run it.
+
+* **The operator** is `Backoffice`: a real MCP client, through the load balancer, with the admin
+token, as `DeployE2ESpec`'s is in-process. Deploys are followed through `get_deploy_status`.
+* **Locations** are created through the tools and deployed (`Locations`): one per name a feature
+uses, shared by its scenarios for the run, since a deploy takes minutes; each run creates its own
+under a slug of its own, `e2e-<name>-<4 characters>`, in the local database. The identification
+surveys belong to the whole deployment, so they are created only when missing. Every text a guest
+sees is written as `text <key>` in `en` and `es`, which is how a step finds a button. The video is
+`e2e/resources/spot.webm`, six seconds of VP9: Playwright's Chromium plays no H.264. A run leaves its
+locations deployed.
+* **Guests** are Playwright browser contexts (`Portal`), each a phone of its own — its own cookies
+and storage, mobile viewport and touch — sent to the portal the way the access point sends them,
+with a MAC, an access point and a click id in the query string. Certificate errors are ignored: the
+distribution's name is two levels under the one LocalStack's certificate covers.
+* **UniFi is off** in these locations: there is no controller here, and a stand-in would only test
+itself. With it off, `finish` grants nothing and the session stays `Ready`, so a journey's end is
+asserted there, on the page that waits for access, never at `Authorized`.
+
+Playwright downloads its browsers into `~/.cache/ms-playwright` on the first run, and warns about
+system libraries it does not find; the headless Chromium runs without them.
+
 == What is deliberately not covered
 
-* **The slug-prefixed route form.** `TestLayers` always builds `ApiBase.none`, so every suite
-exercises routes mounted at `/api/...`, never `/<slug>/api/...`. The prefixed form is verified today
-by starting `mill api.dev` and asking for both paths by hand; nothing automated would catch a
-regression in `ApiBase`'s nesting. See xref:context/pending.adoc[Pending work].
-* **The browser fetch path.** `ClientDecodeSuite` covers every byte `ApiClient` decodes once a
-response body exists, using the same cross-compiled `Decoder` instances the browser resolves — but
-not the `dom.fetch` call itself, the branching on HTTP status that picks which decoder to run, or
-the `InternalError(s"HTTP $status: $text")` fallback when decoding fails. `client` has no test
-module at all, because that half is Scala.js and genuinely browser-shaped; see
-xref:client.adoc[Client].
+* **Access granted on the network.** `e2e` locations make no UniFi call, and `api.test` uses an
+in-process stand-in: nothing exercises a real controller.
+* **The slug-prefixed route form, in `api.test`.** `TestLayers` always builds `ApiBase.none`, so
+every suite exercises routes mounted at `/api/...`, never `/<slug>/api/...`. `e2e` exercises the
+prefixed form, since its guests reach a deployed location through the distribution, but only on the
+paths its features take.
+* **The browser fetch path, apart from `e2e`'s journeys.** `ClientDecodeSuite` covers every byte
+`ApiClient` decodes once a response body exists, using the same cross-compiled `Decoder` instances
+the browser resolves. `e2e` drives the real client, `dom.fetch` included, but only on the answers
+its features get: the branching on HTTP status that picks which decoder to run and the
+`InternalError(s"HTTP $status: $text")` fallback are not provoked. `client` has no test module of
+its own; see xref:client.adoc[Client].
 * **The same decoders, compiled to JavaScript.** Every check of the browser's side — these suites
 and `WireCheck` before each response — runs its decoders on the JVM. They are the same source, but
 Scala.js differs at some edges (`Long`, number formatting, `java.time` through `scala-java-time`),

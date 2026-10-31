@@ -188,6 +188,32 @@ def applyConfiguration(
   outputs()
 end applyConfiguration
 
+/** The string outputs of the configuration as the last apply in `workDir` left them, staged and
+  * initialised there by [[applyConfiguration]]. Local only: elsewhere the state is in the backend.
+  */
+def localOutputs(workDir: os.Path): Map[String, String] =
+  val result = os
+    .proc(
+      "tofu",
+      s"-chdir=${workDir / "config"}",
+      "output",
+      "-json",
+      s"-state=${workDir / "terraform.tfstate"}")
+    .call(
+      env = Map("TF_DATA_DIR" -> (workDir / ".terraform").toString, "TF_CLI_ARGS" -> "-no-color"),
+      check = false,
+      stderr = os.Pipe)
+  if result.exitCode != 0 then
+    sys.error(
+      s"[tofu] no outputs in $workDir: ${result.err.trim()}. Release into LocalStack first: `mill mcp.dev`.")
+  ujson
+    .read(result.out.text())
+    .obj
+    .collect { case (name, output) if output.obj("value").strOpt.exists(_.nonEmpty) =>
+      name -> output.obj("value").str
+    }
+    .toMap
+
 /** `ci.run`'s first four operations, which `mcp.dev` runs against LocalStack: applies the configuration,
   * which pushes the images whose tags changed and points the services at them, moves every location onto
   * the API image, and publishes the client. The images have to be built first. Answers the
