@@ -67,6 +67,10 @@ import zio.*
   * `unifiProxyUrl` is forwarded the same way, as `UNIFI_PROXY_URL`: the HTTP proxy a location's API
   * reaches its venue's gateway through. `None` means the API calls the gateway directly.
   *
+  * `cdcFeedAddress` too, as `CDC_FEED_ADDRESS`: the change data capture relay this server follows,
+  * which a location's API follows to tell a waiting page its error recurred. Its tasks reach it by
+  * the same name this server does.
+  *
   * `publicBaseUrl` is where the edge serves each location's copy of the bundle; a task is told its
   * own `manifest.json` under it, as `BUNDLE_MANIFEST_URL`. `None` tells it none, and the API judges
   * client error reports without one.
@@ -85,7 +89,8 @@ final case class DeployTargets(
     /** The port the API listens on, and the port the target group forwards to. */
     containerPort: Int = 8080,
     unifiProxyUrl: Option[String] = None,
-    publicBaseUrl: Option[String] = None):
+    publicBaseUrl: Option[String] = None,
+    cdcFeedAddress: Option[String] = None):
 
   /** `captal-<slug>`. AWS caps a target group name at 32 characters, which is where
     * `LocationTools.MaxSlugLength` comes from; the two have to agree or a slug `create_location`
@@ -149,6 +154,7 @@ object DeployTargets:
             region <- System.env("AWS_REGION").orDie.map(_.getOrElse("us-east-1"))
             proxy  <- System.env("UNIFI_PROXY_URL").orDie.map(_.map(_.trim).filter(_.nonEmpty))
             base   <- System.env("PUBLIC_BASE_URL").orDie.map(_.map(_.trim).filter(_.nonEmpty))
+            feed   <- System.env("CDC_FEED_ADDRESS").orDie.map(_.map(_.trim).filter(_.nonEmpty))
             _      <-
               ZIO.when(proxy.isEmpty)(
                 ZIO.logWarning(
@@ -167,7 +173,8 @@ object DeployTargets:
               dbUrl = dbUrl,
               region = region,
               unifiProxyUrl = proxy,
-              publicBaseUrl = base
+              publicBaseUrl = base,
+              cdcFeedAddress = feed
             ))
 end DeployTargets
 
@@ -316,7 +323,12 @@ final case class InfraStore(
                 .map(url => KeyValuePair.builder().name("UNIFI_PROXY_URL").value(url).build()) ++
               targets
                 .bundleManifestUrl(slug)
-                .map(url => KeyValuePair.builder().name("BUNDLE_MANIFEST_URL").value(url).build())
+                .map(url =>
+                  KeyValuePair.builder().name("BUNDLE_MANIFEST_URL").value(url).build()) ++
+              targets
+                .cdcFeedAddress
+                .map(address =>
+                  KeyValuePair.builder().name("CDC_FEED_ADDRESS").value(address).build())
           )*)
         .logConfiguration(
           LogConfiguration

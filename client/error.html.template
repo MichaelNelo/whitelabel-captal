@@ -161,26 +161,49 @@
           location.pathname + location.search + '#' + encodeURIComponent(JSON.stringify(reason)));
       }
 
-      // While it waits, the page asks where its way out stands: when another device reports the
-      // same error the server shortens the wait, and the countdown jumps to the new one. Never
-      // longer: an answer that would lengthen it, or one that does not come, changes nothing.
-      var CheckEvery = 10000;
-      var lastCheck = Date.now();
+      // While it waits, the page follows where its way out stands: when another device reports the
+      // same error the server shortens the wait and says so, and the countdown jumps to the new
+      // one. Never longer: an offer that would lengthen it changes nothing. A dropped stream is
+      // reopened by the browser, and the server answers every connection with the offer as it
+      // stands; a page with no EventSource just counts down the wait it has.
+      var stream = null;
 
-      function check() {
-        lastCheck = Date.now();
-        post('api/recovery/check', { errorId: reason.errorId }).then(function (answer) {
-          if (answer.ok) {
-            var until = Date.now() + answer.json.waitSeconds * 1000;
-            if (until < reason.until || answer.json.recurrent !== reason.recurrent) {
-              remember({
-                errorId: reason.errorId,
-                waitSeconds: Math.max(0, Math.min(until, reason.until) - Date.now()) / 1000,
-                recurrent: answer.json.recurrent
-              });
-            }
+      function follow() {
+        if (stream || typeof EventSource === 'undefined') {
+          return;
+        }
+        stream = new EventSource('api/recovery/' + encodeURIComponent(reason.errorId) + '/events');
+        stream.addEventListener('offer', function (event) {
+          var offer = JSON.parse(event.data);
+          var until = Date.now() + offer.waitSeconds * 1000;
+          if (until < reason.until || offer.recurrent !== reason.recurrent) {
+            remember({
+              errorId: reason.errorId,
+              waitSeconds: Math.max(0, Math.min(until, reason.until) - Date.now()) / 1000,
+              recurrent: offer.recurrent
+            });
           }
-        }, function () {});
+        });
+        // The server ends the stream after it; closed here, or the browser would reopen it. The
+        // countdown carries on, and the redeem says what the matter is, except for a way out
+        // already taken, from another tab.
+        stream.addEventListener('failed', function (event) {
+          unfollow();
+          var error = {};
+          try {
+            error = JSON.parse(event.data);
+          } catch (e) {}
+          if (error.RecoveryAlreadyUsed) {
+            toPortal();
+          }
+        });
+      }
+
+      function unfollow() {
+        if (stream) {
+          stream.close();
+          stream = null;
+        }
       }
 
       function countdown() {
@@ -193,14 +216,13 @@
             copy.title,
             copy.waiting + Math.floor(left / 60) + ':' + (seconds < 10 ? '0' : '') + seconds + '.' +
               (reason.recurrent ? ' ' + copy.shared : ''));
-          if (Date.now() - lastCheck >= CheckEvery) {
-            check();
-          }
+          follow();
           setTimeout(countdown, 1000);
         }
       }
 
       function redeem() {
+        unfollow();
         show(copy.title, copy.connecting);
         post('api/recovery/redeem', { errorId: reason.errorId }).then(function (answer) {
           if (answer.ok || answer.json.RecoveryAlreadyUsed) {

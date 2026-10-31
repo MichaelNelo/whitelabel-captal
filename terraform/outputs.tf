@@ -182,6 +182,11 @@ output "mcp_log_group_name" {
 
 # ─── Change data capture relay ──────────────────────────────────────────────
 
+output "cdc_feed_address" {
+  description = "`host:port` of the relay's feed, which the backoffice and every location's API follow"
+  value       = module.cdc.feed_address
+}
+
 output "cdc_service_name" {
   description = "ECS service name of the relay, for `aws ecs update-service --force-new-deployment` after pushing a new image"
   value       = module.cdc.service_name

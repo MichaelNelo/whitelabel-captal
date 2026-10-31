@@ -9,7 +9,7 @@ import millbuild.*
 // ─────────────────────────────────────────────────────────────────────────────
 
 object `package` extends BaseModule with Released:
-  def moduleDeps = Seq(build.core, build.messages, build.platform)
+  def moduleDeps = Seq(build.core, build.messages, build.platform, build.cdc.protocol)
 
   def dockerfile: T[PathRef] = Task.Source(moduleDir / os.up / "docker" / "api.Dockerfile")
 

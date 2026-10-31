@@ -518,6 +518,8 @@ object `package` extends BaseModule with Released:
           "PUBLIC_BASE_URL"            -> "https://portal.test",
           // Stands in for the Tailscale proxy output, which the local configuration does not have.
           "UNIFI_PROXY_URL"            -> "http://tailscale-proxy.test:1055",
+          // Forwarded into every location's task definition; nothing in the suite follows it.
+          "CDC_FEED_ADDRESS"           -> "cdc.test:9090",
           "LOCALSTACK_ENDPOINT"        -> localStackStamp().split(" ")(1)
         ) ++ localStackInfra()
 

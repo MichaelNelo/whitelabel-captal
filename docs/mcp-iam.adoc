@@ -105,7 +105,7 @@ loudly on a missing object rather than quietly finding a neighbour's.
 | rqlite endpoint
 
 | `CDC_FEED_ADDRESS`
-| `host:port` of the change data capture relay's feed. Optional: without it the server logs a warning and hears of no playback starting or ending after its startup
+| `host:port` of the change data capture relay's feed. Followed by this server, and forwarded into every location's task definition for its API to follow. Optional: without it the server logs a warning and hears of no playback starting or ending after its startup, and locations are deployed without it
 
 | `MCP_ADMIN_TOKEN`
 | Seeds the admin row on startup, which holds every scope. Every other token is issued from it with `create_token` and stored hashed in `mcp_tokens`; nothing else reads this. Rotating it and restarting replaces the credential in place.

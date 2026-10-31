@@ -47,7 +47,7 @@ private[api] object AppLayers:
       VideoRoutes.EndPlaybackFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType &
       RecoveryRoutes & RecoveryRoutes.RequestRecoveryFlowType &
-      RecoveryRoutes.CheckRecoveryFlowType & RecoveryRoutes.RedeemRecoveryFlowType
+      RecoveryRoutes.CheckRecoveryFlowType & RecoveryRoutes.RedeemRecoveryFlowType & RecoveryFeed
 
   /** The location's bundle manifest, read over HTTP when `BUNDLE_MANIFEST_URL` names it. */
   private val bundleManifestLayer: ZLayer[ServerSettings, Nothing, BundleManifest] = ZLayer.fromZIO:
@@ -166,6 +166,7 @@ private[api] object AppLayers:
       Flows.checkRecoveryFlowLayer,
       Flows.redeemRecoveryFlowLayer,
       Flows.expireAccessFlowLayer,
+      RecoveryFeed.layer,
       JobQueue.layer,
       JobRunner.layer,
       ZLayer.fromFunction((s: ServerSettings) => s.config)

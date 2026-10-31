@@ -7,7 +7,6 @@ import whitelabel.captal.messages.{
   AdvertiserSurveyResponse,
   AnswerRequest,
   ApiError,
-  CheckRecoveryRequest,
   ClientErrorReport,
   EndPlaybackRequest,
   ErrorFrame,
@@ -73,7 +72,6 @@ object wire:
   given Schema[RecoveryRequest] = DeriveSchema.gen[RecoveryRequest]
   given Schema[RecoveryOffer] = DeriveSchema.gen[RecoveryOffer]
   given Schema[RedeemRecoveryRequest] = DeriveSchema.gen[RedeemRecoveryRequest]
-  given Schema[CheckRecoveryRequest] = DeriveSchema.gen[CheckRecoveryRequest]
 
   // ─── Survey ───────────────────────────────────────────────────────────────
 

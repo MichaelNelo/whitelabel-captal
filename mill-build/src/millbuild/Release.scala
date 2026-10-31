@@ -214,7 +214,13 @@ def release(
 
   println("[release] Moving every location onto the API image...")
   val locations = locationServices(target, cluster)
-  rollLocations(target, cluster, locations, output("api_image"), await = awaitLocations)
+  rollLocations(
+    target,
+    cluster,
+    locations,
+    output("api_image"),
+    outputs.get("cdc_feed_address"),
+    await = awaitLocations)
 
   // Published once per version: skipped when the bucket holds it already. Locally it is always published.
   val bucket = output("assets_bucket_name")
@@ -372,9 +378,10 @@ val RegisterableFields = Seq(
   "runtimePlatform"
 )
 
-/** Moves every location onto `api`, the API image by digest: a new task definition revision that differs only
-  * in the image, and its service pointed at it. The service keeps its task count, so a paused location stays
-  * paused and runs the new image on resume. A location already on that digest is left as it is.
+/** Moves every location onto `api`, the API image by digest, following the relay at `feed`: a new task
+  * definition revision that differs only in the image and `CDC_FEED_ADDRESS`, and its service pointed at it.
+  * The service keeps its task count, so a paused location stays paused and runs the new image on resume. A
+  * location already on both is left as it is.
   *
   * With `await`, waits for the moved services to settle and fails naming the ones that did not.
   */
@@ -383,12 +390,25 @@ def rollLocations(
     cluster: String,
     locations: Seq[LocationService],
     api: String,
+    feed: Option[String],
     await: Boolean): Unit =
+  def pairs(environment: Seq[ujson.Value]) =
+    environment.map(variable => variable("name").str -> variable("value").str).toSet
   val moved = locations.flatMap: location =>
-    if location.image != api then
+    val environment = location
+      .taskDefinition("containerDefinitions")(0)
+      .obj
+      .get("environment")
+      .map(_.arr.toSeq)
+      .getOrElse(Nil)
+    val following = feed.fold(environment): address =>
+      environment.filterNot(_("name").str == "CDC_FEED_ADDRESS") :+
+        ujson.Obj("name" -> "CDC_FEED_ADDRESS", "value" -> address)
+    if location.image != api || pairs(following) != pairs(environment) then
       val input = ujson.Obj.from(RegisterableFields.flatMap(field =>
         location.taskDefinition.obj.get(field).filterNot(_.isNull).map(field -> _)))
       input("containerDefinitions")(0)("image") = api
+      input("containerDefinitions")(0)("environment") = ujson.Arr.from(following)
       val registered = awsJson(
         target,
         "ecs",

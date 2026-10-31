@@ -5,7 +5,7 @@ import io.circe.generic.semiauto.deriveDecoder
 import io.circe.parser.decode
 import whitelabel.captal.api.TestHelpers.*
 import whitelabel.captal.api.wire.given
-import whitelabel.captal.api.{ApiErrors, TestFixtures, TestUnifiClient, WireCheck}
+import whitelabel.captal.api.{ApiErrors, RecoveryFeed, TestFixtures, TestUnifiClient, WireCheck}
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.recovery.{Activity, ErrorFingerprint}
 import whitelabel.captal.core.survey.question
@@ -180,26 +180,82 @@ object RecoverySuite:
           )
         ,
         test("the waiting page is told when another device reports the same error"):
-          for
-            backend <- testBackend
-            first   <- createSessionFrom(backend, "click-first", "AA:00:00:00:00:01")
-            offer   <- postRecovery(backend, first, clientReport())
-            errorId = offerOf(offer.body).get.errorId
-            before   <- postCheck(backend, first, errorId)
-            second   <- createSessionFrom(backend, "click-second", "AA:00:00:00:00:02")
-            _        <- postRecovery(backend, second, clientReport())
-            after    <- postCheck(backend, first, errorId)
-            errors   <- TestFixtures.getErrors
-            tooEarly <- postRedeem(backend, first, errorId)
-            _        <- TestClock.adjust(31.seconds)
-            onTime   <- postRedeem(backend, first, errorId)
-          yield assertTrue(
-            offerOf(before.body).exists(o => o.waitSeconds == 300 && !o.recurrent),
-            // A tenth of the wait it was offered, counted from when it happened.
-            offerOf(after.body).exists(o => o.waitSeconds == 30 && o.recurrent),
-            errors.exists(e => e.id == errorId && e.verdict.contains("recurrent")),
-            errorOf(tooEarly.body).exists(_.isInstanceOf[ApiError.RecoveryNotYet]),
-            decode[StatusResponse](onTime.body).toOption.exists(_.phase == Phase.Recovered)
+          ZIO.scoped:
+            for
+              backend <- testBackend
+              first   <- createSessionFrom(backend, "click-first", "AA:00:00:00:00:01")
+              offer   <- postRecovery(backend, first, clientReport())
+              errorId = offerOf(offer.body).get.errorId
+              events <- recoveryEvents(first, errorId)
+              before <- events.take
+              second <- createSessionFrom(backend, "click-second", "AA:00:00:00:00:02")
+              _      <- postRecovery(backend, second, clientReport())
+              // What the relay delivers once rqlite commits that report.
+              _ <- ZIO.serviceWithZIO[RecoveryFeed](_.publish(RecoveryFeed.Signal.Recorded("any")))
+              after    <- events.take
+              errors   <- TestFixtures.getErrors
+              tooEarly <- postRedeem(backend, first, errorId)
+              _        <- TestClock.adjust(31.seconds)
+              onTime   <- postRedeem(backend, first, errorId)
+            yield assertTrue(
+              before._1 == "offer",
+              offerOf(before._2).exists(o => o.waitSeconds == 300 && !o.recurrent),
+              // A tenth of the wait it was offered, counted from when it happened.
+              after._1 == "offer",
+              offerOf(after._2).exists(o => o.waitSeconds == 30 && o.recurrent),
+              errors.exists(e => e.id == errorId && e.verdict.contains("recurrent")),
+              errorOf(tooEarly.body).exists(_.isInstanceOf[ApiError.RecoveryNotYet]),
+              decode[StatusResponse](onTime.body).toOption.exists(_.phase == Phase.Recovered)
+            )
+        ,
+        test("a gap in the feed has the page checked again"):
+          ZIO.scoped:
+            for
+              backend <- testBackend
+              first   <- createSessionFrom(backend, "click-first", "AA:00:00:00:00:01")
+              offer   <- postRecovery(backend, first, clientReport())
+              errorId = offerOf(offer.body).get.errorId
+              events <- recoveryEvents(first, errorId)
+              _      <- events.take
+              second <- createSessionFrom(backend, "click-second", "AA:00:00:00:00:02")
+              _      <- postRecovery(backend, second, clientReport())
+              _      <- ZIO.serviceWithZIO[RecoveryFeed](_.publish(RecoveryFeed.Signal.Gap))
+              after  <- events.take
+            yield assertTrue(offerOf(after._2).exists(_.recurrent))
+        ,
+        test("a stream for an error that is not the session's says so, and ends"):
+          ZIO.scoped:
+            for
+              backend <- testBackend
+              first   <- createSessionFrom(backend, "click-first", "AA:00:00:00:00:01")
+              offer   <- postRecovery(backend, first, clientReport())
+              errorId = offerOf(offer.body).get.errorId
+              other  <- createSessionFrom(backend, "click-other", "AA:00:00:00:00:03")
+              events <- recoveryEvents(other, errorId)
+              failed <- events.take
+            yield assertTrue(
+              failed._1 == "failed",
+              errorOf(failed._2).exists(_.isInstanceOf[ApiError.UnknownError]))
+        ,
+        test(
+          "the feed reads an error recorded, by its fingerprint, out of what the relay hands on"):
+          import whitelabel.captal.cdc.protocol.ChangeFeedFollower.Event
+          val recorded =
+            """{"index":7,"events":[{"op":"INSERT","table":"errors","after":{"id":"e-1","fingerprint":"f-1"}}]}"""
+          val serverError =
+            """{"index":8,"events":[{"op":"INSERT","table":"errors","after":{"id":"e-2","fingerprint":null}}]}"""
+          val playback =
+            """{"index":9,"events":[{"op":"INSERT","table":"video_playbacks","after":{"id":"p-1"}}]}"""
+          val redeemed =
+            """{"index":10,"events":[{"op":"UPDATE","table":"errors","after":{"id":"e-1","fingerprint":"f-1"}}]}"""
+          assertTrue(
+            RecoveryFeed.signalsOf(Event.Changed(7, recorded)) ==
+              List(RecoveryFeed.Signal.Recorded("f-1")),
+            RecoveryFeed.signalsOf(Event.Changed(8, serverError)) == Nil,
+            RecoveryFeed.signalsOf(Event.Changed(9, playback)) == Nil,
+            RecoveryFeed.signalsOf(Event.Changed(10, redeemed)) == Nil,
+            RecoveryFeed.signalsOf(Event.Changed(11, "{")) == Nil,
+            RecoveryFeed.signalsOf(Event.Gap) == List(RecoveryFeed.Signal.Gap)
           )
         ,
         test("the history counted is the user's on this device, by kind of effort"):

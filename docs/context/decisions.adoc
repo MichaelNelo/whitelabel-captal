@@ -324,10 +324,17 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
      the numbers the product chose.
   ** *An error that turns out recurrent shortens the wait of those already waiting* (2026-10-31).
      An error a deploy introduces reaches someone first, and that guest, with no history, would
-     wait five minutes for a bug of ours. The waiting page asks every ten seconds rather than being
-     pushed to: a poll survives the captive-portal browser sleeping and needs nothing between the
-     edge and the API, and the waits are minutes. The shortening is a tenth of the wait offered,
-     counted from when the error happened, never longer, and the redeem applies it too.
+     wait five minutes for a bug of ours. The shortening is a tenth of the wait offered, counted
+     from when the error happened, never longer, and the redeem applies it too.
+  ** *The waiting page is told, not polling* (2026-10-31), at the user's direction: notifications,
+     not a poll. A first version had the page ask `POST /api/recovery/check` every ten seconds,
+     chosen without asking. Now the page follows `GET /api/recovery/{errorId}/events` (server-sent
+     events, through CloudFront and the load balancer like any request), and the API follows the
+     change data capture relay: an error recorded on any location wakes every waiting page, which
+     checks whether it was its own. Server-sent events and not a websocket: one direction is all it
+     needs, `EventSource` reconnects by itself, and it is plain HTTP for the edge. Every error wakes
+     every page rather than only the pages with its fingerprint, because the page's fingerprint is
+     in the database and not in its request, and errors are rare.
   ** *The final phases are unrecoverable.* In `Ready`, `Recovered` or `Authorized` the error is in
      granting access itself, which a way out would only repeat; the guest is told so and given the
      error's id for staff.

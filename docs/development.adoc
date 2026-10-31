@@ -321,9 +321,11 @@ the first four against LocalStack:
   images built and, against AWS, the `aws` CLI for the ECR login, wherever it runs: a `tofu apply`
   run by hand without them fails at the push, before any service changes.
 . **Locations.** Every location's service — the ones whose task runs a single container named
-  `api`, which is how `deploy_location` registers them — not already on the API image's digest gets a
-  new revision of its task definition differing only in the image, and is pointed at it. Environment, roles and sizes carry
-  over as the last deploy registered them, so a change to those is still a `deploy_location`. The
+  `api`, which is how `deploy_location` registers them — not already on the API image's digest and
+  following the relay gets a new revision of its task definition differing only in the image and
+  `CDC_FEED_ADDRESS` (the configuration's `cdc_feed_address` output), and is pointed at it. The rest
+  of its environment, roles and sizes carry over as the last deploy registered them, so a change to
+  those is still a `deploy_location`. The
   service keeps its task count: a paused location stays paused and runs the new image when it is
   resumed. `ci.run` waits for every moved service to settle and fails naming the ones that did not.
 . **The client.** Under its version, published once, as the images are: if the bucket keeps it
@@ -396,8 +398,8 @@ api.releaseVersion` prints the tag the next release goes out under and the last 
 same when nothing since moves it. The client carries its own as `BuildInfo.version`.
 
 Only commits touching the module count: its own folder and its source folders, those of the
-modules it depends on (`core`, `messages` and `platform` for the API; `cdc.protocol` for the relay
-and the backoffice; `core` and `messages`, through
+modules it depends on (`core`, `messages`, `platform` and `cdc.protocol` for the API;
+`cdc.protocol` for the relay and the backoffice; `core` and `messages`, through
 `core-js` and `messages-js`, for the client), and the files it lists as `versionFiles` — the
 Dockerfile of an image, and the portal stylesheet the backoffice carries. Source folders as well as
 module folders because `core-js` and `messages-js` have none of their own: their sources are

@@ -31,9 +31,12 @@ object WireCheck:
   final class UnreadableResponse(what: String, reason: String)
       extends Exception(s"The browser cannot read this $what: $reason")
 
+  /** `value` as the server writes it to the browser. */
+  def json[A: Schema](value: A): String =
+    JsonCodec.jsonEncoder(config)(summon[Schema[A]]).encodeJson(value, None).toString
+
   def readable[A: Schema: Decoder](value: A): ZIO[QuillSqlite & SessionContext, ApiError, A] =
-    val json = JsonCodec.jsonEncoder(config)(summon[Schema[A]]).encodeJson(value, None).toString
-    io.circe.parser.decode[A](json) match
+    io.circe.parser.decode[A](json(value)) match
       case Right(_) =>
         ZIO.succeed(value)
       case Left(e) =>

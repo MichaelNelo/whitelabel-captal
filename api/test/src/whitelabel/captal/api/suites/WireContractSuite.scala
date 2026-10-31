@@ -30,7 +30,6 @@ import whitelabel.captal.messages.MarkVideoWatchedRequest.given
 import whitelabel.captal.messages.SetLocaleRequest.given
 import whitelabel.captal.messages.EndPlaybackRequest.given
 import whitelabel.captal.messages.PlaybackResponse.given
-import whitelabel.captal.messages.CheckRecoveryRequest.given
 import whitelabel.captal.messages.RecoveryOffer.given
 import whitelabel.captal.messages.RecoveryRequest.given
 import whitelabel.captal.messages.RedeemRecoveryRequest.given
@@ -43,7 +42,6 @@ import whitelabel.captal.messages.i18n.given
 import whitelabel.captal.messages.{
   AnswerRequest,
   ApiError,
-  CheckRecoveryRequest,
   ClientErrorReport,
   EndPlaybackRequest,
   ErrorFrame,
@@ -376,7 +374,6 @@ object WireContractSuite:
     everyRequest(
       "RecoveryRequest",
       (Gen.option(text) <*> Gen.option(report)).map(RecoveryRequest(_, _))),
-    everyRequest("CheckRecoveryRequest", text.map(CheckRecoveryRequest(_))),
     everyRequest("RedeemRecoveryRequest", text.map(RedeemRecoveryRequest(_)))
   )
 
@@ -439,7 +436,6 @@ object WireContractSuite:
           List(
             RecoveryOffer("e1", "2026-10-30T12:05:00Z", 300, recurrent = false),
             RecoveryOffer("e2", "x", 0, recurrent = true))),
-        agreement("CheckRecoveryRequest", List(CheckRecoveryRequest("e1"))),
         agreement("RedeemRecoveryRequest", List(RedeemRecoveryRequest("e1"))),
         // The survey tree, where the format is a column as well as a response: these same bytes go
         // into `question_rules.rule_config` and `answers.answer_value`, so this also checks that

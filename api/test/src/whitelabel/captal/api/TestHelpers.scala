@@ -327,14 +327,43 @@ object TestHelpers:
       .response(asStringAlways)
       .send(backend)
 
-  def postCheck(backend: SttpBackend[Task, Any], sessionCookie: String, errorId: String) =
-    basicRequest
-      .post(uri"http://test/api/recovery/check")
-      .cookie("captal_session", sessionCookie)
-      .body(s"""{"errorId":"$errorId"}""")
-      .contentType("application/json")
-      .response(asStringAlways)
-      .send(backend)
+  /** The waiting page's stream for `errorId`, opened as the page opens it, and its events as they
+    * arrive, each one its name and its data; the keep-alive comments left out. Open for as long as
+    * the scope lasts. Not through `testBackend`, which reads a body to its end: this one has none.
+    */
+  def recoveryEvents(
+      sessionCookie: String,
+      errorId: String): ZIO[TestEnv & Scope, Throwable, Queue[(String, String)]] =
+    for
+      env      <- ZIO.environment[TestEnv]
+      response <- env
+        .get[RecoveryRoutes]
+        .routes
+        .provideEnvironment(env)
+        .runZIO(
+          zio
+            .http
+            .Request
+            .get(zio.http.URL(zio.http.Path.root / "api" / "recovery" / errorId / "events"))
+            .addHeader(
+              zio
+                .http
+                .Header
+                .Cookie(NonEmptyChunk(zio.http.Cookie.Request("captal_session", sessionCookie)))))
+      events <- Queue.unbounded[(String, String)]
+      _      <-
+        response
+          .body
+          .asStream
+          .via(zio.stream.ZPipeline.utf8Decode)
+          .via(zio.stream.ZPipeline.splitOn("\n\n"))
+          .filter(_.startsWith("event: "))
+          .map: event =>
+            val lines = event.linesIterator.toList
+            (lines.head.stripPrefix("event: "), lines.drop(1).map(_.stripPrefix("data: ")).mkString)
+          .foreach(events.offer)
+          .forkScoped
+    yield events
 
   def postRedeem(backend: SttpBackend[Task, Any], sessionCookie: String, errorId: String) =
     basicRequest

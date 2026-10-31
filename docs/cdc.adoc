@@ -100,10 +100,17 @@ rebuilds it from the database when it gets one, and carries on.
 | Backoffice (`mcp`)
 | `VideoFileCollector` reads `video_playbacks` events: an `INSERT` of an open row starts a
   `PlaybackExpiry` timer, an `UPDATE` that sets `ended_at` or a `DELETE` cancels it, and every
-  change set asks for a collection pass. A `Gap` resyncs the timers with the open playbacks in the
-  database and asks for a pass. It follows `CDC_FEED_ADDRESS`; without it, it logs a warning and
-  only runs the passes and timers of startup and replacements. See
-  xref:mcp.adoc#replaced-files[Replaced files].
+  change set of that table asks for a collection pass; one of any other table does nothing. A `Gap`
+  resyncs the timers with the open playbacks in the database and asks for a pass. It follows
+  `CDC_FEED_ADDRESS`; without it, it logs a warning and only runs the passes and timers of startup
+  and replacements. See xref:mcp.adoc#replaced-files[Replaced files].
+
+| Every location's API (`api`)
+| `RecoveryFeed` reads `errors` events: an `INSERT` with a fingerprint, read from `after`, is
+  published to every waiting page's stream, which checks again whether its wait shortened. A `Gap`
+  is published too. It follows the `CDC_FEED_ADDRESS` its task definition carries, which
+  `deploy_location` forwards from the backoffice's and `ci.run` sets on every location it moves;
+  without it, it logs a warning. See xref:api.adoc#recovery-stream[the waiting page's stream].
 |===
 
 Which tables reach the relay is rqlite's `table_filter`: the root variable `rqlite_cdc_table_filter`,

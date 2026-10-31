@@ -667,11 +667,15 @@ error, or one typed into the console, does not interrupt the flow. Airstream's a
 
 The page keeps the offer in its fragment once it has one (`{"errorId", "until", "recurrent"}`), so
 reloading resumes the countdown instead of reporting the error again; `until` is timed by the
-device's clock against itself, never compared with the server's. While it counts down it asks
-`POST /api/recovery/check` every ten seconds: when another device has reported the same error the
-server answers a shorter wait with `recurrent`, and the countdown jumps to it with a line saying
-other guests ran into the same problem. An answer that would lengthen the wait, or one that does
-not come, changes nothing. When the wait is over it redeems at once — a tap
+device's clock against itself, never compared with the server's. While it counts down it follows
+`GET /api/recovery/{errorId}/events` with an `EventSource` (see xref:api.adoc#recovery-stream[the
+waiting page's stream]): when another device reports the same error the server sends an `offer`
+with a shorter wait and `recurrent`, and the countdown jumps to it with a line saying other guests
+ran into the same problem. An offer that would lengthen the wait changes nothing. The browser
+reopens a dropped stream on its own and the server answers each connection with the offer as it
+stands; a `failed` event closes it for good, and `RecoveryAlreadyUsed`, from another tab, goes back
+to the portal. A browser with no `EventSource` counts down the wait it has. When the wait is over
+the page closes the stream and redeems at once — a tap
 first would protect nothing, since the endpoint can be called directly — and goes back to the
 portal. The redeem only moves the session to `Recovered`; the portal routes that to `ReadyView`,
 whose `/finish` grants the access, and retries it as it would from `Ready`. `RecoveryNotYet`, from

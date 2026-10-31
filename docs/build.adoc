@@ -76,7 +76,7 @@ The repository is built by Mill. The build is a set of modules: one `package.mil
 
 | `api`
 | 3.8.0, JVM
-| `core`, `messages`, `platform`.
+| `core`, `messages`, `platform`, `cdc.protocol`.
 
 | `client`
 | 3.8.0, Scala.js with ES modules
@@ -137,7 +137,7 @@ The repository is built by Mill. The build is a set of modules: one `package.mil
 
 === Release
 
-`CAPTAL_ENV=<environment> mill ci.run`:: Releases to an environment. It builds the `rqlite`, `api` and `mcp` images, applies the `terraform/` configuration with the variables of `environments/<environment>`, moves every deployed location onto the API image, publishes the client under its version, and tags the commit with each module version that moved. Reads `AWS_REGION` or `AWS_DEFAULT_REGION` (default `us-east-1`), and `AWS_ENDPOINT_URL` when releasing to LocalStack, which tags nothing.
+`CAPTAL_ENV=<environment> mill ci.run`:: Releases to an environment. It builds the `rqlite`, `api`, `mcp` and `cdc` images, applies the `terraform/` configuration with the variables of `environments/<environment>`, which pushes the images whose versions moved, moves every deployed location onto the API image, publishes the client under its version, and tags the commit with each module version that moved. Reads `AWS_REGION` or `AWS_DEFAULT_REGION` (default `us-east-1`), and `AWS_ENDPOINT_URL` when releasing to LocalStack, which tags nothing.
 
 === Database
 

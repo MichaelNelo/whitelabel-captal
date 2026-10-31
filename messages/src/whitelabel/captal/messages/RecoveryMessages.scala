@@ -36,7 +36,8 @@ object RecoveryRequest:
 
 /** The way out, open from `availableAt`; `waitSeconds` is the same, counted from the answer, for a
   * page whose clock cannot be trusted. `recurrent` when other devices reported the same error,
-  * which is why a wait shortens while the page counts it down.
+  * which is why a wait shortens while the page counts it down. The answer to a request for one, and
+  * each `offer` event of the waiting page's stream.
   */
 final case class RecoveryOffer(
     errorId: String,
@@ -47,13 +48,6 @@ final case class RecoveryOffer(
 object RecoveryOffer:
   given CirceEncoder[RecoveryOffer] = deriveEncoder
   given CirceDecoder[RecoveryOffer] = deriveDecoder
-
-/** Where the way out stands now, asked by the waiting page. */
-final case class CheckRecoveryRequest(errorId: String)
-
-object CheckRecoveryRequest:
-  given CirceEncoder[CheckRecoveryRequest] = deriveEncoder
-  given CirceDecoder[CheckRecoveryRequest] = deriveDecoder
 
 final case class RedeemRecoveryRequest(errorId: String)
 

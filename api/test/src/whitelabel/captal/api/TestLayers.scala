@@ -255,7 +255,7 @@ object TestLayers:
       SessionCookieConfig & ApiBase & CurrentLocation & UserCookieConfig & UserLookup &
       SurveyRoutes & LocaleRoutes & VideoRoutes & AdvertiserSurveyRoutes & FinishRoutes &
       RecoveryRoutes & RecoveryRoutes.RequestRecoveryFlowType &
-      RecoveryRoutes.CheckRecoveryFlowType & RecoveryRoutes.RedeemRecoveryFlowType &
+      RecoveryRoutes.CheckRecoveryFlowType & RecoveryRoutes.RedeemRecoveryFlowType & RecoveryFeed &
       TestUnifiClient & TestUnifiSwitch & JobQueue & JobRunner.ExpireFlow & JobRunner
 
   /** The bundle the suite's location serves, so a report can be found consistent with it or not. */
@@ -306,6 +306,8 @@ object TestLayers:
     RecoveryRepositoryQuill.layer,
     Flows.requestRecoveryFlowLayer,
     Flows.checkRecoveryFlowLayer,
-    Flows.redeemRecoveryFlowLayer
+    Flows.redeemRecoveryFlowLayer,
+    // Following nothing: the suites publish what the relay would deliver.
+    ZLayer(RecoveryFeed.make)
   )
 end TestLayers

@@ -1,9 +1,10 @@
 = cdc
 
 Some things have to happen the moment the database changes, and the change can be made by any
-server: a guest who stops playing a replaced video, on any location, frees its file. This is how
-the services that react to those changes hear of them, without any of them having to ask the
-database over and over, and without any of them depending on the others.
+server: a guest who stops playing a replaced video, on any location, frees its file; an error that
+shows up on a second guest's phone shortens the wait for everyone who hit it, and tells them so.
+This is how the services that react to those changes hear of them, without any of them having to
+ask the database over and over, and without any of them depending on the others.
 
 The database reports every change it commits here once; this hands it to every service that
 follows along. A service that was away gets what it missed when it comes back, or is told plainly

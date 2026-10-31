@@ -415,10 +415,10 @@ declares `outError[ApiError](Status.BadRequest)`.
 |`RecoveryOffer`, or `ApiError.Unrecoverable` in a final phase
 |any; session required
 
-|POST
-|`/api/recovery/check`
-|`CheckRecoveryRequest`
-|`RecoveryOffer`, the wait as it stands now — shortened, and `recurrent`, once another device reported the same error
+|GET
+|`/api/recovery/{errorId}/events`
+|–
+|`text/event-stream`, always `200`: an `offer` event (`RecoveryOffer`) at once and whenever the wait changes — shortened, and `recurrent`, once another device reported the same error; a `failed` event (`ApiError`) ending it. See <<recovery-stream>>
 |any; session required
 
 |POST
@@ -456,12 +456,39 @@ Where each is defined:
 |`/api/finish`
 
 |`api/src/whitelabel/captal/api/routes/RecoveryRoutes.scala`
-|`/api/recovery`, `/api/recovery/check`, `/api/recovery/redeem`
+|`/api/recovery`, `/api/recovery/{errorId}/events`, `/api/recovery/redeem`
 
 |`api/src/whitelabel/captal/api/routes/LocaleRoutes.scala`
 |`/api/locales`, `/api/i18n/{locale}`, `/api/session/locale`, and `/api/dev/reset-phase` in
 `devRoutes`
 |===
+
+[[recovery-stream]]
+=== The waiting page's stream
+
+`GET /api/recovery/{errorId}/events` is what `error.html` follows while it counts a wait down, as
+an `EventSource`. It is a plain route rather than an `Endpoint`: its body is a stream.
+
+It is answered `200` and `text/event-stream` whatever happens, a refusal included, because
+`EventSource` reads no body from any other status and would only try again. The session and the
+error id are checked first; a refusal is a single `failed` event carrying the `ApiError`, and the
+stream ends.
+
+Otherwise the stream sends an `offer` event with the `RecoveryOffer` as it stands, and checks again
+each time `RecoveryFeed` publishes a signal: an `INSERT` into `errors` with a fingerprint, heard from
+the change data capture relay at `CDC_FEED_ADDRESS` (see xref:cdc.adoc[Change data capture relay]),
+or a gap in that feed. Each check is `CheckRecoveryHandler`, run in the session the stream was
+opened for (`SessionContext.locally`, since the stream outlives the request), so a recurrence
+shortens the wait and records it as `POST /api/recovery` would. An `offer` is sent only when its
+`availableAt` or `recurrent` changed; a `failed` event ends the stream. The stream subscribes before
+its first check, so an error recorded in between is not missed. Every error recorded on any
+location wakes every waiting page, which checks whether it was its own: the page's fingerprint is in
+the database, and errors are rare.
+
+A comment, `: keepalive`, goes every 15 seconds (`RecoveryRoutes.KeepAlive`), under CloudFront's 30
+seconds for an origin to answer and the load balancer's 60-second idle timeout. Without
+`CDC_FEED_ADDRESS` the server starts with a warning, and a page learns of a recurrence only when it
+connects again.
 
 === Health
 

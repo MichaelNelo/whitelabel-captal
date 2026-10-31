@@ -38,7 +38,7 @@ Two serialisation libraries describe one format. circe instances travel with the
 | `SurveyResponse` | `messages/SurveyResponse.scala` | `api/wire.scala`
 | `AdvertiserSurveyResponse` | `messages/AdvertiserSurveyResponse.scala` | `api/wire.scala`
 | `VideoResponse`, `MarkVideoWatchedRequest`, `VideoWatchedResponse`, `StartPlaybackRequest`, `EndPlaybackRequest`, `PlaybackResponse` | `messages/VideoResponse.scala` | `api/wire.scala`
-| `ErrorFrame`, `ClientErrorReport`, `RecoveryRequest`, `RecoveryOffer`, `CheckRecoveryRequest`, `RedeemRecoveryRequest` | `messages/RecoveryMessages.scala` | `api/wire.scala`
+| `ErrorFrame`, `ClientErrorReport`, `RecoveryRequest`, `RecoveryOffer` (also each `offer` event of the waiting page's stream), `RedeemRecoveryRequest` | `messages/RecoveryMessages.scala` | `api/wire.scala`
 | `I18n` | `messages/i18n.scala` (babel instances are in `core`) | `api/wire.scala`
 | `NextStep`, `NextVideo`, `NextAdvertiserSurvey` | declared in `core` beside the types | `api/wire.scala`
 | `Phase` | `core/application/phase.scala`, a bare string | `api/wire.scala`, hand-written `Schema[String].transform(fromDbString, toDbString)` to match
