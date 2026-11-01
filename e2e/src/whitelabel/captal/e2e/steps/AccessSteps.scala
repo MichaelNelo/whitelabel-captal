@@ -17,13 +17,13 @@ final class AccessSteps extends ScalaDsl with EN:
   /** A location whose guests get one minute of access, so that its expiry comes within a minute. */
   private def expiring: Locations.Deployed =
     Locations.once("access-expiry"):
-      val location = Locations.create("access-expiry", accessMinutes = 1)
+      val location = Locations.create("expiry", accessMinutes = 1)
       Locations.addAdvertiserVideo(location)
       Locations.deploy(location)
 
   private def quiet: Locations.Deployed =
     Locations.once("access-unifi-off"):
-      val location = Locations.create("access-unifi-off")
+      val location = Locations.create("quiet")
       Backoffice.tool[UnifiTools.SetEnabledRequest, UnifiTools.StatusResponse](
         "set_unifi_enabled",
         UnifiTools.SetEnabledRequest(location.slug, enabled = false))
@@ -32,7 +32,7 @@ final class AccessSteps extends ScalaDsl with EN:
 
   private def unreachable: Locations.Deployed =
     Locations.once("access-unreachable"):
-      val location = Locations.create("access-unreachable")
+      val location = Locations.create("unreachable")
       Locations.configureUnifi(location.slug, Venue.AccessMinutes, host = "nowhere.captal.local")
       Locations.addAdvertiserVideo(location)
       Locations.deploy(location)

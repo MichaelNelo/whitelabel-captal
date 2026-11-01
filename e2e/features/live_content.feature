@@ -48,9 +48,9 @@ Feature: Changing a deployed location while guests use it
 
   Scenario: A translation the operator sets reaches the next guest without a deploy
     Given the operator's own deployed location "wording" with one advertiser video
-    When the operator sets the English text of "welcome.button.start" to "Begin now" at "wording"
+    When the operator sets the Spanish text of "welcome.button.start" to "Empezar ahora" at "wording"
     And Ana opens the portal on a new phone
-    Then Ana sees the welcome button "Begin now"
+    Then Ana sees the welcome button "Empezar ahora"
 
   @pending
   Scenario: A guest who walks away mid-video keeps the file only until its playback expires

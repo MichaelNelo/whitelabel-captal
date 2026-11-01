@@ -137,7 +137,7 @@ object `package` extends BaseModule:
           "E2E_RECORDINGS"    -> recordings.toString,
           "E2E_LINGER_SECONDS" -> linger.toString,
           "E2E_KEEP_LOCATIONS" -> keep.value.toString,
-          "E2E_AWS_ENDPOINT"  -> endpoint,
+          "E2E_LOCALSTACK_CONTAINER" -> localStackContainer,
           "E2E_CLUSTER"       -> outputs("ecs_cluster_name"),
           "E2E_CDC_SERVICE"   -> outputs("cdc_service_name")
         ),

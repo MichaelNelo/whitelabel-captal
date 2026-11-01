@@ -99,9 +99,17 @@ final class PauseResumeSteps extends ScalaDsl with EN:
       throw AssertionError(s"$name's session is at $found, expected $phase")
   }
 
-  /** The location's API answers its health check with `ok` only while the location is served. */
+  /** The location's API answers its health check with `ok` only while the location is served. Gone,
+    * the path falls to the load balancer's default, a redirect: answered, not followed.
+    */
   Then("""the API of {string} answers nothing for {word}""") { (at: String, name: String) =>
-    val response = World.guest(name).context.request().get(World.location(at).api("health"))
+    val response = World
+      .guest(name)
+      .context
+      .request()
+      .get(
+        World.location(at).api("health"),
+        com.microsoft.playwright.options.RequestOptions.create().setMaxRedirects(0))
     if response.ok && response.text.contains("ok") then
       throw AssertionError(
         s"The API of $at still answers ${response.status()} to $name's phone after its destroy")

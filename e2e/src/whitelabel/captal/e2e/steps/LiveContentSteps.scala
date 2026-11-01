@@ -199,13 +199,14 @@ final class LiveContentSteps extends ScalaDsl with EN:
           s"The new file of '$title' at ${location.slug} did not replace the old one")
   }
 
-  When("""the operator sets the English text of {string} to {string} at {string}""") {
+  // Spanish: what a new session is greeted in, whatever the phone's language.
+  When("""the operator sets the Spanish text of {string} to {string} at {string}""") {
     (key: String, value: String, at: String) =>
       Backoffice.tool[I18nTools.SetTranslationsRequest, I18nTools.SetTranslationsResponse](
         "set_translations",
         I18nTools.SetTranslationsRequest(
           slug = World.location(at).slug,
-          locale = "en",
+          locale = "es",
           entries = List(I18nTools.Translation(key, value))))
   }
 

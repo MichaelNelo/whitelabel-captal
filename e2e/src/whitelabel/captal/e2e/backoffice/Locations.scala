@@ -61,13 +61,21 @@ object Locations:
     */
   def once(key: String)(build: => Deployed): Deployed = deployed.getOrElseUpdate(key, build)
 
+  /** What a slug leaves for a location's name: 25, less `e2e-` and `-<4 characters>`. */
+  val SlugName = 16
+
   /** A new location, not yet deployed: created, its UniFi settings pointed at the stand-in with
     * access lasting `accessMinutes`, the deployment's identification surveys ensured, and every
     * text a guest sees written as `text <key>` in [[Locales]].
+    *
+    * Its slug is `e2e-<name>-<4 characters>`, with `name` cut to [[SlugName]] characters: the
+    * backoffice takes 25 at most, since the slug names AWS resources with limits of their own. The
+    * display name keeps all of `name`.
     */
   def create(name: String, accessMinutes: Int = Venue.AccessMinutes): Deployed =
     val run = scala.util.Random.alphanumeric.filter(_.isLetterOrDigit).take(4).mkString.toLowerCase
-    val location = Deployed(s"e2e-$name-$run", s"E2E $name")
+    val short = name.take(SlugName).stripSuffix("-")
+    val location = Deployed(s"e2e-$short-$run", s"E2E $name")
     Backoffice.tool[LocationTools.CreateRequest, LocationTools.CreateResponse](
       "create_location",
       LocationTools.CreateRequest(location.slug, location.name))
