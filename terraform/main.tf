@@ -153,6 +153,8 @@ module "alb" {
   vpc_id            = local.vpc_id
   public_subnet_ids = local.public_subnet_ids
   container_port    = var.container_port
+  # The port it answers on from outside, where that is not the scheme's own: LocalStack's gateway.
+  http_port = var.public_port != 0 ? var.public_port : 80
   # Wire the captive portal dispatcher Lambda target group into the HTTP listener.
   # enable_portal_dispatcher_rule is a static bool so the resource count can be
   # evaluated at plan time (must NOT use a module attribute for count gating).
