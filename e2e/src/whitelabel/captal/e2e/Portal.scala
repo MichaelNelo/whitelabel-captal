@@ -1,5 +1,7 @@
 package whitelabel.captal.e2e
 
+import scala.jdk.CollectionConverters.*
+
 import com.microsoft.playwright.*
 import zio.json.ast.Json
 
@@ -71,20 +73,41 @@ object Portal:
         .flatMap(_.asString)
         .getOrElse(throw AssertionError(s"$name's status was not readable: $body"))
 
-    def close(): Unit = context.close()
+    /** Puts the phone down. When the scenario is recorded, each page it had open leaves its video
+      * under the guest's name, `<name>.webm`, or `<name>-<n>.webm` for a guest who came back.
+      */
+    def close(): Unit =
+      val pages = context.pages().asScala.toList
+      context.close()
+      for
+        dir             <- World.recording
+        (opened, index) <- pages.zipWithIndex
+        video           <- Option(opened.video())
+      do
+        val file =
+          if pages.size == 1 then
+            s"$name.webm"
+          else
+            s"$name-${index + 1}.webm"
+        video.saveAs(dir.resolve(file))
+        video.delete()
   end Guest
 
   /** `name` on a new phone set to `locale`, sent by the access point to `location`'s portal. */
   def arrive(name: String, location: Locations.Deployed, locale: String = "en-US"): Guest =
     val mac = Seq.fill(6)(f"${scala.util.Random.nextInt(256)}%02X").mkString(":")
-    val context = browser.newContext(
-      Browser
-        .NewContextOptions()
-        .setIgnoreHTTPSErrors(true)
-        .setViewportSize(390, 844)
-        .setIsMobile(true)
-        .setHasTouch(true)
-        .setLocale(locale))
+    val options = Browser
+      .NewContextOptions()
+      .setIgnoreHTTPSErrors(true)
+      .setViewportSize(390, 844)
+      .setIsMobile(true)
+      .setHasTouch(true)
+      .setLocale(locale)
+    // Written where Playwright likes while the phone is in use, and moved by `close`.
+    World
+      .recording
+      .foreach(dir => options.setRecordVideoDir(dir.resolve(".raw")).setRecordVideoSize(390, 844))
+    val context = browser.newContext(options)
     val page = context.newPage()
     val clickId = s"e2e-${java.util.UUID.randomUUID}"
     page.navigate(location.portal(mac, clickId))

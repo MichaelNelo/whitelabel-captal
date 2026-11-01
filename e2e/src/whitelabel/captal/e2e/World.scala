@@ -1,5 +1,7 @@
 package whitelabel.captal.e2e
 
+import java.nio.file.{Files, Path}
+
 import scala.collection.mutable
 
 import io.cucumber.scala.{EN, PendingException, ScalaDsl, Scenario}
@@ -53,7 +55,33 @@ object World:
     println(s"[pending] $reason")
     throw PendingException()
 
-  private[e2e] def reset(): Unit =
+  /** Where the running scenario's screens are recorded, when the run records them
+    * (`E2E_RECORDINGS`): `<feature>/<line>-<scenario>`, one video per page a guest had open.
+    */
+  private[e2e] def recording: Option[Path] = scenarioRecording
+
+  private val recordings = sys.env.get("E2E_RECORDINGS").filter(_.nonEmpty).map(Path.of(_))
+  private var scenarioRecording = Option.empty[Path]
+
+  private[e2e] def begin(scenario: Scenario): Unit =
+    reset()
+    val feature = Path.of(scenario.getUri.getPath).getFileName.toString.stripSuffix(".feature")
+    val name = scenario.getName.replaceAll("[^A-Za-z0-9]+", "-").stripPrefix("-").stripSuffix("-")
+    scenarioRecording = recordings.map(_.resolve(feature).resolve(s"${scenario.getLine}-$name"))
+
+  /** Closes the scenario's phones, which writes their videos, and marks a failed scenario's. */
+  private[e2e] def finish(scenario: Scenario): Unit =
+    reset()
+    for
+      recorded <- scenarioRecording
+      if Files.isDirectory(recorded)
+    do
+      Files.deleteIfExists(recorded.resolve(".raw"))
+      if scenario.isFailed then
+        Files.move(recorded, recorded.resolveSibling(s"${recorded.getFileName} (failed)"))
+    scenarioRecording = None
+
+  private def reset(): Unit =
     guests.values.foreach(_.close())
     guests.clear()
     locations.clear()
@@ -61,11 +89,11 @@ end World
 
 /** Empties the [[World]] around each scenario. */
 final class WorldHooks extends ScalaDsl with EN:
-  Before { (_: Scenario) =>
-    World.reset()
+  Before { (scenario: Scenario) =>
+    World.begin(scenario)
   }
 
-  After { (_: Scenario) =>
-    World.reset()
+  After { (scenario: Scenario) =>
+    World.finish(scenario)
   }
 end WorldHooks

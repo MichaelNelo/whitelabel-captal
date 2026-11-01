@@ -60,6 +60,9 @@ object `package` extends BaseModule:
     * A scenario tagged `@pending` needs something the product or this stack does not have yet; it
     * runs only when `tags` asks for it.
     *
+    * Every guest's screen is recorded, one video per page, in this command's `recordings/`, by
+    * feature and scenario; a failed scenario's folder says so.
+    *
     * Usage: `mill e2e.cucumber`, or `mill e2e.cucumber --tags @first-visit`
     */
   def cucumber(tags: String = "not @pending") = Task.Command:
@@ -99,6 +102,7 @@ object `package` extends BaseModule:
       "--query",
       "SecretString").getOrElse(sys.error("[e2e] could not read the admin token"))
     val classpath = runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
+    val recordings = Task.dest / "recordings"
     val ran = os
       .proc(
         "java",
@@ -121,6 +125,7 @@ object `package` extends BaseModule:
           "E2E_UNIFI_HOST"    -> unifi("unifi_fake_host"),
           "E2E_UNIFI_PORT"    -> unifi("unifi_fake_port"),
           "E2E_UNIFI_RECORDS" -> unifi("unifi_fake_records_url"),
+          "E2E_RECORDINGS"    -> recordings.toString,
           "E2E_AWS_ENDPOINT"  -> endpoint,
           "E2E_CLUSTER"       -> outputs("ecs_cluster_name"),
           "E2E_CDC_SERVICE"   -> outputs("cdc_service_name")
@@ -129,6 +134,15 @@ object `package` extends BaseModule:
         stdout = os.Inherit,
         stderr = os.Inherit
       )
+    if os.exists(recordings) then
+      // Under WSL, the same folder as Windows' Explorer reaches it.
+      val windows = scala
+        .util
+        .Try(os.proc("wslpath", "-w", recordings).call().out.trim())
+        .toOption
+        .filter(_.nonEmpty)
+      println(s"[e2e] Every guest's screen, by feature and scenario: $recordings")
+      windows.foreach(path => println(s"[e2e]   from Windows: $path"))
     if ran.exitCode != 0 then
       sys.error("[e2e] some scenarios failed")
 end `package`

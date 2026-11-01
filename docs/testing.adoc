@@ -323,6 +323,13 @@ network was asked for a guest's MAC: the action, its time limit, the API key.
 * **The infrastructure** is `Stack`: the AWS CLI against LocalStack, for what an operator does
 outside the backoffice, such as restarting the relay.
 
+Every guest's screen is recorded: Playwright writes a video of each page a guest's phone opens, and
+when the scenario ends `World` moves them to `out/e2e/cucumber.dest/recordings/<feature>/<line>-<scenario>/`,
+as `<guest>.webm`, or `<guest>-<n>.webm` for a guest who came back; a failed scenario's folder ends
+in `(failed)`. The run prints the folder, and under WSL its Windows path. Headless Chromium renders
+the page as a window would — the bundle runs, the stylesheet applies, the video plays — so the
+recording is what a phone would have shown. Mill empties the folder at the start of every run.
+
 Steps are grouped in one class per feature; Cucumber builds each class anew for every scenario, so
 what a scenario has — its locations and guests, by the names its steps give them — is in `World`,
 which every class shares and which is emptied before each scenario. A feature that changes a
