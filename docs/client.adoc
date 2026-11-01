@@ -337,8 +337,12 @@ being reported. Otherwise there are three outcomes:
 
 The paused check matches on the parsed `status` field, never on raw text, and the expected value
 must stay in step with what `pause_location` installs (`InfraStore.PausedBody`; see
-xref:mcp.adoc[MCP backoffice]). `maintenanceUrl` is `/maintenance.html` or
-`/<slug>/maintenance.html`.
+xref:mcp.adoc[MCP backoffice]). `maintenanceUrl` is the location's own address, `/<slug>/` (`/`
+with no slug), with the page's query string: while the location is paused the edge serves the
+maintenance page there, since `pause_location` puts it in place of `<slug>/index.html`, and once it
+is resumed the same address serves the portal again. Never `maintenance.html` by name, which no
+location has a copy of. `index.html` is stored `max-age=0, must-revalidate`, so the redirect fetches
+whichever of the two is there, not the portal from the browser's cache.
 
 `get`, `post`, `postJson` and `putJson` wrap `fetchApi`.
 

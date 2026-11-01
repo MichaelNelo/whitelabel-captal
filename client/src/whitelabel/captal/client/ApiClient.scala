@@ -22,9 +22,13 @@ object ApiClient:
 
   private val apiBase: String = firstSegment.fold("/api")(slug => s"/$slug/api")
 
-  /** Served from the same prefix as the page itself, beside `index.html`. */
-  private val maintenanceUrl: String =
-    firstSegment.fold("/maintenance.html")(slug => s"/$slug/maintenance.html")
+  /** Where a paused location's guest is sent: the location's own address, which the edge serves as
+    * the maintenance page while it is paused (`pause_location` puts that page in place of its
+    * `index.html`) and as the portal again once it is resumed. Not `maintenance.html` by name: no
+    * location has its own. The query string goes along, the access point's parameters with it.
+    */
+  private def maintenanceUrl: String =
+    firstSegment.fold("/")(slug => s"/$slug/") + dom.window.location.search
 
   /** `status` value the load balancer answers on this location's API path while the portal is
     * paused. Must match what `pause_location` installs, in `InfraStore.PausedBody`.
