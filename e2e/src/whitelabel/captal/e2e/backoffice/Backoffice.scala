@@ -1,7 +1,8 @@
-package whitelabel.captal.e2e
+package whitelabel.captal.e2e.backoffice
 
 import com.jamesward.ziohttp.mcp.client.{McpClient, McpClientConfig, McpClientExtensions}
 import com.jamesward.ziohttp.mcp.{CallToolResult, McpApps, McpAppsClientSettings, ResourceContents}
+import whitelabel.captal.e2e.scenario.Run
 import whitelabel.captal.mcp.tools.DeployTools
 import zio.*
 import zio.http.{Client, Header, Headers}

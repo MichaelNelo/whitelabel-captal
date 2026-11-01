@@ -1,7 +1,10 @@
-package whitelabel.captal.e2e
+package whitelabel.captal.e2e.steps
 
 import com.microsoft.playwright.{Locator, PlaywrightException}
 import io.cucumber.scala.{EN, ScalaDsl}
+import whitelabel.captal.e2e.backoffice.{Locations, Operator}
+import whitelabel.captal.e2e.guest.Portal
+import whitelabel.captal.e2e.scenario.World
 import whitelabel.captal.mcp.tools.DeployTools
 
 /** Pausing, resuming and destroying a location with the backoffice's tools, and what a guest sees

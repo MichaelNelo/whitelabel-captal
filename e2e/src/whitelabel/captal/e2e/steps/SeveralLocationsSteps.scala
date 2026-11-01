@@ -1,7 +1,11 @@
-package whitelabel.captal.e2e
+package whitelabel.captal.e2e.steps
 
 import com.microsoft.playwright.Page
 import io.cucumber.scala.{EN, ScalaDsl}
+import whitelabel.captal.e2e.backoffice.{Backoffice, Locations}
+import whitelabel.captal.e2e.guest.Portal
+import whitelabel.captal.e2e.scenario.World
+import whitelabel.captal.e2e.venue.Venue
 import whitelabel.captal.mcp.tools.{AssetTools, I18nTools}
 
 /** Two locations of one deployment, north and south, each with its own brand, texts and video, and

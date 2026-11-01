@@ -1,5 +1,6 @@
-package whitelabel.captal.e2e
+package whitelabel.captal.e2e.venue
 
+import whitelabel.captal.e2e.scenario.Run
 import zio.json.ast.Json
 
 /** The venue's network, as the local configuration's stand-in for a UniFi controller sees it: what

@@ -1,7 +1,8 @@
-package whitelabel.captal.e2e
+package whitelabel.captal.e2e.steps
 
 import com.microsoft.playwright.Page
 import io.cucumber.scala.{EN, ScalaDsl}
+import whitelabel.captal.e2e.scenario.World
 
 /** The way out of an error, as the guest's page shows it: the error page and its countdown, the
   * shortening when other guests run into the same error, reloading the page, and the code staff

@@ -1,8 +1,11 @@
-package whitelabel.captal.e2e
+package whitelabel.captal.e2e.steps
 
 import com.microsoft.playwright.Page
 import com.microsoft.playwright.options.AriaRole
 import io.cucumber.scala.{EN, ScalaDsl}
+import whitelabel.captal.e2e.backoffice.{Backoffice, Locations}
+import whitelabel.captal.e2e.guest.Portal
+import whitelabel.captal.e2e.scenario.World
 import whitelabel.captal.mcp.tools.{AssetTools, I18nTools}
 
 /** An operator builds a location through the backoffice (its stylesheet, its icon, its texts in

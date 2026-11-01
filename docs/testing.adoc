@@ -272,7 +272,11 @@ tolerated, so widening the tolerated set is a deliberate edit, not a side effect
 
 `e2e/features/*.feature` describe what an operator and guests do, in Gherkin, in English;
 `e2e/src/whitelabel/captal/e2e/` holds the steps, written with `cucumber-scala` (`ScalaDsl with
-EN`). Nothing runs in-process: the features run against this build released into LocalStack.
+EN`), in one package per kind of file: `steps` (the step classes), `scenario` (`Run`, `World` and
+its hooks), `backoffice` (`Backoffice`, `Operator`, `Locations`), `guest` (`Portal`), `venue`
+(`Venue`) and `infrastructure` (`Stack`). Cucumber finds them all from the glue package
+`whitelabel.captal.e2e`. Nothing runs in-process: the features run against this build released
+into LocalStack.
 
 [source,bash]
 ----

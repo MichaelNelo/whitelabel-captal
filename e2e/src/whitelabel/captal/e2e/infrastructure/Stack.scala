@@ -1,4 +1,6 @@
-package whitelabel.captal.e2e
+package whitelabel.captal.e2e.infrastructure
+
+import whitelabel.captal.e2e.scenario.Run
 
 /** The stack the features run against, as an operator of the infrastructure reaches it: the AWS
   * CLI, against LocalStack. For what no tool of the backoffice does, such as restarting a service.

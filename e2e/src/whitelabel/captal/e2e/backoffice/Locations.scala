@@ -1,9 +1,12 @@
-package whitelabel.captal.e2e
+package whitelabel.captal.e2e.backoffice
 
 import scala.collection.concurrent.TrieMap
 
 import com.microsoft.playwright.Locator
 import whitelabel.captal.core.i18n.{I18n, I18nSchema}
+import whitelabel.captal.e2e.guest.Portal
+import whitelabel.captal.e2e.scenario.Run
+import whitelabel.captal.e2e.venue.Venue
 import whitelabel.captal.mcp.tools.{
   AdvertiserTools,
   AnswerFormat,

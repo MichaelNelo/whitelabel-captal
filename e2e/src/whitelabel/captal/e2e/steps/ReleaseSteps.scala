@@ -1,7 +1,11 @@
-package whitelabel.captal.e2e
+package whitelabel.captal.e2e.steps
 
 import com.microsoft.playwright.Page
 import io.cucumber.scala.{EN, ScalaDsl}
+import whitelabel.captal.e2e.backoffice.Locations
+import whitelabel.captal.e2e.guest.Portal
+import whitelabel.captal.e2e.infrastructure.Stack
+import whitelabel.captal.e2e.scenario.{Run, World}
 import zio.json.ast.Json
 
 import scala.jdk.CollectionConverters.*

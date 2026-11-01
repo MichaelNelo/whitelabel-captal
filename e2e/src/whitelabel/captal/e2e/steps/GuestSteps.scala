@@ -1,8 +1,11 @@
-package whitelabel.captal.e2e
+package whitelabel.captal.e2e.steps
 
 import com.microsoft.playwright.options.AriaRole
 import com.microsoft.playwright.{Locator, Page}
 import io.cucumber.scala.{EN, ScalaDsl}
+import whitelabel.captal.e2e.backoffice.Locations
+import whitelabel.captal.e2e.scenario.World
+import whitelabel.captal.e2e.venue.Venue
 
 /** What a guest does on the portal, and the locations they do it at, in the words of the features.
   * What they act on is in [[World]], so every step class shares it.

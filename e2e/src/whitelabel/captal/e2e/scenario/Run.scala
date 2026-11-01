@@ -1,4 +1,4 @@
-package whitelabel.captal.e2e
+package whitelabel.captal.e2e.scenario
 
 import zio.*
 

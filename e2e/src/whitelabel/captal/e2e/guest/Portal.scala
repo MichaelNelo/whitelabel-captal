@@ -1,8 +1,10 @@
-package whitelabel.captal.e2e
+package whitelabel.captal.e2e.guest
 
 import scala.jdk.CollectionConverters.*
 
 import com.microsoft.playwright.*
+import whitelabel.captal.e2e.backoffice.Locations
+import whitelabel.captal.e2e.scenario.World
 import zio.json.ast.Json
 
 /** The portal as guests reach it: through the distribution, in a browser. One browser for the run;
@@ -109,7 +111,7 @@ object Portal:
     Guest(name, mac, clickId, location, context, page)
 
   /** The operator's browser, at a desk rather than on a phone: where the backoffice's pages are
-    * shown ([[Operator]]).
+    * shown ([[whitelabel.captal.e2e.backoffice.Operator]]).
     */
   private[e2e] def desk(): BrowserContext =
     val options = Browser.NewContextOptions().setIgnoreHTTPSErrors(true).setViewportSize(760, 900)

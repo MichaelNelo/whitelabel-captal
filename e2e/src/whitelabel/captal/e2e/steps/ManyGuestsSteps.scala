@@ -1,8 +1,12 @@
-package whitelabel.captal.e2e
+package whitelabel.captal.e2e.steps
 
 import com.microsoft.playwright.options.{AriaRole, WaitForSelectorState}
 import com.microsoft.playwright.{Locator, Page}
 import io.cucumber.scala.{EN, ScalaDsl}
+import whitelabel.captal.e2e.backoffice.{Backoffice, Locations}
+import whitelabel.captal.e2e.guest.Portal
+import whitelabel.captal.e2e.scenario.World
+import whitelabel.captal.e2e.venue.Venue
 import whitelabel.captal.mcp.tools.VideoTools
 
 /** Groups of guests at one location, all at once: the crowd of five, each on a phone of its own,

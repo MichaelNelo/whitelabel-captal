@@ -1,4 +1,4 @@
-package whitelabel.captal.e2e
+package whitelabel.captal.e2e.backoffice
 
 import java.nio.file.Path
 
@@ -8,6 +8,7 @@ import scala.util.control.NonFatal
 import com.jamesward.ziohttp.mcp.{CallToolResult, ResourceContents}
 import com.microsoft.playwright.options.FunctionCallback
 import com.microsoft.playwright.{FrameLocator, Locator, Page, TimeoutError}
+import whitelabel.captal.e2e.scenario.{Run, World}
 import whitelabel.captal.mcp.tools.{DeployTools, VideoTools}
 import zio.Chunk
 import zio.json.*

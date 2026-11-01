@@ -1,4 +1,4 @@
-package whitelabel.captal.e2e
+package whitelabel.captal.e2e.scenario
 
 import java.nio.file.{Files, Path}
 
@@ -6,6 +6,8 @@ import scala.collection.mutable
 
 import com.microsoft.playwright.{BrowserContext, Page}
 import io.cucumber.scala.{EN, PendingException, ScalaDsl, Scenario}
+import whitelabel.captal.e2e.backoffice.Locations
+import whitelabel.captal.e2e.guest.Portal
 
 /** What the scenario running now has made, by the names its steps give them: the locations it uses,
   * its guests, and the operator's browser. Every step class reads and writes it, which is how a
@@ -79,8 +81,8 @@ object World:
   private var scenarioRecording = Option.empty[Path]
 
   /** How long a view stays on screen before the next one, for a recording a person can follow
-    * (`E2E_LINGER_SECONDS`): after every step, and on the operator's pages ([[Operator]]). None by
-    * default.
+    * (`E2E_LINGER_SECONDS`): after every step, and on the operator's pages
+    * ([[whitelabel.captal.e2e.backoffice.Operator]]). None by default.
     */
   private[e2e] val linger: Option[Double] = sys
     .env

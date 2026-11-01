@@ -1,7 +1,10 @@
-package whitelabel.captal.e2e
+package whitelabel.captal.e2e.steps
 
 import com.microsoft.playwright.Page
 import io.cucumber.scala.{EN, ScalaDsl}
+import whitelabel.captal.e2e.backoffice.{Backoffice, Locations}
+import whitelabel.captal.e2e.scenario.World
+import whitelabel.captal.e2e.venue.Venue
 import whitelabel.captal.mcp.tools.UnifiTools
 
 /** Access as the venue's controller sees it: how long a phone is let in, when it is taken out again
