@@ -46,9 +46,10 @@ trait SessionService:
   /** Mark the session as authorized (Phase.Authorized) until the given instant. */
   def setAuthorized(sessionId: user.SessionId, expiresAt: java.time.Instant): Task[Unit]
 
-  /** Reset a session whose access has expired: phase back to Welcome, clear all transient fields
-    * (userId, current survey/question/video/advertiser, access_expires_at). The session row itself
-    * is kept so the cookie continues to resolve.
+  /** Reset a session whose access has expired: phase back to Welcome, clear the fields of the visit
+    * that ended (current survey/question/video/advertiser, access_expires_at). The session row is
+    * kept so the cookie continues to resolve, and so is its user: the phone's next visit is that
+    * guest's, asked only what they have not answered.
     */
   def resetForExpiration(sessionId: user.SessionId): Task[Unit]
 
@@ -123,13 +124,11 @@ object SessionService:
       .filter(_.id == sessionIdParam)
       .update(
         _.phase               -> phaseParam,
-        _.userId              -> None,
         _.currentSurveyId     -> None,
         _.currentQuestionId   -> None,
         _.currentVideoId      -> None,
         _.currentAdvertiserId -> None,
-        _.accessExpiresAt     -> None
-      )
+        _.accessExpiresAt     -> None)
 
   /** @param devices
     *   which fingerprint fields make two sessions the same device.

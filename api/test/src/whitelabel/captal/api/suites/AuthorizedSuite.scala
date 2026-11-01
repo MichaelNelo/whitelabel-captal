@@ -39,12 +39,14 @@ object AuthorizedSuite:
               secondsRemaining.exists(s => s > 0 && s <= 3600)
             )
         ,
-        test("Status resets session to Welcome when the access expiry is in the past"):
+        test("Status resets session to Welcome when the access expiry is in the past, keeping its user"):
           for
             backend <- testBackend
             cookie  <- createSession(backend)
             sessionId = user.SessionId.unsafe(cookie)
-            now <- Clock.instant
+            guest <- TestFixtures.createUser("returning@example.com")
+            _     <- TestFixtures.linkSessionToUser(sessionId, guest.userId)
+            now   <- Clock.instant
             pastExpiry = now.minusSeconds(60)
             _          <- TestFixtures.setSessionAuthorized(sessionId, pastExpiry)
             statusResp <- getStatus(backend, Some(cookie))
@@ -64,7 +66,8 @@ object AuthorizedSuite:
               secondsRemaining.isNull,
               sessionAfter.exists(_.phase == Phase.Welcome),
               sessionAfter.exists(_.accessExpiresAt.isEmpty),
-              sessionAfter.exists(_.userId.isEmpty)
+              // the phone's next visit is still this guest's
+              sessionAfter.exists(_.userId.contains(guest.userId))
             )
         ,
         test("Finish leaves session in Ready when UniFi authorization fails"):
@@ -206,7 +209,9 @@ object AuthorizedSuite:
               expired,
               after.exists(_.phase == Phase.Welcome),
               after.exists(_.accessExpiresAt.isEmpty),
-              after.exists(_.userId.isEmpty),
+              // and kept the guest the email identified, for the phone's next visit
+              authorized.exists(_.userId.isDefined),
+              after.exists(_.userId == authorized.flatMap(_.userId)),
               // it was revoked on the UCG, after having been authorized
               calls.exists(_.isInstanceOf[TestUnifiClient.Call.Authorize]),
               calls.exists(_.isInstanceOf[TestUnifiClient.Call.Revoke]),

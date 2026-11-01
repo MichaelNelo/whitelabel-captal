@@ -13,12 +13,12 @@ import zio.*
   *
   * On [[whitelabel.captal.core.access.Event.AccessExpired]] it runs the same
   * `resetForExpirationQuery` as the `/api/status` safety net: a single UPDATE setting `phase =
-  * Welcome` and clearing `userId`, `currentSurveyId`, `currentQuestionId`, `currentVideoId`,
+  * Welcome` and clearing `currentSurveyId`, `currentQuestionId`, `currentVideoId`,
   * `currentAdvertiserId` and `accessExpiresAt`. `SessionPhaseHandler` therefore needs no case for
   * this event.
   *
-  * The `users` row and the `captal_user` cookie survive, so the next visit skips the questions
-  * already answered.
+  * The session keeps its `userId`, and the `users` row and the `captal_user` cookie survive, so the
+  * next visit skips the questions already answered.
   */
 object SessionExpirationHandler:
   def apply(ctx: SessionContext): DbEventHandler[Event] =

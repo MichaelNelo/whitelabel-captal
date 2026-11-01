@@ -252,7 +252,7 @@ All nine run inside one transaction, in this order. All live in `platform/src/wh
 
 | `SessionExpirationHandler`
 | `AccessExpired`
-| one UPDATE — the same `SessionService.resetForExpirationQuery` the `/api/status` safety net runs — setting `phase = Welcome` and clearing `userId`, `currentSurveyId`, `currentQuestionId`, `currentVideoId`, `currentAdvertiserId` and `accessExpiresAt`. The `users` row and the cross-location `captal_user` cookie survive.
+| one UPDATE — the same `SessionService.resetForExpirationQuery` the `/api/status` safety net runs — setting `phase = Welcome` and clearing `currentSurveyId`, `currentQuestionId`, `currentVideoId`, `currentAdvertiserId` and `accessExpiresAt`. The session keeps its `userId`, and the `users` row and the cross-location `captal_user` cookie survive.
 
 | `SurveyProgressHandler`
 | any `QuestionAnswered`

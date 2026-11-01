@@ -647,9 +647,10 @@ client changes language with `PUT /api/session/locale`.
 === Expired access on status
 
 When a resolved session is at `Phase.Authorized` with an `accessExpiresAt` already in the past,
-`/api/status` calls `SessionService.resetForExpiration` (phase back to `Welcome`, transient fields
-and `userId` cleared, row and cookie kept) and answers `StatusResponse(Welcome, locale, None)`. The
-user record and the `captal_user` cookie survive, so the next visit still skips the email question.
+`/api/status` calls `SessionService.resetForExpiration` (phase back to `Welcome`, the visit's
+fields cleared, row, cookie and `userId` kept) and answers `StatusResponse(Welcome, locale, None)`.
+The session's user, the user record and the `captal_user` cookie survive, so the next visit skips
+what the guest already answered, the email first.
 Otherwise it answers the live phase plus
 `StatusResponse.secondsRemainingFrom(session.accessExpiresAt, now)` — a server-computed countdown,
 because a device behind a captive portal may have an unsynced clock.

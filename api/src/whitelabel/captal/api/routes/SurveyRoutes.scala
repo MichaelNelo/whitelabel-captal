@@ -255,9 +255,9 @@ final class SurveyRoutes(
           session.phase == Phase.Authorized && session.accessExpiresAt.exists(_.isBefore(now))
         response <-
           if isExpired then
-            // Reset the session: phase → Welcome, clear userId and current* fields. The user
-            // record and the cross-location `captal_user` cookie stay so the next visit skips
-            // email.
+            // Reset the session: phase → Welcome, clear the current* fields. It keeps its user,
+            // and the cross-location `captal_user` cookie stays, so the next visit skips what was
+            // already answered.
             ZIO
               .serviceWithZIO[SessionService](_.resetForExpiration(session.sessionId))
               .mapError(ApiError.fromThrowable)

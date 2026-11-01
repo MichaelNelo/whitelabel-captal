@@ -303,7 +303,7 @@ directly rather than going through the service.
 | `setPhase`, `setLocale` | one column
 | `setCurrentQuestion` / `clearCurrentQuestion` | `current_survey_id` + `current_question_id`
 | `setAuthorized` | `phase = authorized` and `access_expires_at`
-| `resetForExpiration` | `phase = welcome` and clears `user_id`, `current_survey_id`, `current_question_id`, `current_video_id`, `current_advertiser_id`, `access_expires_at` in one statement; the row itself is kept so the cookie still resolves
+| `resetForExpiration` | `phase = welcome` and clears `current_survey_id`, `current_question_id`, `current_video_id`, `current_advertiser_id`, `access_expires_at` in one statement; the row is kept so the cookie still resolves, and so is its `user_id`, so the phone's next visit is the same guest's
 | `findPendingExpirations()` | the `(session_id, access_expires_at)` pairs for this location's authorized sessions that still have a deadline
 |===
 
