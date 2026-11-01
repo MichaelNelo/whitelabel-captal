@@ -38,6 +38,9 @@ object Operator:
     /** Whether `done` came to hold within `seconds`. The page goes on talking to its host while
       * this waits: Playwright dispatches its calls only while a call into it is blocked.
       */
+    /** Leaves the page as it is on screen for a while ([[World.linger]]), still answering it. */
+    def linger(): Unit = World.linger.foreach(page.waitForTimeout(_))
+
     def awaitUntil(seconds: Int)(done: => Boolean): Boolean =
       try
         page.waitForCondition(
@@ -146,6 +149,7 @@ object Operator:
   def upload[A: Schema, B: Schema](tool: String, in: A): (B, VideoTools.ConfirmUploadResponse) =
     val (response, opened) = open[A, B](tool, in)
     opened.app.locator("#row.row").waitFor(Locator.WaitForOptions().setTimeout(60_000))
+    opened.linger()
     opened.app.locator("#file").setInputFiles(Path.of(Run.setting("E2E_SPOT")))
     def confirmation = opened
       .toolCalls
@@ -160,6 +164,7 @@ object Operator:
             .textContent()}")
     val confirmed = confirmation.getOrElse(
       throw AssertionError(s"The upload page of $tool said: ${opened.toldTheModel.mkString(" ")}"))
+    opened.linger()
     (
       response,
       Backoffice.decode[VideoTools.ConfirmUploadResponse]("confirm_video_upload", confirmed))
@@ -176,6 +181,7 @@ object Operator:
             .app
             .locator("#status")
             .textContent()}")
+    opened.linger()
     Backoffice.awaitRun(started)
 
   private def encode(result: CallToolResult): Json = summon[JsonCodec[CallToolResult]]

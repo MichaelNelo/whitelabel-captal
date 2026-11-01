@@ -78,6 +78,17 @@ object World:
   private val recordings = sys.env.get("E2E_RECORDINGS").filter(_.nonEmpty).map(Path.of(_))
   private var scenarioRecording = Option.empty[Path]
 
+  /** How long a view stays on screen before the next one, for a recording a person can follow
+    * (`E2E_LINGER_SECONDS`): after every step, and on the operator's pages ([[Operator]]). None by
+    * default.
+    */
+  private[e2e] val linger: Option[Double] = sys
+    .env
+    .get("E2E_LINGER_SECONDS")
+    .flatMap(_.toDoubleOption)
+    .filter(_ > 0)
+    .map(_ * 1000)
+
   private[e2e] def begin(scenario: Scenario): Unit =
     reset()
     val feature = Path.of(scenario.getUri.getPath).getFileName.toString.stripSuffix(".feature")
@@ -109,6 +120,11 @@ end World
 final class WorldHooks extends ScalaDsl with EN:
   Before { (scenario: Scenario) =>
     World.begin(scenario)
+  }
+
+  // What the step left on screen stays there a while before the next step changes it.
+  AfterStep { (_: Scenario) =>
+    World.linger.foreach(millis => Thread.sleep(millis.toLong))
   }
 
   After { (scenario: Scenario) =>

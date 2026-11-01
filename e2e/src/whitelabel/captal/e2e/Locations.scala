@@ -170,16 +170,19 @@ object Locations:
       UnifiTools.ConfigureRequest(slug))
     val form = opened.app
     form.locator("#form.ready").waitFor(Locator.WaitForOptions().setTimeout(60_000))
+    opened.linger()
     form.locator("#host").fill(host)
     form.locator("#port").fill(port)
     form.locator("#siteId").fill(Venue.Site)
     form.locator("#apiToken").fill(Venue.ApiKey)
     form.locator("#durationMinutes").fill(accessMinutes.toString)
+    opened.linger()
     form.locator("#save").click()
     // Saved, the page tells the model so; refused, it says why on the page and nothing else.
     if !opened.awaitUntil(60)(opened.toldTheModel.nonEmpty) then
       throw AssertionError(
         s"The UniFi page of $slug saved nothing: ${form.locator("#status").textContent()}")
+    opened.linger()
     Backoffice.tool[UnifiTools.SetEnabledRequest, UnifiTools.StatusResponse](
       "set_unifi_enabled",
       UnifiTools.SetEnabledRequest(slug, enabled = true))
