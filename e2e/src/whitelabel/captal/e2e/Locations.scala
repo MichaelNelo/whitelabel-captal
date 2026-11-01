@@ -2,6 +2,7 @@ package whitelabel.captal.e2e
 
 import scala.collection.concurrent.TrieMap
 
+import com.microsoft.playwright.Locator
 import whitelabel.captal.core.i18n.{I18n, I18nSchema}
 import whitelabel.captal.mcp.tools.{
   AdvertiserTools,
@@ -83,7 +84,7 @@ object Locations:
     )
 
   /** An advertiser of its own with one video, the spot, and the survey asked after it: one required
-    * free-text question. Answers the video's id.
+    * free-text question. The spot goes up through the page the tool opens. Answers the video's id.
     */
   def addAdvertiserVideo(
       location: Deployed,
@@ -95,7 +96,7 @@ object Locations:
           "create_advertiser",
           AdvertiserTools.CreateRequest(s"E2E advertiser ${location.slug} $title", 10))
         .id
-    val video = Backoffice.tool[VideoTools.CreateVideoRequest, VideoTools.CreateVideoResponse](
+    val (video, _) = Operator.upload[VideoTools.CreateVideoRequest, VideoTools.CreateVideoResponse](
       "create_advertiser_video",
       VideoTools.CreateVideoRequest(
         slug = location.slug,
@@ -113,67 +114,72 @@ object Locations:
         productCampaignId = None
       )
     )
-    upload(video.uploadUrl)
-    Backoffice.tool[VideoTools.ConfirmUploadRequest, VideoTools.ConfirmUploadResponse](
-      "confirm_video_upload",
-      VideoTools.ConfirmUploadRequest(video.videoId, 6))
     video.videoId
   end addAdvertiserVideo
 
-  /** Deploys it, follows the run to the end, and waits for its portal to answer. */
+  /** A promo of the venue's own, the spot, at `priority` in its rotation, with the survey asked
+    * after it when there is a `question`. Up through the page the tool opens. Answers its id.
+    */
+  def addPromo(
+      location: Deployed,
+      title: String,
+      priority: Int,
+      question: Option[String] = None): String =
+    val (promo, _) = Operator.upload[VideoTools.CreatePromoRequest, VideoTools.CreatePromoResponse](
+      "create_promo_video",
+      VideoTools.CreatePromoRequest(
+        slug = location.slug,
+        title = texts(title),
+        description = None,
+        minWatchSeconds = None,
+        priority = Some(priority),
+        noRepeatSeconds = None,
+        questions = question.map(text =>
+          List(
+            VideoTools.VideoQuestion(
+              text = texts(text),
+              answer = AnswerFormat.Input(None),
+              required = Some(true),
+              points = Some(1))))
+      )
+    )
+    promo.videoId
+  end addPromo
+
+  /** Deploys it, watching the run on the page the tool opens, and waits for its portal to answer.
+    */
   def deploy(location: Deployed): Deployed =
-    Backoffice.awaitRun(
-      Backoffice.tool[DeployTools.DeployRequest, DeployTools.RunView](
-        "deploy_location",
-        DeployTools.DeployRequest(location.slug)))
+    Operator.run("deploy_location", DeployTools.DeployRequest(location.slug))
     Portal.awaitServing(location)
     location
 
   def texts(value: String): List[LocalizedText] = Locales.map(LocalizedText(_, value))
 
-  /** What the page `configure_unifi` opens does: posts the controller's settings with the ticket
-    * the tool handed it. Then the calls are turned on, which a new location has by default anyway.
-    * The controller is the stand-in unless `host` and `port` name another, such as one that is not
-    * there.
+  /** The controller's settings, entered on the page `configure_unifi` opens and saved by it. Then
+    * the calls are turned on, which a new location has by default anyway. The controller is the
+    * stand-in unless `host` and `port` name another, such as one that is not there. Read by a
+    * location's API when its task starts: settings entered after a deploy wait for the next one.
     */
   def configureUnifi(
       slug: String,
       accessMinutes: Int,
       host: String = Run.setting("E2E_UNIFI_HOST"),
       port: String = Run.setting("E2E_UNIFI_PORT")): Unit =
-    val page = Backoffice.tool[UnifiTools.ConfigureRequest, UnifiTools.ConfigureResponse](
+    val (_, opened) = Operator.open[UnifiTools.ConfigureRequest, UnifiTools.ConfigureResponse](
       "configure_unifi",
       UnifiTools.ConfigureRequest(slug))
-    val form = Map(
-      "ticket"          -> page.ticket,
-      "host"            -> host,
-      "port"            -> port,
-      "siteId"          -> Venue.Site,
-      "apiToken"        -> Venue.ApiKey,
-      "durationMinutes" -> accessMinutes.toString)
-    val body = form
-      .map((name, value) =>
-        s"$name=${java.net.URLEncoder.encode(value, java.nio.charset.StandardCharsets.UTF_8)}")
-      .mkString("&")
-    val response = java
-      .net
-      .http
-      .HttpClient
-      .newHttpClient()
-      .send(
-        java
-          .net
-          .http
-          .HttpRequest
-          .newBuilder(java.net.URI(page.postUrl))
-          .header("Content-Type", "application/x-www-form-urlencoded")
-          .POST(java.net.http.HttpRequest.BodyPublishers.ofString(body))
-          .build(),
-        java.net.http.HttpResponse.BodyHandlers.ofString()
-      )
-    if response.statusCode != 200 then
+    val form = opened.app
+    form.locator("#form.ready").waitFor(Locator.WaitForOptions().setTimeout(60_000))
+    form.locator("#host").fill(host)
+    form.locator("#port").fill(port)
+    form.locator("#siteId").fill(Venue.Site)
+    form.locator("#apiToken").fill(Venue.ApiKey)
+    form.locator("#durationMinutes").fill(accessMinutes.toString)
+    form.locator("#save").click()
+    // Saved, the page tells the model so; refused, it says why on the page and nothing else.
+    if !opened.awaitUntil(60)(opened.toldTheModel.nonEmpty) then
       throw AssertionError(
-        s"The UniFi page's post for $slug answered ${response.statusCode}: ${response.body}")
+        s"The UniFi page of $slug saved nothing: ${form.locator("#status").textContent()}")
     Backoffice.tool[UnifiTools.SetEnabledRequest, UnifiTools.StatusResponse](
       "set_unifi_enabled",
       UnifiTools.SetEnabledRequest(slug, enabled = true))
@@ -216,21 +222,4 @@ object Locations:
         )
   end ensureIdentification
 
-  /** What the upload page does with the URL a tool hands it: the spot, with its own type. */
-  def upload(url: String): Unit =
-    val connection = java
-      .net
-      .URI(url)
-      .toURL
-      .openConnection()
-      .asInstanceOf[java.net.HttpURLConnection]
-    connection.setRequestMethod("PUT")
-    connection.setDoOutput(true)
-    connection.setRequestProperty("Content-Type", "video/webm")
-    val out = connection.getOutputStream
-    try out.write(java.nio.file.Files.readAllBytes(java.nio.file.Path.of(Run.setting("E2E_SPOT"))))
-    finally out.close()
-    val status = connection.getResponseCode
-    if status / 100 != 2 then
-      throw AssertionError(s"Uploading the spot to $url answered $status")
 end Locations

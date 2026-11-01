@@ -22,11 +22,11 @@ final class PauseResumeSteps extends ScalaDsl with EN:
       Locations.deploy(location)
     }
 
-  /** `pause_location` or `resume_location` for `slug`, followed to the end of its run. */
-  private def operate(tool: String, slug: String): DeployTools.RunView = Backoffice.awaitRun(
-    Backoffice.tool[DeployTools.PauseRequest, DeployTools.RunView](
-      tool,
-      DeployTools.PauseRequest(slug)))
+  /** `pause_location` or `resume_location` for `slug`, watched to the end of its run on its page.
+    */
+  private def operate(tool: String, slug: String): DeployTools.RunView = Operator.run(
+    tool,
+    DeployTools.PauseRequest(slug))
 
   Given("""a location {string} of its own, deployed with an advertiser video""") { (name: String) =>
     World.use(name, own(name))
@@ -47,10 +47,9 @@ final class PauseResumeSteps extends ScalaDsl with EN:
 
   When("""the operator destroys {string}""") { (name: String) =>
     val slug = World.location(name).slug
-    val finished = Backoffice.awaitRun(
-      Backoffice.tool[DeployTools.DestroyRequest, DeployTools.RunView](
-        "destroy_location",
-        DeployTools.DestroyRequest(slug = slug, confirm = slug)))
+    val finished = Operator.run(
+      "destroy_location",
+      DeployTools.DestroyRequest(slug = slug, confirm = slug))
     if finished.destroyed.isEmpty then
       throw AssertionError(s"The destroy of $name ended without a destroy result")
   }

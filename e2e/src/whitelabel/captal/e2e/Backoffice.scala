@@ -1,7 +1,7 @@
 package whitelabel.captal.e2e
 
 import com.jamesward.ziohttp.mcp.client.{McpClient, McpClientConfig, McpClientExtensions}
-import com.jamesward.ziohttp.mcp.{McpApps, McpAppsClientSettings}
+import com.jamesward.ziohttp.mcp.{CallToolResult, McpApps, McpAppsClientSettings, ResourceContents}
 import whitelabel.captal.mcp.tools.DeployTools
 import zio.*
 import zio.http.{Client, Header, Headers}
@@ -32,7 +32,7 @@ object Backoffice:
     yield connected
 
   /** The arguments as JSON, from the tool's own request type. */
-  private def args[A](value: A)(using schema: Schema[A]): Json.Obj = Json
+  private[e2e] def args[A](value: A)(using schema: Schema[A]): Json.Obj = Json
     .decoder
     .decodeJson(JsonCodec.jsonEncoder(schema).encodeJson(value, None))
     .toOption
@@ -42,6 +42,35 @@ object Backoffice:
   /** One call, failing with the tool's own words and its name. */
   def tool[A: Schema, B: Schema](name: String, in: A): B = Run:
     client.callToolAs[B](name, args(in)).mapError(error => AssertionError(s"$name: $error"))
+
+  /** One call as a host receives it: the whole result, an error result included, which is what a
+    * page the tool declares is told.
+    */
+  def call(name: String, arguments: Json.Obj): CallToolResult = Run:
+    client.callTool(name, arguments).mapError(error => AssertionError(s"$name: $error"))
+
+  /** A result's structured content as the tool's response type. */
+  def decode[B](name: String, result: CallToolResult)(using schema: Schema[B]): B = result
+    .structuredContent
+    .flatMap(json => JsonCodec.jsonDecoder(schema).decodeJson(json.toString).toOption)
+    .getOrElse(throw AssertionError(s"$name answered nothing readable: ${result.content}"))
+
+  def read(uri: String): List[ResourceContents] = Run:
+    client.readResource(uri).map(_.toList).mapError(error => AssertionError(s"$uri: $error"))
+
+  /** The page each tool declares, its `_meta.ui.resourceUri`, as the server lists its tools. */
+  lazy val pages: Map[String, String] =
+    val tools = Run(client.listTools.mapError(error => AssertionError(s"tools/list: $error")))
+    tools
+      .flatMap: tool =>
+        tool
+          .meta
+          .flatMap(_.get("ui"))
+          .flatMap(_.asObject)
+          .flatMap(_.get("resourceUri"))
+          .flatMap(_.asString)
+          .map(tool.name.value -> _)
+      .toMap
 
   /** Follows a run through `get_deploy_status` until it is no longer running, as a model would, and
     * fails unless it succeeded.

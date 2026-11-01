@@ -2,7 +2,7 @@ package whitelabel.captal.e2e
 
 import com.microsoft.playwright.Page
 import io.cucumber.scala.{EN, ScalaDsl}
-import whitelabel.captal.mcp.tools.{AssetTools, I18nTools, VideoTools}
+import whitelabel.captal.mcp.tools.{AssetTools, I18nTools}
 
 /** Two locations of one deployment, north and south, each with its own brand, texts and video, and
   * what a guest does across them: a guest's brand and video are the location's own, and a phone
@@ -68,7 +68,7 @@ final class SeveralLocationsSteps extends ScalaDsl with EN:
     val location = Locations.create("north")
     brand(location, Brands("north"))
     Locations.addAdvertiserVideo(location, title = "North spot", question = "Did you like it?")
-    addPromo(location, "North promo", priority = 1)
+    Locations.addPromo(location, "North promo", priority = 1)
     Locations.deploy(location)
 
   /** South: its brand, its promo alone, and an access of 30 minutes, so its grant is told apart
@@ -77,7 +77,7 @@ final class SeveralLocationsSteps extends ScalaDsl with EN:
   private def buildSouth(): Locations.Deployed =
     val location = Locations.create("south", accessMinutes = 30)
     brand(location, Brands("south"))
-    addPromo(location, "South promo", priority = 10)
+    Locations.addPromo(location, "South promo", priority = 10)
     Locations.deploy(location)
 
   /** The stylesheet and icon of `brand`, and its welcome title in each locale. */
@@ -108,26 +108,6 @@ final class SeveralLocationsSteps extends ScalaDsl with EN:
         entries = List(I18nTools.Translation("welcome.title", brand.welcomeEn)))
     )
   end brand
-
-  /** A promo of the venue's own: no advertiser and no questions, uploaded and confirmed, six
-    * seconds long like the spot.
-    */
-  private def addPromo(location: Locations.Deployed, title: String, priority: Int): Unit =
-    val promo = Backoffice.tool[VideoTools.CreatePromoRequest, VideoTools.CreatePromoResponse](
-      "create_promo_video",
-      VideoTools.CreatePromoRequest(
-        slug = location.slug,
-        title = Locations.texts(title),
-        description = None,
-        minWatchSeconds = None,
-        priority = Some(priority),
-        noRepeatSeconds = None,
-        questions = None)
-    )
-    Locations.upload(promo.uploadUrl)
-    val _ = Backoffice.tool[VideoTools.ConfirmUploadRequest, VideoTools.ConfirmUploadResponse](
-      "confirm_video_upload",
-      VideoTools.ConfirmUploadRequest(promo.videoId, 6))
 
   private def textOf(page: Page, selector: String): String =
     val found = page.locator(selector)

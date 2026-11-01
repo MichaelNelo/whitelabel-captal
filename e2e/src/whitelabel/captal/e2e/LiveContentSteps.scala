@@ -15,9 +15,6 @@ import whitelabel.captal.mcp.tools.{AnswerFormat, I18nTools, SurveyTools, VideoT
   */
 final class LiveContentSteps extends ScalaDsl with EN:
 
-  /** The spot's length, as [[Locations.upload]] sends it. */
-  private val SpotSeconds = 6
-
   /** A location of the feature's own, built the first time a scenario names it. */
   private def own(name: String)(content: Locations.Deployed => Any): Locations.Deployed =
     Locations.once(s"live-content-$name") {
@@ -189,15 +186,11 @@ final class LiveContentSteps extends ScalaDsl with EN:
     (title: String, at: String) =>
       val location = World.location(at)
       val videoId = videoIdTitled(location, title)
-      val ticket = Backoffice.tool[VideoTools.ReplaceFileRequest, VideoTools.ResumeUploadResponse](
+      val (_, confirmed) = Operator.upload[
+        VideoTools.ReplaceFileRequest,
+        VideoTools.ResumeUploadResponse](
         "replace_video_file",
-        VideoTools.ReplaceFileRequest(videoId = videoId))
-      Locations.upload(ticket.uploadUrl)
-      val confirmed = Backoffice.tool[
-        VideoTools.ConfirmUploadRequest,
-        VideoTools.ConfirmUploadResponse](
-        "confirm_video_upload",
-        VideoTools.ConfirmUploadRequest(videoId = videoId, durationSeconds = SpotSeconds))
+        VideoTools.ReplaceFileRequest(videoId))
       if !confirmed.replaced then
         throw AssertionError(
           s"The new file of '$title' at ${location.slug} did not replace the old one")

@@ -4,16 +4,31 @@ import java.nio.file.{Files, Path}
 
 import scala.collection.mutable
 
+import com.microsoft.playwright.{BrowserContext, Page}
 import io.cucumber.scala.{EN, PendingException, ScalaDsl, Scenario}
 
-/** What the scenario running now has made, by the names its steps give them: the locations it uses
-  * and its guests. Every step class reads and writes it, which is how a step of one class acts on
-  * what a step of another set up. Scenarios run one at a time, so there is one world, emptied
-  * before each of them.
+/** What the scenario running now has made, by the names its steps give them: the locations it uses,
+  * its guests, and the operator's browser. Every step class reads and writes it, which is how a
+  * step of one class acts on what a step of another set up. Scenarios run one at a time, so there
+  * is one world, emptied before each of them.
   */
 object World:
   private val locations = mutable.LinkedHashMap.empty[String, Locations.Deployed]
   private val guests = mutable.Map.empty[String, Portal.Guest]
+  private var desk = Option.empty[BrowserContext]
+  private val operatorPages = mutable.ListBuffer.empty[(Page, String)]
+
+  /** A new tab of the operator's browser, one per scenario, for the page `tool` opened. Recorded as
+    * `operator-<n>-<tool>.webm`.
+    */
+  private[e2e] def operatorPage(tool: String): Page =
+    val context = desk.getOrElse:
+      val opened = Portal.desk()
+      desk = Some(opened)
+      opened
+    val page = context.newPage()
+    operatorPages += page -> s"operator-${operatorPages.size + 1}-${tool.replace('_', '-')}"
+    page
 
   /** `location` as `name` for the rest of the scenario, and the one its guests go to unless a step
     * names another.
@@ -84,6 +99,9 @@ object World:
   private def reset(): Unit =
     guests.values.foreach(_.close())
     guests.clear()
+    desk.foreach(Portal.close(_, operatorPages.toList))
+    desk = None
+    operatorPages.clear()
     locations.clear()
 end World
 

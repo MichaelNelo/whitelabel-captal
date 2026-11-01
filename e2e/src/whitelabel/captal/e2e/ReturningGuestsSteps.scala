@@ -3,7 +3,7 @@ package whitelabel.captal.e2e
 import com.microsoft.playwright.options.AriaRole
 import com.microsoft.playwright.{Locator, Page}
 import io.cucumber.scala.{EN, ScalaDsl}
-import whitelabel.captal.mcp.tools.{AnswerFormat, SurveyTools, VideoTools}
+import whitelabel.captal.mcp.tools.SurveyTools
 
 /** Identification across visits: what a guest who has been here before is asked, and how a new
   * phone that gives a known email is taken for the guest it belongs to. A location of its own has
@@ -51,44 +51,11 @@ final class ReturningGuestsSteps extends ScalaDsl with EN:
       .flatMap(_.questions.filter(_.active).flatMap(_.text.map(_.value)))
       .toSet
 
-  /** A promo of `location`, at `priority` in its rotation, with the survey asked after it when
-    * `survey` is set. Uploaded and confirmed, so it is in rotation.
-    */
-  private def createPromo(
-      location: Locations.Deployed,
-      title: String,
-      priority: Int,
-      survey: Boolean): Unit =
-    val video = Backoffice.tool[VideoTools.CreatePromoRequest, VideoTools.CreatePromoResponse](
-      "create_promo_video",
-      VideoTools.CreatePromoRequest(
-        slug = location.slug,
-        title = Locations.texts(title),
-        description = None,
-        minWatchSeconds = None,
-        priority = Some(priority),
-        noRepeatSeconds = None,
-        questions =
-          Option.when(survey)(
-            List(
-              VideoTools.VideoQuestion(
-                text = Locations.texts("Did you like it?"),
-                answer = AnswerFormat.Input(None),
-                required = Some(true),
-                points = Some(1))))
-      )
-    )
-    Locations.upload(video.uploadUrl)
-    Backoffice.tool[VideoTools.ConfirmUploadRequest, VideoTools.ConfirmUploadResponse](
-      "confirm_video_upload",
-      VideoTools.ConfirmUploadRequest(video.videoId, 6))
-  end createPromo
-
   /** A location of its own: one minute of access, one promo with its survey. */
   private def promoLocation(name: String): Locations.Deployed =
     Locations.once(s"returning-guests-$name"):
       val location = Locations.create(name, accessMinutes = 1)
-      createPromo(location, "E2E promo", priority = 1, survey = true)
+      Locations.addPromo(location, "E2E promo", priority = 1, question = Some("Did you like it?"))
       Locations.deploy(location)
 
   /** A whole first visit: the welcome page, the email, the video, its survey, and access. */

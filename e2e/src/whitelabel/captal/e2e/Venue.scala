@@ -6,7 +6,10 @@ import zio.json.ast.Json
   * every location of these features is pointed at, and what it was asked to do.
   */
 object Venue:
-  val Site = "default"
+  /** A site's id as the Integration API names it, a UUID: the page warns that the legacy name does
+    * not work with a real controller.
+    */
+  val Site = "88f7af54-98f8-306a-a1c7-c9349722b1f6"
   val ApiKey = "e2e-api-key"
 
   /** How long a guest's access lasts, as the locations are configured unless a feature says. */

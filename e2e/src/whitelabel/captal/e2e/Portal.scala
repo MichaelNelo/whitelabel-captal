@@ -78,19 +78,17 @@ object Portal:
       */
     def close(): Unit =
       val pages = context.pages().asScala.toList
-      context.close()
-      for
-        dir             <- World.recording
-        (opened, index) <- pages.zipWithIndex
-        video           <- Option(opened.video())
-      do
-        val file =
-          if pages.size == 1 then
-            s"$name.webm"
-          else
-            s"$name-${index + 1}.webm"
-        video.saveAs(dir.resolve(file))
-        video.delete()
+      Portal.close(
+        context,
+        pages
+          .zipWithIndex
+          .map((opened, index) =>
+            opened -> (
+              if pages.size == 1 then
+                name
+              else
+                s"$name-${index + 1}"
+            )))
   end Guest
 
   /** `name` on a new phone set to `locale`, sent by the access point to `location`'s portal. */
@@ -103,13 +101,38 @@ object Portal:
       .setIsMobile(true)
       .setHasTouch(true)
       .setLocale(locale)
-    // Written where Playwright likes while the phone is in use, and moved by `close`.
-    World
-      .recording
-      .foreach(dir => options.setRecordVideoDir(dir.resolve(".raw")).setRecordVideoSize(390, 844))
+    recorded(options, 390, 844)
     val context = browser.newContext(options)
     val page = context.newPage()
     val clickId = s"e2e-${java.util.UUID.randomUUID}"
     page.navigate(location.portal(mac, clickId))
     Guest(name, mac, clickId, location, context, page)
+
+  /** The operator's browser, at a desk rather than on a phone: where the backoffice's pages are
+    * shown ([[Operator]]).
+    */
+  private[e2e] def desk(): BrowserContext =
+    val options = Browser.NewContextOptions().setIgnoreHTTPSErrors(true).setViewportSize(760, 900)
+    recorded(options, 760, 900)
+    browser.newContext(options)
+
+  /** Recorded when the scenario is: written where Playwright likes while the context is in use, and
+    * moved by [[close]].
+    */
+  private def recorded(options: Browser.NewContextOptions, width: Int, height: Int): Unit = World
+    .recording
+    .foreach(dir =>
+      options.setRecordVideoDir(dir.resolve(".raw")).setRecordVideoSize(width, height))
+
+  /** Closes `context`; when the scenario is recorded, each page leaves its video as `<name>.webm`.
+    */
+  private[e2e] def close(context: BrowserContext, named: List[(Page, String)]): Unit =
+    context.close()
+    for
+      dir          <- World.recording
+      (page, name) <- named
+      video        <- Option(page.video())
+    do
+      video.saveAs(dir.resolve(s"$name.webm"))
+      video.delete()
 end Portal

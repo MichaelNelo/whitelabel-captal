@@ -41,25 +41,6 @@ final class ManyGuestsSteps extends ScalaDsl with EN:
   private def addressOf(who: Portal.Guest): String =
     s"${who.name}.${who.clickId.stripPrefix("e2e-").take(8)}@example.com"
 
-  /** A promo of `location`, at `priority` in its rotation. Uploaded and confirmed, so in rotation.
-    */
-  private def createPromo(location: Locations.Deployed, title: String, priority: Int): Unit =
-    val video = Backoffice.tool[VideoTools.CreatePromoRequest, VideoTools.CreatePromoResponse](
-      "create_promo_video",
-      VideoTools.CreatePromoRequest(
-        slug = location.slug,
-        title = Locations.texts(title),
-        description = None,
-        minWatchSeconds = None,
-        priority = Some(priority),
-        noRepeatSeconds = None,
-        questions = None)
-    )
-    Locations.upload(video.uploadUrl)
-    Backoffice.tool[VideoTools.ConfirmUploadRequest, VideoTools.ConfirmUploadResponse](
-      "confirm_video_upload",
-      VideoTools.ConfirmUploadRequest(video.videoId, 6))
-
   /** The id of the promo titled `title` at `location`, as the backoffice lists it. */
   private def promoId(location: Locations.Deployed, title: String): String = Backoffice
     .tool[VideoTools.ListVideosRequest, VideoTools.ListVideosResponse](
@@ -77,7 +58,7 @@ final class ManyGuestsSteps extends ScalaDsl with EN:
       List("Alpha", "Bravo", "Charlie")
         .zipWithIndex
         .foreach: (title, index) =>
-          createPromo(location, title, priority = index + 1)
+          Locations.addPromo(location, title, priority = index + 1)
       Locations.deploy(location)
 
   Given("""a deployed location {string} whose venue has three promos, in rotation order""") {

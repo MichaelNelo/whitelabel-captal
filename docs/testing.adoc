@@ -300,7 +300,15 @@ steps call its tools with its own request types; it is not a test module, so `mi
 not run it.
 
 * **The operator** is `Backoffice`: a real MCP client, through the load balancer, with the admin
-token, as `DeployE2ESpec`'s is in-process. Deploys are followed through `get_deploy_status`.
+token, as `DeployE2ESpec`'s is in-process. When a tool that declares an MCP App page returns
+(`configure_unifi`, the video tools, the deploy tools), `Operator` reads the page from the server
+and renders it in the operator's browser, in a frame sandboxed as a host's is, and tells it the
+result. What the page asks of its host — `ui/initialize`, `resources/read`, `tools/call` — is
+answered through the same client, and what it tells the model (`ui/message`) is kept. So the UniFi
+settings are typed into the form and saved by it, the spot is chosen on the upload page, which
+reads its length, uploads it and confirms it, and a deploy is watched on the run page until it says
+the run ended, then checked through `get_deploy_status`. No content security policy is applied: the
+pages' declared CSP is not tested.
 * **Locations** are created through the tools and deployed (`Locations`): one per name a feature
 uses, shared by its scenarios for the run, since a deploy takes minutes; each run creates its own
 under a slug of its own, `e2e-<name>-<4 characters>`, in the local database. The identification
@@ -323,10 +331,11 @@ network was asked for a guest's MAC: the action, its time limit, the API key.
 * **The infrastructure** is `Stack`: the AWS CLI against LocalStack, for what an operator does
 outside the backoffice, such as restarting the relay.
 
-Every guest's screen is recorded: Playwright writes a video of each page a guest's phone opens, and
-when the scenario ends `World` moves them to `out/e2e/cucumber.dest/recordings/<feature>/<line>-<scenario>/`,
-as `<guest>.webm`, or `<guest>-<n>.webm` for a guest who came back; a failed scenario's folder ends
-in `(failed)`. The run prints the folder, and under WSL its Windows path. Headless Chromium renders
+Every screen is recorded: Playwright writes a video of each page a guest's phone or the operator's
+browser opens, and when the scenario ends `World` moves them to
+`out/e2e/cucumber.dest/recordings/<feature>/<line>-<scenario>/`, as `<guest>.webm`, or
+`<guest>-<n>.webm` for a guest who came back, and `operator-<n>-<tool>.webm` for each page a tool
+opened; a failed scenario's folder ends in `(failed)`. The run prints the folder, and under WSL its Windows path. Headless Chromium renders
 the page as a window would — the bundle runs, the stylesheet applies, the video plays — so the
 recording is what a phone would have shown. Mill empties the folder at the start of every run.
 
