@@ -797,3 +797,23 @@ then reverted in its entirety once actually wired into the published bundle.
   `syncLocalTargets` (`mill-build/src/millbuild/Release.scala`) leaves a service's target group
   holding its running tasks alone, and `mcp.dev` waits for the backoffice's service to settle and
   syncs it. A location's service rolled by the release is not synced yet.
+* **No assembled service ever followed the change feed.** A replaced video file was never deleted in
+  the end-to-end run. The backoffice had logged `Following the change feed` and nothing more: no
+  socket to the relay, no gRPC thread. Mill's assembly keeps one jar's `META-INF/services` file and
+  drops the others': `io.grpc.NameResolverProvider` came from `grpc-netty-shaded`, which registers
+  the UDS resolver alone, and hid `grpc-core`'s DNS resolver. Building a channel to
+  `cdc.captal.local:9090` threw, `ChangeFeedFollower`'s `.orDie` made that a defect, and the fiber
+  following the feed ended without a line at `INFO`. The API's jar had the same file. `api.test`,
+  `mcp.test` and `cdc.test` run from the classpath, where every jar's file is visible, so nothing
+  failed. Found 2026-11-01. In AWS too, since the relay shipped: replaced files stayed until the
+  backoffice restarted, playbacks started after a start never got their expiry timer, and a waiting
+  page was never told its error recurred. **Fix:** `BaseModule.assemblyRules` appends every jar's
+  `META-INF/services` files; `ChangeFeedFollower` builds its channel on each attempt and logs and
+  retries whatever ends one, a defect included. **Lesson:** a service registration is a resource a
+  fat jar can drop silently; and a stream that may die of a defect has to say so.
+* **Every local release stopped the load balancer for minutes.** The HTTP listener declared port
+  80. LocalStack answers on its gateway port and reports the listener there, so every plan moved it
+  back to 80, and LocalStack rebuilt it, routing nothing meanwhile: after each release the backoffice
+  answered only 2 to 3 minutes later, and once not within ten. Found 2026-11-01, timing the
+  end-to-end runs. **Fix:** the listener takes `public_port` when it is set (`http_port` in
+  `modules/alb`); in AWS it stays 80.

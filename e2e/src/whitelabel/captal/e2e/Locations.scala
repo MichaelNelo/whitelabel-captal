@@ -42,36 +42,71 @@ object Locations:
 
   private val deployed = TrieMap.empty[String, Deployed]
 
-  /** `name`, with an advertiser video and the survey asked after it, deployed. */
-  def withAdvertiserVideo(name: String): Deployed = deployed.getOrElseUpdate(name, create(name))
+  /** `name`, with an advertiser video and the survey asked after it, deployed: the one shape most
+    * features need, built once per run.
+    */
+  def withAdvertiserVideo(name: String): Deployed = deployed.getOrElseUpdate(
+    name, {
+      val location = create(name)
+      addAdvertiserVideo(location)
+      deploy(location)
+    })
 
-  private def create(name: String): Deployed =
+  /** Once per run for each `key`: `build` runs the first time a feature asks, and every scenario
+    * after it shares what it built. For a feature that needs a location of its own shape.
+    */
+  def once(key: String)(build: => Deployed): Deployed = deployed.getOrElseUpdate(key, build)
+
+  /** A new location, not yet deployed: created, its UniFi settings pointed at the stand-in with
+    * access lasting `accessMinutes`, the deployment's identification surveys ensured, and every
+    * text a guest sees written as `text <key>` in [[Locales]].
+    */
+  def create(name: String, accessMinutes: Int = Venue.AccessMinutes): Deployed =
     val run = scala.util.Random.alphanumeric.filter(_.isLetterOrDigit).take(4).mkString.toLowerCase
     val location = Deployed(s"e2e-$name-$run", s"E2E $name")
-    import location.slug
     Backoffice.tool[LocationTools.CreateRequest, LocationTools.CreateResponse](
       "create_location",
-      LocationTools.CreateRequest(slug, location.name))
-    configureUnifi(slug)
+      LocationTools.CreateRequest(location.slug, location.name))
+    configureUnifi(location.slug, accessMinutes)
     ensureIdentification()
+    translate(location, key => text(key))
+    location
+
+  /** Writes every key the portal needs, in every locale of [[Locales]], as `text(key)`. */
+  def translate(location: Deployed, text: String => String): Unit = Locales.foreach: locale =>
+    Backoffice.tool[I18nTools.SetTranslationsRequest, I18nTools.SetTranslationsResponse](
+      "set_translations",
+      I18nTools.SetTranslationsRequest(
+        slug = location.slug,
+        locale = locale,
+        entries = I18nSchema.keys[I18n].map(key => I18nTools.Translation(key, text(key))))
+    )
+
+  /** An advertiser of its own with one video, the spot, and the survey asked after it: one required
+    * free-text question. Answers the video's id.
+    */
+  def addAdvertiserVideo(
+      location: Deployed,
+      title: String = "E2E spot",
+      question: String = "Did you like it?"): String =
     val advertiser =
       Backoffice
         .tool[AdvertiserTools.CreateRequest, AdvertiserTools.CreateResponse](
           "create_advertiser",
-          AdvertiserTools.CreateRequest(s"E2E advertiser $slug", 10))
+          AdvertiserTools.CreateRequest(s"E2E advertiser ${location.slug} $title", 10))
         .id
     val video = Backoffice.tool[VideoTools.CreateVideoRequest, VideoTools.CreateVideoResponse](
       "create_advertiser_video",
       VideoTools.CreateVideoRequest(
-        slug = slug,
+        slug = location.slug,
         advertiserId = advertiser,
-        title = texts("E2E spot"),
+        title = texts(title),
         description = None,
         minWatchSeconds = None,
         priority = Some(1),
         questions = List(
           VideoTools.VideoQuestion(
-            text = texts("Did you like it?"),
+            text = texts(question),
             answer = AnswerFormat.Input(None),
             required = Some(true),
             points = Some(1))),
@@ -82,39 +117,40 @@ object Locations:
     Backoffice.tool[VideoTools.ConfirmUploadRequest, VideoTools.ConfirmUploadResponse](
       "confirm_video_upload",
       VideoTools.ConfirmUploadRequest(video.videoId, 6))
-    Locales.foreach: locale =>
-      Backoffice.tool[I18nTools.SetTranslationsRequest, I18nTools.SetTranslationsResponse](
-        "set_translations",
-        I18nTools.SetTranslationsRequest(
-          slug = slug,
-          locale = locale,
-          entries = I18nSchema.keys[I18n].map(key => I18nTools.Translation(key, text(key))))
-      )
+    video.videoId
+  end addAdvertiserVideo
+
+  /** Deploys it, follows the run to the end, and waits for its portal to answer. */
+  def deploy(location: Deployed): Deployed =
     Backoffice.awaitRun(
       Backoffice.tool[DeployTools.DeployRequest, DeployTools.RunView](
         "deploy_location",
-        DeployTools.DeployRequest(slug)))
+        DeployTools.DeployRequest(location.slug)))
     Portal.awaitServing(location)
     location
-  end create
 
-  private def texts(value: String) = Locales.map(LocalizedText(_, value))
+  def texts(value: String): List[LocalizedText] = Locales.map(LocalizedText(_, value))
 
   /** What the page `configure_unifi` opens does: posts the controller's settings with the ticket
     * the tool handed it. Then the calls are turned on, which a new location has by default anyway.
+    * The controller is the stand-in unless `host` and `port` name another, such as one that is not
+    * there.
     */
-  private def configureUnifi(slug: String): Unit =
+  def configureUnifi(
+      slug: String,
+      accessMinutes: Int,
+      host: String = Run.setting("E2E_UNIFI_HOST"),
+      port: String = Run.setting("E2E_UNIFI_PORT")): Unit =
     val page = Backoffice.tool[UnifiTools.ConfigureRequest, UnifiTools.ConfigureResponse](
       "configure_unifi",
       UnifiTools.ConfigureRequest(slug))
     val form = Map(
       "ticket"          -> page.ticket,
-      "host"            -> Run.setting("E2E_UNIFI_HOST"),
-      "port"            -> Run.setting("E2E_UNIFI_PORT"),
+      "host"            -> host,
+      "port"            -> port,
       "siteId"          -> Venue.Site,
       "apiToken"        -> Venue.ApiKey,
-      "durationMinutes" -> Venue.AccessMinutes.toString
-    )
+      "durationMinutes" -> accessMinutes.toString)
     val body = form
       .map((name, value) =>
         s"$name=${java.net.URLEncoder.encode(value, java.nio.charset.StandardCharsets.UTF_8)}")
@@ -180,8 +216,8 @@ object Locations:
         )
   end ensureIdentification
 
-  /** What the upload page does with the URL a tool hands it: the file, with its own type. */
-  private def upload(url: String): Unit =
+  /** What the upload page does with the URL a tool hands it: the spot, with its own type. */
+  def upload(url: String): Unit =
     val connection = java
       .net
       .URI(url)

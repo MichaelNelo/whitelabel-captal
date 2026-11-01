@@ -276,16 +276,25 @@ EN`). Nothing runs in-process: the features run against this build released into
 
 [source,bash]
 ----
-mill e2e.cucumber                     # every feature
+mill e2e.cucumber                     # every feature, but @pending scenarios
 mill e2e.cucumber --tags @first-visit # one
+mill e2e.check                        # every step defined once, without LocalStack
 ----
+
+A scenario tagged `@pending` needs something the product or this stack does not have yet: fault
+injection, configurable recovery timings or playback grace, a release run from a scenario. It is
+written in full, its feasible steps implemented, and the missing ones report themselves pending
+with what is missing (`World.pending`); `e2e.cucumber` leaves them out unless `--tags` asks.
+`e2e.check` is Cucumber's dry run: it compiles the steps and fails on a step with no definition or
+with two.
 
 `e2e.cucumber` depends on nothing else having run. It releases the build into LocalStack first, as
 `ci.run` releases it — `ci.images`, `ci.localTags` and `release`: the images, the configuration,
 the client — and waits for the backoffice to serve; the backoffice migrates the database itself.
 Then it reads the admin token from Secrets Manager and runs Cucumber's CLI
 (`io.cucumber.core.cli.Main`) on the module's classpath with `E2E_MCP_URL`, `E2E_MCP_TOKEN`,
-`E2E_PORTAL` (the distribution on LocalStack's port) and `E2E_SPOT` set, from the release's
+`E2E_PORTAL` (the distribution on LocalStack's port), `E2E_SPOT`, the stand-in controller's
+`E2E_UNIFI_*`, and LocalStack's endpoint, cluster and relay service set, from the release's
 outputs. The module is Scala 3.10, the backoffice's, because the
 steps call its tools with its own request types; it is not a test module, so `mill __.test` does
 not run it.
@@ -311,6 +320,13 @@ location is pointed at it through the page `configure_unifi` opens, posting the 
 ticket as the page does, then `set_unifi_enabled`. `Venue` reads the record from
 `http://localhost:18080/calls`, which LocalStack publishes on the host, so a step checks what the
 network was asked for a guest's MAC: the action, its time limit, the API key.
+* **The infrastructure** is `Stack`: the AWS CLI against LocalStack, for what an operator does
+outside the backoffice, such as restarting the relay.
+
+Steps are grouped in one class per feature; Cucumber builds each class anew for every scenario, so
+what a scenario has — its locations and guests, by the names its steps give them — is in `World`,
+which every class shares and which is emptied before each scenario. A feature that changes a
+location uses locations of its own (`Locations.once`), never the shared ones other features read.
 
 Playwright downloads its browsers into `~/.cache/ms-playwright` on the first run, and warns about
 system libraries it does not find; the headless Chromium runs without them.

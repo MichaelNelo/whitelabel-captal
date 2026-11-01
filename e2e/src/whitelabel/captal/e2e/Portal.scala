@@ -41,13 +41,24 @@ object Portal:
           s"${location.slug} did not answer through the distribution in 5 minutes")
       Thread.sleep(3000)
 
-  /** A guest on a phone of their own, `mac`, sent to the portal by the access point. */
+  /** A guest on a phone of their own, `mac`, sent to the portal by the access point with the click
+    * id that tells the device apart, `clickId`.
+    */
   final case class Guest(
       name: String,
       mac: String,
+      clickId: String,
       location: Locations.Deployed,
       context: BrowserContext,
       page: Page):
+    /** The same phone sent to `at`'s portal again, as on a later visit: same cookies, same MAC,
+      * same click id, in a new page.
+      */
+    def returnTo(at: Locations.Deployed = location): Guest =
+      val again = context.newPage()
+      again.navigate(at.portal(mac, clickId))
+      copy(location = at, page = again)
+
     /** The session's phase, as the portal itself asks for it. */
     def phase: String =
       val body = context.request().get(location.api("status")).text()
@@ -63,7 +74,8 @@ object Portal:
     def close(): Unit = context.close()
   end Guest
 
-  def arrive(name: String, location: Locations.Deployed): Guest =
+  /** `name` on a new phone set to `locale`, sent by the access point to `location`'s portal. */
+  def arrive(name: String, location: Locations.Deployed, locale: String = "en-US"): Guest =
     val mac = Seq.fill(6)(f"${scala.util.Random.nextInt(256)}%02X").mkString(":")
     val context = browser.newContext(
       Browser
@@ -72,8 +84,9 @@ object Portal:
         .setViewportSize(390, 844)
         .setIsMobile(true)
         .setHasTouch(true)
-        .setLocale("en-US"))
+        .setLocale(locale))
     val page = context.newPage()
-    page.navigate(location.portal(mac, s"e2e-${java.util.UUID.randomUUID}"))
-    Guest(name, mac, location, context, page)
+    val clickId = s"e2e-${java.util.UUID.randomUUID}"
+    page.navigate(location.portal(mac, clickId))
+    Guest(name, mac, clickId, location, context, page)
 end Portal

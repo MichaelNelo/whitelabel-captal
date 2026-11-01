@@ -9,7 +9,7 @@ object Venue:
   val Site = "default"
   val ApiKey = "e2e-api-key"
 
-  /** How long a guest's access lasts, as the locations are configured. */
+  /** How long a guest's access lasts, as the locations are configured unless a feature says. */
   val AccessMinutes = 60
 
   /** One action the controller was asked for. */
