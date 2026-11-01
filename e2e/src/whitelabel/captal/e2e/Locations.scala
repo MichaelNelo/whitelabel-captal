@@ -21,7 +21,8 @@ import whitelabel.captal.mcp.tools.{
   * minutes. Each run creates its own, under a slug of its own, in the local configuration's
   * database, which other runs and a developer's own content share.
   *
-  * Their UniFi calls are off: there is no controller here, and a stand-in would test the stand-in.
+  * Their UniFi settings point at the local configuration's stand-in for a controller ([[Venue]]),
+  * entered through the page `configure_unifi` opens, as an operator enters them.
   */
 object Locations:
   final case class Deployed(slug: String, name: String):
@@ -51,9 +52,7 @@ object Locations:
     Backoffice.tool[LocationTools.CreateRequest, LocationTools.CreateResponse](
       "create_location",
       LocationTools.CreateRequest(slug, location.name))
-    Backoffice.tool[UnifiTools.SetEnabledRequest, UnifiTools.StatusResponse](
-      "set_unifi_enabled",
-      UnifiTools.SetEnabledRequest(slug, enabled = false))
+    configureUnifi(slug)
     ensureIdentification()
     val advertiser =
       Backoffice
@@ -100,6 +99,49 @@ object Locations:
   end create
 
   private def texts(value: String) = Locales.map(LocalizedText(_, value))
+
+  /** What the page `configure_unifi` opens does: posts the controller's settings with the ticket
+    * the tool handed it. Then the calls are turned on, which a new location has by default anyway.
+    */
+  private def configureUnifi(slug: String): Unit =
+    val page = Backoffice.tool[UnifiTools.ConfigureRequest, UnifiTools.ConfigureResponse](
+      "configure_unifi",
+      UnifiTools.ConfigureRequest(slug))
+    val form = Map(
+      "ticket"          -> page.ticket,
+      "host"            -> Run.setting("E2E_UNIFI_HOST"),
+      "port"            -> Run.setting("E2E_UNIFI_PORT"),
+      "siteId"          -> Venue.Site,
+      "apiToken"        -> Venue.ApiKey,
+      "durationMinutes" -> Venue.AccessMinutes.toString
+    )
+    val body = form
+      .map((name, value) =>
+        s"$name=${java.net.URLEncoder.encode(value, java.nio.charset.StandardCharsets.UTF_8)}")
+      .mkString("&")
+    val response = java
+      .net
+      .http
+      .HttpClient
+      .newHttpClient()
+      .send(
+        java
+          .net
+          .http
+          .HttpRequest
+          .newBuilder(java.net.URI(page.postUrl))
+          .header("Content-Type", "application/x-www-form-urlencoded")
+          .POST(java.net.http.HttpRequest.BodyPublishers.ofString(body))
+          .build(),
+        java.net.http.HttpResponse.BodyHandlers.ofString()
+      )
+    if response.statusCode != 200 then
+      throw AssertionError(
+        s"The UniFi page's post for $slug answered ${response.statusCode}: ${response.body}")
+    Backoffice.tool[UnifiTools.SetEnabledRequest, UnifiTools.StatusResponse](
+      "set_unifi_enabled",
+      UnifiTools.SetEnabledRequest(slug, enabled = true))
+  end configureUnifi
 
   /** The email, profiling and location surveys belong to the whole deployment, one active each:
     * created only when missing, with one question, for a guest to be identified at all.

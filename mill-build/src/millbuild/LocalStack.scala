@@ -199,7 +199,8 @@ val localLoadBalancerHost = "captal-local.elb.localhost.localstack.cloud"
 
 /** Waits for the backoffice's service in LocalStack to settle on its current task definition
   * ([[settledLocally]]), then for the server's own `ok` from its health check through the load
-  * balancer, which answers `200 {}` for a target group with nobody in it. Five minutes at most.
+  * balancer, which answers `200 {}` for a target group with nobody in it. Ten minutes at most:
+  * LocalStack takes minutes to stop the task a new definition replaces.
   * Meanwhile the names of the services it reaches, `discovered`, are kept naming their running
   * tasks alone ([[syncLocalDiscovery]]): the database's, which the backoffice migrates as it starts.
   *
@@ -228,7 +229,7 @@ def awaitLocalBackoffice(
   val started = System.nanoTime
   def elapsed = (System.nanoTime - started) / 1_000_000_000L
   var nudged = false
-  while !serving && elapsed < 300 do
+  while !serving && elapsed < 600 do
     if !nudged && elapsed >= 60 && idle then
       val _ = awsJson(
         target,
@@ -244,7 +245,7 @@ def awaitLocalBackoffice(
     Thread.sleep(2000)
   if !serving then
     sys.error(
-      s"[release] the backoffice did not answer $health within five minutes. Its log group, `/ecs/$service`, says why.")
+      s"[release] the backoffice did not answer $health within ten minutes. Its log group, `/ecs/$service`, says why.")
   println(s"[release] the backoffice serves, after ${elapsed}s")
 
 /** Beside devenv's state rather than under `out/`, so that `mill clean` cannot drop a state whose resources

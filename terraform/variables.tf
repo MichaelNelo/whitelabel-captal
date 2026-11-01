@@ -163,6 +163,12 @@ variable "cdc_image_tag" {
   type        = string
 }
 
+variable "enable_unifi_fake" {
+  description = "A stand-in for a venue's UniFi controller, which locations can be pointed at to grant and revoke access with no controller: `local` only, for the end-to-end features. Never in an AWS environment, where a location's access is a real controller's."
+  type        = bool
+  default     = false
+}
+
 variable "cdc_desired_count" {
   description = "How many relay tasks: one in a deployed environment, since rqlite posts to one address and every subscriber has to follow that same relay. Zero for `local`, where `mill mcp.dev` runs it on the host."
   type        = number

@@ -41,9 +41,10 @@ object Portal:
           s"${location.slug} did not answer through the distribution in 5 minutes")
       Thread.sleep(3000)
 
-  /** A guest on a phone of their own, sent to the portal by the access point. */
+  /** A guest on a phone of their own, `mac`, sent to the portal by the access point. */
   final case class Guest(
       name: String,
+      mac: String,
       location: Locations.Deployed,
       context: BrowserContext,
       page: Page):
@@ -74,5 +75,5 @@ object Portal:
         .setLocale("en-US"))
     val page = context.newPage()
     page.navigate(location.portal(mac, s"e2e-${java.util.UUID.randomUUID}"))
-    Guest(name, location, context, page)
+    Guest(name, mac, location, context, page)
 end Portal

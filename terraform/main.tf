@@ -234,6 +234,24 @@ module "cdc" {
   desired_count    = var.cdc_desired_count
 }
 
+# A stand-in for a venue's UniFi controller, which the end-to-end features point their locations at.
+# Local only: see `enable_unifi_fake`.
+module "unifi_fake" {
+  source = "./modules/unifi-fake"
+  count  = var.enable_unifi_fake ? 1 : 0
+
+  project_name                     = var.project_name
+  environment                      = var.environment
+  aws_region                       = var.aws_region
+  cluster_id                       = module.ecs.cluster_id
+  vpc_id                           = local.vpc_id
+  subnet_ids                       = local.workload_subnet_ids
+  service_discovery_namespace_id   = aws_service_discovery_private_dns_namespace.main.id
+  service_discovery_namespace_name = local.service_discovery_namespace
+  execution_role_arn               = module.ecs.execution_role_arn
+  caller_security_group_id         = aws_security_group.ecs_tasks.id
+}
+
 # Debug ingress: let the Tailscale proxy (acting as VPC subnet router) reach rqlite's HTTP API.
 # Approved tailnet devices with --accept-routes can then query rqlite directly from a developer
 # laptop. Lives in root (not in the rqlite module) because it bridges two sibling modules and the

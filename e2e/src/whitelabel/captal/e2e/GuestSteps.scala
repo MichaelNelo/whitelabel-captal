@@ -59,14 +59,25 @@ final class GuestSteps extends ScalaDsl with EN:
     answer(guest(name).page, value)
   }
 
-  // With UniFi off `finish` grants nothing: the session stays `Ready`, on the page that asks for it.
-  Then("""{word}'s journey ends where his/her/their access would be granted""") { (name: String) =>
+  Then("""{word} has internet access""") { (name: String) =>
     val who = guest(name)
-    who
-      .page
-      .getByText(Locations.text("ready.title"))
-      .waitFor(com.microsoft.playwright.Locator.WaitForOptions().setTimeout(30_000))
-    if !who.phase.equalsIgnoreCase("ready") then
-      throw AssertionError(s"$name's session is ${who.phase}, not ready for access")
+    val deadline = System.nanoTime + 60_000_000_000L
+    while !who.phase.equalsIgnoreCase("authorized") do
+      if System.nanoTime > deadline then
+        throw AssertionError(s"$name's session is ${who.phase}, a minute after finishing")
+      Thread.sleep(1000)
+  }
+
+  Then("""the venue's controller let {word}'s phone in for {int} minutes""") {
+    (name: String, minutes: Int) =>
+      val who = guest(name)
+      val calls = Venue.callsFor(who.mac)
+      val authorized = calls.filter(_.action == "AUTHORIZE_GUEST_ACCESS")
+      if authorized.size != 1 then
+        throw AssertionError(
+          s"$name's phone ${who.mac} was authorized ${authorized.size} times: $calls")
+      val call = authorized.head
+      if call.timeLimitMinutes != Some(minutes) || call.apiKey != Venue.ApiKey then
+        throw AssertionError(s"$name's phone was authorized as $call")
   }
 end GuestSteps

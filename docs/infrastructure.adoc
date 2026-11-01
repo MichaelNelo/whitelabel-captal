@@ -134,7 +134,12 @@ apply would hang — CloudFront falls back to its own default certificate and ge
 a laptop is what `docker exec` already does here), and `enable_global_accelerator` (not emulated,
 and it brings the portal-dispatcher Lambda with it, which exists only for real captive-portal
 hardware). Everything else runs as in AWS: three rqlite tasks, the change data capture relay and the
-backoffice, released by `mill mcp.dev` (see xref:development.adoc[Local development]). Two variables
+backoffice, released by `mill mcp.dev` (see xref:development.adoc[Local development]). One thing
+runs here alone, `enable_unifi_fake`: `modules/unifi-fake`, a stand-in for a venue's UniFi
+controller that a location can be pointed at, as `unifi.captal.local:8443` — a Python script on the
+public Python image, with a self-signed certificate from the `tls` provider — which answers the two
+calls the API makes and records them on `http://localhost:18080/calls` for the end-to-end features
+(see xref:testing.adoc#end-to-end[the end-to-end features]). Two variables
 give the addresses LocalStack serves things at: `public_port = 4567`, the gateway port the load
 balancer and the distribution answer on, which the backoffice's `MCP_RESOURCE_URI` and
 `PUBLIC_BASE_URL` name; and `assets_endpoint_url`, the bucket as the operator's browser reaches it,
@@ -168,7 +173,7 @@ every `.tf` and `.tfvars` in the tree.
 
 == Module inventory
 
-The root module (`terraform/main.tf`) wires fourteen child modules together. The account's networking
+The root module (`terraform/main.tf`) wires fifteen child modules together. The account's networking
 is a data source rather than a module — `data "aws_vpc" "default"` and `data "aws_subnets" "default"`
 resolve the account's default VPC and its one-per-AZ default subnets, which are public and
 auto-assign addresses, letting every Fargate task reach ECR without a NAT gateway. A `modules/vpc`

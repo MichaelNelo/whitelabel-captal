@@ -51,11 +51,16 @@ object `package` extends BaseModule:
       variables = Nil,
       awaitLocations = false
     )
+    // The locations these features deploy reach the database, the relay and the UniFi stand-in.
     awaitLocalBackoffice(
       target,
       outputs("ecs_cluster_name"),
       outputs("mcp_service_name"),
-      Seq(outputs("rqlite_service_name"), outputs("cdc_service_name")))
+      Seq("rqlite_service_name", "cdc_service_name", "unifi_fake_service_name").flatMap(
+        outputs.get))
+    def unifi(output: String) = outputs.getOrElse(
+      output,
+      sys.error(s"[e2e] no $output: the local configuration runs the UniFi stand-in only with `enable_unifi_fake`"))
     println("[e2e] Running the features...")
     val token = awsText(
       target,
@@ -81,10 +86,13 @@ object `package` extends BaseModule:
       )
       .call(
         env = Map(
-          "E2E_MCP_URL"   -> outputs("mcp_url"),
-          "E2E_MCP_TOKEN" -> token,
-          "E2E_PORTAL"    -> s"https://${outputs("cloudfront_domain_name")}:$localStackPort",
-          "E2E_SPOT"      -> spot().path.toString
+          "E2E_MCP_URL"       -> outputs("mcp_url"),
+          "E2E_MCP_TOKEN"     -> token,
+          "E2E_PORTAL"        -> s"https://${outputs("cloudfront_domain_name")}:$localStackPort",
+          "E2E_SPOT"          -> spot().path.toString,
+          "E2E_UNIFI_HOST"    -> unifi("unifi_fake_host"),
+          "E2E_UNIFI_PORT"    -> unifi("unifi_fake_port"),
+          "E2E_UNIFI_RECORDS" -> unifi("unifi_fake_records_url")
         ),
         check = false,
         stdout = os.Inherit,

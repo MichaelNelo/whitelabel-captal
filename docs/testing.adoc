@@ -303,17 +303,22 @@ locations deployed.
 and storage, mobile viewport and touch — sent to the portal the way the access point sends them,
 with a MAC, an access point and a click id in the query string. Certificate errors are ignored: the
 distribution's name is two levels under the one LocalStack's certificate covers.
-* **UniFi is off** in these locations: there is no controller here, and a stand-in would only test
-itself. With it off, `finish` grants nothing and the session stays `Ready`, so a journey's end is
-asserted there, on the page that waits for access, never at `Authorized`.
+* **The venue's controller** is the local configuration's stand-in (`terraform/modules/unifi-fake`,
+`enable_unifi_fake`): a Python script on the public Python image, reached by the locations' tasks
+as `unifi.captal.local:8443` over HTTPS, as a controller is. It answers the two calls of the
+Integration v1 API the API makes — any MAC is a connected client — and records every action. Each
+location is pointed at it through the page `configure_unifi` opens, posting the form with the
+ticket as the page does, then `set_unifi_enabled`. `Venue` reads the record from
+`http://localhost:18080/calls`, which LocalStack publishes on the host, so a step checks what the
+network was asked for a guest's MAC: the action, its time limit, the API key.
 
 Playwright downloads its browsers into `~/.cache/ms-playwright` on the first run, and warns about
 system libraries it does not find; the headless Chromium runs without them.
 
 == What is deliberately not covered
 
-* **Access granted on the network.** `e2e` locations make no UniFi call, and `api.test` uses an
-in-process stand-in: nothing exercises a real controller.
+* **A real controller.** `e2e` locations call a stand-in over the network, and `api.test` one in
+process: what a real controller answers, and whether it grants what it was asked, is not tested.
 * **The slug-prefixed route form, in `api.test`.** `TestLayers` always builds `ApiBase.none`, so
 every suite exercises routes mounted at `/api/...`, never `/<slug>/api/...`. `e2e` exercises the
 prefixed form, since its guests reach a deployed location through the distribution, but only on the

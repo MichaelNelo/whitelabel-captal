@@ -15,6 +15,11 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+    # The UniFi stand-in's self-signed certificate, in the local configuration only.
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
 }
 

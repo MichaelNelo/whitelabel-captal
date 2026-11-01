@@ -29,6 +29,11 @@ enable_dns                = false
 enable_tailscale          = false
 enable_global_accelerator = false
 
+# On here alone: a stand-in for a venue's UniFi controller, as `unifi.captal.local:8443`, which the
+# end-to-end features point their locations at to check what access a guest was given. Its record of
+# calls is on the host at `http://localhost:18080/calls`.
+enable_unifi_fake = true
+
 # Never resolved locally: with `enable_dns = false` the distribution answers at its own generated
 # domain. Present because the variable has no default, and the string is what the comment on the
 # distribution is built from.

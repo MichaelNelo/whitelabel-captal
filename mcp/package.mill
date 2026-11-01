@@ -172,7 +172,8 @@ object `package` extends BaseModule with Released:
       target,
       outputs("ecs_cluster_name"),
       outputs("mcp_service_name"),
-      Seq(outputs("rqlite_service_name"), outputs("cdc_service_name")))
+      Seq("rqlite_service_name", "cdc_service_name", "unifi_fake_service_name").flatMap(
+        outputs.get))
     val dbUrl = localDbUrl(configDir)
     val resourceUri = outputs("mcp_url")
     val adminToken = awsText(

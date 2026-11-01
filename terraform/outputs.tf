@@ -182,6 +182,28 @@ output "mcp_log_group_name" {
 
 # ─── Change data capture relay ──────────────────────────────────────────────
 
+# ─── UniFi stand-in (local only) ────────────────────────────────────────────
+
+output "unifi_fake_host" {
+  description = "Where a location's UniFi settings point to reach the stand-in. Null unless `enable_unifi_fake`."
+  value       = var.enable_unifi_fake ? module.unifi_fake[0].host : null
+}
+
+output "unifi_fake_port" {
+  description = "The port those settings name. Null unless `enable_unifi_fake`."
+  value       = var.enable_unifi_fake ? tostring(module.unifi_fake[0].port) : null
+}
+
+output "unifi_fake_records_url" {
+  description = "The stand-in's record of calls, as this machine reaches it. Null unless `enable_unifi_fake`."
+  value       = var.enable_unifi_fake ? module.unifi_fake[0].records_url : null
+}
+
+output "unifi_fake_service_name" {
+  description = "The stand-in's ECS service. Null unless `enable_unifi_fake`."
+  value       = var.enable_unifi_fake ? module.unifi_fake[0].service_name : null
+}
+
 output "cdc_feed_address" {
   description = "`host:port` of the relay's feed, which the backoffice and every location's API follow"
   value       = module.cdc.feed_address
