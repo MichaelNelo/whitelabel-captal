@@ -11,6 +11,14 @@ trait BaseModule extends ScalaModule with ScalafmtModule with ScalafixModule:
   def scalaVersion = "3.8.0"
   def scalacOptions = Seq("-Wunused:imports,locals,explicits,implicits")
 
+  /** Every jar's `META-INF/services` registrations in the assembly, one per line, where Mill's
+    * defaults keep one jar's file and drop the rest's providers: `grpc-netty-shaded`'s
+    * `io.grpc.NameResolverProvider` would hide `grpc-core`'s DNS resolver, and no gRPC channel to a
+    * host name could be built. Separated by a newline, since a file may not end in one.
+    */
+  def assemblyRules =
+    super.assemblyRules :+ Assembly.Rule.AppendPattern("META-INF/services/.*", "\n")
+
 trait BaseJSModule extends ScalaJSModule with ScalafmtModule with ScalafixModule:
   def scalaVersion = "3.8.0"
   def scalaJSVersion = "1.20.1"
