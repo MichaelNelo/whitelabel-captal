@@ -118,6 +118,18 @@ object World:
     locations.clear()
 end World
 
+/** Once every scenario has run, destroys the locations the features made
+  * ([[whitelabel.captal.e2e.backoffice.Locations.sweep]]), unless the run was told to keep them
+  * (`E2E_KEEP_LOCATIONS`). Not in a dry run, which has no backoffice to reach.
+  */
+object RunHooks extends ScalaDsl with EN:
+  AfterAll {
+    val keep = sys.env.get("E2E_KEEP_LOCATIONS").contains("true")
+    if sys.env.contains("E2E_MCP_URL") && !keep then
+      whitelabel.captal.e2e.backoffice.Locations.sweep()
+  }
+end RunHooks
+
 /** Empties the [[World]] around each scenario. */
 final class WorldHooks extends ScalaDsl with EN:
   Before { (scenario: Scenario) =>

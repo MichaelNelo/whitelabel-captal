@@ -194,6 +194,52 @@ object Locations:
   /** The email, profiling and location surveys belong to the whole deployment, one active each:
     * created only when missing, with one question, for a guest to be identified at all.
     */
+  /** Destroys every location these features made — this run's, and any a run that was cut short
+    * left standing: every `e2e-` slug whose latest run is not a destroy that succeeded. Every
+    * teardown is started first and each then followed to its end, so they run side by side. One
+    * that fails is reported and left: the run's outcome is its scenarios'. The objects in S3 go
+    * with it, which [[Backoffice]] answers yes to; the rows stay.
+    */
+  def sweep(): Unit =
+    val standing = Backoffice
+      .tool[LocationTools.ListRequest, LocationTools.ListResponse](
+        "list_locations",
+        LocationTools.ListRequest(includeInactive = true))
+      .locations
+      .map(_.slug)
+      .filter(_.startsWith("e2e-"))
+      .filter(slug =>
+        latestRun(slug).exists(run => !(run.operation == "destroy" && run.status == "succeeded")))
+    if standing.nonEmpty then
+      println(s"[e2e] Destroying the locations the features made: ${standing.mkString(", ")}")
+    val started = standing.flatMap(slug =>
+      attempt(s"destroy $slug")(
+        Backoffice.tool[DeployTools.DestroyRequest, DeployTools.RunView](
+          "destroy_location",
+          DeployTools.DestroyRequest(slug = slug, confirm = slug))))
+    started.foreach(run => attempt(s"destroy ${run.slug}")(Backoffice.awaitRun(run)))
+  end sweep
+
+  /** A location's latest run, or none when it never had one: then nothing of it was deployed. */
+  private def latestRun(slug: String): Option[DeployTools.RunView] =
+    scala
+      .util
+      .Try(
+        Backoffice.tool[DeployTools.StatusRequest, DeployTools.RunView](
+          "get_deploy_status",
+          DeployTools.StatusRequest(runId = None, slug = Some(slug))))
+      .toOption
+
+  private def attempt[A](what: String)(work: => A): Option[A] = scala
+    .util
+    .Try(work)
+    .fold(
+      failure =>
+        println(s"[e2e] Could not $what: ${failure.getMessage}")
+        None
+      ,
+      Some(_))
+
   private def ensureIdentification(): Unit =
     val present =
       Backoffice

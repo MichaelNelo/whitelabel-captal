@@ -1,7 +1,13 @@
 package whitelabel.captal.e2e.backoffice
 
 import com.jamesward.ziohttp.mcp.client.{McpClient, McpClientConfig, McpClientExtensions}
-import com.jamesward.ziohttp.mcp.{CallToolResult, McpApps, McpAppsClientSettings, ResourceContents}
+import com.jamesward.ziohttp.mcp.{
+  CallToolResult,
+  InputRequest,
+  McpApps,
+  McpAppsClientSettings,
+  ResourceContents
+}
 import whitelabel.captal.e2e.scenario.Run
 import whitelabel.captal.mcp.tools.DeployTools
 import zio.*
@@ -25,12 +31,32 @@ object Backoffice:
           McpClientConfig(
             serverUrl = Run.setting("E2E_MCP_URL"),
             headers = Headers(Header.Authorization.Bearer(Run.setting("E2E_MCP_TOKEN"))),
-            onInputRequest = None),
+            onInputRequest = Some(request => ZIO.succeed(answer(request)))
+          ),
           declared
         )
         .mapError(error => AssertionError(s"connect: $error"))
         .provideEnvironment(http ++ ZEnvironment(Run.scope))
     yield connected
+
+  /** What the operator answers when a tool asks them something in the middle of a call: yes to
+    * `destroy_location`'s question whether to delete the location's files too, so a torn-down
+    * location leaves nothing in the bucket. Anything else is declined, as by an operator who did
+    * not expect the question.
+    */
+  private def answer(request: InputRequest): Json =
+    val asked = request
+      .params
+      .get("requestedSchema")
+      .flatMap(_.asObject)
+      .flatMap(_.get("properties"))
+      .flatMap(_.asObject)
+    if request.method == "elicitation/create" && asked.exists(_.get("deleteAssets").isDefined) then
+      Json.Obj(
+        "action"  -> Json.Str("accept"),
+        "content" -> Json.Obj("deleteAssets" -> Json.Bool(true)))
+    else
+      Json.Obj("action" -> Json.Str("decline"))
 
   /** The arguments as JSON, from the tool's own request type. */
   private[e2e] def args[A](value: A)(using schema: Schema[A]): Json.Obj = Json

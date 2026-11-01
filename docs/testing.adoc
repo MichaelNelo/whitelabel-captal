@@ -319,8 +319,13 @@ uses, shared by its scenarios for the run, since a deploy takes minutes; each ru
 under a slug of its own, `e2e-<name>-<4 characters>`, in the local database. The identification
 surveys belong to the whole deployment, so they are created only when missing. Every text a guest
 sees is written as `text <key>` in `en` and `es`, which is how a step finds a button. The video is
-`e2e/resources/spot.webm`, six seconds of VP9: Playwright's Chromium plays no H.264. A run leaves its
-locations deployed.
+`e2e/resources/spot.webm`, six seconds of VP9: Playwright's Chromium plays no H.264. Once the
+scenarios are over, an `AfterAll` hook (`RunHooks`) destroys every `e2e-` location whose latest run
+is not a successful destroy — this run's, and any a run cut short left — all teardowns started at
+once and then followed; one that fails is reported, not raised. Their objects in S3 go too:
+`destroy_location` asks the operator whether to delete them, and `Backoffice` answers that question
+yes and declines any other. Their rows stay. `--keep` leaves them up, to look at what a scenario
+left.
 * **Guests** are Playwright browser contexts (`Portal`), each a phone of its own — its own cookies
 and storage, mobile viewport and touch — sent to the portal the way the access point sends them,
 with a MAC, an access point and a click id in the query string. Certificate errors are ignored: the

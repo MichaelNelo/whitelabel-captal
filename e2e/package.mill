@@ -54,8 +54,9 @@ object `package` extends BaseModule:
 
   /** Releases this build into LocalStack as `ci.run` releases it, then runs the features against
     * it: the backoffice at its load balancer address, with the admin token the configuration
-    * generated, and the portal at the distribution. Each feature deploys the locations it needs; a
-    * run leaves them deployed. Needs a LocalStack licence.
+    * generated, and the portal at the distribution. Each feature deploys the locations it needs,
+    * and the run destroys every `e2e-` location once the scenarios are over, any an earlier run left
+    * included, unless `keep` says to leave them up to look at. Needs a LocalStack licence.
     *
     * A scenario tagged `@pending` needs something the product or this stack does not have yet; it
     * runs only when `tags` asks for it.
@@ -64,10 +65,13 @@ object `package` extends BaseModule:
     * scenario; a failed scenario's folder says so. `linger` holds each view on screen that many
     * seconds before the next, for a recording a person can follow.
     *
-    * Usage: `mill e2e.cucumber`, `mill e2e.cucumber --tags @first-visit`, or
-    * `mill e2e.cucumber --tags @first-visit --linger 3`
+    * Usage: `mill e2e.cucumber`, `mill e2e.cucumber --tags @first-visit`,
+    * `mill e2e.cucumber --tags @first-visit --linger 3`, or `mill e2e.cucumber --keep`
     */
-  def cucumber(tags: String = "not @pending", linger: Double = 0) = Task.Command:
+  def cucumber(
+      tags: String = "not @pending",
+      linger: Double = 0,
+      keep: mainargs.Flag = mainargs.Flag()) = Task.Command:
     val endpoint = s"http://localhost:$localStackPort"
     val target = ReleaseTarget.localStack(endpoint)
     val workDir = localStackWorkDir(endpoint, Task.env)
@@ -129,6 +133,7 @@ object `package` extends BaseModule:
           "E2E_UNIFI_RECORDS" -> unifi("unifi_fake_records_url"),
           "E2E_RECORDINGS"    -> recordings.toString,
           "E2E_LINGER_SECONDS" -> linger.toString,
+          "E2E_KEEP_LOCATIONS" -> keep.value.toString,
           "E2E_AWS_ENDPOINT"  -> endpoint,
           "E2E_CLUSTER"       -> outputs("ecs_cluster_name"),
           "E2E_CDC_SERVICE"   -> outputs("cdc_service_name")
