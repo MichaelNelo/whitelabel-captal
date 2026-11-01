@@ -61,9 +61,10 @@ object `package` extends BaseModule:
     * A scenario tagged `@pending` needs something the product or this stack does not have yet; it
     * runs only when `tags` asks for it.
     *
-    * Every screen is recorded, one video per page, in this command's `recordings/`, by feature and
-    * scenario; a failed scenario's folder says so. `linger` holds each view on screen that many
-    * seconds before the next, for a recording a person can follow.
+    * Every screen is recorded, one video per page, in `out/e2e/recordings/`, by feature and
+    * scenario; a scenario that runs again replaces its own folder and no other, and a failed
+    * scenario's folder says so. `linger` holds each view on screen that many seconds before the
+    * next, for a recording a person can follow.
     *
     * Usage: `mill e2e.cucumber`, `mill e2e.cucumber --tags @first-visit`,
     * `mill e2e.cucumber --tags @first-visit --linger 3`, or `mill e2e.cucumber --keep`
@@ -108,7 +109,9 @@ object `package` extends BaseModule:
       "--query",
       "SecretString").getOrElse(sys.error("[e2e] could not read the admin token"))
     val classpath = runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
-    val recordings = Task.dest / "recordings"
+    // Outside this command's own folder, which every run empties: a run of one feature leaves the
+    // other features' videos where they are.
+    val recordings = mill.api.BuildCtx.workspaceRoot / "out" / "e2e" / "recordings"
     val ran = os
       .proc(
         "java",

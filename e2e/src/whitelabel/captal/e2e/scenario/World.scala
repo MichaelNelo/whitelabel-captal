@@ -91,11 +91,22 @@ object World:
     .filter(_ > 0)
     .map(_ * 1000)
 
+  /** Starts the scenario's recording afresh: what an earlier run recorded for it, failed or not, is
+    * removed; other scenarios' recordings stay.
+    */
   private[e2e] def begin(scenario: Scenario): Unit =
     reset()
     val feature = Path.of(scenario.getUri.getPath).getFileName.toString.stripSuffix(".feature")
     val name = scenario.getName.replaceAll("[^A-Za-z0-9]+", "-").stripPrefix("-").stripSuffix("-")
     scenarioRecording = recordings.map(_.resolve(feature).resolve(s"${scenario.getLine}-$name"))
+    for
+      recorded <- scenarioRecording
+      earlier  <- List(recorded, recorded.resolveSibling(s"${recorded.getFileName} (failed)"))
+      if Files.isDirectory(earlier)
+    do
+      val files = Files.walk(earlier)
+      try files.sorted(java.util.Comparator.reverseOrder()).forEach(Files.delete)
+      finally files.close()
 
   /** Closes the scenario's phones, which writes their videos, and marks a failed scenario's. */
   private[e2e] def finish(scenario: Scenario): Unit =
