@@ -177,9 +177,8 @@ The task definitions differ from production only in the addresses `environments/
   `https://<id>.cloudfront.localhost.localstack.cloud:4567`. A location deployed from here answers
   there: `/<slug>/` for the portal, `/<slug>/api/*` through the load balancer to its task.
 * `assets_endpoint_url = "http://localhost:4567"`, the bucket from the operator's browser, which
-  becomes `SCRIPT_BASE_URL` (`<it>/<bucket>`) and `PRESIGN_ENDPOINT_URL`. Not the distribution:
-  LocalStack's gateway refuses a request to one carrying an `Origin` it does not know, which a page in
-  a host's frame always sends; the bucket answers with its own CORS rule instead.
+  becomes `SCRIPT_BASE_URL` (`<it>/<bucket>`) and `PRESIGN_ENDPOINT_URL`. The bucket answers a
+  page in a host's frame with its own CORS rule.
 * No `AWS_ENDPOINT_URL`, in any environment: LocalStack gives every task it runs its own, the address
   of its container, along with credentials of its own account. The backoffice's IAM policy is
   therefore not exercised by the task here; `DeployE2ESpec` exercises it.
@@ -191,6 +190,13 @@ repository URI, the endpoint its own ECS tasks are given — and `awslocal` dial
 container. A URL saying 4566 would reach whichever LocalStack holds that port; one saying 4567 while
 LocalStack listened on 4566 inside would reach nothing. LocalStack started with any other command —
 another port, image, service list or IAM mode — is replaced, not reused.
+
+LocalStack runs with `DISABLE_CORS_CHECKS=1`. Its gateway otherwise answers `403` to a request
+carrying an `Origin` it does not know, before the request reaches a load balancer's target, which
+AWS never does; and a backoffice MCP App page, in a host's sandboxed frame, always sends one — the
+opaque `null` in the end-to-end features, the host's own in Claude — when it posts the UniFi form or
+follows a run. The cost is LocalStack's protection against a website in the developer's browser
+sending it requests.
 
 Step 2 runs only with `mill mcp.dev --tunnel`, before the apply, which is given its addresses. It
 opens two Cloudflare quick tunnels to LocalStack's port, the devenv processes `tunnel-mcp` and

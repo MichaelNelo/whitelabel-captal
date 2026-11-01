@@ -83,6 +83,9 @@ def ensureLocalStack(
   // name the port it listens on. `GATEWAY_LISTEN` moves that listener off 4566.
   val localStackHost = s"localhost.localstack.cloud:$hostPort"
   val gatewayListen = s"0.0.0.0:$hostPort,0.0.0.0:443"
+  // `DISABLE_CORS_CHECKS`: LocalStack answers 403 to a request whose `Origin` it does not know, before
+  // it reaches the load balancer's target, which AWS never does. A backoffice MCP App page runs in a
+  // sandboxed frame, whose origin is opaque (`null`), and posts to the backoffice through it.
 
   // The token by name only: its value reaches the container from the process's environment, which
   // `Processes.ensureManager` sets. The Docker socket is needed for ECS: LocalStack runs each task as a
@@ -114,6 +117,8 @@ def ensureLocalStack(
       s"GATEWAY_LISTEN=$gatewayListen",
       "-e",
       s"LOCALSTACK_HOST=$localStackHost",
+      "-e",
+      "DISABLE_CORS_CHECKS=1",
       "-e",
       s"SERVICES=$services") ++ licensedArgs :+ image,
     ready = Some(s"curl -sf -m 1 $endpoint/_localstack/health > /dev/null")
