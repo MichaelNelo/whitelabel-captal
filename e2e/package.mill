@@ -84,8 +84,9 @@ object `package` extends BaseModule:
       terraformDir(Task.env, moduleDir / os.up),
       workDir,
       build.ci.localTags(),
-      build.client.bundle().path,
-      build.client.releaseVersion().version,
+      // The portal with its failures on demand, which the recovery features make happen.
+      build.client.local.bundle().path,
+      build.client.local.releaseVersion().version,
       variables = Nil,
       awaitLocations = false
     )

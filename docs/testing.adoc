@@ -286,8 +286,8 @@ mill e2e.cucumber --tags @first-visit --linger 3 # each view held 3 s, to watch 
 mill e2e.check                        # every step defined once, without LocalStack
 ----
 
-A scenario tagged `@pending` needs something the product or this stack does not have yet: fault
-injection, configurable recovery timings or playback grace, a release run from a scenario. It is
+A scenario tagged `@pending` needs something the product or this stack does not have yet:
+configurable playback grace, a release run from a scenario. It is
 written in full, its feasible steps implemented, and the missing ones report themselves pending
 with what is missing (`World.pending`); `e2e.cucumber` leaves them out unless `--tags` asks.
 `e2e.check` is Cucumber's dry run: it compiles the steps and fails on a step with no definition or
@@ -330,6 +330,13 @@ left.
 and storage, mobile viewport and touch — sent to the portal the way the access point sends them,
 with a MAC, an access point and a click id in the query string. Certificate errors are ignored: the
 distribution's name is two levels under the one LocalStack's certificate covers.
+* **Errors** are made to happen on demand for the recovery features. The run releases
+`client.local`'s bundle, which carries `Faults`, and the local configuration has every location
+mount the API's dev endpoints (`enable_location_faults`). A step dispatches `captal-fault` in the
+guest's page: `server` has the API fail for real and record it; `client:<tag>` has the page's own
+code throw. The tag is the scenario's own, so an earlier scenario's error, or an earlier run's, is
+never taken for this one's, which would make it recurrent; two guests of one scenario share it
+when the scenario is about recurrence.
 * **The venue's controller** is the local configuration's stand-in (`terraform/modules/unifi-fake`,
 `enable_unifi_fake`): a Python script on the public Python image, reached by the locations' tasks
 as `unifi.captal.local:8443` over HTTPS, as a controller is. It answers the two calls of the

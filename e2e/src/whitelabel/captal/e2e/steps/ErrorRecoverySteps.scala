@@ -1,6 +1,6 @@
 package whitelabel.captal.e2e.steps
 
-import com.microsoft.playwright.Page
+import com.microsoft.playwright.{ConsoleMessage, Page, Request, Response, TimeoutError}
 import io.cucumber.scala.{EN, ScalaDsl}
 import whitelabel.captal.e2e.scenario.World
 
@@ -10,8 +10,8 @@ import whitelabel.captal.e2e.scenario.World
   * the server for it, so it is in English and Spanish by the browser's language, as its script has
   * it.
   *
-  * Nothing makes an error happen on demand, so the steps that would cause one are pending; the rest
-  * check the page as an error leaves it.
+  * An error is made to happen on demand by the local bundle's `Faults`, through the API's dev
+  * endpoints: a server error the API records, or a throw from the portal's own code.
   */
 final class ErrorRecoverySteps extends ScalaDsl with EN:
   final private case class Copy(title: String, shared: String, unrecoverable: String)
@@ -44,8 +44,10 @@ final class ErrorRecoverySteps extends ScalaDsl with EN:
     .findFirstMatchIn(message(page))
     .map(found => found.group(1).toInt * 60 + found.group(2).toInt)
 
-  /** Waits until `condition` holds, polling every second, or fails with `what` after `seconds`. */
-  private def within(seconds: Long, what: String)(condition: => Boolean): Unit =
+  /** Waits until `condition` holds, polling every second, or fails with `what` after `seconds`.
+    * `what` is read when it fails, so it says what the page showed then.
+    */
+  private def within(seconds: Long, what: => String)(condition: => Boolean): Unit =
     val deadline = System.nanoTime + seconds * 1_000_000_000L
     while !scala.util.Try(condition).getOrElse(false) do
       if System.nanoTime > deadline then
@@ -63,21 +65,62 @@ final class ErrorRecoverySteps extends ScalaDsl with EN:
       found = scala.util.Try(read).toOption.flatten
     found.get
 
-  /** The fault injection the scenarios need: nothing in the stack makes an error happen on demand.
+  /** Makes a failure happen in `name`'s portal, `server` or `client`: what the local bundle's
+    * `Faults` does on `captal-fault`, through the dev endpoints the local configuration gives every
+    * location. The guest's page then leaves for the error page, as it would for a real one.
     */
-  private def provoked(what: String): Nothing = World.pending(what)
+  private def provoke(name: String, kind: String): Unit =
+    val page = World.guest(name).page
+    // What the page said and asked meanwhile, for a failure to say what went wrong.
+    val seen = scala.collection.mutable.ListBuffer.empty[String]
+    val console: java.util.function.Consumer[ConsoleMessage] =
+      message => seen += s"console ${message.`type`}: ${message.text}"
+    val thrown: java.util.function.Consumer[String] = error => seen += s"page error: $error"
+    val failed: java.util.function.Consumer[Request] =
+      request => seen += s"failed ${request.method} ${request.url}: ${request.failure}"
+    val answered: java.util.function.Consumer[Response] =
+      response =>
+        if response.url.contains("/api/") then
+          seen += s"${response.status} ${response.request.method} ${response.url}"
+    page.onConsoleMessage(console)
+    page.onPageError(thrown)
+    page.onRequestFailed(failed)
+    page.onResponse(answered)
+    try
+      page.evaluate(
+        "kind => window.dispatchEvent(new CustomEvent('captal-fault', { detail: kind }))",
+        kind)
+      page.waitForURL(
+        java.util.regex.Pattern.compile(".*/error\\.html.*"),
+        Page.WaitForURLOptions().setTimeout(30_000))
+    catch
+      case _: TimeoutError =>
+        throw AssertionError(
+          s"$name's page did not leave for the error page on captal-fault '$kind': ${seen.mkString(
+              "; ")}")
+    finally
+      page.offConsoleMessage(console)
+      page.offPageError(thrown)
+      page.offRequestFailed(failed)
+      page.offResponse(answered)
+  end provoke
 
   When("""the portal fails for {word} with a server error""") { (name: String) =>
-    provoked(
-      s"a fault injected into the API, so that the portal answers $name with a recorded error")
+    provoke(name, "server")
   }
+
+  /** This scenario's client error: its own, so an earlier scenario's, or an earlier run's, is not
+    * taken for it, which would make it recurrent. One per scenario, as this class is.
+    */
+  private val clientError = s"client:e2e-${java.util.UUID.randomUUID.toString.take(8)}"
 
   When("""the portal's code throws for {word}""") { (name: String) =>
-    provoked(s"a fault injected into the bundle, so that the portal's code throws for $name")
+    provoke(name, clientError)
   }
 
+  // The same tag: the same throw, from the same place, with the same name, so the same error.
   When("""{word} hits the same error on another phone""") { (name: String) =>
-    provoked(s"the same fault in the bundle, reached from a second phone by $name")
+    provoke(name, clientError)
   }
 
   When("""{word} waits {int} seconds""") { (_: String, seconds: Int) =>
@@ -119,11 +162,16 @@ final class ErrorRecoverySteps extends ScalaDsl with EN:
       throw AssertionError(s"$name's first error is shown as shared: ${message(page)}")
   }
 
+  // The server shortens the wait as soon as the feed tells it of the other report, and says so on
+  // the page's stream. In AWS that reaches the page as it happens. LocalStack's distribution hands a
+  // stream on only when its connection ends, which the page then reopens, about every 80 seconds
+  // here: two and a half minutes covers one.
   Then("""{word}'s countdown reads at most {int} seconds""") { (name: String, max: Int) =>
     val page = World.guest(name).page
-    val shown = await(60, s"$name's error page shows no countdown")(secondsShown(page))
-    if shown > max then
-      throw AssertionError(s"$name's countdown reads $shown seconds, more than $max")
+    within(
+      150,
+      s"$name's countdown reads ${secondsShown(page).getOrElse(
+          "nothing")}, not $max seconds or less")(secondsShown(page).exists(_ <= max))
   }
 
   Then("""{word} is told that other guests ran into the same problem""") { (name: String) =>
@@ -132,17 +180,30 @@ final class ErrorRecoverySteps extends ScalaDsl with EN:
       message(page).contains(copyOf(page).shared))
   }
 
+  /** Waits for the error page to hand back to the portal. Through Playwright's own wait: a
+    * navigation reaches the page's `url` only while a call into Playwright is under way, and a loop
+    * of sleeps would read the error page's address forever.
+    */
+  private def backInPortal(name: String, seconds: Long): Unit =
+    try
+      World
+        .guest(name)
+        .page
+        .waitForURL(
+          (url: String) => !url.contains("error.html"),
+          Page.WaitForURLOptions().setTimeout(seconds * 1000.0))
+    catch
+      case _: TimeoutError =>
+        throw AssertionError(
+          s"$name's error page did not hand back to the portal, within $seconds seconds")
+
   Then("""{word} is taken back into the portal""") { (name: String) =>
-    val page = World.guest(name).page
-    within(600, s"$name's error page did not hand back to the portal")(
-      !page.url.contains("error.html"))
+    backInPortal(name, 600)
   }
 
   Then("""{word} is taken back into the portal within {int} seconds""") {
     (name: String, seconds: Int) =>
-      val page = World.guest(name).page
-      within(seconds.toLong, s"$name's error page did not hand back to the portal")(
-        !page.url.contains("error.html"))
+      backInPortal(name, seconds.toLong)
   }
 
   Then("""{word} is shown a code for the staff and no way out""") { (name: String) =>

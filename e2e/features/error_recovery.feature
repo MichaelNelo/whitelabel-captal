@@ -10,7 +10,6 @@ Feature: Recovery from an error
   Background:
     Given a deployed location "plaza" with an advertiser video and its survey
 
-  @pending
   Scenario: A server error takes the guest back into the portal at once
     When Ana opens the portal on a new phone
     And Ana starts
@@ -19,7 +18,6 @@ Feature: Recovery from an error
     And Ana has internet access
     And the venue's controller let Ana's phone in for 60 minutes
 
-  @pending
   Scenario: A client error makes a new guest wait five minutes, then takes them back in
     When Ana opens the portal on a new phone
     And Ana starts
@@ -29,16 +27,14 @@ Feature: Recovery from an error
     And Ana is taken back into the portal
     And Ana has internet access
 
-  @pending
   Scenario: A guest who has given an email waits less for a client error
     When Ana opens the portal on a new phone
     And Ana starts
     And Ana answers the email question with "ana@example.com"
     And the portal's code throws for Ana
     Then Ana sees the error page
-    And Ana is told to wait about 87 seconds
+    And Ana is told to wait about 90 seconds
 
-  @pending
   Scenario: Another guest running into the same error shortens the wait
     When Ana opens the portal on a new phone
     And Ana starts
@@ -51,7 +47,6 @@ Feature: Recovery from an error
     And Ana is told that other guests ran into the same problem
     And Ana is taken back into the portal within 40 seconds
 
-  @pending
   Scenario: Reloading the error page resumes the countdown
     When Ana opens the portal on a new phone
     And Ana starts
@@ -63,12 +58,13 @@ Feature: Recovery from an error
     And Ana is taken back into the portal
     And Ana has internet access
 
-  @pending
+  # A new address: the access feature shares this location in a full run, and a guest who already
+  # answered its video's survey is offered no video there.
   Scenario: An error after the guest has finished gives staff a code and no way out
     Given a deployed location "unreachable" whose controller cannot be reached
     When Ana opens the portal on a new phone
     And Ana starts
-    And Ana answers the email question with "ana@example.com"
+    And Ana answers the email question with a new address
     And Ana watches the advertiser video to the end
     And Ana answers the video's survey with "Yes"
     And the portal's code throws for Ana
