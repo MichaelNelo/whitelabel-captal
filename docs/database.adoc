@@ -257,7 +257,7 @@ xref:platform.adoc[Platform]), differing only in those two arguments.
 The backoffice needs both. `mcp/src/whitelabel/captal/mcp/McpMigrate.scala` runs the API's set and
 then its own, so it starts on an empty database: a new environment's first location is created
 through the backoffice, before any API exists to migrate anything. The API runs its own set as it
-starts too; both take the migration lock, and whichever comes second finds nothing to do.
+starts too, in its `Main` before it builds anything that reads the database; both take the migration lock, and whichever comes second finds nothing to do.
 
 `McpMigrate` is also a `ZIOAppDefault`, so both schemas can be laid down without starting a server.
 

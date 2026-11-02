@@ -75,27 +75,17 @@ object `package` extends BaseModule with Released:
       build.client.fastLinkJS()
     super.run(args)()
 
-  /** Migrates the local configuration's database, then serves a location from it as the devenv process
-    * `api`, and returns once it serves. A run restarts it on the current build; `mill api.stop` stops it,
-    * `devenv processes logs api` shows its log. Usage: mill api.dev, or mill api.dev --slug basic.
+  /** Serves a location from the local configuration's database as the devenv process `api`, which
+    * migrates it first, and returns once it serves. A run restarts it on the current build; `mill api.stop`
+    * stops it, `devenv processes logs api` shows its log. Usage: mill api.dev, or mill api.dev --slug basic.
     * Requires `mcp.dev`'s local configuration to be applied first.
     */
   def dev(slug: String = defaultLocationSlug) = Task.Command:
     build.mcp.test.tofuSources()
     val dbUrl = localDbUrl(terraformDir(Task.env, moduleDir / os.up))
-    println("[dev] Step 1/3: Waiting for the local configuration's rqlite...")
+    println("[dev] Step 1/2: Waiting for the local configuration's rqlite...")
     awaitLocalDb(dbUrl)
-    println("[dev] Step 2/3: Running migrations...")
-    val migrationCp = build.platform
-      .runClasspath()
-      .map(_.path.toString)
-      .mkString(java.io.File.pathSeparator)
-    val migration = os
-      .proc("java", "-cp", migrationCp, "whitelabel.captal.platform.Migrate")
-      .call(env = Map("DB_URL" -> dbUrl), check = false, stdout = os.Inherit, stderr = os.Inherit)
-    if migration.exitCode != 0 then
-      sys.error("[dev] Migrations failed; the server would start against a schema-less database.")
-    println(s"[dev] Step 3/3: Starting server (location=$slug)...")
+    println(s"[dev] Step 2/2: Starting server (location=$slug)...")
     copyIndex()()
     if Task.env.getOrElse("CLIENT_LINKER", "fast") == "full" then
       build.client.bundle()

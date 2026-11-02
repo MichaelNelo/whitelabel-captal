@@ -27,14 +27,5 @@ ENV MCP_PORT=8080
 # default stack on some of these queries.
 ENV JAVA_TOOL_OPTIONS="-Xss4m -Dnetworkaddress.cache.ttl=5 -Dnetworkaddress.cache.negative.ttl=0"
 
-# Migrations first, then the server, in one command so a failed migration stops the container
-# rather than starting a server against a schema it was not written for.
-#
-# `McpMigrate` and not `infra.Migrate`: there are two schemas with two history tables, and this
-# owns `db/migration-mcp` only. It also refuses to start when the API schema is behind the version
-# its tools are written against -- deployment order between two services is not something either
-# one can enforce, so it says so at startup instead of failing one operator at a time on a column
-# that is not there.
-#
-# Both read `database.jdbcUrl`, which `application.conf` overrides from `DB_URL`.
-CMD ["sh", "-c", "java -cp mcp.jar whitelabel.captal.mcp.McpMigrate && java -jar mcp.jar"]
+# The server migrates the API's schema and its own before it serves (`McpMigrate`).
+CMD ["java", "-jar", "mcp.jar"]

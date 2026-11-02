@@ -9,11 +9,12 @@ import whitelabel.captal.api.routes.{
   VideoRoutes
 }
 import whitelabel.captal.api.session.SessionCookieConfig
+import whitelabel.captal.platform.Migrate
 import whitelabel.captal.platform.session.JobRunner
 import zio.*
 import zio.http.Server
 
-/** Starts the portal's API, and nothing else: resolve the settings, start the scheduler, log what
+/** Starts the portal's API: migrate its schema, resolve the settings, start the scheduler, log what
   * is mounted, serve.
   */
 object Main extends ZIOAppDefault:
@@ -72,7 +73,8 @@ object Main extends ZIOAppDefault:
         _ <- ZIO.logInfo(s"Mounted routes:\n${routeInfos.mkString("\n")}")
         result <- Server.serve(served)
       yield result
-    program.provide(ServerSettings.layer, Server.live, AppLayers.appLayers)
+    // Migrated before the layers are built: they read the served location's row.
+    Migrate.run *> program.provide(ServerSettings.layer, Server.live, AppLayers.appLayers)
   end run
 
 end Main

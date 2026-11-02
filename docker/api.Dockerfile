@@ -39,11 +39,6 @@ ENV SERVER_PORT=8080
 # caching lets this heal on its own instead of staying down until the JVM re-resolves.
 ENV JAVA_TOOL_OPTIONS="-Xss4m -Dnetworkaddress.cache.ttl=5 -Dnetworkaddress.cache.negative.ttl=0"
 
-# Migrations first, then the server, in one command so a failed migration stops the container rather
-# than starting a server against a schema it was not written for.
-#
-# `Migrate` owns `db/migration` and the default history table; the backoffice has its own and runs
-# `McpMigrate` from its own image. Both take `Migrate.Lock` first, which matters most here: every
-# location runs this image, so a fleet redeploy is one migrator per location against one history
-# table, and Flyway cannot serialise them on SQLite.
-CMD ["sh", "-c", "java -cp api.jar whitelabel.captal.platform.Migrate && java -jar api.jar"]
+# The server migrates its schema itself before it serves, under `Migrate.Lock`: every location runs
+# this image, so a fleet redeploy is one migrator per location against one history table.
+CMD ["java", "-jar", "api.jar"]

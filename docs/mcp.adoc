@@ -81,7 +81,8 @@ absent.
 [[Migrations]]
 == Migrations
 
-`McpMigrate` is its own `ZIOAppDefault` (also called directly from `Main.run`) and owns its own
+`McpMigrate` runs from `Main.run`, the only place a deployment runs it; it is also its own
+`ZIOAppDefault`, which the test tasks use to lay the schema down without a server, and owns its own
 history, kept apart from the API's on purpose — see xref:database.adoc[Database] and
 xref:platform.adoc[Platform] for the two-history arrangement in general.
 

@@ -569,11 +569,11 @@ pre-built jar, run it — rather than compiling inside the image, which is the p
 before and had rotted twice over by naming a deleted `provision/` directory and a `mill` wrapper
 script absent from the repository, invisible because nothing built these images in CI. `api.image`
 and `mcp.image` (Mill tasks) stage the already-assembled jar beside the Dockerfile so the build
-context is two files, not the whole repository. Both images run migrations and the server as one
-`CMD`, so a failed migration stops the container rather than starting a server against a schema it
-was not written for — `whitelabel.captal.platform.Migrate` for the API, `whitelabel.captal.mcp
-.McpMigrate` for the backoffice, which runs the API's migrations and then its own, each set with
-its own history table (`db/migration` versus `db/migration-mcp`). Both set a 5-second positive DNS cache TTL with no negative caching
+context is two files, not the whole repository. Each image's `CMD` runs its server alone, and the
+server migrates before it serves: the API runs `Migrate`, the backoffice `McpMigrate`, which runs
+the API's migrations and then its own, each set with its own history table (`db/migration` versus
+`db/migration-mcp`). A failed migration ends the process, so the container stops rather than
+serving against a schema it was not written for. Both set a 5-second positive DNS cache TTL with no negative caching
 (`-Dnetworkaddress.cache.ttl=5 -Dnetworkaddress.cache.negative.ttl=0`), because rqlite is reached
 through a Cloud Map service-discovery name whose answer changes whenever its task rotates, and the
 JDK's 30-second default positive / 10-second negative caching would otherwise pin the JDBC client to

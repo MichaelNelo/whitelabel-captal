@@ -164,7 +164,7 @@ These start processes that keep running after the command returns, under devenv'
 `mill e2e.cucumber [--tags T] [--linger S] [--keep]`:: Releases this build into LocalStack as `ci.run` does, then runs the end-to-end features against it, all but `@pending` ones unless `--tags` says, and destroys the `e2e-` locations afterwards unless `--keep`; `--linger` holds each view `S` seconds before the next, for the recordings. See xref:testing.adoc#end-to-end[the end-to-end features].
 `mill e2e.check [--only F]`:: Cucumber's dry run of every feature, or of the file `F`: fails on a step with no definition or with two. Needs no LocalStack.
 
-`mill api.dev [--slug S]`:: Migrates the local configuration's database and serves one location's API on `:8080`.
+`mill api.dev [--slug S]`:: Serves one location's API on `:8080` from the local configuration's database, which the server migrates as it starts.
 
 `mill mcp.stop`, `mill api.stop`:: Stop the backoffice with its tunnels, or the API.
 
