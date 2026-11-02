@@ -52,9 +52,9 @@ Feature: Changing a deployed location while guests use it
     And Ana opens the portal on a new phone
     Then Ana sees the welcome button "Empezar ahora"
 
-  @pending
   Scenario: A guest who walks away mid-video keeps the file only until its playback expires
     Given the operator's own deployed location "abandoned" with one advertiser video
+    And the location "abandoned" closes a playback its page never ended 120 seconds after its file ends
     When Ana opens the portal on a new phone
     And Ana starts
     And Ana answers the email question with "ana.live@example.com"

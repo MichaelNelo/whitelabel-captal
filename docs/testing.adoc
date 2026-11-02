@@ -286,8 +286,8 @@ mill e2e.cucumber --tags @first-visit --linger 3 # each view held 3 s, to watch 
 mill e2e.check                        # every step defined once, without LocalStack
 ----
 
-A scenario tagged `@pending` needs something the product or this stack does not have yet:
-configurable playback grace, a release run from a scenario. It is
+A scenario tagged `@pending` needs something the product or this stack does not have yet: a
+release run from a scenario. It is
 written in full, its feasible steps implemented, and the missing ones report themselves pending
 with what is missing (`World.pending`); `e2e.cucumber` leaves them out unless `--tags` asks.
 `e2e.check` is Cucumber's dry run: it compiles the steps and fails on a step with no definition or
@@ -337,6 +337,11 @@ guest's page: `server` has the API fail for real and record it; `client:<tag>` h
 code throw. The tag is the scenario's own, so an earlier scenario's error, or an earlier run's, is
 never taken for this one's, which would make it recurrent; two guests of one scenario share it
 when the scenario is about recurrence.
+* **Waits** are the location's to set, and the features set them short through
+`set_recovery_policy` so a scenario waits seconds rather than the defaults' minutes: the recovery
+feature a one-minute maximum (five for its recurrence scenario, where the shortening and not the
+countdown has to bring the guest back), and the abandoned-playback scenario a two-minute grace,
+long enough for the operator to replace the file while the playback still holds it.
 * **The venue's controller** is the local configuration's stand-in (`terraform/modules/unifi-fake`,
 `enable_unifi_fake`): a Python script on the public Python image, reached by the locations' tasks
 as `unifi.captal.local:8443` over HTTPS, as a controller is. It answers the two calls of the

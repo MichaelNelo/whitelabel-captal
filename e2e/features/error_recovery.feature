@@ -3,12 +3,15 @@ Feature: Recovery from an error
   Something that breaks never leaves a guest without internet. An error the server recorded opens
   the way out at once. An error in the portal's own code makes the guest wait, as long as the
   effort they have made on that phone asks, and the wait gets shorter when other guests run into
-  the same error. Reloading the error page resumes the wait. Taking the way out grants access as
+  the same error. How long a new guest waits is the location's to set, and every other wait is
+  that one scaled: an identified guest waits three tenths of it, and one whose error other guests
+  ran into a tenth. Reloading the error page resumes the wait. Taking the way out grants access as
   the end of the flow does. After the guest has finished, an error gives no way out, but staff a
   code to look it up by.
 
   Background:
     Given a deployed location "plaza" with an advertiser video and its survey
+    And the location "plaza" makes a new guest wait 60 seconds for an error in its portal's code
 
   Scenario: A server error takes the guest back into the portal at once
     When Ana opens the portal on a new phone
@@ -18,13 +21,13 @@ Feature: Recovery from an error
     And Ana has internet access
     And the venue's controller let Ana's phone in for 60 minutes
 
-  Scenario: A client error makes a new guest wait five minutes, then takes them back in
+  Scenario: A client error makes a new guest wait the location's maximum, then takes them back in
     When Ana opens the portal on a new phone
     And Ana starts
     And the portal's code throws for Ana
     Then Ana sees the error page
-    And Ana is told to wait about 300 seconds
-    And Ana is taken back into the portal
+    And Ana is told to wait about 60 seconds
+    And Ana is taken back into the portal within 90 seconds
     And Ana has internet access
 
   Scenario: A guest who has given an email waits less for a client error
@@ -33,9 +36,12 @@ Feature: Recovery from an error
     And Ana answers the email question with "ana@example.com"
     And the portal's code throws for Ana
     Then Ana sees the error page
-    And Ana is told to wait about 90 seconds
+    And Ana is told to wait about 18 seconds
 
+  # Long enough that the shortening, not the countdown, is what brings the guest back: the error
+  # page hears of the other report about every 80 seconds through LocalStack's distribution.
   Scenario: Another guest running into the same error shortens the wait
+    Given the location "plaza" makes a new guest wait 300 seconds for an error in its portal's code
     When Ana opens the portal on a new phone
     And Ana starts
     And the portal's code throws for Ana
@@ -51,11 +57,11 @@ Feature: Recovery from an error
     When Ana opens the portal on a new phone
     And Ana starts
     And the portal's code throws for Ana
-    Then Ana is told to wait about 300 seconds
-    When Ana waits 60 seconds
+    Then Ana is told to wait about 60 seconds
+    When Ana waits 20 seconds
     And Ana reloads the error page
-    Then Ana's countdown reads at most 240 seconds
-    And Ana is taken back into the portal
+    Then Ana's countdown reads at most 40 seconds
+    And Ana is taken back into the portal within 60 seconds
     And Ana has internet access
 
   # A new address: the access feature shares this location in a full run, and a guest who already

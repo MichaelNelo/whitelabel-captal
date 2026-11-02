@@ -8,7 +8,7 @@ import io.cucumber.scala.{EN, ScalaDsl}
 import whitelabel.captal.e2e.backoffice.{Backoffice, Locations, Operator}
 import whitelabel.captal.e2e.infrastructure.Stack
 import whitelabel.captal.e2e.scenario.World
-import whitelabel.captal.mcp.tools.{AnswerFormat, I18nTools, SurveyTools, VideoTools}
+import whitelabel.captal.mcp.tools.{AnswerFormat, I18nTools, RecoveryTools, SurveyTools, VideoTools}
 
 /** The operator changing a deployed location while guests use it: retiring a survey question,
   * taking a video out of rotation, replacing a video's file, setting a translation, and a guest who
@@ -267,11 +267,22 @@ final class LiveContentSteps extends ScalaDsl with EN:
     awaitDeleted(firstFileKey(World.location(at), title), minutes = 2)
   }
 
-  /** Waits out the playback grace: the file's length plus ten minutes from the playback's start,
-    * which is fixed, so this is the real wait.
+  /** The location's playback grace, set through the backoffice before any guest starts a video: a
+    * playback's deadline is read when it starts. Long enough for the operator to replace the file
+    * while the playback still holds it.
+    */
+  Given(
+    """the location {string} closes a playback its page never ended {int} seconds after its file ends""") {
+    (name: String, seconds: Int) =>
+      Locations.setRecovery(
+        RecoveryTools.SetRequest(World.location(name).slug, playbackGraceSeconds = Some(seconds)))
+  }
+
+  /** Waits out the playback: the file's length plus the location's grace from its start, and the
+    * pass that deletes the file after.
     */
   Then("""the old file of {string} at {string} is deleted once its playback has expired""") {
     (title: String, at: String) =>
-      awaitDeleted(firstFileKey(World.location(at), title), minutes = 13)
+      awaitDeleted(firstFileKey(World.location(at), title), minutes = 4)
   }
 end LiveContentSteps

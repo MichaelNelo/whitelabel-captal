@@ -15,6 +15,7 @@ import whitelabel.captal.mcp.tools.{
   IdentificationCategory,
   LocalizedText,
   LocationTools,
+  RecoveryTools,
   SurveyTools,
   UnifiTools,
   VideoTools
@@ -198,6 +199,13 @@ object Locations:
       "set_unifi_enabled",
       UnifiTools.SetEnabledRequest(slug, enabled = true))
   end configureUnifi
+
+  /** Changes how a location treats errors and abandoned playbacks, as an operator does. Its portal
+    * and the backoffice read it as they need it, so it needs no deploy.
+    */
+  def setRecovery(change: RecoveryTools.SetRequest): RecoveryTools.PolicyView = Backoffice.tool[
+    RecoveryTools.SetRequest,
+    RecoveryTools.PolicyView]("set_recovery_policy", change)
 
   /** The email, profiling and location surveys belong to the whole deployment, one active each:
     * created only when missing, with one question, for a guest to be identified at all.

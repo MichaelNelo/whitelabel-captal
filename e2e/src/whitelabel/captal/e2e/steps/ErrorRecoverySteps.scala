@@ -2,7 +2,9 @@ package whitelabel.captal.e2e.steps
 
 import com.microsoft.playwright.{ConsoleMessage, Page, Request, Response, TimeoutError}
 import io.cucumber.scala.{EN, ScalaDsl}
+import whitelabel.captal.e2e.backoffice.Locations
 import whitelabel.captal.e2e.scenario.World
+import whitelabel.captal.mcp.tools.RecoveryTools
 
 /** The way out of an error, as the guest's page shows it: the error page and its countdown, the
   * shortening when other guests run into the same error, reloading the page, and the code staff
@@ -104,6 +106,16 @@ final class ErrorRecoverySteps extends ScalaDsl with EN:
       page.offRequestFailed(failed)
       page.offResponse(answered)
   end provoke
+
+  /** The location's maximum wait, set through the backoffice: every other wait is this one, scaled.
+    * Shorter than the default's five minutes, so a scenario waits it out in under one.
+    */
+  Given(
+    """the location {string} makes a new guest wait {int} seconds for an error in its portal's code""") {
+    (name: String, seconds: Int) =>
+      Locations.setRecovery(
+        RecoveryTools.SetRequest(World.location(name).slug, maximumSeconds = Some(seconds)))
+  }
 
   When("""the portal fails for {word} with a server error""") { (name: String) =>
     provoke(name, "server")
