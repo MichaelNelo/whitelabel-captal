@@ -38,8 +38,11 @@ Feature: Recovery from an error
     Then Ana sees the error page
     And Ana is told to wait about 18 seconds
 
-  # Long enough that the shortening, not the countdown, is what brings the guest back: the error
-  # page hears of the other report about every 80 seconds through LocalStack's distribution.
+  # The waiting page hears of the other report on a stream the server keeps open. LocalStack's
+  # distribution hands a response on only once it ends, which a stream never does, so the guests'
+  # streams go through the load balancer. Five minutes, so the countdown is still running when the
+  # shortening reaches it.
+  @stream-through-load-balancer
   Scenario: Another guest running into the same error shortens the wait
     Given the location "plaza" makes a new guest wait 300 seconds for an error in its portal's code
     When Ana opens the portal on a new phone

@@ -58,7 +58,7 @@ object World:
       name: String,
       at: Locations.Deployed = location,
       locale: String = "en-US"): Portal.Guest =
-    val guest = Portal.arrive(name, at, locale)
+    val guest = Portal.arrive(name, at, locale, streamThroughLoadBalancer)
     guests(name) = guest
     guest
 
@@ -80,6 +80,14 @@ object World:
   private val recordings = sys.env.get("E2E_RECORDINGS").filter(_.nonEmpty).map(Path.of(_))
   private var scenarioRecording = Option.empty[Path]
 
+  /** Whether the scenario's guests follow the server's event streams through the load balancer
+    * rather than the distribution: a scenario tagged [[StreamThroughLoadBalancer]], which needs a
+    * stream to reach a page while it is open (see [[Portal.arrive]]).
+    */
+  private var streamThroughLoadBalancer = false
+
+  val StreamThroughLoadBalancer = "@stream-through-load-balancer"
+
   /** How long a view stays on screen before the next one, for a recording a person can follow
     * (`E2E_LINGER_SECONDS`): after every step, and on the operator's pages
     * ([[whitelabel.captal.e2e.backoffice.Operator]]). None by default.
@@ -96,6 +104,7 @@ object World:
     */
   private[e2e] def begin(scenario: Scenario): Unit =
     reset()
+    streamThroughLoadBalancer = scenario.getSourceTagNames.contains(StreamThroughLoadBalancer)
     val feature = Path.of(scenario.getUri.getPath).getFileName.toString.stripSuffix(".feature")
     val name = scenario.getName.replaceAll("[^A-Za-z0-9]+", "-").stripPrefix("-").stripSuffix("-")
     scenarioRecording = recordings.map(_.resolve(feature).resolve(s"${scenario.getLine}-$name"))

@@ -3,8 +3,9 @@ package whitelabel.captal.e2e.guest
 import scala.jdk.CollectionConverters.*
 
 import com.microsoft.playwright.*
+import com.microsoft.playwright.options.Cookie
 import whitelabel.captal.e2e.backoffice.Locations
-import whitelabel.captal.e2e.scenario.World
+import whitelabel.captal.e2e.scenario.{Run, World}
 import zio.json.ast.Json
 
 /** The portal as guests reach it: through the distribution, in a browser. One browser for the run;
@@ -93,8 +94,14 @@ object Portal:
             )))
   end Guest
 
-  /** `name` on a new phone set to `locale`, sent by the access point to `location`'s portal. */
-  def arrive(name: String, location: Locations.Deployed, locale: String = "en-US"): Guest =
+  /** `name` on a new phone set to `locale`, sent by the access point to `location`'s portal. With
+    * `streamThroughLoadBalancer`, its event streams go to the load balancer ([[streamThrough]]).
+    */
+  def arrive(
+      name: String,
+      location: Locations.Deployed,
+      locale: String = "en-US",
+      streamThroughLoadBalancer: Boolean = false): Guest =
     val mac = Seq.fill(6)(f"${scala.util.Random.nextInt(256)}%02X").mkString(":")
     val options = Browser
       .NewContextOptions()
@@ -105,10 +112,41 @@ object Portal:
       .setLocale(locale)
     recorded(options, 390, 844)
     val context = browser.newContext(options)
+    if streamThroughLoadBalancer then
+      streamThrough(context)
     val page = context.newPage()
     val clickId = s"e2e-${java.util.UUID.randomUUID}"
     page.navigate(location.portal(mac, clickId))
     Guest(name, mac, clickId, location, context, page)
+  end arrive
+
+  /** Sends the phone's event streams to the load balancer rather than the distribution, the rest of
+    * the portal staying where it is. LocalStack's distribution hands a response on only once it
+    * ends, which a stream never does; AWS's hands each part on as it arrives. The request keeps its
+    * page, so the page reads it as its own; the browser sends a host only its own cookies, so the
+    * session's are copied to the load balancer's host first.
+    */
+  private def streamThrough(context: BrowserContext): Unit =
+    val portal = Run.setting("E2E_PORTAL")
+    val balancer = Run.setting("E2E_LOAD_BALANCER")
+    val balancerHost = java.net.URI.create(balancer).getHost
+    context.route(
+      java.util.regex.Pattern.compile(".*/api/recovery/[^/]+/events$"),
+      route =>
+        val copies = context
+          .cookies(route.request.url)
+          .asScala
+          .map(cookie =>
+            Cookie(cookie.name, cookie.value)
+              .setDomain(balancerHost)
+              .setPath(cookie.path)
+              .setSecure(cookie.secure)
+              .setHttpOnly(cookie.httpOnly)
+              .setSameSite(cookie.sameSite))
+        context.addCookies(copies.asJava)
+        route.resume(Route.ResumeOptions().setUrl(route.request.url.replace(portal, balancer)))
+    )
+  end streamThrough
 
   /** The operator's browser, at a desk rather than on a phone: where the backoffice's pages are
     * shown ([[whitelabel.captal.e2e.backoffice.Operator]]).

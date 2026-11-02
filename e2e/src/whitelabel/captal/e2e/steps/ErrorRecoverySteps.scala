@@ -175,13 +175,12 @@ final class ErrorRecoverySteps extends ScalaDsl with EN:
   }
 
   // The server shortens the wait as soon as the feed tells it of the other report, and says so on
-  // the page's stream. In AWS that reaches the page as it happens. LocalStack's distribution hands a
-  // stream on only when its connection ends, which the page then reopens, about every 80 seconds
-  // here: two and a half minutes covers one.
+  // the page's stream, which reaches the page as it happens: through the distribution in AWS, and
+  // through the load balancer in a scenario tagged so here (`World.StreamThroughLoadBalancer`).
   Then("""{word}'s countdown reads at most {int} seconds""") { (name: String, max: Int) =>
     val page = World.guest(name).page
     within(
-      150,
+      60,
       s"$name's countdown reads ${secondsShown(page).getOrElse(
           "nothing")}, not $max seconds or less")(secondsShown(page).exists(_ <= max))
   }

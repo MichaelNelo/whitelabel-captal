@@ -339,9 +339,17 @@ never taken for this one's, which would make it recurrent; two guests of one sce
 when the scenario is about recurrence.
 * **Waits** are the location's to set, and the features set them short through
 `set_recovery_policy` so a scenario waits seconds rather than the defaults' minutes: the recovery
-feature a one-minute maximum (five for its recurrence scenario, where the shortening and not the
-countdown has to bring the guest back), and the abandoned-playback scenario a two-minute grace,
-long enough for the operator to replace the file while the playback still holds it.
+feature a one-minute maximum (five for its recurrence scenario, so the countdown is still running
+when the shortening reaches it), and the abandoned-playback scenario a two-minute grace, long
+enough for the operator to replace the file while the playback still holds it.
+* **Streams** reach a page through the load balancer in a scenario tagged
+`@stream-through-load-balancer`. LocalStack's distribution hands a response on only once it ends,
+which the stream a waiting error page follows never does; AWS's hands each part on as it arrives
+(only a response with a `Content-Length` is compressed, and `text/event-stream` is not among the
+types it compresses). In such a scenario every guest's context routes
+`…/api/recovery/<id>/events` to `E2E_LOAD_BALANCER` instead, copying the session's cookies to that
+host, and the page reads the answer as its own. Everything else still goes through the
+distribution.
 * **The venue's controller** is the local configuration's stand-in (`terraform/modules/unifi-fake`,
 `enable_unifi_fake`): a Python script on the public Python image, reached by the locations' tasks
 as `unifi.captal.local:8443` over HTTPS, as a controller is. It answers the two calls of the

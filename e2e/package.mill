@@ -131,6 +131,7 @@ object `package` extends BaseModule:
           "E2E_MCP_URL"       -> outputs("mcp_url"),
           "E2E_MCP_TOKEN"     -> token,
           "E2E_PORTAL"        -> s"https://${outputs("cloudfront_domain_name")}:$localStackPort",
+          "E2E_LOAD_BALANCER" -> s"https://${outputs("alb_dns_name")}:$localStackPort",
           "E2E_SPOT"          -> spot().path.toString,
           "E2E_UNIFI_HOST"    -> unifi("unifi_fake_host"),
           "E2E_UNIFI_PORT"    -> unifi("unifi_fake_port"),
