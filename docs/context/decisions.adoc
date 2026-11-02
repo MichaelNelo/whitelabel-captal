@@ -478,6 +478,14 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
   CloudFront compresses on the fly (brotli, `compress = true` already the CloudFront default)
   instead, and `publishS3` enumerates whatever the build produced rather than naming four fixed
   files.
+* **A location's stylesheet is stored as written, not pre-gzipped, as `custom-styles.css`.** It
+  was the one asset still gzipped by hand, as `custom-styles.css.gz` with `Content-Encoding: gzip`,
+  which CloudFront's `compress` already made redundant. And it could not be tested locally:
+  LocalStack's distribution decompressed the body and kept the header, so the browser failed to
+  decode it and the `<link onerror>` dropped the stylesheet (measured 2026-11-01). Considered: a
+  fallback `<link>` swapped in by `onerror` — two copies to keep in step, an extra request, and
+  LocalStack exercising a different path from AWS. Nothing in production had a stylesheet of its
+  own, so nothing was migrated.
 * **Vite/Rollup replaced esbuild+terser for the client bundle**, measured slightly better
   (1,854 bytes better on first paint, 7,621 on the full session) and folding the eager half into
   one chunk instead of two; needed at all because per-route code splitting makes Scala.js emit

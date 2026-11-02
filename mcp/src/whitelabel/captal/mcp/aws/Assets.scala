@@ -1,9 +1,7 @@
 package whitelabel.captal.mcp.aws
 
-import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 import java.net.URI
 import java.time.Duration as JavaDuration
-import java.util.zip.{GZIPInputStream, GZIPOutputStream}
 
 import scala.jdk.CollectionConverters.*
 import scala.util.Try
@@ -33,11 +31,12 @@ import zio.*
 import zio.http.{Client, Request, URL}
 
 /** One asset a location can override, and how it has to be stored. The SPA fetches these by fixed
-  * relative name, so the content type and encoding are part of the contract.
+  * relative name, so the content type is part of the contract. Stored as written: the distribution
+  * compresses what it serves, as it does the bundle.
   */
-enum Asset(val fileName: String, val contentType: String, val gzipped: Boolean):
-  case Styles    extends Asset("custom-styles.css.gz", "text/css", true)
-  case BrandIcon extends Asset("brand-icon.svg", "image/svg+xml", false)
+enum Asset(val fileName: String, val contentType: String):
+  case Styles    extends Asset("custom-styles.css", "text/css")
+  case BrandIcon extends Asset("brand-icon.svg", "image/svg+xml")
 
 /** What a bundle copy did.
   *
@@ -81,12 +80,7 @@ final case class AssetStore(
   def key(slug: String, asset: Asset): String = s"$slug/${asset.fileName}"
 
   def put(slug: String, asset: Asset, content: String): ZIO[Any, String, Int] =
-    val raw = content.getBytes("UTF-8")
-    val body =
-      if asset.gzipped then
-        gzip(raw)
-      else
-        raw
+    val body = content.getBytes("UTF-8")
     ZIO
       .attemptBlocking:
         val request = PutObjectRequest
@@ -97,12 +91,8 @@ final case class AssetStore(
           // Matches what `client.publishS3` puts on the bundle. Without it the browser invents a
           // freshness window from the object's age.
           .cacheControl(AssetStore.CacheControl)
-        val withEncoding =
-          if asset.gzipped then
-            request.contentEncoding("gzip")
-          else
-            request
-        s3.putObject(withEncoding.build(), RequestBody.fromBytes(body))
+          .build()
+        s3.putObject(request, RequestBody.fromBytes(body))
       .mapError(e => s"Could not write ${key(slug, asset)}: ${e.getMessage}")
       .as(body.length)
   end put
@@ -112,11 +102,7 @@ final case class AssetStore(
       val bytes = s3
         .getObject(GetObjectRequest.builder().bucket(bucket).key(key(slug, asset)).build())
         .readAllBytes()
-      Some(
-        if asset.gzipped then
-          gunzip(bytes)
-        else
-          new String(bytes, "UTF-8"))
+      Some(new String(bytes, "UTF-8"))
     .catchSome { case _: NoSuchKeyException =>
       ZIO.none
     }
@@ -480,17 +466,6 @@ final case class AssetStore(
     }
     .mapError(e => s"Could not check $key: ${e.getMessage}")
 
-  private def gzip(bytes: Array[Byte]): Array[Byte] =
-    val out = new ByteArrayOutputStream()
-    val gz = new GZIPOutputStream(out)
-    try gz.write(bytes)
-    finally gz.close()
-    out.toByteArray
-
-  private def gunzip(bytes: Array[Byte]): String =
-    val in = new GZIPInputStream(new ByteArrayInputStream(bytes))
-    try new String(in.readAllBytes(), "UTF-8")
-    finally in.close()
 end AssetStore
 
 object AssetStore:

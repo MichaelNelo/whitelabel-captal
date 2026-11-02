@@ -54,7 +54,7 @@ fails at runtime.
 
 | `s3:PutObject`
 | `set_location_styles`, `set_location_icon`
-| Writes `<slug>/custom-styles.css.gz` and `<slug>/brand-icon.svg`
+| Writes `<slug>/custom-styles.css` and `<slug>/brand-icon.svg`
 
 | `s3:GetObject`
 | `get_location_styles`, `get_location_icon`

@@ -523,7 +523,7 @@ them. Scope it under `.view-icon` / `.nav-loader` / `.initial-loader` when you w
 
 - **Order**: base styles load first, custom-styles second. Same specificity → custom wins. A variable on `:root { --color-primary: ... }` in custom-styles overrides the base.
 - **Specificity**: avoid `!important` unless absolutely necessary. The base stylesheet doesn't use it, so plain selectors work.
-- **No CSS preprocessing**: the file is served verbatim (gzipped). No SCSS, no PostCSS.
+- **No CSS preprocessing**: the file is served verbatim. No SCSS, no PostCSS.
 - **Mobile-first**: the base stylesheet uses fluid units and mobile-first breakpoints. Test at 360px width minimum.
 - **Don't restyle `.app-root` margins/padding**: the layout depends on them being controlled via `--space-*` and `--content-*` variables.
 - **Don't leave the brand icon static while loading**: keep some animation on `.brand-icon` during
@@ -539,7 +539,7 @@ them. Scope it under `.view-icon` / `.nav-loader` / `.initial-loader` when you w
 4. Open `http://localhost:8080/<slug>/`.
 
 What the dev server shows is the **base** theme. It serves `client/assets/styles.css` at
-`/assets/styles.css` and nothing at `/<slug>/custom-styles.css.gz`, which is where the location's
+`/assets/styles.css` and nothing at `/<slug>/custom-styles.css`, which is where the location's
 override lives in production — so a local run never picks one up. To eyeball a stylesheet before
 publishing it, paste the rules into `client/assets/styles.css` temporarily and revert afterwards;
 they are not a location's content and must not be committed.

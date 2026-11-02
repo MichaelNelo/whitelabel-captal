@@ -66,19 +66,6 @@ trait Portal extends BaseJSModule with Released:
     )
     Seq(PathRef(Task.dest))
 
-  private def gzipFile(src: os.Path, dest: os.Path): Unit =
-    val in = java.io.FileInputStream(src.toIO)
-    val out = java.util.zip.GZIPOutputStream(java.io.FileOutputStream(dest.toIO))
-    try
-      val buf = new Array[Byte](8192)
-      var n = in.read(buf)
-      while n > 0 do
-        out.write(buf, 0, n)
-        n = in.read(buf)
-    finally
-      out.close()
-      in.close()
-
   def clientAssets: T[PathRef] = Task.Source(portalDir / "assets")
   def clientTemplate: T[PathRef] = Task.Source(portalDir / "index.html.template")
   def maintenanceTemplate: T[PathRef] = Task.Source(portalDir / "maintenance.html.template")

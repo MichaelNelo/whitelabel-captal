@@ -108,7 +108,7 @@ The location's brand icon is the one key it treats specially, and `iconPreserved
 so the copy compares ETags: an icon that is still the default gets refreshed, and one the operator
 set is left alone. Nothing to do about it either way — just do not read `iconPreserved: false` as a
 lost icon, it is the ordinary answer for a location with no branding of its own.
-`custom-styles.css.gz` is not in the bundle and is never touched.
+`custom-styles.css` is not in the bundle and is never touched.
 
 ### Following a run
 

@@ -17,7 +17,7 @@
     })();
   </script>
   <link rel="stylesheet" href="{{CSS_PATH}}">
-  <link rel="stylesheet" href="./custom-styles.css.gz" onerror="this.remove()">
+  <link rel="stylesheet" href="./custom-styles.css" onerror="this.remove()">
 </head>
 <body>
   <!-- The way out of an error. Static, with its own script and no part of the bundle, because the

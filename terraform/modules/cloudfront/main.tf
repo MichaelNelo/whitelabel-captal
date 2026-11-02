@@ -30,7 +30,7 @@ resource "aws_cloudfront_origin_access_control" "assets" {
 }
 
 # Allow only CloudFront to read the bucket. Includes s3:ListBucket so S3 returns 404
-# (instead of 403) for missing keys — important for optional assets like custom-styles.css.gz
+# (instead of 403) for missing keys — important for optional assets like custom-styles.css
 # that locations may or may not provide; the SPA's `<link onerror=...>` only fires reliably
 # on 404, and 403 leaks "key denied" semantics that aren't accurate for missing files.
 data "aws_iam_policy_document" "bucket" {

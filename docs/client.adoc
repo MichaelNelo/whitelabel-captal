@@ -734,7 +734,7 @@ It is inline and first in the `<head>` because every relative URL below it depen
 document URL is `/<slug>/<route>` rather than `/<slug>/` for every route but the first.
 
 IMPORTANT: Every asset reference must be relative. `./main.js`, `./styles.css`,
-`./custom-styles.css.gz`, `brand-icon.svg` in `BrandLoader` — an absolute path such as
+`./custom-styles.css`, `brand-icon.svg` in `BrandLoader` — an absolute path such as
 `/styles.css` resolves outside the slug and breaks. The same applies to anything referenced *from*
 the stylesheet, which resolves against the stylesheet's own URL rather than the `<base>`.
 

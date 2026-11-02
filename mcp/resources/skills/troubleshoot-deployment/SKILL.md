@@ -33,7 +33,7 @@ curl -sI https://<domain>/<slug>/main.js
 
 ## B. 403 instead of 404 on a missing key
 
-Typically `custom-styles.css.gz`, whose `<link onerror>` only fires reliably on a 404.
+Typically `custom-styles.css`, whose `<link onerror>` only fires reliably on a 404.
 
 S3 with a private bucket and OAC answers 403 for a missing key unless the principal has
 `s3:ListBucket`, and CloudFront forwards it. The policy in `modules/cloudfront` already grants both

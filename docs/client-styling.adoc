@@ -16,7 +16,7 @@ stylesheets, in order:
 [source,html]
 ----
 <link rel="stylesheet" href="{{CSS_PATH}}">
-<link rel="stylesheet" href="./custom-styles.css.gz" onerror="this.remove()">
+<link rel="stylesheet" href="./custom-styles.css" onerror="this.remove()">
 ----
 
 `{{CSS_PATH}}` is the bundle's own `styles.css` — the file this document describes. The second link
@@ -27,10 +27,11 @@ changed — anything it omits keeps the bundle's default. `onerror="this.remove(
 location with no customisation correct: the object does not exist, the link fails to load, and the
 tag removes itself rather than sitting there as a stylesheet reference to nothing.
 
-`custom-styles.css.gz` is always gzipped and always `text/css`, written by the MCP backoffice's
-`AssetTools.setStyles` → `AssetStore.put` (`mcp/src/whitelabel/captal/mcp/aws/Assets.scala`), which
-also sets `Content-Encoding: gzip` and the same `Cache-Control: public, max-age=86400` the portal
-bundle carries, and invalidates the one CloudFront key the write touched so the change is visible
+`custom-styles.css` is stored as written, `text/css`, by the MCP backoffice's
+`AssetTools.setStyles` → `AssetStore.put` (`mcp/src/whitelabel/captal/mcp/aws/Assets.scala`), with
+the same `Cache-Control: public, max-age=86400` the portal bundle carries; the distribution
+compresses it for a browser that accepts it, as it does the bundle (`compress` on its cache
+behaviours). The write invalidates the one CloudFront key it touched, so the change is visible
 without waiting out that cache. The brand icon (`brand-icon.svg`, referenced by `BrandLoader` and by
 the static markup in the HTML templates) follows the same store but is not a CSS property at all —
 `set_location_icon` replaces the file outright, after `AssetTools.validateSvg` rejects anything

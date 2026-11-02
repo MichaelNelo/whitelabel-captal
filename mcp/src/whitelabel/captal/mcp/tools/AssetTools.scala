@@ -26,7 +26,7 @@ object AssetTools:
       @description(
         "False when this location has no stylesheet of its own and is running on the bundle's defaults.")
       present: Boolean,
-      @description("The stored stylesheet, ungzipped. Absent when there is none.")
+      @description("The stored stylesheet. Absent when there is none.")
       css: Option[String])
   final case class GetIconResponse(
       @description("The location read.")
