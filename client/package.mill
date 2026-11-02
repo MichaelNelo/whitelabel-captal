@@ -9,9 +9,20 @@ import millbuild.*
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** One linker run for every public module: the portal, the maintenance page and the MCP App pages.
-  * Sources under `client/src`, entry stubs under `client/entries`.
+  * Sources under `client/src`, entry stubs under `client/entries`. Built twice: as `client`, what
+  * every release ships, and as `client.local`, the same sources with `Faults` in.
   */
-object `package` extends BaseJSModule with Released:
+trait Portal extends BaseJSModule with Released:
+  /** Whether the bundle carries `Faults`, the failures on demand the end-to-end features recover
+    * from. A constant in `BuildInfo`, so a bundle built without it has none of that code.
+    */
+  def faults: Boolean
+
+  /** Where the portal's files are. */
+  def portalDir: os.Path = moduleDir
+
+  override def sources = Task.Sources(portalDir / "src")
+
   def moduleDeps = Seq(build.`core-js`, build.`messages-js`)
 
   /** Targets ES2021 and backs `Long` with the native `BigInt`, which removes `RuntimeLong` from the bundle.
@@ -36,7 +47,8 @@ object `package` extends BaseJSModule with Released:
     mvn"org.scala-js::scalajs-dom::2.8.0",
     mvn"io.github.cquiroz::scala-java-time::2.6.0")
 
-  // Generates `BuildInfo`: the environment (`ENVIRONMENT`, default production) and the release version.
+  // Generates `BuildInfo`: the environment (`ENVIRONMENT`, default production), the release version,
+  // and whether `Faults` is in.
   def generatedSources: T[Seq[PathRef]] = Task:
     val env = Task.env.getOrElse("ENVIRONMENT", "production")
     val isDevMode = env == "dev"
@@ -49,6 +61,7 @@ object `package` extends BaseJSModule with Released:
          |  val environment: String = "$env"
          |  val isDevMode: Boolean = $isDevMode
          |  val version: String = "${releaseVersion().version}"
+         |  inline val faults = $faults
          |""".stripMargin
     )
     Seq(PathRef(Task.dest))
@@ -66,16 +79,16 @@ object `package` extends BaseJSModule with Released:
       out.close()
       in.close()
 
-  def clientAssets: T[PathRef] = Task.Source(moduleDir / "assets")
-  def clientTemplate: T[PathRef] = Task.Source(moduleDir / "index.html.template")
-  def maintenanceTemplate: T[PathRef] = Task.Source(moduleDir / "maintenance.html.template")
-  def errorTemplate: T[PathRef] = Task.Source(moduleDir / "error.html.template")
+  def clientAssets: T[PathRef] = Task.Source(portalDir / "assets")
+  def clientTemplate: T[PathRef] = Task.Source(portalDir / "index.html.template")
+  def maintenanceTemplate: T[PathRef] = Task.Source(portalDir / "maintenance.html.template")
+  def errorTemplate: T[PathRef] = Task.Source(portalDir / "error.html.template")
 
   /** Hand-written entries that call `start`, staged beside the linker's output: one per public module other than the portal.
     */
-  def entries: T[PathRef] = Task.Source(moduleDir / "entries")
+  def entries: T[PathRef] = Task.Source(portalDir / "entries")
 
-  def viteConfig: T[PathRef] = Task.Source(moduleDir / "vite.config.mjs")
+  def viteConfig: T[PathRef] = Task.Source(portalDir / "vite.config.mjs")
 
   /** Installs Vite and terser into the task's directory. Vite's Rollup build does the scope hoisting. */
   def jsTools: T[PathRef] = Task:
@@ -178,4 +191,17 @@ object `package` extends BaseJSModule with Released:
       region: String = "us-east-1",
       endpoint: String = "") = Task.Command:
     publishBundle(bundle().path, bucket, prefix, region, local = endpoint.nonEmpty)
+end Portal
+
+object `package` extends Portal:
+  def faults = false
+
+  /** The portal with `Faults` in, for the local stack the end-to-end features release into: the same
+    * sources and the same version as `client`, its own bundle. Never what `ci.run` releases.
+    */
+  object local extends Portal:
+    def faults = true
+    override def portalDir = build.client.moduleDir
+    override def releaseVersion = Task.Uncached(build.client.releaseVersion())
+    override def jsTools = Task(build.client.jsTools())
 end `package`

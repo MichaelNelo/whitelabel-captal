@@ -21,7 +21,7 @@ import whitelabel.captal.messages.{
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.session.{SessionContext, SessionService}
 import zio.*
-import zio.http.codec.HeaderCodec
+import zio.http.codec.{HeaderCodec, PathCodec}
 import zio.http.endpoint.Endpoint
 import zio.http.*
 import zio.stream.ZStream
@@ -97,6 +97,14 @@ final class RecoveryRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
   private val redeem = Endpoint(base(Method.POST / "api" / "recovery" / "redeem"))
     .header(HeaderCodec.cookie.optional)
     .in[RedeemRecoveryRequest]
+    .out[StatusResponse]
+    .outError[ApiError](Status.BadRequest)
+
+  // ─── Fault (dev only) ─────────────────────────────────────────────────────
+
+  private val fault = Endpoint(
+    base(Method.POST / "api" / "dev" / "fault" / PathCodec.string("kind")))
+    .header(HeaderCodec.cookie.optional)
     .out[StatusResponse]
     .outError[ApiError](Status.BadRequest)
 
@@ -225,5 +233,31 @@ final class RecoveryRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
             Option(fresh.redirectUrl).filter(_.nonEmpty),
             StatusResponse.secondsRemainingFrom(fresh.accessExpiresAt, now))
       )
+
+  /** A failure on demand, for the end-to-end features to recover from: mounted only with the dev
+    * endpoints, which a location has only when the local configuration deploys it.
+    *
+    *   - `server`: a defect, recorded against the session and answered with its id, as any defect
+    *     is. The way out it opens is a real server error's.
+    *   - `client`: nothing fails here. The answer is the page's leave to throw an error of its own
+    *     (`Faults` in the client), so a bundle carrying that hook throws nothing where this is not
+    *     mounted.
+    */
+  val devRoutes: Routes[FullEnv, Nothing] = Routes(
+    fault.implementReadable: (kind, cookie) =>
+      for
+        current  <- session(cookie)
+        response <-
+          kind match
+            case "server" =>
+              ApiErrors.failWith(
+                IllegalStateException("A server error, injected through the dev endpoints"))
+            case "client" =>
+              ZIO.succeed(StatusResponse(current.phase, current.locale))
+            case other =>
+              ZIO.fail(
+                ApiError.InvalidRecoveryRequest(
+                  s"No fault called '$other': ask for `server` or `client`."))
+      yield response)
 
 end RecoveryRoutes

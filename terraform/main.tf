@@ -465,6 +465,7 @@ module "mcp" {
 
   db_url                      = module.rqlite.http_url
   cdc_feed_address            = module.cdc.feed_address
+  location_dev_endpoints      = var.enable_location_faults
   assets_bucket_name          = module.cloudfront.assets_bucket_name
   assets_bucket_arn           = module.cloudfront.assets_bucket_arn
   cloudfront_distribution_id  = module.cloudfront.distribution_id

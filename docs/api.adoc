@@ -81,7 +81,9 @@ See xref:database.adoc[Database].
 |`SERVER_DEV_ENDPOINTS`
 |`server.dev-endpoints`
 |`true` in `application.conf`; a `docker/api.Dockerfile` build arg defaulting to `false`
-|Mounts `LocaleRoutes.devRoutes` (`POST /api/dev/reset-phase`).
+|Mounts `LocaleRoutes.devRoutes` (`POST /api/dev/reset-phase`) and `RecoveryRoutes.devRoutes`
+(`POST /api/dev/fault/{kind}`). A deployed location gets it only from the local configuration
+(`enable_location_faults`).
 
 |`UNIFI_PROXY_URL`
 |`unifi.proxy-url`
@@ -432,6 +434,12 @@ declares `outError[ApiError](Status.BadRequest)`.
 |–
 |`StatusResponse`
 |any; session required. Mounted only when `server.dev-endpoints` is true
+
+|POST
+|`/api/dev/fault/{kind}`
+|–
+|`StatusResponse`, or the recorded error
+|any; session required. Mounted only when `server.dev-endpoints` is true
 |===
 
 Where each is defined:
@@ -499,10 +507,20 @@ a location checks `/<slug>/api/health`.
 === Dev-only endpoints
 
 `POST /api/dev/reset-phase` resolves the session, sets its phase back to `Phase.Welcome` and
-answers `StatusResponse(Welcome, locale)`. It is the sole member of `LocaleRoutes.devRoutes`, and
-`HttpApp.apiRoutes` appends `devRoutes` only when `ServerSettings.devEndpoints` is true
-(`server.dev-endpoints`, `SERVER_DEV_ENDPOINTS`). `docker/api.Dockerfile` sets that build arg to `false`
-by default; the dev image sets it to `true`.
+answers `StatusResponse(Welcome, locale)`. It is the sole member of `LocaleRoutes.devRoutes`.
+
+`POST /api/dev/fault/{kind}` makes a failure for the end-to-end features to recover from, the sole
+member of `RecoveryRoutes.devRoutes`. `server` raises a defect, which `ApiErrors` records against
+the session and answers with its id, as any defect: the way out it opens is a real server error's.
+`client` fails nothing and answers the session: it is a page's leave to throw an error of its own,
+which only a bundle built for the local stack can (`Faults`, see xref:client.adoc[Client]). Any
+other kind is `InvalidRecoveryRequest`.
+
+`HttpApp.apiRoutes` appends both `devRoutes` only when `ServerSettings.devEndpoints` is true
+(`server.dev-endpoints`, `SERVER_DEV_ENDPOINTS`). `docker/api.Dockerfile` sets that build arg to
+`false` by default; the dev image sets it to `true`. A location the backoffice deploys is told
+`SERVER_DEV_ENDPOINTS=true` only when the backoffice has `LOCATION_DEV_ENDPOINTS=true`, which the
+local configuration alone sets (`enable_location_faults`).
 
 The other dev surface — the SPA catch-all, `client/assets`, the linker output directories — is
 gated by the separate `server.dev-mode` / `SERVER_DEV_MODE` flag and serves no API.

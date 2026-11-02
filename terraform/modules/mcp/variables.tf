@@ -157,6 +157,12 @@ variable "cdc_feed_address" {
   type        = string
 }
 
+variable "location_dev_endpoints" {
+  description = "Whether the locations this server deploys mount the API's dev endpoints, which inject failures on demand: the local configuration's end-to-end features only"
+  type        = bool
+  default     = false
+}
+
 variable "assets_bucket_name" {
   description = "Bucket holding per-location assets and the shared bundle"
   type        = string

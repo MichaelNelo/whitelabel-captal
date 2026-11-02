@@ -752,10 +752,27 @@ build time:
 object BuildInfo:
   val environment: String = "dev"
   val isDevMode: Boolean = true
+  val version: String = "1.0.0"
+  inline val faults = false
 ----
 
 The value comes from the `ENVIRONMENT` environment variable, defaulting to `production`.
 `isDevMode` is `environment == "dev"`.
+
+`faults` is not read from the environment: it is which module built the bundle. `client`, which
+every release ships, writes `false`; `client.local`, the same sources and version built again for
+the local stack the end-to-end features release into, writes `true`. It is an `inline val`, a
+constant, so in `client`'s bundle `Faults.install` is empty and the linker leaves out the rest of
+`Faults`: the production bundle has no `captal-fault` listener and no call to `/api/dev/fault`.
+
+`Faults` makes an error happen on demand: on a `captal-fault` event on the window, its `detail`
+`server`, `client` or `client:<tag>`, it posts `/api/dev/fault/{kind}` (see xref:api.adoc[Guest
+API]). For `server` the API records a defect and its answer escalates through `ErrorHandler`, as
+any call's would: the way out of a recorded server error. For `client` the API only answers, and
+the bundle throws a JavaScript `Error` from a timer, uncaught, as a bug of ours would be, which
+`Recovery` reports. Its name carries the tag, and the server tells errors apart by name and place:
+the same tag is one error across devices, which is how recurrence is made, and a new tag is a new
+one. Without the API's dev endpoints the post fails and nothing is thrown.
 
 Its only consumer today is `ReadyView`, whose footer renders the `.dev-reset-button` —
 `POST /api/dev/reset-phase`, which returns the session to `Phase.Welcome` — only when

@@ -45,6 +45,7 @@ locals {
     { name = "AWS_REGION", value = var.aws_region },
     { name = "DB_URL", value = var.db_url },
     { name = "CDC_FEED_ADDRESS", value = var.cdc_feed_address },
+    { name = "LOCATION_DEV_ENDPOINTS", value = tostring(var.location_dev_endpoints) },
 
     # Assets and the edge in front of them.
     { name = "ASSETS_BUCKET", value = var.assets_bucket_name },

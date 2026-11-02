@@ -137,6 +137,7 @@ The repository is built by Mill. The build is a set of modules: one `package.mil
 === Client
 
 `mill client.bundle`:: Builds the production bundle into `out/client/bundle.dest/`. The output is not pre-gzipped; CloudFront compresses it.
+`mill client.local.bundle`:: The same bundle with `Faults` in, the errors on demand the end-to-end features recover from, into `out/client/local/bundle.dest/`. Only `e2e.cucumber` releases it.
 
 `mill client.publish --bucket B [--region R] [--endpoint E]`:: Publishes the MCP App scripts under `ui/` in the bucket. `--endpoint` points it at LocalStack.
 

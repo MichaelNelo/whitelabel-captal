@@ -74,6 +74,10 @@ import zio.*
   * `publicBaseUrl` is where the edge serves each location's copy of the bundle; a task is told its
   * own `manifest.json` under it, as `BUNDLE_MANIFEST_URL`. `None` tells it none, and the API judges
   * client error reports without one.
+  *
+  * `devEndpoints`, from `LOCATION_DEV_ENDPOINTS`, has every task mount the API's dev endpoints
+  * (`SERVER_DEV_ENDPOINTS`): failures on demand, for the end-to-end features. Set by the local
+  * configuration alone; anywhere else a task is told nothing, and its image keeps them off.
   */
 final case class DeployTargets(
     cluster: String,
@@ -90,7 +94,8 @@ final case class DeployTargets(
     containerPort: Int = 8080,
     unifiProxyUrl: Option[String] = None,
     publicBaseUrl: Option[String] = None,
-    cdcFeedAddress: Option[String] = None):
+    cdcFeedAddress: Option[String] = None,
+    devEndpoints: Boolean = false):
 
   /** `captal-<slug>`. AWS caps a target group name at 32 characters, which is where
     * `LocationTools.MaxSlugLength` comes from; the two have to agree or a slug `create_location`
@@ -155,6 +160,7 @@ object DeployTargets:
             proxy  <- System.env("UNIFI_PROXY_URL").orDie.map(_.map(_.trim).filter(_.nonEmpty))
             base   <- System.env("PUBLIC_BASE_URL").orDie.map(_.map(_.trim).filter(_.nonEmpty))
             feed   <- System.env("CDC_FEED_ADDRESS").orDie.map(_.map(_.trim).filter(_.nonEmpty))
+            dev    <- System.env("LOCATION_DEV_ENDPOINTS").orDie.map(_.exists(_.trim == "true"))
             _      <-
               ZIO.when(proxy.isEmpty)(
                 ZIO.logWarning(
@@ -174,7 +180,8 @@ object DeployTargets:
               region = region,
               unifiProxyUrl = proxy,
               publicBaseUrl = base,
-              cdcFeedAddress = feed
+              cdcFeedAddress = feed,
+              devEndpoints = dev
             ))
 end DeployTargets
 
@@ -328,7 +335,9 @@ final case class InfraStore(
               targets
                 .cdcFeedAddress
                 .map(address =>
-                  KeyValuePair.builder().name("CDC_FEED_ADDRESS").value(address).build())
+                  KeyValuePair.builder().name("CDC_FEED_ADDRESS").value(address).build()) ++
+              Option.when(targets.devEndpoints)(
+                KeyValuePair.builder().name("SERVER_DEV_ENDPOINTS").value("true").build())
           )*)
         .logConfiguration(
           LogConfiguration

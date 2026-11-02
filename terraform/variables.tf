@@ -163,6 +163,12 @@ variable "cdc_image_tag" {
   type        = string
 }
 
+variable "enable_location_faults" {
+  description = "Whether the locations the backoffice deploys mount the API's dev endpoints, which make a server or a client error happen on demand for the end-to-end features to recover from: `local` only. Never in an AWS environment, where a guest could reach them."
+  type        = bool
+  default     = false
+}
+
 variable "enable_unifi_fake" {
   description = "A stand-in for a venue's UniFi controller, which locations can be pointed at to grant and revoke access with no controller: `local` only, for the end-to-end features. Never in an AWS environment, where a location's access is a real controller's."
   type        = bool

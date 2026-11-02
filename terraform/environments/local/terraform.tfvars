@@ -34,6 +34,10 @@ enable_global_accelerator = false
 # calls is on the host at `http://localhost:18080/calls`.
 enable_unifi_fake = true
 
+# On here alone too: the locations the backoffice deploys mount the API's dev endpoints, so the
+# end-to-end features can make a server or a client error happen on demand.
+enable_location_faults = true
+
 # Never resolved locally: with `enable_dns = false` the distribution answers at its own generated
 # domain. Present because the variable has no default, and the string is what the comment on the
 # distribution is built from.

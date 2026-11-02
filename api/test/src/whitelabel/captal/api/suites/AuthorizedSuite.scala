@@ -39,7 +39,8 @@ object AuthorizedSuite:
               secondsRemaining.exists(s => s > 0 && s <= 3600)
             )
         ,
-        test("Status resets session to Welcome when the access expiry is in the past, keeping its user"):
+        test(
+          "Status resets session to Welcome when the access expiry is in the past, keeping its user"):
           for
             backend <- testBackend
             cookie  <- createSession(backend)

@@ -101,6 +101,41 @@ object RecoverySuite:
             errors.exists(e => e.id == errorId && e.redeemedAt.isDefined)
           )
         ,
+        test(
+          "a server error injected through the dev endpoints is a recorded one, and opens at once"):
+          for
+            backend <- testBackend
+            cookie  <- createSession(backend)
+            fault   <- postFault(backend, cookie, "server")
+            errorId = errorOf(fault.body).collect:
+              case ApiError.InternalError(_, Some(id)) =>
+                id
+            offer <- postRecovery(
+              backend,
+              cookie,
+              s"""{"serverErrorId":"${errorId.getOrElse("")}"}""")
+          yield assertTrue(
+            errorId.isDefined,
+            offerOf(offer.body).exists(o => errorId.contains(o.errorId) && o.waitSeconds == 0))
+        ,
+        test("a client fault fails nothing on the server, only answers the session"):
+          for
+            backend <- testBackend
+            cookie  <- createSession(backend)
+            fault   <- postFault(backend, cookie, "client")
+            unknown <- postFault(backend, cookie, "nothing")
+            errors  <- TestFixtures.getErrors
+          yield assertTrue(
+            decode[StatusResponse](fault.body).toOption.exists(_.phase == Phase.Welcome),
+            errorOf(unknown.body).exists:
+              case ApiError.InvalidRecoveryRequest(_) =>
+                true
+              case _ =>
+                false
+            ,
+            errors.isEmpty
+          )
+        ,
         test("an access granted to a session with no user is revoked when it expires"):
           ZIO.scoped:
             for

@@ -148,7 +148,7 @@ private[api] object HttpApp:
         recoveryRoutes.routes
     val all =
       if devEndpoints then
-        mounted ++ localeRoutes.devRoutes
+        mounted ++ localeRoutes.devRoutes ++ recoveryRoutes.devRoutes
       else
         mounted
     all @@ CodecConfig.withConfig(codecConfig)

@@ -103,8 +103,8 @@ object TestHelpers:
                     .map(h => sttp.model.Header(h.headerName, h.renderedValue)))
   end serveZioHttp
 
-  /** Every route the dev server mounts, with the test environment supplied — `devRoutes` among
-    * them, for `/api/dev/reset-phase`.
+  /** Every route the dev server mounts, with the test environment supplied — the `devRoutes` among
+    * them, for `/api/dev/reset-phase` and `/api/dev/fault/{kind}`.
     */
   def testBackend: ZIO[TestEnv, Nothing, SttpBackend[Task, Any]] = ZIO
     .environment[TestEnv]
@@ -115,7 +115,7 @@ object TestHelpers:
           HealthRoutes.routes(env.get[ApiBase]) ++ env.get[FinishRoutes].routes ++
             localeRoutes.routes ++ localeRoutes.devRoutes ++ env.get[VideoRoutes].routes ++
             env.get[SurveyRoutes].routes ++ env.get[AdvertiserSurveyRoutes].routes ++
-            env.get[RecoveryRoutes].routes
+            env.get[RecoveryRoutes].routes ++ env.get[RecoveryRoutes].devRoutes
         ).provideEnvironment(env))
 
   /** The health check. */
@@ -315,6 +315,13 @@ object TestHelpers:
     .cookie("captal_session", sessionCookie)
     .body(s"""{"playbackId":"$playbackId","videoUrl":"$videoUrl"}""")
     .contentType("application/json")
+    .response(asStringAlways)
+    .send(backend)
+
+  /** A failure on demand, `server` or `client`, through the dev endpoints. */
+  def postFault(backend: SttpBackend[Task, Any], sessionCookie: String, kind: String) = basicRequest
+    .post(uri"http://test/api/dev/fault/$kind")
+    .cookie("captal_session", sessionCookie)
     .response(asStringAlways)
     .send(backend)
 

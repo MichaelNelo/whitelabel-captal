@@ -139,7 +139,9 @@ runs here alone, `enable_unifi_fake`: `modules/unifi-fake`, a stand-in for a ven
 controller that a location can be pointed at, as `unifi.captal.local:8443` — a Python script on the
 public Python image, with a self-signed certificate from the `tls` provider — which answers the two
 calls the API makes and records them on `http://localhost:18080/calls` for the end-to-end features
-(see xref:testing.adoc#end-to-end[the end-to-end features]). Two variables
+(see xref:testing.adoc#end-to-end[the end-to-end features]). Another, `enable_location_faults`,
+gives the backoffice `LOCATION_DEV_ENDPOINTS=true`, so every location it deploys mounts the API's
+dev endpoints, which make a server or a client error happen on demand. Two variables
 give the addresses LocalStack serves things at: `public_port = 4567`, the gateway port the load
 balancer and the distribution answer on, which the backoffice's `MCP_RESOURCE_URI` and
 `PUBLIC_BASE_URL` name; and `assets_endpoint_url`, the bucket as the operator's browser reaches it,
