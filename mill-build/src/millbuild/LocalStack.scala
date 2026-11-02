@@ -234,7 +234,9 @@ def awaitLocalBackoffice(
   val started = System.nanoTime
   def elapsed = (System.nanoTime - started) / 1_000_000_000L
   var nudged = false
-  while !serving && elapsed < 600 do
+  // Kept, not asked again after the loop: a second answer can differ from the one that ended it.
+  var served = serving
+  while !served && elapsed < 600 do
     if !nudged && elapsed >= 60 && idle then
       val _ = awsJson(
         target,
@@ -248,7 +250,8 @@ def awaitLocalBackoffice(
       println(s"[release] $service ran no task after a minute; told to start a fresh one")
       nudged = true
     Thread.sleep(2000)
-  if !serving then
+    served = serving
+  if !served then
     sys.error(
       s"[release] the backoffice did not answer $health within ten minutes. Its log group, `/ecs/$service`, says why.")
   println(s"[release] the backoffice serves, after ${elapsed}s")
