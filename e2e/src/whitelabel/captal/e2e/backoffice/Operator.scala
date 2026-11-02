@@ -200,9 +200,10 @@ object Operator:
     val blocks = content.toList.flatMap(json => json.asArray.map(_.toList).getOrElse(List(json)))
     blocks.flatMap(_.asObject).flatMap(_.get("text")).flatMap(_.asString)
 
-  /** The host's own page: the frame, sandboxed as a host's is, and what passes each of the page's
-    * messages to [[Opened.answer]] and posts back what it answers. A size the page reports is
-    * applied, so the recording shows all of it.
+  /** The host's own page: the frame, sandboxed as strictly as a host may (scripts and forms, and no
+    * origin of its own, which the frames a page builds inside it inherit), and what passes each of
+    * the page's messages to [[Opened.answer]] and posts back what it answers. A size the page
+    * reports is applied, so the recording shows all of it.
     */
   private val HostPage =
     """<!doctype html>

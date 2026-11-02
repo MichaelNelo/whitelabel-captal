@@ -306,14 +306,15 @@ not run it.
 
 * **The operator** is `Backoffice`: a real MCP client, through the load balancer, with the admin
 token, as `DeployE2ESpec`'s is in-process. When a tool that declares an MCP App page returns
-(`configure_unifi`, the video tools, the deploy tools), `Operator` reads the page from the server
-and renders it in the operator's browser, in a frame sandboxed as a host's is, and tells it the
-result. What the page asks of its host — `ui/initialize`, `resources/read`, `tools/call` — is
-answered through the same client, and what it tells the model (`ui/message`) is kept. So the UniFi
-settings are typed into the form and saved by it, the spot is chosen on the upload page, which
-reads its length, uploads it and confirms it, and a deploy is watched on the run page until it says
-the run ended, then checked through `get_deploy_status`. No content security policy is applied: the
-pages' declared CSP is not tested.
+(`configure_unifi`, the video tools, the deploy tools, `preview_location`), `Operator` reads the
+page from the server and renders it in the operator's browser, in a frame sandboxed as strictly as a
+host may (`allow-scripts allow-forms`, no origin of its own), and tells it the result. What the page asks of its
+host — `ui/initialize`, `resources/read`, `tools/call` — is answered through the same client, and
+what it tells the model (`ui/message`) is kept. So the UniFi settings are typed into the form and
+saved by it, the spot is chosen on the upload page, which reads its length, uploads it and confirms
+it, a deploy is watched on the run page until it says the run ended, then checked through
+`get_deploy_status`, and the preview of a location never deployed is read screen by screen. No
+content security policy is applied: the pages' declared CSP is not tested.
 * **Locations** are created through the tools and deployed (`Locations`): one per name a feature
 uses, shared by its scenarios for the run, since a deploy takes minutes; each run creates its own
 under a slug of its own, `e2e-<name>-<4 characters>`, in the local database. The identification

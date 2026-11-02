@@ -35,16 +35,18 @@ object Portal:
     */
   def awaitServing(location: Locations.Deployed): Unit =
     val deadline = System.nanoTime + 5 * 60 * 1_000_000_000L
-    def healthy = scala
-      .util
-      .Try(requests.get(location.api("health")))
-      .toOption
-      .exists(response => response.ok && response.text.contains("ok"))
-    while !healthy do
+    while !serving(location) do
       if System.nanoTime > deadline then
         throw AssertionError(
           s"${location.slug} did not answer through the distribution in 5 minutes")
       Thread.sleep(3000)
+
+  /** Whether a location's API answers its health check through the distribution, now. */
+  def serving(location: Locations.Deployed): Boolean = scala
+    .util
+    .Try(requests.get(location.api("health")))
+    .toOption
+    .exists(response => response.ok && response.text.contains("ok"))
 
   /** A guest on a phone of their own, `mac`, sent to the portal by the access point with the click
     * id that tells the device apart, `clickId`.

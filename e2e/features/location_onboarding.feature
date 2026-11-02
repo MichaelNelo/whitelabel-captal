@@ -3,6 +3,7 @@ Feature: Building a location
   An operator builds a location through the backoffice (its stylesheet, its icon, its texts in
   Spanish and English, an advertiser video) and deploys it. A guest who opens its portal sees the
   location as it was built: its brand, its texts in the language the guest has chosen, its video.
+  The operator sees it before ever deploying it, every screen at once, in the backoffice's preview.
 
   Background:
     Given an operator builds the location "brasa" with its own styles, icon, texts and advertiser video, and deploys it
@@ -11,6 +12,28 @@ Feature: Building a location
     When Ana opens the portal on a new phone
     Then Ana's portal uses the location's stylesheet
     And Ana's portal shows the location's icon
+
+  Scenario Outline: The operator previews the <screen> screen of a location not yet deployed
+    Given an operator builds the location "boceto" with its own styles, icon, texts and advertiser video, without deploying it
+    When the operator previews the <screen> screen of the location "boceto"
+    Then the preview shows what a guest sees on that screen
+    And the preview uses the location's stylesheet
+    And the location "boceto" has no portal yet
+
+    Examples:
+      | screen   |
+      | welcome  |
+      | question |
+      | video    |
+      | survey   |
+      | ready    |
+      | access   |
+      | error    |
+
+  Scenario: The preview of a location not yet deployed reads the location's own texts
+    Given an operator builds the location "boceto" with its own styles, icon, texts and advertiser video, without deploying it
+    When the operator previews the welcome screen of the location "boceto"
+    Then the preview reads "Bienvenidos a Boceto" as the welcome title
 
   Scenario: A guest on a phone set to Spanish reads the Spanish texts
     When Ana opens the portal on a new phone set to "es-ES"

@@ -1,12 +1,12 @@
 package whitelabel.captal.e2e.steps
 
-import com.microsoft.playwright.Page
 import com.microsoft.playwright.options.AriaRole
+import com.microsoft.playwright.{FrameLocator, Locator, Page}
 import io.cucumber.scala.{EN, ScalaDsl}
-import whitelabel.captal.e2e.backoffice.{Backoffice, Locations}
+import whitelabel.captal.e2e.backoffice.{Backoffice, Locations, Operator}
 import whitelabel.captal.e2e.guest.Portal
 import whitelabel.captal.e2e.scenario.World
-import whitelabel.captal.mcp.tools.{AssetTools, I18nTools}
+import whitelabel.captal.mcp.tools.{AssetTools, I18nTools, PreviewTools}
 
 /** An operator builds a location through the backoffice (its stylesheet, its icon, its texts in
   * Spanish and English, an advertiser video) and deploys it; a guest's portal shows what was built:
@@ -24,6 +24,18 @@ final class OnboardingSteps extends ScalaDsl with EN:
     """an operator builds the location {string} with its own styles, icon, texts and advertiser video, and deploys it""") {
     (name: String) =>
       World.use(name, Locations.once(s"onboarding-$name")(build(name)))
+  }
+
+  Given(
+    """an operator builds the location {string} with its own styles, icon, texts and advertiser video, without deploying it""") {
+    (name: String) =>
+      World.use(name, Locations.once(s"onboarding-draft-$name")(build(name, deployed = false)))
+  }
+
+  Then("""the location {string} has no portal yet""") { (name: String) =>
+    if Portal.serving(World.location(name)) then
+      throw AssertionError(
+        s"${World.location(name).slug} has a portal, though it was never deployed")
   }
 
   When("""{word} opens the portal on a new phone set to {string}""") {
@@ -73,9 +85,11 @@ final class OnboardingSteps extends ScalaDsl with EN:
   }
 
   /** The location as the operator builds it: stylesheet and icon first, then the texts of each
-    * locale, then the video, then the deployment, which waits until the portal answers.
+    * locale, then the video, then the deployment, which waits until the portal answers, when
+    * `deployed`. Its titles and its video are named after it.
     */
-  private def build(name: String): Locations.Deployed =
+  private def build(name: String, deployed: Boolean = true): Locations.Deployed =
+    val shown = name.capitalize
     val location = Locations.create(name)
     Backoffice.tool[AssetTools.SetStylesRequest, AssetTools.SetResponse](
       "set_location_styles",
@@ -92,16 +106,19 @@ final class OnboardingSteps extends ScalaDsl with EN:
       location,
       "es",
       Map(
-        "welcome.title"    -> "Bienvenidos a Brasa",
-        "welcome.subtitle" -> "Conéctese a Brasa en tres pasos"))
+        "welcome.title"    -> s"Bienvenidos a $shown",
+        "welcome.subtitle" -> s"Conéctese a $shown en tres pasos"))
     translate(
       location,
       "en",
       Map(
-        "welcome.title"    -> "Welcome to Brasa",
-        "welcome.subtitle" -> "Connect to Brasa in three steps"))
-    Locations.addAdvertiserVideo(location, title = "Brasa spot", question = "Did you like it?")
-    Locations.deploy(location)
+        "welcome.title"    -> s"Welcome to $shown",
+        "welcome.subtitle" -> s"Connect to $shown in three steps"))
+    Locations.addAdvertiserVideo(location, title = s"$shown spot", question = "Did you like it?")
+    if deployed then
+      Locations.deploy(location)
+    else
+      location
   end build
 
   /** Writes `entries` for one locale; keys left out keep their text. */
@@ -157,6 +174,79 @@ final class OnboardingSteps extends ScalaDsl with EN:
         response.text()
       else
         s"HTTP ${response.status()}"
+
+  /** The page `preview_location` opened in this scenario, and what it answered. */
+  private var preview = Option.empty[(Operator.Opened, PreviewTools.PreviewResponse)]
+
+  private def previewed = preview.getOrElse(
+    throw IllegalStateException("The operator has not previewed a location in this scenario"))
+
+  private def primaryColour(portal: FrameLocator): String = scala
+    .util
+    .Try(
+      String
+        .valueOf(
+          portal
+            .locator("html")
+            .evaluate(
+              "root => getComputedStyle(root).getPropertyValue('--color-primary').trim()",
+              null,
+              Locator.EvaluateOptions().setTimeout(5000)))
+        .trim)
+    .getOrElse("")
+
+  When("""the operator previews the {word} screen of the location {string}""") {
+    (screen: String, name: String) =>
+      val (shown, opened) = Operator.open[
+        PreviewTools.PreviewRequest,
+        PreviewTools.PreviewResponse](
+        "preview_location",
+        PreviewTools.PreviewRequest(World.location(name).slug, screen = Some(screen)))
+      preview = Some(opened -> shown)
+  }
+
+  /** What each screen shows once its view is drawn: the loader every screen starts on already
+    * carries the stylesheet, so the colour alone says nothing about whether the view came.
+    */
+  private val Drawn = Map(
+    "welcome"  -> ".welcome-steps",
+    "question" -> ".question-title",
+    "video"    -> "video.video-hero-video",
+    "survey"   -> ".question-title",
+    "ready"    -> ".ready-view",
+    "access"   -> ".welcome-countdown",
+    "error"    -> ".error-title"
+  )
+
+  Then("""the preview shows what a guest sees on that screen""") { () =>
+    val (opened, shown) = previewed
+    val selector = Drawn.getOrElse(
+      shown.screen,
+      throw AssertionError(s"The preview's screen '${shown.screen}' is no screen this knows"))
+    try
+      opened.app.locator(selector).first().waitFor(Locator.WaitForOptions().setTimeout(60_000))
+    catch
+      case _: com.microsoft.playwright.TimeoutError =>
+        throw AssertionError(
+          s"The preview of '${shown.screen}' did not show '$selector' within a minute")
+    opened.linger()
+  }
+
+  Then("""the preview uses the location's stylesheet""") { () =>
+    val (opened, shown) = previewed
+    val colour = settle(primaryColour(opened.app), _ == Colour, 60)
+    if colour != Colour then
+      throw AssertionError(
+        s"The preview of '${shown
+            .screen}' has --color-primary '$colour', the location's stylesheet sets '$Colour'")
+  }
+
+  Then("""the preview reads {string} as the welcome title""") { (title: String) =>
+    val welcome = previewed._1.app.locator(".welcome-title")
+    val shown = settle(scala.util.Try(welcome.textContent().trim).getOrElse(""), _ == title)
+    if shown != title then
+      throw AssertionError(s"The preview's welcome screen reads '$shown', expected '$title'")
+  }
 
   /** Polls `read` until `done` holds or `seconds` pass, and returns the last value read. */
   private def settle[A](read: => A, done: A => Boolean, seconds: Int = 30): A =
