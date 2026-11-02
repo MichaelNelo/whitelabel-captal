@@ -7,6 +7,7 @@ import whitelabel.captal.mcp.tools.{
   AssetTools,
   I18nTools,
   LocationTools,
+  PreviewTools,
   RecoveryTools,
   SkillTools,
   SurveyTools,
@@ -24,7 +25,7 @@ object AnnotationsSpec extends ZIOSpecDefault:
   private def all(uiOrigin: String): List[McpToolHandlerR[?]] =
     LocationTools.all ++ I18nTools.all ++ AdvertiserTools.all ++ SurveyTools.all ++
       AssetTools.all ++ VideoTools.all ++ TokenTools.all ++ SkillTools.all ++ Readiness.all ++
-      UnifiTools.all(uiOrigin) ++ RecoveryTools.all
+      UnifiTools.all(uiOrigin) ++ RecoveryTools.all ++ PreviewTools.all
 
   private val tools = all("http://localhost:8081")
 
@@ -36,11 +37,12 @@ object AnnotationsSpec extends ZIOSpecDefault:
 
   def spec =
     suite("tool annotations")(
-      // Named by convention and classified by annotation; the two have to agree.
+      // Named by convention and classified by annotation; the two have to agree. A preview shows
+      // what is there and changes nothing.
       test("every read is declared read-only and nothing else is"):
         val (reads, writes) = tools.partition(t =>
           t.name.value.startsWith("list_") || t.name.value.startsWith("get_") ||
-            t.name.value.startsWith("read_"))
+            t.name.value.startsWith("read_") || t.name.value.startsWith("preview_"))
         assertTrue(
           reads.nonEmpty,
           writes.nonEmpty,

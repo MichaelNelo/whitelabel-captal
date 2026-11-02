@@ -2,7 +2,7 @@ package whitelabel.captal.mcp.resources
 
 import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
-import whitelabel.captal.mcp.apps.{RunUi, UnifiUi, UploadUi, UploadUiSource}
+import whitelabel.captal.mcp.apps.{PreviewUi, RunUi, UnifiUi, UploadUi, UploadUiSource}
 import whitelabel.captal.mcp.aws.{Asset, AssetStore}
 import whitelabel.captal.mcp.tools.{AdvertiserTools, SurveyTools, VideoTools}
 import whitelabel.captal.platform.schema.QuillSqlite
@@ -62,6 +62,14 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
       McpAppsCsp(
         connectDomains = Chunk(uiOrigin),
         resourceDomains = Chunk(scriptOrigin, "https://assets.claude.ai"))),
+    prefersBorder = Some(false))
+
+  /** The preview page carries the portal inline and fetches nothing of its own: only the location's
+    * stylesheet, icon and video, from where the portal serves them (`PUBLIC_BASE_URL`, read off the
+    * store).
+    */
+  private def previewMeta(store: AssetStore) = McpAppsResourceMeta(
+    csp = Some(McpAppsCsp(resourceDomains = Chunk(store.portalOrigin))),
     prefersBorder = Some(false))
 
   /** What the upload page reads for one video. Signed on every read: a presigned URL is arithmetic
@@ -133,6 +141,15 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
       ctx: McpToolContext): ZIO[QuillSqlite & AssetStore, Nothing, Chunk[ResourceDefinition]] =
     pendingPages
       .zipWith(upload.listResources(ctx))(_ ++ _)
+      .zipWith(ZIO.serviceWith[AssetStore](previewMeta))((listed, meta) =>
+        listed :+
+          McpApps.resource(
+            PreviewUi.AppUri,
+            "Vista previa",
+            meta,
+            Some(
+              "One screen of a location's portal, drawn by the portal itself with the location's look. Opened by preview_location, which supplies the location and the screen.")
+          ))
       .map(
         _ ++
           Chunk(
@@ -214,6 +231,19 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
                 RunUi.AppUri,
                 RunUi.app(store.scriptUrl, store.scriptOrigin, preloads),
                 runMeta))))
+    else if uri == PreviewUi.Uri then
+      // As published, so the page is the bundle the locations are given. Read on every read: a
+      // publish changes it without the server knowing.
+      ZIO.serviceWithZIO[AssetStore](store =>
+        store
+          .read(AssetStore.PreviewPageKey)
+          .mapError(ToolError.apply)
+          .map(page =>
+            Chunk(
+              McpApps.contents(
+                PreviewUi.AppUri,
+                page.getOrElse(PreviewUi.unpublished),
+                previewMeta(store)))))
     else if uri.startsWith(UploadUi.Uri) then
       upload.readResource(uri, ctx)
     else

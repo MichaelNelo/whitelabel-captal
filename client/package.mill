@@ -70,12 +70,16 @@ trait Portal extends BaseJSModule with Released:
   def clientTemplate: T[PathRef] = Task.Source(portalDir / "index.html.template")
   def maintenanceTemplate: T[PathRef] = Task.Source(portalDir / "maintenance.html.template")
   def errorTemplate: T[PathRef] = Task.Source(portalDir / "error.html.template")
+  def previewTemplate: T[PathRef] = Task.Source(portalDir / "preview.html.template")
 
   /** Hand-written entries that call `start`, staged beside the linker's output: one per public module other than the portal.
     */
   def entries: T[PathRef] = Task.Source(portalDir / "entries")
 
   def viteConfig: T[PathRef] = Task.Source(portalDir / "vite.config.mjs")
+
+  /** The preview page's build: the portal in one file, for `preview.html` to carry inline. */
+  def previewViteConfig: T[PathRef] = Task.Source(portalDir / "vite.preview.config.mjs")
 
   /** Installs Vite and terser into the task's directory. Vite's Rollup build does the scope hoisting. */
   def jsTools: T[PathRef] = Task:
@@ -123,13 +127,17 @@ trait Portal extends BaseJSModule with Released:
           s"[bundle] ${entry.last} is both a hand-written entry and a module the linker emitted. Rename the Scala.js moduleID.")
       os.copy(entry, project / "src" / entry.last)
     os.copy(viteConfig().path, project / "vite.config.mjs")
+    os.copy(previewViteConfig().path, project / "vite.preview.config.mjs")
     os.symlink(project / "node_modules", jsTools().path / "node_modules")
 
-    val built = os
-      .proc((project / "node_modules" / ".bin" / "vite").toString, "build")
-      .call(cwd = project, check = false, stderr = os.Pipe)
-    if built.exitCode != 0 then
-      sys.error(s"[bundle] vite build failed: ${built.err.trim()}")
+    def vite(args: String*): Unit =
+      val built = os
+        .proc((project / "node_modules" / ".bin" / "vite").toString, "build", args)
+        .call(cwd = project, check = false, stderr = os.Pipe)
+      if built.exitCode != 0 then
+        sys.error(s"[bundle] vite build failed: ${built.err.trim()}")
+    vite()
+    vite("--config", "vite.preview.config.mjs")
 
     for
       output <- os.list(project / "dist")
@@ -155,6 +163,16 @@ trait Portal extends BaseJSModule with Released:
       preloadLinks(dest, "maintenance.js"))
     // No script of the bundle: it is where a guest goes when the bundle is what failed.
     renderIndex(errorTemplate().path, dest / "error.html", "", "./styles.css")
+    // The backoffice's preview page, whole: the portal's stylesheet and its one-file build inline.
+    // A `</script` inside the code would end the element early, so it is escaped as JavaScript
+    // reads it the same.
+    os.write.over(
+      dest / "preview.html",
+      os.read(previewTemplate().path)
+        .replace("{{STYLES}}", os.read(assets / "styles.css"))
+        .replace(
+          "{{SCRIPT}}",
+          os.read(project / "dist-preview" / "preview-portal.js").replace("</script", "<\\/script")))
     writeManifest(dest, releaseVersion().version)
 
     PathRef(dest)

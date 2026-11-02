@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vista previa</title>
+  <!-- The backoffice's preview_location: one screen of the portal, drawn by its own code with a
+       location's look, and nothing else. An MCP App page, which a host reads as one document, so the
+       portal's stylesheet and code are inline; the location's stylesheet is linked once the call's
+       result says which. `client.bundle` fills both placeholders. -->
+  <style>{{STYLES}}</style>
+  <!-- A phone's screen, in the middle of a frame as wide as the conversation: its height is what the
+       page reports to the host, so the portal's viewport units measure a phone too. Contained, so
+       what the portal fixes to the screen (the video, its introduction) is fixed to the phone. -->
+  <style>html, body { height: 844px; overflow: hidden; } body { max-width: 390px; margin: 0 auto; contain: layout paint; }</style>
+  <!-- Marks the document as a preview, for the portal's brand icon to read the location's from. -->
+  <script type="application/json" id="captal-preview">{}</script>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module">{{SCRIPT}}</script>
+</body>
+</html>

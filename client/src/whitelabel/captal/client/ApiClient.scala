@@ -37,11 +37,34 @@ object ApiClient:
 
   inline def url(path: String): String = s"$apiBase$path"
 
+  /** What answers in place of the network: a function from the method and the path under the API's
+    * base to the answer, which may take a while to come, or to `None` for one that never comes. Set
+    * by [[Preview.start]] alone, which only the preview page's own build reaches, so the portal
+    * carries none of it.
+    */
+  private[client] var standIn: Option[(String, String) => Option[js.Promise[io.circe.Json]]] = None
+
+  /** Through the network, or answered by the [[standIn]] when there is one. */
   def fetchApi[A: Decoder](
       method: String,
       path: String,
       body: Option[io.circe.Json] = None,
       extraHeaders: Map[String, String] = Map.empty): js.Promise[Either[ApiError, A]] =
+    standIn match
+      case Some(answer) =>
+        answer(method, path.stripPrefix(apiBase)) match
+          case Some(coming) =>
+            coming.map(_.as[A].left.map(e => ApiError.InternalError(e.getMessage)))
+          case None =>
+            new js.Promise[Either[ApiError, A]]((_, _) => ())
+      case None =>
+        network[A](method, path, body, extraHeaders)
+
+  private def network[A: Decoder](
+      method: String,
+      path: String,
+      body: Option[io.circe.Json],
+      extraHeaders: Map[String, String]): js.Promise[Either[ApiError, A]] =
     val options = js.Dynamic.literal(method = method)
     val headers = js.Dynamic.literal()
     body.foreach { json =>
@@ -63,7 +86,7 @@ object ApiClient:
         yield Right((response, text))
       ).recover(e => Left(ApiError.InternalError(s"Connection lost: $e")))
     exchange.map(_.flatMap((response, text) => answer[A](response, text)))
-  end fetchApi
+  end network
 
   private def answer[A: Decoder](response: dom.Response, text: String): Either[ApiError, A] =
     if response.ok then

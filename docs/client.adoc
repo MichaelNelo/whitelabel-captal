@@ -94,6 +94,13 @@ their content hash (`chunkFileNames: '[name]-[hash].js'`).
 | `client/entries/run.js`
 | `run.js`
 | server-rendered, addressed as `ui://deploy-run`
+
+| `client/src/whitelabel/captal/mcpui/preview/PreviewPortal.scala`
+| `preview-portal-app`
+| `preview-portal-app.js`
+| `client/entries/preview-portal.js`
+| none: a build of its own puts it, with everything it reaches, in one file, inline in `preview.html`
+| `preview.html`, rendered from `client/preview.html.template`, addressed as `ui://preview-location`
 |===
 
 IMPORTANT: An entry stub must never be named like a module the linker emits. `client.bundle` stages
@@ -118,12 +125,17 @@ rather than overwriting a linker module.
 
 Non-Scala files in the module:
 
-* `client/entries/{maintenance,unifi,upload}.js` — the stubs that call the exported `start`.
+* `client/entries/{maintenance,unifi,upload,run,preview-portal}.js` — the stubs that call the
+  exported `start`.
 * `client/index.html.template`, `client/maintenance.html.template` — rendered by the build with
   `{{JS_PATH}}`, `{{CSS_PATH}}` and `{{PRELOADS}}` substituted.
 * `client/error.html.template` — `error.html`, with its own inline script; only `{{CSS_PATH}}` is
   substituted.
+* `client/preview.html.template` — `preview.html`, with `{{STYLES}}` and `{{SCRIPT}}` substituted
+  by the portal's stylesheet and the preview build, inline.
 * `client/vite.config.mjs` — the Rollup/terser configuration.
+* `client/vite.preview.config.mjs` — the same, for the preview page's entry alone, in one file
+  (`inlineDynamicImports`).
 * `client/assets/styles.css` — the whole stylesheet; see xref:client-styling.adoc[Client styling].
 * `client/assets/brand-icon.svg` — the default brand icon, replaceable per location.
 
@@ -140,10 +152,13 @@ git-ignored.
 | The raw linker outputs. `api.dev` serves whichever one `CLIENT_LINKER` selects.
 
 | `client.bundle`
-| Stages the linker output plus the stubs and the Vite config into a temporary project, runs
+| Stages the linker output plus the stubs and the Vite configs into a temporary project, runs
   `vite build`, copies `dist/*.js` out, copies `styles.css` and `brand-icon.svg`, renders the three
   HTML files, and writes `manifest.json`: the release version and, per script, the length of each
-  line, which the API checks a client error report against.
+  line, which the API checks a client error report against. Then runs Vite again with
+  `vite.preview.config.mjs`, which puts the preview page's entry and everything it reaches in one
+  file, and writes `preview.html` with that file and `styles.css` inline (see <<preview-mode>>);
+  the one file itself is not kept.
 
 | `client.publishS3 --bucket … --prefix bundle`
 | Uploads the portal half of the bundle. Files reachable *only* from the MCP-UI entries are
@@ -742,6 +757,43 @@ the stylesheet, which resolves against the stylesheet's own URL rather than the 
 `window.location.pathname`, both ignoring a first segment of `api`. In dev the SPA is served at `/`,
 the base tag is never installed, and both derivations yield the empty prefix.
 
+[[preview-mode]]
+== Preview mode — `Preview.scala`
+
+`preview.html` is the backoffice's `preview_location` page, `ui://preview-location`: one screen of
+the portal, drawn by the portal's own views with a location's look, before the location is ever
+deployed. The page is the portal itself. `client.bundle` builds it from `preview.html.template`
+with the portal's stylesheet and a one-file build of `PreviewPortal` (<<preview-app>>) inline, and
+publishes it in `bundle/`, from where the backoffice reads and serves it. A guest's portal is not
+involved: its first chunk carries none of this.
+
+The page learns what to draw from the call that opened it. `Preview.start` takes the call's
+result: the screen (`welcome`, `question`, `video`, `survey`, `ready`, `access` or `error`), the
+locale, the location's texts by key, and the locales. It draws the screen's view directly, without
+the router, and sets `ApiClient.standIn`, so every call the views make is answered instead of the
+network:
+
+* `GET /locales` and `GET /i18n/<locale>` answer the result's locales and its texts, decoded through
+  `I18nSchema` as the API decodes them; a key the location has not translated reads `[key]`.
+* `/status` answers the screen's phase; `access` answers `Authorized` with most of an hour left.
+* `/survey/next`, `/video/next`, `/video/playback/start` and `/survey/advertiser/next` answer made-up
+  content in the API's own types: a profiling question with three options, a free-text survey
+  question, and a video. The video is made where it plays (`PreviewVideo`): a generic video's icon,
+  drawn on a canvas and recorded for three seconds with `MediaRecorder`, as a `data:` URL. It needs
+  no video of the location's and fetches nothing. The stand-in's answers are promises, so
+  `/video/next` is answered when the recording ends, and meanwhile the view shows its own loader,
+  as it does for a guest whose video is on its way; the player then plays it and shows it watched.
+  Where the browser cannot record a canvas, the answer never comes and the screen stays on its
+  loader.
+* Everything else is never answered, which keeps the screen where it is: `/finish` leaves
+  `ReadyView` connecting, an answer leaves the question on screen. `endPlayback`'s beacon is not
+  sent.
+
+`error` draws the portal's `ErrorView`, which shares its markup with `error.html` and reads the
+location's `error.*` texts. Nothing reaches the network but the location's stylesheet, icon and
+video. The page marks itself with `<script type="application/json" id="captal-preview">`, whose
+`data-icon` names the location's icon: `BrandLoader` reads it there with the DOM alone.
+
 == `BuildInfo` and dev mode
 
 `client.generatedSources` writes a `BuildInfo.scala` into the `whitelabel.captal.client` package at
@@ -937,16 +989,34 @@ the server's message and stops.
 When a run the page saw running finishes, `tellTheModel` says how it ended, once. A page reopened
 on a run that had already finished says nothing: the model knows how that one ended.
 
+[[preview-app]]
+=== `mcpui/preview/PreviewPortal.scala`
+
+Behind `ui://preview-location`, which `preview_location` opens, and inline in `preview.html`
+rather than loaded from `ui/`: `vite.preview.config.mjs` bundles its module and everything it
+reaches, the portal's views included, into one file. It does the handshake as the other pages do,
+and when the tool-result notification arrives, mirroring `PreviewTools.PreviewResponse`, it links
+the location's stylesheet after the portal's inline one, so the location's overrides it, names the
+location's icon in the page's marker, and hands the result to `Preview.start` (<<preview-mode>>).
+
+The page is a phone's screen in a frame as wide as the conversation: `preview.html` fixes the
+document at 844 pixels high and 390 wide, centred, and `Bridge.trackSize` reports that height, so
+the portal's viewport units measure a phone. The body is contained (`contain: layout paint`), so
+what the portal fixes to the screen, the video and its introduction, is fixed to the phone rather
+than to the whole frame. The page asks nothing of the host and tells the model nothing.
+
 === Addressing and delivery
 
-`ui://upload-video`, `ui://configure-unifi` and `ui://deploy-run` are MCP App resource URIs; a tool
+`ui://upload-video`, `ui://configure-unifi`, `ui://deploy-run` and `ui://preview-location` are MCP App resource URIs; a tool
 points at one
 through `_meta.ui`, the host reads that resource and renders the HTML in a sandboxed iframe.
 `captal://` is the separate entity-resource hierarchy the upload page reads its ticket from.
 
 The scripts themselves are not carried by the MCP server. `mill client.publish` puts `upload.js`,
 `unifi.js` and `run.js` at `<bucket>/ui/<name>.js` under stable, revalidating names, with their hashed chunks
-beside them as immutable objects, and the server names them through `AssetStore.scriptUrl`. Locally,
+beside them as immutable objects, and the server names them through `AssetStore.scriptUrl`. The
+preview page is the exception: it is published whole, script inline, as `bundle/preview.html`, and
+the server serves its text as the resource. Locally,
 `mcp.dev` does the same against the local configuration's bucket on every run, and points
 `SCRIPT_BASE_URL` at the bucket itself rather than the distribution, whose LocalStack gateway refuses
 a request carrying an unfamiliar `Origin`.

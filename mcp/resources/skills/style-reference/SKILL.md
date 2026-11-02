@@ -1,7 +1,7 @@
 ---
 name: style-reference
-description: How to theme a location's portal through set_location_styles — the per-screen DOM structure, the class hooks, the state modifiers, and which variable drives which part. Call get_css_schema for the variable list itself; it is derived from the portal's stylesheet and this document is not. Use when customizing branding, colors, typography, layout, or specific screens (welcome, question, video, video-survey, ready). Triggers on "custom styles", "branding", "theme", "css variables", "override styles", "style screen", "estilos", "marca", "colores", "personalizar pantalla".
-version: 2.1.0
+description: How to theme a location's portal through set_location_styles — the per-screen DOM structure, the class hooks, the state modifiers, and which variable drives which part. Call get_css_schema for the variable list itself; it is derived from the portal's stylesheet and this document is not. Use when customizing branding, colors, typography, layout, or specific screens (welcome, question, video, video-survey, ready). Triggers on "custom styles", "branding", "theme", "css variables", "override styles", "style screen", "estilos", "marca", "colores", "personalizar pantalla", "vista previa", "preview", "cómo se ve".
+version: 2.2.0
 ---
 
 # Style customization reference
@@ -14,6 +14,11 @@ Each location can override the SPA's look with its own stylesheet, written throu
 2. `get_location_styles` — what is deployed today, or nothing when the location uses the base theme.
 3. `set_location_styles` — replaces it. **The whole file, not a patch**: read first when editing,
    or the rest of the stylesheet is lost.
+4. `preview_location` — one screen a guest goes through (`welcome`, `question`, `video`, `survey`,
+   `ready`, `access` or `error`), drawn by the portal itself with this stylesheet, the location's
+   icon and its texts. Use it to show the operator the result instead of describing it, one call
+   per screen the change touches. It works before the location is ever deployed, and records
+   nothing.
 
 The write also invalidates the CDN for that one file, so the change is visible immediately. There is
 no deploy step and nothing else to push.
@@ -544,7 +549,8 @@ override lives in production — so a local run never picks one up. To eyeball a
 publishing it, paste the rules into `client/assets/styles.css` temporarily and revert afterwards;
 they are not a location's content and must not be committed.
 
-Once it looks right, `set_location_styles` publishes it. There is no deploy step.
+Once it looks right, `set_location_styles` publishes it. There is no deploy step, and
+`preview_location` shows it on any screen, deployed or not.
 
 ## Source of truth
 

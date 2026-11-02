@@ -97,16 +97,19 @@ final case class AssetStore(
       .as(body.length)
   end put
 
-  def get(slug: String, asset: Asset): ZIO[Any, String, Option[String]] = ZIO
+  def get(slug: String, asset: Asset): ZIO[Any, String, Option[String]] = read(key(slug, asset))
+
+  /** The object at `key` as text, or `None` when there is none. */
+  def read(key: String): ZIO[Any, String, Option[String]] = ZIO
     .attemptBlocking:
       val bytes = s3
-        .getObject(GetObjectRequest.builder().bucket(bucket).key(key(slug, asset)).build())
+        .getObject(GetObjectRequest.builder().bucket(bucket).key(key).build())
         .readAllBytes()
       Some(new String(bytes, "UTF-8"))
     .catchSome { case _: NoSuchKeyException =>
       ZIO.none
     }
-    .mapError(e => s"Could not read ${key(slug, asset)}: ${e.getMessage}")
+    .mapError(e => s"Could not read $key: ${e.getMessage}")
 
   /** Invalidates the one key an asset write touched. Without it the edge keeps serving the previous
     * file until the cache expires.
@@ -167,8 +170,10 @@ final case class AssetStore(
             ZIO.succeed(None)
           // The maintenance page is deliberately not copied: a pause installs it *as* `index.html`
           // straight from the bundle, and a per-location copy would be a public URL serving
-          // maintenance at every healthy slug.
-          else if destination == AssetStore.maintenanceKey(slug) then
+          // maintenance at every healthy slug. Nor is the preview page, the backoffice's, which
+          // reads it from the bundle.
+          else if destination == AssetStore.maintenanceKey(slug) ||
+            destination == AssetStore.previewKey(slug) then
             ZIO.succeed(None)
           else
             copyObject(source, destination).as(Some(destination))
@@ -402,8 +407,15 @@ final case class AssetStore(
   /** The origin those scripts come from, for `_meta.ui.csp.resourceDomains`, which maps to
     * `script-src`. Without it the module is blocked and the page renders inert.
     */
-  def scriptOrigin: String =
-    val parsed = URI.create(scriptBaseUrl)
+  def scriptOrigin: String = originOf(scriptBaseUrl)
+
+  /** The origin the portal is served from, for the policy of a page that loads a location's assets
+    * from it.
+    */
+  def portalOrigin: String = originOf(publicBaseUrl)
+
+  private def originOf(url: String): String =
+    val parsed = URI.create(url)
     val port =
       if parsed.getPort < 0 then
         ""
@@ -485,6 +497,15 @@ object AssetStore:
 
   /** The one copy of the maintenance page: shared, like the bundle it comes from. */
   val BundleMaintenanceKey: String = "bundle/maintenance.html"
+
+  /** The preview page, the portal inline in one document, as `client.bundle` builds it. Read by the
+    * backoffice to serve `ui://preview-location`; never copied under a location, where it would be
+    * one more public page.
+    */
+  val PreviewPageKey: String = "bundle/preview.html"
+
+  /** The preview page's key under a location's prefix, which [[AssetStore.copyBundle]] skips. */
+  def previewKey(slug: String): String = s"$slug/preview.html"
 
   /** Where a pause keeps the page it replaced. Outside the location's own prefix, since anything
     * under `<slug>/` is served by the edge and would keep the real portal reachable by name for the

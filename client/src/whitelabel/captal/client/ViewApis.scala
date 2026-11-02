@@ -69,16 +69,18 @@ object VideoApi:
     StartPlaybackRequest(playbackId, videoUrl))
 
   /** Sent with `sendBeacon`, the one request a page can still make while it is being torn down; a
-    * `fetch` from `pagehide` is cancelled with the page. Nothing reads the answer.
+    * `fetch` from `pagehide` is cancelled with the page. Nothing reads the answer. Not from a
+    * preview, whose playback the server never recorded.
     */
   def endPlayback(playbackId: String): Unit =
-    val body = EndPlaybackRequest(playbackId).asJson.noSpaces
-    val blob =
-      new dom.Blob(
-        js.Array(body),
-        new dom.BlobPropertyBag:
-          `type` = "application/json")
-    val _ = dom.window.navigator.sendBeacon(ApiClient.url("/video/playback/end"), blob)
+    if ApiClient.standIn.isEmpty then
+      val body = EndPlaybackRequest(playbackId).asJson.noSpaces
+      val blob =
+        new dom.Blob(
+          js.Array(body),
+          new dom.BlobPropertyBag:
+            `type` = "application/json")
+      val _ = dom.window.navigator.sendBeacon(ApiClient.url("/video/playback/end"), blob)
 end VideoApi
 
 object AdvertiserApi:
