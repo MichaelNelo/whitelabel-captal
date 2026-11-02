@@ -88,7 +88,7 @@ inline given SchemaMeta[SessionRow] = schemaMeta[SessionRow]("sessions")
 inline given SchemaMeta[DeviceRow] = schemaMeta[DeviceRow]("devices")
 // ... surveys, questions, question_options, question_rules, answers,
 //     user_survey_progress, localized_texts, advertisers, advertiser_videos,
-//     video_files, video_playbacks, video_views, locations, event_log
+//     video_files, video_playbacks, video_views, locations, location_recovery, event_log
 ----
 
 WARNING: A row type without a `SchemaMeta` does not fail to compile. Quill derives the table name
@@ -128,7 +128,8 @@ defaulting, naming the column and the V22 rename in the message.
 `rows.scala` is the flat, one-case-class-per-table description of the schema: `UserRow`,
 `SessionRow`, `SurveyRow`, `QuestionRow`, `QuestionOptionRow`, `QuestionRuleRow`, `AnswerRow`,
 `UserSurveyProgressRow`, `NextIdentificationSurveyRow`, `LocalizedTextRow`, `AdvertiserRow`,
-`AdvertiserVideoRow`, `VideoViewRow`, `DeviceRow`, `DeviceUserRow`, `LocationRow`, `EventLogRow`.
+`AdvertiserVideoRow`, `VideoViewRow`, `DeviceRow`, `DeviceUserRow`, `LocationRow`,
+`LocationRecoveryRow`, `EventLogRow`.
 
 Conventions that hold across all of them:
 
@@ -476,6 +477,26 @@ between the two, transaction or not — the driver's transactions batch the writ
 
 `confirmed_at` is compared as text, so `VideoFiles.stamp` writes it at a fixed width:
 `Instant.toString` drops trailing zeros, and `…:41Z` sorts after `…:41.5Z`.
+
+[[location-recovery]]
+== Location recovery
+
+`LocationRecovery` is what a location makes of errors and abandoned playbacks: the `WaitPolicy` its
+portal offers a way out of a client error with, and the grace a playback its page never ended gets
+after its file would have finished. `location_recovery` holds one row per location that set any of
+it, a nullable column per setting, durations in seconds. What a row leaves out, and every setting of
+a location with no row, is `WaitPolicy.Default` or `Playback.Grace` (see xref:core.adoc#_recovery[Core]),
+so a location that never set anything follows the defaults as they change.
+
+* `waitPolicy(row)` and `grace(row)` fill in the defaults; `waitPolicyOf` and `graceOf` read the row
+  first.
+* `save(row)` writes the row whole, inserting it the first time.
+
+Both readers read it as they need it, so a change applies to the next guest with no redeploy. The
+portal reads the wait policy on every request for a way out, as it reads the UniFi switch. The
+backoffice's playback timer reads the grace of the session's location when the playback starts, so
+a playback already timed keeps its deadline; one whose session is gone takes the default. The
+backoffice's `set_recovery_policy` is the only writer.
 
 == Migrations
 

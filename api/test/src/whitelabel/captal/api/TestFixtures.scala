@@ -504,6 +504,7 @@ object TestFixtures:
         stmt.execute("DELETE FROM advertiser_videos")
         stmt.execute("DELETE FROM advertisers")
         stmt.execute("DELETE FROM users")
+        stmt.execute("DELETE FROM location_recovery")
         stmt.execute("DELETE FROM locations")
         stmt.close()
       finally

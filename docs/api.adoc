@@ -156,7 +156,11 @@ Routes and flows:: the six `*Routes.layer` values plus `Flows.eventHandlerLayer`
 through — see <<request-lifecycle>>. `expireAccessFlowLayer` is the one flow no endpoint calls: the
 `JobRunner` executes it when a granted access expires. `markVideoWatchedFlowLayer` is built by hand
 rather than by `Flow(...)`, because `MarkVideoWatchedHandler.withSession` needs the session and so
-can only be constructed per request.
+can only be constructed per request. The three recovery flows are built per request too, and also
+read the served location's wait policy for each command (`Flows.waitPolicy`, see
+xref:platform.adoc#location-recovery[Platform]), as `eventHandlerLayer` reads the UniFi switch: a
+change through `set_recovery_policy` applies to the next request with no redeploy. Without a
+location they use `WaitPolicy.Default`.
 
 `Phases.scala` is the pipeline expressed as values, and is the only place the order of the guest
 journey is written down:

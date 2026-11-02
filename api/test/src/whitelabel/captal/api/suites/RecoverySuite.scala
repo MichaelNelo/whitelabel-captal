@@ -3,17 +3,32 @@ package whitelabel.captal.api.suites
 import io.circe.Decoder
 import io.circe.generic.semiauto.deriveDecoder
 import io.circe.parser.decode
+import io.getquill.*
 import whitelabel.captal.api.TestHelpers.*
 import whitelabel.captal.api.wire.given
-import whitelabel.captal.api.{ApiErrors, RecoveryFeed, TestFixtures, TestUnifiClient, WireCheck}
+import whitelabel.captal.api.session.CurrentLocation
+import whitelabel.captal.api.{
+  ApiErrors,
+  Flows,
+  RecoveryFeed,
+  TestFixtures,
+  TestUnifiClient,
+  WireCheck
+}
 import whitelabel.captal.core.application.Phase
-import whitelabel.captal.core.recovery.{Activity, ErrorFingerprint}
+import whitelabel.captal.core.recovery.{Activity, ErrorFingerprint, WaitPolicy}
 import whitelabel.captal.core.survey.question
 import whitelabel.captal.core.user
 import whitelabel.captal.messages.{ApiError, RecoveryOffer, StatusResponse}
-import whitelabel.captal.platform.BundleManifest
 import whitelabel.captal.platform.repositories.RecoveryRepositoryQuill
 import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.platform.schema.given
+import whitelabel.captal.platform.{
+  BundleManifest,
+  LocationRecovery,
+  LocationRecoveryRow,
+  LocationRow
+}
 import whitelabel.captal.platform.session.{JobRunner, SessionContext, SessionService}
 import zio.schema.Schema
 import zio.test.*
@@ -179,6 +194,30 @@ object RecoverySuite:
             errorOf(early.body).exists(_.isInstanceOf[ApiError.RecoveryNotYet]),
             decode[StatusResponse](onTime.body).toOption.exists(_.phase == Phase.Recovered),
             errors.exists(e => e.origin == "client" && e.verdict.contains("plausible"))
+          )
+        ,
+        test("the wait policy is the served location's, with the default for what it leaves out"):
+          for
+            quill <- ZIO.service[QuillSqlite]
+            _     <- insertLocation(quill, "recovery-short")
+            _     <- insertLocation(quill, "recovery-bare")
+            _     <- LocationRecovery.save(
+              quill,
+              LocationRecoveryRow(
+                "recovery-short",
+                maximumSeconds = Some(60),
+                recurrentFactor = Some(0.5),
+                updatedAt = Now.toString))
+            short <- Flows.waitPolicy(quill, servedAt("recovery-short"))
+            bare  <- Flows.waitPolicy(quill, servedAt("recovery-bare"))
+            none  <- Flows.waitPolicy(quill, CurrentLocation.empty)
+          yield assertTrue(
+            short.maximum == java.time.Duration.ofSeconds(60),
+            short.recurrentFactor == 0.5,
+            short.ceiling == WaitPolicy.Default.ceiling,
+            short.identifiedFactor == WaitPolicy.Default.identifiedFactor,
+            bare == WaitPolicy.Default,
+            none == WaitPolicy.Default
           )
         ,
         test("a report that is not ours waits the ceiling"):
@@ -396,4 +435,20 @@ object RecoverySuite:
                 case _ =>
                   false))
       )
+
+  private def servedAt(id: String): CurrentLocation = CurrentLocation(
+    Some(id),
+    Some(id),
+    None,
+    None)
+
+  /** A bare location, its id and slug the same. */
+  private def insertLocation(quill: QuillSqlite, id: String): ZIO[Any, Throwable, Unit] =
+    import quill.*
+    val now = Now.toString
+    quill
+      .run(
+        query[LocationRow].insertValue(
+          lift(LocationRow(id, id, id, isActive = 1, now, now, unifiApMac = None))))
+      .unit
 end RecoverySuite

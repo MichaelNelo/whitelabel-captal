@@ -55,5 +55,7 @@ package object schema:
   inline given SchemaMeta[VideoPlaybackRow] = schemaMeta[VideoPlaybackRow]("video_playbacks")
   inline given SchemaMeta[VideoViewRow] = schemaMeta[VideoViewRow]("video_views")
   inline given SchemaMeta[LocationRow] = schemaMeta[LocationRow]("locations")
+  inline given SchemaMeta[LocationRecoveryRow] = schemaMeta[LocationRecoveryRow](
+    "location_recovery")
   inline given SchemaMeta[EventLogRow] = schemaMeta[EventLogRow]("event_log")
 end schema

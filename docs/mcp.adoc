@@ -328,7 +328,8 @@ surface as a page that will not open."
 
 Grouped three ways at once, each real: by business area (the table below, one group per source
 file); by what environment a tool needs (`LocationTools`, `I18nTools`, `AdvertiserTools`,
-`SurveyTools`, `UnifiTools`, `TokenTools` and `SkillTools` need only `QuillSqlite`; `AssetTools`,
+`SurveyTools`, `UnifiTools`, `RecoveryTools`, `TokenTools` and `SkillTools` need only
+`QuillSqlite`; `AssetTools`,
 `VideoTools`, `Readiness` and the deploy tools also need `AssetStore`, which is why `CaptalMcp`
 assembles them as two separate groups); and by visibility, covered above.
 
@@ -579,8 +580,9 @@ phone left the WiFi — leaves its playback open, and its file would be kept for
 `PlaybackExpiry` closes those: one fiber per playback, started for each `INSERT` of an open row a
 change set reports (read from the row in `after`) and, at startup, for every playback still open,
 since timers live in memory and a restart would forget them. Each sleeps until
-`Playback.expiresAt` — the start plus the file's length plus ten minutes, so a long video is not cut
-short — and then sets `ended_at` and `expired = 1` if the playback is still open, and asks for a
+`Playback.expiresAt` — the start plus the file's length plus the grace of the session's location,
+ten minutes unless it set its own (`set_recovery_policy`), so a long video is not cut short — and
+then sets `ended_at` and `expired = 1` if the playback is still open, and asks for a
 pass. The deadline is read from the database, never from the change set; an id that names no open
 playback schedules nothing, and a repeated one schedules once.
 
@@ -616,6 +618,32 @@ xref:platform.adoc[Platform] and xref:unifi.adoc[UniFi integration]. Also report
 |Turns the location's calls to its controller off or back on (`unifi_is_enabled`), keeping the
 stored settings. Off, the portal runs its whole flow and never authorizes or revokes a guest. The API
 reads the switch on every event, so it takes effect without a redeploy.
+|===
+
+=== Recovery (`RecoveryTools`)
+
+What a location makes of an error in its portal's own code and of a playback its page never ended,
+stored in `location_recovery` (see xref:platform.adoc#location-recovery[Platform]). Every setting
+of `WaitPolicy` (xref:core.adoc#_recovery[Core]) by its own name, durations in seconds
+(`maximumSeconds`, `recoveryWindowSeconds`, …), plus `playbackGraceSeconds`.
+
+[cols="2,1,4"]
+|===
+|Tool |Scope |
+
+|`get_recovery_policy`
+|read-only
+|Every setting in force, whether the location set it or takes the default, and `defaults`, the
+names of the ones it takes. Writes nothing, so a location that never set anything keeps no row.
+
+|`set_recovery_policy`
+|`content:write`
+|Sets the settings it is given and keeps the rest; `reset` names settings to return to their
+default. Refused before any write: a negative value, a ceiling below the maximum once merged, an
+unknown name in `reset`, a setting both set and reset, or nothing to change. Answers what
+`get_recovery_policy` would. The portal reads the policy on every request for a way out, so it
+takes effect without a redeploy; a wait already offered keeps its length, and a playback already
+timed its deadline.
 |===
 
 === Skills (`SkillTools`)

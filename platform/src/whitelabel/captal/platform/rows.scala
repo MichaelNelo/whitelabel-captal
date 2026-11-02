@@ -244,6 +244,28 @@ final case class LocationRow(
     unifiRedirectUrl: Option[String] = None,
     unifiIsEnabled: Int = 1)
 
+/** What a location changed of the recovery defaults; `None` takes the default. See
+  * [[LocationRecovery]].
+  */
+final case class LocationRecoveryRow(
+    locationId: String,
+    maximumSeconds: Option[Int] = None,
+    ceilingSeconds: Option[Int] = None,
+    zeroBelowSeconds: Option[Int] = None,
+    videoWeight: Option[Double] = None,
+    videoAnswerWeight: Option[Double] = None,
+    identificationWeight: Option[Double] = None,
+    emailWeight: Option[Double] = None,
+    identifiedFactor: Option[Double] = None,
+    watchedFactor: Option[Double] = None,
+    recoveryExponent: Option[Double] = None,
+    fabricatedFactor: Option[Double] = None,
+    recurrentFactor: Option[Double] = None,
+    recoveryWindowSeconds: Option[Int] = None,
+    recurrenceWindowSeconds: Option[Int] = None,
+    playbackGraceSeconds: Option[Int] = None,
+    updatedAt: String)
+
 final case class EventLogRow(
     id: String,
     eventType: String,

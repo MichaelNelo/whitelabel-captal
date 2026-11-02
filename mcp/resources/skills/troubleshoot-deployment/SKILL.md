@@ -1,7 +1,7 @@
 ---
 name: troubleshoot-deployment
-description: Symptom to cause to fix for a portal that is misbehaving — blank page, 403s, 500s, unhealthy targets, stale content, missing questions or videos, guests stuck at Ready with no internet. Triggers on "no funciona", "broken", "error", "503", "502", "500", "404", "403", "unhealthy", "stuck", "drain", "no carga", "troubleshoot", "diagnose", "debug", "sin internet", "no autoriza".
-version: 2.1.0
+description: Symptom to cause to fix for a portal that is misbehaving — blank page, 403s, 500s, unhealthy targets, stale content, missing questions or videos, guests stuck at Ready with no internet, guests waiting on the error page, replaced video files still stored. Triggers on "no funciona", "broken", "error", "503", "502", "500", "404", "403", "unhealthy", "stuck", "drain", "no carga", "troubleshoot", "diagnose", "debug", "sin internet", "no autoriza", "algo salió mal", "espera", "cuenta regresiva".
+version: 2.2.0
 ---
 
 # Troubleshoot a portal
@@ -154,6 +154,27 @@ ENVIRONMENT=dev mill client.bundle
 ```
 
 Then republish and invalidate (sections A and G).
+
+## N. Guests wait minutes on "Something went wrong"
+
+The page counting down is the way out of an error in the portal's own code, and the wait is on
+purpose: inventing an error must be slower than going through the flow. `get_recovery_policy` for
+the slug says how long: a new guest waits `maximumSeconds`, less once identified or once other
+phones ran into the same error, more after recent ways out. To shorten it for the next guests,
+`set_recovery_policy` with a lower `maximumSeconds`; no redeploy. A wait already offered keeps its
+length, and reloading the page resumes it rather than starting over.
+
+An error the server recorded has no wait at all. A code for the staff and no countdown means the
+error came after the guest finished the flow, where there is no way out: the code is the error's id
+in the `errors` table.
+
+## O. A replaced video file is still in the bucket
+
+Expected while somebody may still be playing it. A file is deleted once it is not the video's
+current one and no playback holds it. A playback whose page closed without saying so (the phone left
+the WiFi) holds it until its file's length plus `playbackGraceSeconds` from `get_recovery_policy`,
+ten minutes by default; then it is closed and the file goes. A shorter grace through
+`set_recovery_policy` applies to playbacks that start after it.
 
 ## When all else fails
 

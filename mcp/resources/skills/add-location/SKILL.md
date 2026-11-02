@@ -1,7 +1,7 @@
 ---
 name: add-location
-description: Use this skill to onboard a location end-to-end — create it, give it translations, advertisers and videos, brand it, configure UniFi, and check what is still missing. Composes the smaller skills into one flow. Triggers on "agregar location", "add new location", "onboard location", "nuevo cliente", "new client", "create location", "configurar unifi", "configure unifi", "desactivar unifi", "disable unifi", "readiness", "qué falta".
-version: 2.1.0
+description: Use this skill to onboard a location end-to-end — create it, give it translations, advertisers and videos, brand it, configure UniFi, set how its guests recover from errors, and check what is still missing. Composes the smaller skills into one flow. Triggers on "agregar location", "add new location", "onboard location", "nuevo cliente", "new client", "create location", "configurar unifi", "configure unifi", "desactivar unifi", "disable unifi", "espera de error", "error wait", "recovery policy", "readiness", "qué falta".
+version: 2.2.0
 ---
 
 # Onboard a location end-to-end
@@ -105,13 +105,34 @@ readiness stops asking for credentials. Guests finish the flow and stay at Ready
 off or back on at any time, also after deploying; the stored settings are kept and the change
 reaches the next guest without a redeploy.
 
-## 7. Deploy
+## 7. Error recovery (optional)
+
+Something breaking never leaves a guest without internet. An error the server recorded opens a way
+out at once; an error in the portal's own code makes the guest wait first, so that inventing one is
+slower than going through the flow. Every location starts with the same defaults, and
+`get_recovery_policy` shows them, with `defaults` naming the ones it has not changed.
+
+`set_recovery_policy` changes any of them for this location alone, and keeps the rest; `reset`
+returns some to their default. The ones an operator usually wants:
+
+| Setting | Default | What it does |
+|---|---|---|
+| `maximumSeconds` | 300 | What a new guest waits. Every other wait is this one, scaled |
+| `ceilingSeconds` | 1800 | No wait is longer; at least the maximum |
+| `identifiedFactor`, `watchedFactor` | 0.3, 0.5 | How much less a guest waits once identified this visit, and again once the video is watched |
+| `recurrentFactor` | 0.1 | How much less when other phones ran into the same error |
+| `playbackGraceSeconds` | 600 | How long after its file ends a playback whose page never said so is closed, which is what lets a replaced video file be deleted |
+
+The rest (weights of past effort, the factor for a made-up report, the windows) are described on
+the tool. Changes reach the next guest who asks for a way out with no redeploy.
+
+## 8. Deploy
 
 Content is live the moment a tool writes it. Standing up the portal service for a brand-new slug is
 a separate, currently unimplemented step — see `read_skill('deploy-location')` before promising
 anything here.
 
-## 8. Verify with a test URL
+## 9. Verify with a test URL
 
 The portal expects to be reached through a UniFi redirect carrying identifying params. Build one
 with the location's AP MAC:

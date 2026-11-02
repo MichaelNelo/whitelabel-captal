@@ -13,6 +13,7 @@ import whitelabel.captal.mcp.tools.{
   DeployTools,
   I18nTools,
   LocationTools,
+  RecoveryTools,
   SkillTools,
   SurveyTools,
   TokenTools,
@@ -100,7 +101,8 @@ object Main extends ZIOAppDefault:
       tools =
         LocationTools.all.size + I18nTools.all.size + AdvertiserTools.all.size +
           SurveyTools.all.size + AssetTools.all.size + UnifiTools.all(uiOrigin).size +
-          TokenTools.all.size + SkillTools.all.size + VideoTools.all.size + Readiness.all.size
+          RecoveryTools.all.size + TokenTools.all.size + SkillTools.all.size + VideoTools.all.size +
+          Readiness.all.size
       // The API's schema and its own. Before anything is served: the first request would otherwise
       // arrive at a tokens table that is not there.
       _ <- McpMigrate.run

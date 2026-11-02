@@ -139,8 +139,12 @@ by the MCP server (`mcp/resources/db/migration-mcp`, `V1` and `V2`).
 | via its session
 
 | `locations`
-| A venue: `slug` (UNIQUE), `name`, `is_active`, and the UniFi block — `unifi_ap_mac`, `unifi_host`, `unifi_port`, `unifi_site_id`, `unifi_api_token`, `unifi_duration_minutes`, `unifi_redirect_url`.
+| A venue: `slug` (UNIQUE), `name`, `is_active`, and the UniFi block — `unifi_ap_mac`, `unifi_host`, `unifi_port`, `unifi_site_id`, `unifi_api_token`, `unifi_duration_minutes`, `unifi_redirect_url`, `unifi_is_enabled`.
 | is the scope
+
+| `location_recovery`
+| What a location changed of the recovery defaults, one row per location that changed any: every setting of the wait for a way out of a client error (`maximum_seconds`, `ceiling_seconds`, `zero_below_seconds`, the four weights, the five factors, `recovery_window_seconds`, `recurrence_window_seconds`) and `playback_grace_seconds`. A NULL column, or no row, is the code's default. See xref:platform.adoc#location-recovery[Platform].
+| `location_id`, its key
 
 | `event_log`
 | Append-only audit trail: `event_type`, `event_data` as JSON, session, user, `occurred_at`, `created_at`. Written by `EventLogHandler`; nothing reads it in the request path.

@@ -12,7 +12,7 @@ import whitelabel.captal.core.infrastructure.{
   VideoRepository
 }
 import whitelabel.captal.core.recovery.WaitPolicy
-import whitelabel.captal.platform.UnifiClient
+import whitelabel.captal.platform.{LocationRecovery, UnifiClient}
 import whitelabel.captal.platform.eventhandlers.{
   AnswerPersistenceHandler,
   EventLogHandler,
@@ -233,46 +233,78 @@ private[api] object Flows:
     (ctx: SessionContext, eventHandler: EventHandler[Task, Event]) =>
       perSession(ctx, eventHandler)(EndPlaybackHandler.withSession[Task](_))
 
-  /** The recovery flows, per request like the others here. The wait policy is `core`'s default. */
+  /** The recovery flows, per request like the others here, under the served location's wait policy.
+    */
   val requestRecoveryFlowLayer: ZLayer[
-    RecoveryRepository[Task] & SessionContext & EventHandler[Task, Event],
+    RecoveryRepository[Task] & SessionContext & EventHandler[Task, Event] & QuillSqlite &
+      CurrentLocation,
     Nothing,
-    Flow.Aux[Task, RequestRecoveryCommand, RecoveryOutcome]] = ZLayer.fromFunction:
+    Flow.Aux[Task, RequestRecoveryCommand, RecoveryOutcome]
+  ] = ZLayer.fromFunction:
     (
         repo: RecoveryRepository[Task],
         ctx: SessionContext,
-        eventHandler: EventHandler[Task, Event]) =>
-      perSession(ctx, eventHandler)(RequestRecoveryHandler.withSession(repo, WaitPolicy.Default, _))
+        eventHandler: EventHandler[Task, Event],
+        quill: QuillSqlite,
+        location: CurrentLocation) =>
+      perSessionUnder(ctx, eventHandler, waitPolicy(quill, location))(
+        RequestRecoveryHandler.withSession(repo, _, _))
 
   val redeemRecoveryFlowLayer: ZLayer[
-    RecoveryRepository[Task] & SessionContext & EventHandler[Task, Event],
+    RecoveryRepository[Task] & SessionContext & EventHandler[Task, Event] & QuillSqlite &
+      CurrentLocation,
     Nothing,
     Flow.Aux[Task, RedeemRecoveryCommand, Unit]] = ZLayer.fromFunction:
     (
         repo: RecoveryRepository[Task],
         ctx: SessionContext,
-        eventHandler: EventHandler[Task, Event]) =>
-      perSession(ctx, eventHandler)(RedeemRecoveryHandler.withSession(repo, WaitPolicy.Default, _))
+        eventHandler: EventHandler[Task, Event],
+        quill: QuillSqlite,
+        location: CurrentLocation) =>
+      perSessionUnder(ctx, eventHandler, waitPolicy(quill, location))(
+        RedeemRecoveryHandler.withSession(repo, _, _))
 
   val checkRecoveryFlowLayer: ZLayer[
-    RecoveryRepository[Task] & SessionContext & EventHandler[Task, Event],
+    RecoveryRepository[Task] & SessionContext & EventHandler[Task, Event] & QuillSqlite &
+      CurrentLocation,
     Nothing,
-    Flow.Aux[Task, CheckRecoveryCommand, RecoveryOutcome]] = ZLayer.fromFunction:
+    Flow.Aux[Task, CheckRecoveryCommand, RecoveryOutcome]
+  ] = ZLayer.fromFunction:
     (
         repo: RecoveryRepository[Task],
         ctx: SessionContext,
-        eventHandler: EventHandler[Task, Event]) =>
-      perSession(ctx, eventHandler)(CheckRecoveryHandler.withSession(repo, WaitPolicy.Default, _))
+        eventHandler: EventHandler[Task, Event],
+        quill: QuillSqlite,
+        location: CurrentLocation) =>
+      perSessionUnder(ctx, eventHandler, waitPolicy(quill, location))(
+        CheckRecoveryHandler.withSession(repo, _, _))
+
+  /** The served location's wait policy, read from its row on every call like the UniFi switch.
+    * Without a location (dev, standalone) it is `core`'s default.
+    */
+  private[api] def waitPolicy(quill: QuillSqlite, location: CurrentLocation): Task[WaitPolicy] =
+    location.id match
+      case Some(id) =>
+        LocationRecovery.waitPolicyOf(quill, id)
+      case None =>
+        ZIO.succeed(WaitPolicy.Default)
 
   private def perSession[C, R](ctx: SessionContext, eventHandler: EventHandler[Task, Event])(
       build: SessionData => Handler.Aux[Task, C, R]): Flow.Aux[Task, C, R] =
-    import zio.interop.catz.given
+    perSessionUnder(ctx, eventHandler, ZIO.unit)((_, session) => build(session))
+
+  /** [[perSession]], with what `load` reads for each command handed to the handler too. */
+  private def perSessionUnder[A, C, R](
+      ctx: SessionContext,
+      eventHandler: EventHandler[Task, Event],
+      load: Task[A])(build: (A, SessionData) => Handler.Aux[Task, C, R]): Flow.Aux[Task, C, R] =
     new Flow[Task, C]:
       type Result = R
       def execute(command: C): Task[R] =
         for
           session  <- ctx.getOrFail
-          opResult <- build(session).handle(command)
+          loaded   <- load
+          opResult <- build(loaded, session).handle(command)
           result   <- ZIO.fromEither(
             whitelabel.captal.core.Op.run(opResult).left.map(Flow.HandlerError(_)))
           (events, value) = result

@@ -5,8 +5,15 @@ import java.time.Instant
 import io.getquill.*
 import whitelabel.captal.core.video.Playback
 import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.{VideoFileRow, VideoFiles, VideoPlaybackRow}
+import whitelabel.captal.platform.{
+  LocationRecovery,
+  SessionRow,
+  VideoFileRow,
+  VideoFiles,
+  VideoPlaybackRow
+}
 import zio.*
 
 /** Closes the playbacks whose page never said they ended — the captive-portal browser closed, the
@@ -93,20 +100,33 @@ object PlaybackExpiry:
           ZIO.logInfo(s"Playback $id expired: its page never said it ended") *> asked.offer(()))
     yield ()
 
-  /** When an open playback is due, from its start and its file's length. `None` once it has ended
-    * or for an id that is no playback at all.
+  /** When an open playback is due, from its start, its file's length and the grace of the location
+    * its session is at. `None` once it has ended or for an id that is no playback at all.
     */
-  private def deadlineOf(id: String): URIO[QuillSqlite, Option[Instant]] = ZIO
-    .serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      run(
-        query[VideoPlaybackRow]
-          .filter(p => p.id == lift(id) && p.endedAt.isEmpty)
-          .join(query[VideoFileRow])
-          .on(_.fileId == _.id)
-          .map((p, f) => (p.startedAt, f.durationSeconds))).orDie
-    .map(
-      _.headOption
-        .map((startedAt, duration) =>
-          Playback.expiresAt(Instant.parse(startedAt), duration.getOrElse(0))))
+  private def deadlineOf(id: String): URIO[QuillSqlite, Option[Instant]] = ZIO.serviceWithZIO[
+    QuillSqlite]: quill =>
+    import quill.*
+    for
+      found <-
+        run(
+          query[VideoPlaybackRow]
+            .filter(p => p.id == lift(id) && p.endedAt.isEmpty)
+            .join(query[VideoFileRow])
+            .on(_.fileId == _.id)
+            .leftJoin(query[SessionRow])
+            .on((pf, s) => pf._1.sessionId == s.id)
+            .map((pf, s) => (pf._1.startedAt, pf._2.durationSeconds, s.flatMap(_.locationId))))
+          .orDie
+      deadline <-
+        ZIO.foreach(found.headOption): (startedAt, duration, locationId) =>
+          ZIO
+            .foreach(locationId)(LocationRecovery.find(quill, _))
+            .orDie
+            .map(row =>
+              Playback.expiresAt(
+                Instant.parse(startedAt),
+                duration.getOrElse(0),
+                LocationRecovery.grace(row.flatten)))
+    yield deadline
+    end for
 end PlaybackExpiry
