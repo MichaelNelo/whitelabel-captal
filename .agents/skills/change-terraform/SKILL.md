@@ -16,8 +16,8 @@ binary writes is refused by OpenTofu 1.12 for being from a newer version, so alw
 | `local` | a plain state file under `.devenv/state/localstack/tofu/<container-id>/` | `mill mcp.test`, `mill mcp.dev`, and `mill ci.run` pointed at LocalStack |
 | `prod` | S3, via `backend.tf` and `environments/prod/backend.tfvars` | `mill ci.run` in CodeBuild, or by hand |
 
-There is no `dev`. It was destroyed and its directory removed — a reference to `environments/dev/`
-is a leftover.
+There is no `dev`: a reference to `environments/dev/` is a mistake to fix, not an environment to
+look for.
 
 One variable decides which cloud the configuration talks to:
 

@@ -125,7 +125,7 @@ mill api.dev --slug bonus-test
 ```
 
 `api.dev` fails fast with `LocationNotFound` if `bonus-test` doesn't exist in the `locations`
-table yet — there is no directory for it to provision from any more. Create it first with
+table yet — nothing provisions it from a directory. Create it first with
 `mill mcp.dev` and the backoffice's `create_location` tool (see skill `run-locally`).
 
 ## Patterns to follow

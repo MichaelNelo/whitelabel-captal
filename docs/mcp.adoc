@@ -245,9 +245,8 @@ empty** rather than omitted — with no grants declared, RFC 8414 requires neith
 nor a token endpoint, so leaving both out is consistent rather than missing. It is served
 unauthenticated and cached for an hour (`Cache-Control: max-age=3600`), on the reasoning that it
 carries nothing not already public — the scope names and the server's own address — and is fetched
-before any token exists to present. See xref:context/decisions.adoc[Decisions] and
-xref:context/incidents.adoc[Incidents] for the sentinel-hostname DNS lookup this metadata's
-`issuer` field used to trigger.
+before any token exists to present. Why its `issuer` field holds what it does is in
+xref:context/decisions.adoc[Decisions] and xref:context/incidents.adoc[Incidents].
 
 === Default-deny visibility
 
@@ -289,8 +288,8 @@ the type rather than two. `JsonSchema.SchemaStyle.Inline` is used rather than `R
 `JsonSchema.fromZSchema` through its own JSON encoding and then applies
 `stripOpenApiDiscriminator`, which removes the `discriminator` key from any object that also
 carries a `oneOf` — the variants there already carry the tag as a one-element `enum`, so "removing
-a key cannot misdescribe the contract; inventing one can," which is precisely what the generator
-patching this replaced used to do.
+a key cannot misdescribe the contract; inventing one can," which is what patching the generator
+instead would do.
 
 `derivedOutput[A]` wraps a non-object result under a `"result"` key (per the MCP spec's requirement
 that `outputSchema`/`structuredContent` be object-shaped) and builds a `CallToolResult` carrying

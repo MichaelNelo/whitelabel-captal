@@ -8,7 +8,7 @@ controller for a bounded time. Each customer location gets its own portal from o
 Scala 3 / Mill / ZIO / zio-http / Quill / rqlite on the server, Scala.js with Laminar and Waypoint
 in the browser, deployed to AWS ECS Fargate behind an ALB and CloudFront.
 
-This file is an index. Everything that used to be written out here now lives in `docs/`.
+This file is an index: what it points to lives in `docs/`.
 
 == Read first, in this order
 
@@ -119,7 +119,7 @@ aws elbv2 describe-target-groups --region us-east-1 \
   --query 'TargetGroups[?starts_with(TargetGroupName,`captal-`)].TargetGroupName'
 ----
 
-The `captal` CLI, the YAML provisioning system and the `endpoints/` module were deleted. If a
-document or a skill tells you to run `captal <anything>`, edit a `location.yaml`, or import from
-`whitelabel.captal.endpoints`, that is a leftover and a bug — not an instruction.
+There is no `captal` CLI, no YAML provisioning and no `endpoints/` module. A document or a skill
+that tells you to run `captal <anything>`, edit a `location.yaml`, or import from
+`whitelabel.captal.endpoints` is wrong — a bug, not an instruction.
 `docs/context/history.adoc` records what was removed and when.

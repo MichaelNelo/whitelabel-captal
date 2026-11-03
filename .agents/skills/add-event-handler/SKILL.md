@@ -76,7 +76,7 @@ Use the existing handlers in `platform/.../eventhandlers/` as patterns: `UserPer
 ### 4. Register the handler in the chain
 
 In `api/src/whitelabel/captal/api/Flows.scala`, find `eventHandlerLayer` and `.andThen` your new
-handler. `Main.scala` no longer holds any layer definitions — it is only the startup sequence
+handler. `Main.scala` holds no layer definitions — it is only the startup sequence
 (resolve settings, start the scheduler, log, assemble, serve).
 
 **Transactional (DB write)** — within the `dbHandler` chain:

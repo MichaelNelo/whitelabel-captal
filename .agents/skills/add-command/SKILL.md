@@ -118,8 +118,8 @@ it keeps its own copy of the layer list, not a reference to `Flows`.
 ### 5. Expose at the API edge
 
 Create or reuse a Routes class (see skill `add-api-endpoint`) that resolves this Flow inside a
-zio-http `Endpoint`'s `.implement` body — not a tapir `serverLogic`, which this codebase no longer
-has:
+zio-http `Endpoint`'s `.implement` body — not a tapir `serverLogic`, which this codebase does not
+have:
 
 ```scala
 createBonus.implement: (cookie, request) =>

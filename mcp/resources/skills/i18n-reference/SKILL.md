@@ -18,15 +18,12 @@ to be total. Neither can drift from what the portal actually reads. Adding a fie
 it to the required set, to the decoder, to the documented descriptions and to what
 `get_i18n_status` reports as missing, all at once.
 
-The same list is also published as the `i18n://required-keys` resource, which came first. Prefer
+The same list is also published as the `i18n://required-keys` resource. Prefer
 the tool: whether a model ever sees a resource is the host's decision, and in some clients
 resources reach the operator's attachment menu and never the model at all.
 
-This skill used to enumerate the keys itself. It went stale: it was missing
-`welcome.authorized.title` and `welcome.authorized.remaining` (added with the access-expiry
-countdown), stated a total of 36 when there were 37 listed and 39 real, and claimed a missing key
-makes the i18n endpoint fail to decode. That is why the list is no longer written here, and why
-nothing should re-enumerate it.
+The keys are not listed here, and nothing should list them: a copy goes stale as soon as a field is
+added to `I18n`, and a stale list is worse than none.
 
 ## What a missing key actually does
 

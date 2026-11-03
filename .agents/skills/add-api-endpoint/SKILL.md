@@ -239,5 +239,5 @@ it here.
   while it's built — the `RoutePattern` gets prefixed but the endpoint's own codec doesn't, so a
   prefixed request matches the route and then fails to decode.
 - ❌ Reaching for a tapir type (`PublicEndpoint`, `jsonBody`, `ZServerEndpoint`) — none of it exists
-  in this build any more. The equivalents are `zio.http.endpoint.Endpoint`, `.in[A]`/`.out[A]`, and
+  in this build. The equivalents are `zio.http.endpoint.Endpoint`, `.in[A]`/`.out[A]`, and
   `Routes(endpoint.implement(...))`.

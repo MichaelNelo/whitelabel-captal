@@ -49,8 +49,7 @@ wrong, an option that was not offered was selected, a rating is out of range, a 
 answered. The portal maps them to text in the guest's own language, which it cannot do with a
 sentence the server wrote in English.
 
-Both halves of that mapping are derived from this one definition. They used to be written by hand
-and had drifted apart for 22 of the variants: the server could report a refusal the browser had no
-way to read.
+Both halves of that mapping are derived from this one definition. Written by hand, the two halves
+drift apart, and the server reports a refusal the browser has no way to read.
 
 Architecture: xref:../docs/messages.adoc[docs/messages.adoc].

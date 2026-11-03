@@ -60,7 +60,7 @@ aws ecs describe-services --cluster <cluster> --services captal-<slug> \
 
 | Cause | Fix |
 |---|---|
-| `"a valid taskRoleArn is not being used"` | The service was created without a task role. The roles live in `modules/ecs`; there is no `captal.yaml` to add one to any more |
+| `"a valid taskRoleArn is not being used"` | The service was created without a task role. The roles live in `modules/ecs`; there is no `captal.yaml` to add one to |
 | Stuck `DRAINING` | Wait a minute or two; ECS finishes on its own |
 | Listener rule or target group missing | Nothing recreates them — see `read_skill('deploy-location')` before promising a fix |
 | Targets unhealthy | Section E |

@@ -21,7 +21,7 @@ version: 3.1.0
    <slug>` for the faster loop on `:8080`. Either needs a location row to already exist.
 4. **Client bundle** — built and served from disk in `api.dev`'s dev mode.
 
-There is no provisioning directory any more. A fresh database has no locations, no surveys, no
+There is no provisioning directory. A fresh database has no locations, no surveys, no
 videos — everything is created by calling MCP tools, not by pointing the server at a folder of
 YAML.
 

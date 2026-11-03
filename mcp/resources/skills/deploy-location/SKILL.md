@@ -20,8 +20,8 @@ Three different things get called "deploy" here, and they have three different a
 which one is meant before doing anything: one needs nothing at all, one is a Mill task, and one is
 `deploy_location`.
 
-There is no `captal` CLI. It was deleted along with the file-provisioning engine, so anything that
-remembers a `captal …` command is remembering a tool that no longer exists.
+There is no `captal` CLI and no file provisioning: a `captal …` command names a tool that does not
+exist.
 
 ## 1. Content: already live, nothing to deploy
 

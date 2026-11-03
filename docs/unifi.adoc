@@ -560,7 +560,7 @@ xref:infrastructure.adoc[Infrastructure].
   `list_locations` reports only whether `unifi_host` is non-blank. A location can therefore show as
   configured in a listing and still authorize nobody.
 * **The AP MAC mismatch warning still names `location.yaml`.** The log line in `SurveyRoutes` refers
-  to a provisioning file that no longer exists; the value it compares against is the
+  to a provisioning file that does not exist; the value it compares against is the
   `locations.unifi_ap_mac` column.
 
 == Testing

@@ -223,7 +223,7 @@ screen's panels above all.
 |`--icon-size-lg` |`64px` |The brand icon on a screen's header, and in the loader. The loader's initial position is computed from it, so changing it moves the handoff.
 |`--icon-size-md` |`48px` |The brand icon where it appears smaller.
 |`--control-size` |`18px` |Radio and checkbox size. Below about 18px they become hard to hit on a phone.
-|`--loader-ring-out` |`.3s` |First half of `--loader-handoff`: how long the waiting state takes to leave. Named for a ring that no longer exists; the waiting animation is now `breathe` on the icon itself.
+|`--loader-ring-out` |`.3s` |First half of `--loader-handoff`: how long the waiting state takes to leave. The name says ring, but there is none: the waiting animation is `breathe` on the icon itself.
 |`--loader-settle` |`.1s` |Second half of `--loader-handoff`: the pause between the wait ending and the icon rising with the content. It is what makes the end of the wait legible; at zero the two movements compete.
 |`--loader-handoff` |`calc(--loader-ring-out + --loader-settle)` |When the icon starts rising. Derived from the two above — override those, not this.
 |`--video-intro-out` |`.4s` |How long the video intro takes to dissolve into the player. Paired with `AdvertiserVideoView.IntroFadeMs`, which decides when the element is removed.
@@ -361,11 +361,9 @@ because the loader is `position: fixed; inset: 0` and centres on the *current* v
 `vh` resolves against the viewport with the browser chrome hidden while `dvh` follows what is
 actually visible.
 
-`.brand-ring`, the wrapper `BrandLoader` still emits, is a historical name: the ring it was named for
-was replaced by `breathe` on the icon itself, and the CSS that drew it is gone along with the
-`@keyframes ringOut` it used — `ringOut` remains declared in the stylesheet but no rule references
-it. `--brand-icon-url` is the same story one layer up: a masked, multi-layer icon was tried, is fully
-gone, and left no property behind — the icon today is a plain `<img>`.
+`.brand-ring`, the wrapper `BrandLoader` emits, draws no ring: the waiting animation is `breathe` on
+the icon itself. `@keyframes ringOut` is declared in the stylesheet, but no rule references it. The
+icon is a plain `<img>`, not a masked image: there is no `--brand-icon-url`.
 
 == State-class pattern
 

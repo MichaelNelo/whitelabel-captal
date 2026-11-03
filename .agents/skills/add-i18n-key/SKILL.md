@@ -20,7 +20,7 @@ i18n keys are **typed end-to-end**, and derived rather than hand-mapped at every
    `decode` without touching `LocaleService`. A key the rows don't cover decodes to the literal
    `[your.key]` rather than failing.
 3. **Persistence** — the `localized_texts` table, scoped by `(locale, location_id, category =
-   "frontend")`. There is no YAML and no file-based scaffold any more; every row is written by the
+   "frontend")`. There is no YAML and no file-based scaffold; every row is written by the
    MCP backoffice's `set_translations` tool, and read back with `get_i18n_status`.
 
 If you skip the schema step or forget `I18n.descriptions`, the build doesn't compile — `I18n` is

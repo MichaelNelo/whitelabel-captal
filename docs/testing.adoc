@@ -200,7 +200,7 @@ processes against one URL — the API's schema first, since the backoffice's own
 portal's already exist — rather than through a Flyway instance assembled inline in the test code.
 Two reasons, both load-bearing: Flyway cannot lock a migration on SQLite and says so in its own log
 ("does not support locking. No concurrent migration supported"), so running it inline in several
-forked JVMs at once used to race; and rqlite reports a rejected DDL statement inside an ordinary
+forked JVMs at once races; and rqlite reports a rejected DDL statement inside an ordinary
 HTTP 200, which a Flyway instance without the production `DataSource` wrapper reads as "applied"
 rather than "refused" — four specs that once assembled their own Flyway also set
 `cleanOnValidationError`, which drops every table on a corrupted history and calls it recovery. The

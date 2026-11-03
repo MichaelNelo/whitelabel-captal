@@ -3,10 +3,8 @@
 :toclevels: 2
 
 `terraform/` is the OpenTofu configuration for every environment Captal runs in, including the one
-`mcp.test` applies against LocalStack before its suite runs. It was a separate repository,
-`whitelabel-captal-infrastructure`, brought in as a git subtree with its own history — see
-xref:context/history.adoc[History] — because the local test suite could not run without it: with
-the configuration a clone away, a checkout of the portal alone was not enough to test the portal.
+`mcp.test` applies against LocalStack before its suite runs. It lives in this repository because
+the local test suite cannot run without it: one checkout is all it takes to test the portal.
 
 **OpenTofu, not Terraform.** Every command below is `tofu`. `devenv.nix` installs both `opentofu`
 and `terraform`, because the two cannot share a working directory: a state file written by
@@ -121,8 +119,8 @@ Per-environment sizing, as committed:
 == Local: LocalStack and the keyed state pairing
 
 Nothing here is run by hand. `mill mcp.test` applies this configuration against LocalStack before
-its suite starts, replacing what used to be a 219-line hand-built `awslocal` fixture that had already
-drifted from the real topology — see xref:context/decisions.adoc[Decisions]. The full mechanics of
+its suite starts, so the suite runs against the topology a real environment has — see
+xref:context/decisions.adoc[Decisions]. The full mechanics of
 that task (`localStackInfra`, `tofuSources`, `resetLocalStack`, IAM soft mode, and what the suite
 itself asserts) belong to xref:testing.adoc[Test strategy]; this section covers the three structural
 facts about the configuration and its state that make that task possible at all.
@@ -178,12 +176,10 @@ every `.tf` and `.tfvars` in the tree.
 The root module (`terraform/main.tf`) wires fifteen child modules together. The account's networking
 is a data source rather than a module — `data "aws_vpc" "default"` and `data "aws_subnets" "default"`
 resolve the account's default VPC and its one-per-AZ default subnets, which are public and
-auto-assign addresses, letting every Fargate task reach ECR without a NAT gateway. A `modules/vpc`
-building private subnets existed and was deleted in favour of this: `enable_nat_gateway` defaulted to
-`false` and no environment ever overrode it, so the private half was being paid for
-(~USD 32/month per availability zone) by nobody. The change is in the configuration but **not yet
-applied to any live environment** — see xref:context/pending.adoc[Pending work] for the resource
-replacements a real `tofu apply` would trigger against deployed `dev`.
+auto-assign addresses, letting every Fargate task reach ECR without a NAT gateway: there are no
+private subnets and no NAT gateway to pay for (about USD 32/month per availability zone). The
+configuration is **not yet applied to prod** — see xref:context/pending.adoc[Pending work] for the
+resource replacements its first `tofu apply` there triggers.
 
 === S3 and ECR
 
@@ -195,10 +191,9 @@ cross-wired in code.
 `modules/ecr` creates three repositories, `captal-api`, `captal-mcp` and `captal-cdc`, each keeping
 the last 10 images tagged with a `v` prefix and expiring untagged images after 7 days. A fourth
 image — the custom rqlite build — gets its own repository inside `modules/rqlite` instead, with a simpler
-keep-last-5 policy; see <<Images and releases>>. Two now-removed repositories,
-`captal-provision`/`captal-shared`-style per-location images from the deleted CLI, are not declared
-here any more — their emptying and removal is a `tofu apply`, not something a build task can do; see
-xref:context/history.adoc[History].
+keep-last-5 policy; see <<Images and releases>>. No other repository is declared: an environment
+that still has others, such as `captal-provision` or `captal-shared`, loses them on its next
+`tofu apply`, which is not something a build task can do; see xref:context/history.adoc[History].
 
 === ALB
 
@@ -415,13 +410,11 @@ non-empty.
 
 === MCP backoffice
 
-`modules/mcp` is the newest and largest module: the server that owns every location's deploy did not
-have one for most of this project's life. What existed before, `modules/mcp-iam`, only granted the
-*shared* ECS task role four S3 and CloudFront actions — the role every location's API also runs as,
-so every location's API could write any other location's assets and invalidate the distribution,
-simply because there was one role. See xref:context/history.adoc[History].
+`modules/mcp` is the largest module: the backoffice, the server that owns every location's deploy.
+Its permissions are on a task role of its own, not on the shared ECS task role every location's API
+runs as, so no location's API can write another location's assets or invalidate the distribution.
 
-This module gives the backoffice its own task role, carrying its own policy
+That role carries its own policy
 (`data.aws_iam_policy_document.mcp`, attached as `aws_iam_policy.mcp`), scoped statement by
 statement:
 

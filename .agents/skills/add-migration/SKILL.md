@@ -11,9 +11,9 @@ version: 1.1.0
 Any persisted change to the **portal** schema (new column, new table, index, soft-delete flag) —
 the tree under `platform/resources/db/migration`, owned by the API. (The backoffice has its own,
 separate migration tree under `mcp/resources/db/migration-mcp`, for `mcp_tokens` alone; this skill
-is about the portal's.) Migrations run via `platform.Migrate` as part of the `captal-api` image's
-own startup `CMD`, on every location task that boots on it — there is no separate provisioning task
-any more.
+is about the portal's.) Migrations run via `platform.Migrate` when the API process starts, before it
+builds its layers, on every location task that boots on the `captal-api` image — there is no
+separate provisioning task.
 
 ## Steps
 

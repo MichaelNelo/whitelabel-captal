@@ -367,12 +367,10 @@ nothing.
 </div>
 ```
 
-`.brand-ring` is a wrapper, not a ring. A spinning ring was tried and dropped; the waiting
-animation is `@keyframes breathe` on the icon itself, giving way to `brandGlowFlash` in
-`.loaded-state`. The `.ring-track` / `.ring-arc` spans and the `--loader-ring-gap` /
-`--loader-ring-width` variables were the last of it and are gone — a stylesheet wanting a ring back
-writes its own markup and variables rather than inheriting half a scaffold. `--loader-ring-out`
-survives under a misleading name: it is the first half of `--loader-handoff`.
+`.brand-ring` is a wrapper, not a ring: the waiting animation is `@keyframes breathe` on the icon
+itself, giving way to `brandGlowFlash` in `.loaded-state`. The markup has no ring spans and the
+stylesheet no ring variables — a stylesheet wanting a ring writes its own markup and variables.
+`--loader-ring-out`, despite its name, is the first half of `--loader-handoff`.
 
 If you want the loader background to match your gradient before JS even runs, override:
 ```css

@@ -224,7 +224,7 @@ Every screen uses `Layout(content, footer, isLoading)`:
 
 Layout owns:
 - The brand icon (`assets/brand-icon.svg`)
-- The loading animation (`breathe`, applied to `.brand-icon` — `.brand-ring` is the wrapper's class name, a historical one left over from a ring that no longer exists)
+- The loading animation (`breathe`, applied to `.brand-icon` — `.brand-ring` is the wrapper's class name; there is no ring)
 - The fade-in/out transitions (`view-content.hidden` ↔ `.visible`)
 
 Don't reinvent these in individual views.
@@ -249,5 +249,5 @@ a server change in the same pass.
 - ❌ Absolute paths (`/foo.svg`) in views — breaks under slug prefix.
 - ❌ Inline `style :=` for theming colors — use `cls := "..."` + CSS variables in `styles.css`.
 - ❌ Importing JVM-only Java classes (`java.io.*`) — Scala.js link error.
-- ❌ Treating the server's zio-http `Endpoint` values in `api/routes/` as the client's source of truth — the client only uses the DTO case classes in `messages/`, never the endpoint definitions (there is no shared `endpoints/` module any more).
+- ❌ Treating the server's zio-http `Endpoint` values in `api/routes/` as the client's source of truth — the client only uses the DTO case classes in `messages/`, never the endpoint definitions (there is no shared `endpoints/` module).
 - ❌ Mutating `Var` from inside a Signal observer in render — causes Laminar reentrancy issues. Move mutations to event handlers.

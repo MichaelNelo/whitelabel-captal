@@ -23,8 +23,7 @@ data survives a redeploy. Prod runs **three** on Fargate ephemeral storage and r
 redeployed alone is replayed from its peers, but losing quorum — two of three at once — can lose
 recent writes permanently.
 
-**There is no file-based replay any more.** The CLI and the YAML tree it pushed are gone, so the
-database is the only copy of the content. Nothing can re-apply a directory, and a lost write is lost.
+**There is no file-based replay.** The database is the only copy of the content. Nothing can re-apply a directory, and a lost write is lost.
 Say that plainly rather than suggesting a push that does not exist.
 
 Operator tokens are the exception. `MCP_ADMIN_TOKEN` seeds the admin row on every startup, so losing
@@ -99,5 +98,5 @@ Still failing: `read_skill('troubleshoot-deployment')`.
   trust `tofu plan` over this document.
 - Giving prod the persistent mount dev already has is an infrastructure change
   (`terraform/modules/rqlite`), not something this server can do.
-- Content now has exactly one copy. Until that changes, treat a prod quorum loss as destructive and
-  plan the redeploy around it rather than around a re-push that no longer exists.
+- Content has exactly one copy. Until that changes, treat a prod quorum loss as destructive and
+  plan the redeploy around it: there is nothing to re-push.
