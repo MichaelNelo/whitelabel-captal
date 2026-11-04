@@ -8,7 +8,7 @@ import whitelabel.captal.core.user
   * shortener in front of the portal, which computes it from what the browser reports; the MAC is
   * the one UniFi will authorize.
   */
-final case class Signals(clientMac: String, fingerprint: String)
+final case class Signals(clientMac: Option[Mac], fingerprint: String)
 
 /** Whether a known device is the one in front of us.
   *

@@ -79,8 +79,13 @@ object UnifiAccessHandler:
         for
           session <- ctx.getOrFail
           expiresAt = occurredAt.plusSeconds(unifiCfg.defaultDurationMinutes * 60L)
-          result <- unifiClient.authorizeGuest(unifiCfg, session.clientMac).either
-          _      <-
+          result <-
+            ZIO
+              .fromOption(session.clientMac)
+              .orElseFail(new IllegalStateException("the session has no client MAC"))
+              .flatMap(unifiClient.authorizeGuest(unifiCfg, _))
+              .either
+          _ <-
             result match
               case Left(error) =>
                 ZIO.logError(
@@ -101,21 +106,22 @@ object UnifiAccessHandler:
         for
           session <- ctx.getOrFail
           _       <-
-            if session.clientMac.trim.isEmpty then
-              ZIO.logWarning(
-                s"UniFi revoke: empty clientMac — skipping (session=${session.sessionId.asString})")
-            else
-              unifiClient
-                .revokeGuestAccess(unifiCfg, session.clientMac)
-                .either
-                .flatMap:
-                  case Left(error) =>
-                    ZIO.logError(
-                      s"UniFi revoke failed for session ${session.sessionId.asString}: ${error
-                          .getMessage}")
-                  case Right(_) =>
-                    ZIO.logInfo(
-                      s"UniFi guest access revoked for session ${session.sessionId.asString}")
+            session.clientMac match
+              case None =>
+                ZIO.logWarning(
+                  s"UniFi revoke: no clientMac — skipping (session=${session.sessionId.asString})")
+              case Some(mac) =>
+                unifiClient
+                  .revokeGuestAccess(unifiCfg, mac)
+                  .either
+                  .flatMap:
+                    case Left(error) =>
+                      ZIO.logError(
+                        s"UniFi revoke failed for session ${session.sessionId.asString}: ${error
+                            .getMessage}")
+                    case Right(_) =>
+                      ZIO.logInfo(
+                        s"UniFi guest access revoked for session ${session.sessionId.asString}")
         yield ()
       end revoke
 end UnifiAccessHandler

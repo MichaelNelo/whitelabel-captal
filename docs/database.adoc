@@ -79,7 +79,7 @@ by the MCP server (`mcp/resources/db/migration-mcp`, `V1` and `V2`).
 | **Global** — no `location_id`
 
 | `sessions`
-| One row per captive-portal visit: phase, device id, locale, the current survey/question/video/advertiser cursors, the captive-portal parameters (`client_mac`, `ap_mac`, `redirect_url`, `ssid`, `fingerprint`) and `access_expires_at`. `last_promo_video_id` is still a column and nothing reads or writes it.
+| One row per captive-portal visit: phase, device id, locale, the current survey/question/video/advertiser cursors, the captive-portal parameters (`client_mac` and `ap_mac`, each a MAC's 48-bit big-endian integer, `redirect_url`, `ssid`, `fingerprint`) and `access_expires_at`. `last_promo_video_id` is still a column and nothing reads or writes it.
 | `location_id`
 
 | `devices`

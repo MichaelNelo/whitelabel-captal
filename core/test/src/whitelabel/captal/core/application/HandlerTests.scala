@@ -244,21 +244,35 @@ object HandlerTests extends TestSuite:
         )
 
     test("Device policy"):
-      import whitelabel.captal.core.device.{Matching, Policy, Signals}
+      import whitelabel.captal.core.device.{Mac, Matching, Policy, Signals}
       test("configuration names a policy, and none means the default"):
         assert(
           Policy.fromConfig(None) == Right(Policy.ByMacAndFingerprint),
           Policy.fromConfig(Some("ByMac")) == Right(Policy.ByMac),
           Policy.fromConfig(Some("ByFoo")).isLeft)
       test("each policy compares what it says, and only signals carrying it"):
-        val known = Signals("aa:bb", "fp-1")
+        val ab = Mac.parse("aa:bb:cc:dd:ee:01")
+        val cd = Mac.parse("aa:bb:cc:dd:ee:02")
+        val known = Signals(ab, "fp-1")
         assert(
-          Matching.ByFingerprint.matches(known, Signals("cc:dd", "fp-1")),
-          !Matching.ByMac.matches(known, Signals("cc:dd", "fp-1")),
-          Matching.ByMacAndFingerprint.matches(known, Signals("aa:bb", "fp-1")),
-          !Matching.ByMacAndFingerprint.matches(known, Signals("aa:bb", "fp-2")),
-          !Policy.ByFingerprint.covers(Signals("aa:bb", "")),
-          Policy.ByMac.covers(Signals("aa:bb", ""))
+          Matching.ByFingerprint.matches(known, Signals(cd, "fp-1")),
+          !Matching.ByMac.matches(known, Signals(cd, "fp-1")),
+          Matching.ByMacAndFingerprint.matches(known, Signals(ab, "fp-1")),
+          !Matching.ByMacAndFingerprint.matches(known, Signals(ab, "fp-2")),
+          !Policy.ByFingerprint.covers(Signals(ab, "")),
+          Policy.ByMac.covers(Signals(ab, "")),
+          !Policy.ByMac.covers(Signals(None, "fp-1"))
+        )
+      test("a MAC is its six bytes, however it is written"):
+        val mac = Mac.parse("AA-BB-CC-DD-EE-FF")
+        assert(
+          mac.map(_.toLong).contains(0xaabbccddeeffL),
+          mac == Mac.parse("aa:bb:cc:dd:ee:ff"),
+          mac == Mac.parse("aabbccddeeff"),
+          mac.map(_.show).contains("aa:bb:cc:dd:ee:ff"),
+          Mac.parse("aa:bb:cc:dd:ee").isEmpty,
+          Mac.parse("gg:bb:cc:dd:ee:ff").isEmpty,
+          Mac.fromLong(1L << 48).isEmpty
         )
 
     test("AnswerProfilingHandler"):

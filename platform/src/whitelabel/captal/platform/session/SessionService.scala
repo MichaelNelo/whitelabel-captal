@@ -2,7 +2,7 @@ package whitelabel.captal.platform.session
 
 import io.getquill.*
 import whitelabel.captal.core.application.Phase
-import whitelabel.captal.core.device.{Matching, Policy, Signals}
+import whitelabel.captal.core.device.{Mac, Matching, Policy, Signals}
 import whitelabel.captal.core.infrastructure.SessionData
 import whitelabel.captal.core.survey.AdvertiserId
 import whitelabel.captal.core.survey.question.FullyQualifiedQuestionId
@@ -13,9 +13,12 @@ import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.{DeviceRow, SessionRow}
 import zio.*
 
+/** What the captive portal's redirect said, once read: the MAC is required, the access point's is
+  * only checked against the location's.
+  */
 final case class CaptivePortalParams(
-    clientMac: String,
-    apMac: String,
+    clientMac: Mac,
+    apMac: Option[Mac],
     redirectUrl: String,
     ssid: String,
     fingerprint: String)
@@ -150,7 +153,7 @@ object SessionService:
           portalParams: CaptivePortalParams,
           userAgent: String,
           now: String): Task[user.DeviceId] =
-        val seen = Signals(portalParams.clientMac, portalParams.fingerprint)
+        val seen = Signals(Some(portalParams.clientMac), portalParams.fingerprint)
         val found: Task[Option[user.DeviceId]] =
           if !devices.covers(seen) then
             ZIO.none
@@ -220,7 +223,7 @@ object SessionService:
             currentAdvertiserId = None,
             locationId = locationId,
             createdAt = now,
-            clientMac = portalParams.clientMac,
+            clientMac = Some(portalParams.clientMac),
             apMac = portalParams.apMac,
             redirectUrl = portalParams.redirectUrl,
             ssid = portalParams.ssid,
@@ -256,7 +259,7 @@ object SessionService:
           None,
           None,
           locationId = locationId,
-          clientMac = portalParams.clientMac,
+          clientMac = Some(portalParams.clientMac),
           apMac = portalParams.apMac,
           redirectUrl = portalParams.redirectUrl,
           ssid = portalParams.ssid,
@@ -287,7 +290,7 @@ object SessionService:
             currentAdvertiserId = None,
             locationId = locationId,
             createdAt = now,
-            clientMac = portalParams.clientMac,
+            clientMac = Some(portalParams.clientMac),
             apMac = portalParams.apMac,
             redirectUrl = portalParams.redirectUrl,
             ssid = portalParams.ssid,
@@ -323,7 +326,7 @@ object SessionService:
           None,
           None,
           locationId = locationId,
-          clientMac = portalParams.clientMac,
+          clientMac = Some(portalParams.clientMac),
           apMac = portalParams.apMac,
           redirectUrl = portalParams.redirectUrl,
           ssid = portalParams.ssid,

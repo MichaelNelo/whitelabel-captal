@@ -4,6 +4,7 @@ import scala.annotation.targetName
 
 import io.getquill.*
 import whitelabel.captal.core.application.{IdentificationSurveyType, Phase}
+import whitelabel.captal.core.device.Mac
 import whitelabel.captal.core.{survey, user, video}
 
 package object core:
@@ -22,6 +23,12 @@ package object core:
   inline given MappedEncoding[user.DeviceId, String] = MappedEncoding(_.asString)
   @targetName("stringToDeviceId")
   inline given MappedEncoding[String, user.DeviceId] = MappedEncoding(user.DeviceId.unsafe)
+
+  // A MAC is stored as its 48-bit big-endian integer.
+  @targetName("macToLong")
+  inline given MappedEncoding[Mac, Long] = MappedEncoding(_.toLong)
+  @targetName("longToMac")
+  inline given MappedEncoding[Long, Mac] = MappedEncoding(Mac.unsafe)
 
   @targetName("emailToString")
   inline given MappedEncoding[user.Email, String] = MappedEncoding(_.value)

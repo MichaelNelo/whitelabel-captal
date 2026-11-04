@@ -1,6 +1,7 @@
 package whitelabel.captal.platform
 
 import io.circe.{Decoder, Json, parser as circeParser}
+import whitelabel.captal.core.device.Mac
 import zio.*
 import zio.http.*
 import zio.http.netty.NettyConfig
@@ -14,8 +15,8 @@ import zio.http.netty.NettyConfig
   *      `{"action": <ACTION>, ...}`.
   */
 trait UnifiClient:
-  def authorizeGuest(unifi: UnifiAccess, clientMac: String): Task[Unit]
-  def revokeGuestAccess(unifi: UnifiAccess, clientMac: String): Task[Unit]
+  def authorizeGuest(unifi: UnifiAccess, clientMac: Mac): Task[Unit]
+  def revokeGuestAccess(unifi: UnifiAccess, clientMac: Mac): Task[Unit]
 
 object UnifiClient:
 
@@ -66,9 +67,6 @@ object UnifiClient:
         unifi.host
     s"$scheme://$hostFmt:${unifi.port}/proxy/network/integration/v1"
 
-  /** UniFi normalizes MACs to lowercase with colons; the filter is an exact string match. */
-  def normalizeMac(mac: String): String = mac.toLowerCase.replace("-", ":")
-
   /** Decode the JSON envelope `{"data": [{"id": "...", ...}, ...]}` and return the first id. */
   def extractClientId(body: String, macLower: String): Either[String, String] =
     given Decoder[String] = Decoder.decodeString
@@ -87,13 +85,13 @@ object UnifiClient:
 
   def live(client: Client, scheme: String = "https"): UnifiClient =
     new UnifiClient:
-      def authorizeGuest(unifi: UnifiAccess, clientMac: String): Task[Unit] = run(
+      def authorizeGuest(unifi: UnifiAccess, clientMac: Mac): Task[Unit] = run(
         unifi,
         clientMac,
         AuthorizeAction,
         Some(unifi.defaultDurationMinutes))
 
-      def revokeGuestAccess(unifi: UnifiAccess, clientMac: String): Task[Unit] = run(
+      def revokeGuestAccess(unifi: UnifiAccess, clientMac: Mac): Task[Unit] = run(
         unifi,
         clientMac,
         RevokeAction,
@@ -101,11 +99,12 @@ object UnifiClient:
 
       private def run(
           unifi: UnifiAccess,
-          clientMac: String,
+          clientMac: Mac,
           action: String,
           timeLimitMinutes: Option[Int]): Task[Unit] =
         val base = baseUrl(unifi, scheme)
-        val macNormalized = normalizeMac(clientMac)
+        // UniFi stores MACs lower case with colons, and its filter is an exact string match.
+        val macNormalized = clientMac.show
         val op =
           for
             clientId <- findClientId(client, base, unifi.siteId, unifi.apiToken, macNormalized)
@@ -196,9 +195,9 @@ object UnifiClient:
     */
   val noop: UnifiClient =
     new UnifiClient:
-      def authorizeGuest(unifi: UnifiAccess, clientMac: String): Task[Unit] = ZIO.logDebug(
-        s"UnifiClient.noop: skipping authorize for $clientMac")
+      def authorizeGuest(unifi: UnifiAccess, clientMac: Mac): Task[Unit] = ZIO.logDebug(
+        s"UnifiClient.noop: skipping authorize for ${clientMac.show}")
 
-      def revokeGuestAccess(unifi: UnifiAccess, clientMac: String): Task[Unit] = ZIO.logDebug(
-        s"UnifiClient.noop: skipping revoke for $clientMac")
+      def revokeGuestAccess(unifi: UnifiAccess, clientMac: Mac): Task[Unit] = ZIO.logDebug(
+        s"UnifiClient.noop: skipping revoke for ${clientMac.show}")
 end UnifiClient

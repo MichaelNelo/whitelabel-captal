@@ -1,6 +1,7 @@
 package whitelabel.captal.platform
 
 import whitelabel.captal.core.application.Phase
+import whitelabel.captal.core.device.Mac
 import whitelabel.captal.core.{survey, user, video}
 
 final case class UserRow(
@@ -22,8 +23,8 @@ final case class SessionRow(
     currentAdvertiserId: Option[String],
     locationId: Option[String],
     createdAt: String,
-    clientMac: String,
-    apMac: String,
+    clientMac: Option[Mac],
+    apMac: Option[Mac],
     redirectUrl: String,
     ssid: String,
     fingerprint: String,
@@ -219,7 +220,7 @@ final case class DeviceRow(
     userAgent: String,
     createdAt: String,
     updatedAt: String,
-    clientMac: String,
+    clientMac: Option[Mac],
     fingerprint: String)
 
 final case class DeviceUserRow(

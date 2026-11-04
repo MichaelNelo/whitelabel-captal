@@ -509,7 +509,8 @@ What the network says about the device a session runs on, and the rule for findi
 |===
 | Type | Contents
 
-| `Signals` | `clientMac` and `fingerprint`, both from the redirect: the MAC is UniFi's, the fingerprint the link shortener's, computed from what the browser reports
+| `Mac` | a MAC as the unsigned 48-bit integer its six bytes spell, most significant first. `Mac.parse` reads twelve hex digits separated by `:`, `-` or nothing, in either case; `show` writes it lower case with colons, as UniFi does
+| `Signals` | `clientMac` (a `Mac`, when the redirect carried a readable one) and `fingerprint`, both from the redirect: the MAC is UniFi's, the fingerprint the link shortener's, computed from what the browser reports
 | `Matching` | `inline def matches(known, seen)`, implemented by `ByFingerprint`, `ByMac` and `ByMacAndFingerprint`. Inline so a repository can splice it into its query and the database finds the device: Quill reduces it to a `WHERE` at compile time, and it runs as plain Scala everywhere else. It cannot be called through the trait — the compiler refuses to inline it there — only on a concrete policy
 | `Policy` | which `Matching` configuration names, `ByMacAndFingerprint` by default: a fingerprint alone is shared by phones of one model and system, and a MAC alone changes when a phone rotates its private address. `covers(seen)` says whether the signals carry what it compares; ones that do not are a new device, since an empty fingerprint would match every other empty one
 | `Event` | `DeviceLinked(userId, deviceId, occurredAt)`

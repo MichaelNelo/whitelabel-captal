@@ -108,8 +108,9 @@ the error page carries the parameters too. `GET /api/status` declares all five a
 `CaptivePortalParams(clientMac, apMac, redirectUrl, ssid, fingerprint)` only when `X-Client-Mac`
 **and** a non-empty `X-Fingerprint` are both present. Creating a session without them fails with
 `ApiError.SessionMissing`; a request that already carries a session cookie ignores the parameters
-entirely. The values land on `sessions.client_mac`, `ap_mac`, `redirect_url`, `ssid` (migration V11)
-and `fingerprint` (V14 adds it as `click_id`, V30 renames it).
+entirely. A MAC header that is not twelve hex digits counts as missing. The values land on
+`sessions.client_mac` and `ap_mac`, each its 48-bit big-endian integer (V31), `redirect_url` and
+`ssid` (V11), and `fingerprint` (V14 adds it as `click_id`, V30 renames it).
 
 `X-Ap-Mac` is soft-validated against the location's own `unifi_ap_mac`: a mismatch logs a warning
 and the request proceeds. Comparison normalises both sides to lowercase with colons.
@@ -267,8 +268,8 @@ GET https://<host>:443/proxy/network/integration/v1/sites/<siteId>/clients
 X-API-KEY: <token>
 ----
 
-The filter expression is URL-encoded by the client, and the MAC is normalised first
-(`UnifiClient.normalizeMac`: lowercase, `-` replaced by `:`). The response is the usual envelope and
+The filter expression is URL-encoded by the client, and the MAC is written as the controller stores
+it (`Mac.show`: lower case, colon-separated). The response is the usual envelope and
 the client takes the first `id` from `data`:
 
 [source,json]
@@ -538,9 +539,10 @@ xref:infrastructure.adoc[Infrastructure].
   or associated to a different SSID, `data` is `[]`, the client fails with
   `no client found for MAC …`, and the handler logs an error and leaves the session in `Ready` for
   the next `POST /api/finish` to retry.
-* **MAC normalisation is the caller's job.** The filter is an exact string match and the controller
-  stores lowercase-with-colons, so `UnifiClient.normalizeMac` lowercases and rewrites `-` to `:`
-  before building the filter. A MAC in any other spelling finds nothing.
+* **The filter is an exact string match.** The controller stores lowercase-with-colons, so the
+  client writes the MAC with `Mac.show`; a MAC in any other spelling would find nothing. Every MAC
+  the API holds is a `Mac` (`core/device/Mac.scala`), read from `X-Client-Mac` in any spelling — `:`
+  or `-` or no separator, either case — and stored as its 48-bit big-endian integer.
 * **API-key scope follows the admin who created it.** The token belongs to that administrator
   account; if the account is removed the token stops working. Rotation is manual — re-run
   `configure_unifi` with the new value.
@@ -551,17 +553,14 @@ xref:infrastructure.adoc[Infrastructure].
 * **Revoke failures are absorbed, not retried.** The session reset is already committed when the
   revoke runs, so the guest is back at `Welcome` either way, and the controller drops the
   authorization on its own `timeLimitMinutes`. There is no second attempt.
-* **An empty `clientMac` skips the revoke** with a warning. Sessions created before V11, or without
-  portal parameters, carry `''`.
+* **A session without a `clientMac` skips the revoke** with a warning. Sessions created before
+  V31 carry none.
 * **Both events in one batch resolve to authorize.** The handler matches `AccessGranted` first, so
   a batch carrying both it and `AccessExpired` takes the authorize branch only.
 * **Three definitions of "configured" coexist.** `UnifiAccess.fromRow` and the readiness resource
   require host, token and site id; `get_unifi_config` reports `host && siteId && tokenSet`;
   `list_locations` reports only whether `unifi_host` is non-blank. A location can therefore show as
   configured in a listing and still authorize nobody.
-* **The AP MAC mismatch warning still names `location.yaml`.** The log line in `SurveyRoutes` refers
-  to a provisioning file that does not exist; the value it compares against is the
-  `locations.unifi_ap_mac` column.
 
 == Testing
 
@@ -583,7 +582,7 @@ path — authorize, then a `JobRunner`-driven expiry that resets the session, re
 it had a user.
 `UnifiClient.noop` is the no-op implementation for any wiring that must never reach a controller.
 
-`UnifiClient` itself has no unit test. Its pure parts — `baseUrl`, `normalizeMac`, `extractClientId`
-— are public and testable, but `platform` has no test module in `build.mill` (`core`, `api` and
+`UnifiClient` itself has no unit test. Its pure parts — `baseUrl` and `extractClientId` — are
+public and testable, but `platform` has no test module in `build.mill` (`core`, `api` and
 `mcp` do), so there is nowhere in the build for such a suite to live. See
 xref:context/pending.adoc[Pending work] and xref:testing.adoc[Test strategy].

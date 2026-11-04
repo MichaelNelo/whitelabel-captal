@@ -1,5 +1,6 @@
 package whitelabel.captal.api
 
+import whitelabel.captal.core.device.Mac
 import whitelabel.captal.platform.{UnifiAccess, UnifiClient}
 import zio.*
 
@@ -15,11 +16,11 @@ final class TestUnifiClient(
     extends UnifiClient:
   import TestUnifiClient.*
 
-  def authorizeGuest(unifi: UnifiAccess, clientMac: String): Task[Unit] = record(
-    Call.Authorize(clientMac))
+  def authorizeGuest(unifi: UnifiAccess, clientMac: Mac): Task[Unit] = record(
+    Call.Authorize(clientMac.show))
 
-  def revokeGuestAccess(unifi: UnifiAccess, clientMac: String): Task[Unit] = record(
-    Call.Revoke(clientMac))
+  def revokeGuestAccess(unifi: UnifiAccess, clientMac: Mac): Task[Unit] = record(
+    Call.Revoke(clientMac.show))
 
   private def record(call: Call): Task[Unit] = active
     .get

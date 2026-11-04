@@ -11,6 +11,7 @@ import whitelabel.captal.api.wire.given
 import whitelabel.captal.api.{ApiBase, ApiErrors, SessionEndpoint, WireCheck}
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Flow, NextStep, Phase}
+import whitelabel.captal.core.device.Mac
 import whitelabel.captal.core.user
 import whitelabel.captal.messages.{AnswerRequest, ApiError, StatusResponse, SurveyResponse}
 import whitelabel.captal.platform.schema.QuillSqlite
@@ -117,23 +118,18 @@ final class SurveyRoutes(
     .outHeader(HeaderCodec.setCookie.optional)
     .outError[ApiError](Status.BadRequest)
 
-  /** Compare the incoming `X-Ap-Mac` against the provisioned `location.ap_mac`. Soft validation:
-    * logs a warning on mismatch and accepts the request anyway.
+  /** Compare the incoming `X-Ap-Mac` against the location's `unifi_ap_mac`. Soft validation: logs a
+    * warning on mismatch and accepts the request anyway.
     */
-  private def softValidateApMac(
-      incomingApMac: Option[String],
-      clientMac: Option[String]): UIO[Unit] =
-    (incomingApMac, currentLocation.apMac, currentLocation.slug) match
-      case (Some(incoming), Some(expected), Some(slug)) if !sameMac(incoming, expected) =>
+  private def softValidateApMac(incomingApMac: Option[Mac], clientMac: Option[Mac]): UIO[Unit] =
+    (incomingApMac, currentLocation.apMac.flatMap(Mac.parse), currentLocation.slug) match
+      case (Some(incoming), Some(expected), Some(slug)) if incoming != expected =>
         ZIO.logWarning(
-          s"AP MAC mismatch on /$slug: incoming X-Ap-Mac='$incoming' but location.yaml ap_mac='$expected' (clientMac=${clientMac
-              .getOrElse("?")})")
+          s"AP MAC mismatch on /$slug: incoming X-Ap-Mac='${incoming
+              .show}' but the location's unifi_ap_mac='${expected.show}' (clientMac=${clientMac
+              .fold("?")(_.show)})")
       case _ =>
         ZIO.unit
-
-  private def sameMac(a: String, b: String): Boolean = normalize(a) == normalize(b)
-
-  private def normalize(mac: String): String = mac.toLowerCase.replace("-", ":").trim
 
   /** Resolve the on-missing-session strategy: `CreateForUser` when the cross-location `captal_user`
     * cookie carries a valid, existing user id, plain `Create` otherwise.
@@ -230,23 +226,19 @@ final class SurveyRoutes(
       yield result,
     status.implement: (cookies, userAgentOpt, clientMac, apMac, redirectUrl, ssid, fingerprint) =>
       val userAgent = userAgentOpt.getOrElse(defaultUserAgent)
-      // portalParams only when both clientMac AND fingerprint are present (both required by the
-      // captive-portal redirect contract). If either is missing on a CREATE flow, session
-      // resolution falls through to ApiError.SessionMissing.
+      // portalParams only when both a readable clientMac AND a fingerprint are present (both
+      // required by the captive-portal redirect contract). If either is missing on a CREATE flow,
+      // session resolution falls through to ApiError.SessionMissing.
+      val mac = clientMac.flatMap(Mac.parse)
+      val ap = apMac.flatMap(Mac.parse)
       val portalParams =
-        (clientMac, fingerprint) match
-          case (Some(mac), Some(fp)) if fp.nonEmpty =>
-            Some(
-              CaptivePortalParams(
-                mac,
-                apMac.getOrElse(""),
-                redirectUrl.getOrElse(""),
-                ssid.getOrElse(""),
-                fp))
+        (mac, fingerprint) match
+          case (Some(m), Some(fp)) if fp.nonEmpty =>
+            Some(CaptivePortalParams(m, ap, redirectUrl.getOrElse(""), ssid.getOrElse(""), fp))
           case _ =>
             None
       for
-        _         <- softValidateApMac(apMac, clientMac)
+        _         <- softValidateApMac(ap, mac)
         onMissing <- resolveOnMissing(userCookieConfig.valueFrom(cookies), userAgent, portalParams)
         session   <- SessionEndpoint.resolveSession(cookieConfig.valueFrom(cookies), onMissing)
         _         <- SessionContext.set(session)

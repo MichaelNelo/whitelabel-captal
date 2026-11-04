@@ -2,6 +2,7 @@ package whitelabel.captal.core.infrastructure
 
 import java.time.Instant
 
+import whitelabel.captal.core.device.Mac
 import whitelabel.captal.core.survey.AdvertiserId
 import whitelabel.captal.core.survey.question.FullyQualifiedQuestionId
 import whitelabel.captal.core.{application, user, video}
@@ -19,8 +20,8 @@ final case class SessionData(
     currentVideoId: Option[video.Id],
     currentAdvertiserId: Option[AdvertiserId] = None,
     locationId: Option[String] = None,
-    clientMac: String = "",
-    apMac: String = "",
+    clientMac: Option[Mac] = None,
+    apMac: Option[Mac] = None,
     redirectUrl: String = "",
     ssid: String = "",
     fingerprint: String = "",
