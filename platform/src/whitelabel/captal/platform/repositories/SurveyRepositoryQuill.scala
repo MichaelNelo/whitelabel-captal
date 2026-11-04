@@ -58,7 +58,7 @@ object SurveyRepositoryQuill:
           opt.questionId == questionIdParam && opt.isActive == 1)
         ruleRow <- query[QuestionRuleRow].leftJoin(rule =>
           rule.questionId == questionIdParam && rule.isActive == 1)
-        // JOIN para texto de pregunta
+        // Joins the question's text.
         questionText <- query[LocalizedTextRow]
           .filter(lt => lt.entityId == questionIdStr && lt.isActive == 1)
           .filter(lt => lt.locale == localeParam || lt.locale == "en")
@@ -68,13 +68,13 @@ object SurveyRepositoryQuill:
           .filter(lt => lt.entityId == questionDescIdStr && lt.isActive == 1)
           .filter(lt => lt.locale == localeParam || lt.locale == "en")
           .leftJoin(_ => true)
-        // JOIN para placeholder de pregunta
+        // Joins the question's placeholder.
         questionPlaceholder <- query[LocalizedTextRow]
           .filter(lt => lt.entityId == questionPlaceholderIdStr && lt.isActive == 1)
           .filter(lt => lt.locale == localeParam || lt.locale == "en")
           .leftJoin(_ => true)
-        // Joins the option's text, comparing String against String directly.
-        // El MappedEncoding convierte OptionId a String automáticamente
+        // Joins the option's text, comparing String against String directly: the MappedEncoding
+        // turns the OptionId into its String.
         optionText <- query[LocalizedTextRow].leftJoin(lt =>
           lt.isActive == 1 && optionRow.exists(opt => lt.entityId == sql"${opt.id}".as[String]) &&
             (lt.locale == localeParam || lt.locale == "en"))
@@ -356,7 +356,7 @@ object SurveyRepositoryQuill:
     val questionDescs = rows.flatMap(_.questionDesc).distinctBy(_.id)
     val questionPlaceholders = rows.flatMap(_.questionPlaceholder).distinctBy(_.id)
 
-    // Construir opciones con sus textos
+    // Builds the options with their texts.
     val optionRows = rows.flatMap(_.option).distinctBy(_.id)
     val optionTextsMap: Map[String, List[LocalizedTextRow]] =
       rows
