@@ -32,10 +32,10 @@ import whitelabel.captal.mcp.tools.{
 object Locations:
   final case class Deployed(slug: String, name: String):
     /** The portal as UniFi sends a guest to it, from the device `mac` behind the access point. */
-    def portal(mac: String, clickId: String): String =
+    def portal(mac: String, fingerprint: String): String =
       val back = java.net.URLEncoder.encode("http://example.com", "UTF-8")
       s"${Run.setting(
-          "E2E_PORTAL")}/$slug/?id=$mac&ap=AA:BB:CC:DD:EE:01&ssid=E2E&url=$back&click_id=$clickId"
+          "E2E_PORTAL")}/$slug/?id=$mac&ap=AA:BB:CC:DD:EE:01&ssid=E2E&url=$back&fingerprint=$fingerprint"
 
     def api(path: String): String = s"${Run.setting("E2E_PORTAL")}/$slug/api/$path"
 

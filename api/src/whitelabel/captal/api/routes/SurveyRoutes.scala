@@ -112,7 +112,7 @@ final class SurveyRoutes(
     .header(HeaderCodec.name[String]("X-Ap-Mac").optional)
     .header(HeaderCodec.name[String]("X-Redirect-Url").optional)
     .header(HeaderCodec.name[String]("X-Ssid").optional)
-    .header(HeaderCodec.name[String]("X-Click-Id").optional)
+    .header(HeaderCodec.name[String]("X-Fingerprint").optional)
     .out[StatusResponse]
     .outHeader(HeaderCodec.setCookie.optional)
     .outError[ApiError](Status.BadRequest)
@@ -228,21 +228,21 @@ final class SurveyRoutes(
             case _ =>
               ZIO.unit
       yield result,
-    status.implement: (cookies, userAgentOpt, clientMac, apMac, redirectUrl, ssid, clickId) =>
+    status.implement: (cookies, userAgentOpt, clientMac, apMac, redirectUrl, ssid, fingerprint) =>
       val userAgent = userAgentOpt.getOrElse(defaultUserAgent)
-      // portalParams only when both clientMac AND click_id are present (both required by the
-      // UniFi captive-portal redirect contract). If either is missing on a CREATE flow, session
+      // portalParams only when both clientMac AND fingerprint are present (both required by the
+      // captive-portal redirect contract). If either is missing on a CREATE flow, session
       // resolution falls through to ApiError.SessionMissing.
       val portalParams =
-        (clientMac, clickId) match
-          case (Some(mac), Some(cid)) if cid.nonEmpty =>
+        (clientMac, fingerprint) match
+          case (Some(mac), Some(fp)) if fp.nonEmpty =>
             Some(
               CaptivePortalParams(
                 mac,
                 apMac.getOrElse(""),
                 redirectUrl.getOrElse(""),
                 ssid.getOrElse(""),
-                cid))
+                fp))
           case _ =>
             None
       for

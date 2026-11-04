@@ -509,9 +509,9 @@ What the network says about the device a session runs on, and the rule for findi
 |===
 | Type | Contents
 
-| `Fingerprint` | `clientMac` and `clickId`, both from UniFi's redirect; the click id is the link shortener's, which tracks devices
-| `Matching` | `inline def matches(known, seen)`, implemented by `ByClickId`, `ByMac` and `ByMacAndClickId`. Inline so a repository can splice it into its query and the database finds the device: Quill reduces it to a `WHERE` at compile time, and it runs as plain Scala everywhere else. It cannot be called through the trait — the compiler refuses to inline it there — only on a concrete policy
-| `Policy` | which `Matching` configuration names, `ByClickId` by default. `covers(seen)` says whether a fingerprint carries what it compares; one that does not is a new device, since an empty click id would match every other empty one
+| `Signals` | `clientMac` and `fingerprint`, both from the redirect: the MAC is UniFi's, the fingerprint the link shortener's, computed from what the browser reports
+| `Matching` | `inline def matches(known, seen)`, implemented by `ByFingerprint`, `ByMac` and `ByMacAndFingerprint`. Inline so a repository can splice it into its query and the database finds the device: Quill reduces it to a `WHERE` at compile time, and it runs as plain Scala everywhere else. It cannot be called through the trait — the compiler refuses to inline it there — only on a concrete policy
+| `Policy` | which `Matching` configuration names, `ByMacAndFingerprint` by default: a fingerprint alone is shared by phones of one model and system, and a MAC alone changes when a phone rotates its private address. `covers(seen)` says whether the signals carry what it compares; ones that do not are a new device, since an empty fingerprint would match every other empty one
 | `Event` | `DeviceLinked(userId, deviceId, occurredAt)`
 |===
 
@@ -556,8 +556,8 @@ Frames of other files — an extension, the browser itself — are not judged. W
 (none published, or unreadable) only the console check runs: a deployment that failed to publish
 one must not count against every guest. A report is `Plausible(recurrent = true)` when at least
 `Verdict.RecurrenceThreshold` (1) other device reported the same signature within the policy's
-`recurrenceWindow`. One is enough because the device is the link shortener's `click_id`, not
-something a guest can mint.
+`recurrenceWindow`. One is enough because a device is the redirect's MAC and the link shortener's
+fingerprint, not something a guest can mint.
 
 An error can become recurrent after it was offered: an error introduced by a deploy reaches one
 guest first, with nothing to tell it from an invented one. So the waiting page asks
@@ -657,7 +657,7 @@ through an error before giving an email has no user at all.
 | `RecoveryRepository.activity(userId, deviceId)` | `Activity` — the user's watched videos on this device and their answers, by the category of the survey each belongs to
 |===
 
-`infrastructure/Session.scala` holds `SessionData`, the session projection the handlers and `MarkVideoWatchedHandler.withSession` read: `sessionId`, `deviceId`, `userId: Option`, `locale`, `phase`, `currentQuestion: Option[FullyQualifiedQuestionId]`, `currentVideoId`, `currentAdvertiserId`, `locationId`, `clientMac`, `apMac`, `redirectUrl`, `ssid`, `clickId`, `accessExpiresAt: Option[Instant]`.
+`infrastructure/Session.scala` holds `SessionData`, the session projection the handlers and `MarkVideoWatchedHandler.withSession` read: `sessionId`, `deviceId`, `userId: Option`, `locale`, `phase`, `currentQuestion: Option[FullyQualifiedQuestionId]`, `currentVideoId`, `currentAdvertiserId`, `locationId`, `clientMac`, `apMac`, `redirectUrl`, `ssid`, `fingerprint`, `accessExpiresAt: Option[Instant]`.
 
 == i18n
 

@@ -162,7 +162,7 @@ resource "aws_cloudfront_cache_policy" "api" {
 }
 
 # Everything forwarded to the ALB, which the API needs rather than merely likes: the portal's
-# session resolver reads `X-Client-Mac`, `X-Ap-Mac`, `X-Click-Id` and `X-Ssid`, and the captive
+# session resolver reads `X-Client-Mac`, `X-Ap-Mac`, `X-Fingerprint` and `X-Ssid`, and the captive
 # portal's query string is where they come from.
 resource "aws_cloudfront_origin_request_policy" "api" {
   name    = "${local.bucket_name}-api-origin"

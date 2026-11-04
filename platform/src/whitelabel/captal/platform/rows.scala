@@ -26,7 +26,7 @@ final case class SessionRow(
     apMac: String,
     redirectUrl: String,
     ssid: String,
-    clickId: String,
+    fingerprint: String,
     accessExpiresAt: Option[String] = None)
 
 /** Which survey this is, as stored in `surveys.category` and constrained by V1's CHECK. `inline` so
@@ -220,7 +220,7 @@ final case class DeviceRow(
     createdAt: String,
     updatedAt: String,
     clientMac: String,
-    clickId: String)
+    fingerprint: String)
 
 final case class DeviceUserRow(
     deviceId: user.DeviceId,

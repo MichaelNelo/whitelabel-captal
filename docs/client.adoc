@@ -202,7 +202,7 @@ headers:
 | `ap` | `X-Ap-Mac`
 | `url` | `X-Redirect-Url`
 | `ssid` | `X-Ssid`
-| `click_id` | `X-Click-Id`
+| `fingerprint` | `X-Fingerprint`
 |===
 
 Empty values are dropped. Each surviving value is passed through `safeDecodeURIComponent`, a

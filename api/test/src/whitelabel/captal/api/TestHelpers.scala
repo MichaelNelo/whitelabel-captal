@@ -142,7 +142,7 @@ object TestHelpers:
     "X-Ap-Mac"       -> "11:22:33:44:55:66",
     "X-Redirect-Url" -> "http://google.com",
     "X-Ssid"         -> "TestNetwork",
-    "X-Click-Id"     -> "test-click-id"
+    "X-Fingerprint"  -> "test-fingerprint"
   )
 
   def getStatus(backend: SttpBackend[Task, Any], sessionCookie: Option[String] = None) =
@@ -158,12 +158,12 @@ object TestHelpers:
   def createSession(backend: SttpBackend[Task, Any]): Task[String] = getStatus(backend, None).map(
     r => extractSessionCookie(r).get)
 
-  /** A new session from a device the redirect describes differently: its own click id and MAC. */
+  /** A new session from a device the redirect describes differently: its own fingerprint and MAC. */
   def createSessionFrom(
       backend: SttpBackend[Task, Any],
-      clickId: String,
+      fingerprint: String,
       mac: String): Task[String] =
-    val headers = defaultPortalHeaders ++ Map("X-Click-Id" -> clickId, "X-Client-Mac" -> mac)
+    val headers = defaultPortalHeaders ++ Map("X-Fingerprint" -> fingerprint, "X-Client-Mac" -> mac)
     headers
       .foldLeft(basicRequest.get(uri"http://test/api/status").response(asStringAlways)) {
         case (req, (k, v)) =>

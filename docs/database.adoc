@@ -79,11 +79,11 @@ by the MCP server (`mcp/resources/db/migration-mcp`, `V1` and `V2`).
 | **Global** — no `location_id`
 
 | `sessions`
-| One row per captive-portal visit: phase, device id, locale, the current survey/question/video/advertiser cursors, the captive-portal parameters (`client_mac`, `ap_mac`, `redirect_url`, `ssid`, `click_id`) and `access_expires_at`. `last_promo_video_id` is still a column and nothing reads or writes it.
+| One row per captive-portal visit: phase, device id, locale, the current survey/question/video/advertiser cursors, the captive-portal parameters (`client_mac`, `ap_mac`, `redirect_url`, `ssid`, `fingerprint`) and `access_expires_at`. `last_promo_video_id` is still a column and nothing reads or writes it.
 | `location_id`
 
 | `devices`
-| One row per device, found again by its fingerprint: `client_mac` and `click_id`, both from UniFi's redirect. Which of them a match compares is configuration (`DEVICE_MATCHING`). `user_agent` is the latest one seen, for diagnosis only. Rows from before V27 have neither field and match nothing.
+| One row per device, found again by the redirect's signals: `client_mac`, UniFi's, and `fingerprint`, the link shortener's. Which of them a match compares is configuration (`DEVICE_MATCHING`). `user_agent` is the latest one seen, for diagnosis only. Rows from before V27 have neither field and match nothing.
 | Global
 
 | `device_users`

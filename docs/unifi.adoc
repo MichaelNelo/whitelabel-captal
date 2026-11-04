@@ -99,17 +99,17 @@ malformed sequence falls back to the raw string):
 | `ap` | `X-Ap-Mac` | MAC of the access point the device associated to.
 | `url` | `X-Redirect-Url` | The URL the guest originally asked for.
 | `ssid` | `X-Ssid` | The guest SSID's name.
-| `click_id` | `X-Click-Id` | Per-redirect token, stored on the session.
+| `fingerprint` | `X-Fingerprint` | The device fingerprint the link shortener in front of the portal computes, stored on the session and the device.
 |===
 
 `client/src/whitelabel/captal/client/views/ErrorView.scala` repeats the same mapping so a retry from
 the error page carries the parameters too. `GET /api/status` declares all five as optional headers
 (`api/src/whitelabel/captal/api/routes/SurveyRoutes.scala`) and builds a
-`CaptivePortalParams(clientMac, apMac, redirectUrl, ssid, clickId)` only when `X-Client-Mac` **and**
-a non-empty `X-Click-Id` are both present. Creating a session without them fails with
+`CaptivePortalParams(clientMac, apMac, redirectUrl, ssid, fingerprint)` only when `X-Client-Mac`
+**and** a non-empty `X-Fingerprint` are both present. Creating a session without them fails with
 `ApiError.SessionMissing`; a request that already carries a session cookie ignores the parameters
 entirely. The values land on `sessions.client_mac`, `ap_mac`, `redirect_url`, `ssid` (migration V11)
-and `click_id` (V14).
+and `fingerprint` (V14 adds it as `click_id`, V30 renames it).
 
 `X-Ap-Mac` is soft-validated against the location's own `unifi_ap_mac`: a mismatch logs a warning
 and the request proceeds. Comparison normalises both sides to lowercase with colons.

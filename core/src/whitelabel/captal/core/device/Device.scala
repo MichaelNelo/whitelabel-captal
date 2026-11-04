@@ -4,11 +4,11 @@ import java.time.Instant
 
 import whitelabel.captal.core.user
 
-/** What the network said about the device a session runs on, both from UniFi's redirect. The click
-  * id comes from the link shortener in front of the portal, which tracks devices; the MAC is the
-  * one UniFi will authorize.
+/** What the redirect said about the device a session runs on. The fingerprint comes from the link
+  * shortener in front of the portal, which computes it from what the browser reports; the MAC is
+  * the one UniFi will authorize.
   */
-final case class Fingerprint(clientMac: String, clickId: String)
+final case class Signals(clientMac: String, fingerprint: String)
 
 /** Whether a known device is the one in front of us.
   *
@@ -18,45 +18,47 @@ final case class Fingerprint(clientMac: String, clickId: String)
   * — which is what [[Policy]] is for: configuration names one, and the repository matches on it.
   */
 trait Matching:
-  inline def matches(inline known: Fingerprint, inline seen: Fingerprint): Boolean
+  inline def matches(inline known: Signals, inline seen: Signals): Boolean
 
 object Matching:
-  object ByClickId extends Matching:
-    inline def matches(inline known: Fingerprint, inline seen: Fingerprint): Boolean =
-      known.clickId == seen.clickId
+  object ByFingerprint extends Matching:
+    inline def matches(inline known: Signals, inline seen: Signals): Boolean =
+      known.fingerprint == seen.fingerprint
 
   /** The MAC validates itself: access is granted to the session's MAC, so claiming another one
     * authorizes somebody else's device.
     */
   object ByMac extends Matching:
-    inline def matches(inline known: Fingerprint, inline seen: Fingerprint): Boolean =
+    inline def matches(inline known: Signals, inline seen: Signals): Boolean =
       known.clientMac == seen.clientMac
 
-  object ByMacAndClickId extends Matching:
-    inline def matches(inline known: Fingerprint, inline seen: Fingerprint): Boolean =
-      known.clientMac == seen.clientMac && known.clickId == seen.clickId
+  object ByMacAndFingerprint extends Matching:
+    inline def matches(inline known: Signals, inline seen: Signals): Boolean =
+      known.clientMac == seen.clientMac && known.fingerprint == seen.fingerprint
 
 /** Which [[Matching]] is in force, as configuration names it. */
 enum Policy:
-  case ByClickId,
+  case ByFingerprint,
     ByMac,
-    ByMacAndClickId
+    ByMacAndFingerprint
 
   /** Whether `seen` carries what this policy compares. One that does not cannot be matched against
-    * anything — an empty click id would match every other empty one — and is a new device.
+    * anything — an empty fingerprint would match every other empty one — and is a new device.
     */
-  def covers(seen: Fingerprint): Boolean =
+  def covers(seen: Signals): Boolean =
     this match
-      case ByClickId =>
-        seen.clickId.nonEmpty
+      case ByFingerprint =>
+        seen.fingerprint.nonEmpty
       case ByMac =>
         seen.clientMac.nonEmpty
-      case ByMacAndClickId =>
-        seen.clientMac.nonEmpty && seen.clickId.nonEmpty
+      case ByMacAndFingerprint =>
+        seen.clientMac.nonEmpty && seen.fingerprint.nonEmpty
 
 object Policy:
-  /** When the configuration names none. */
-  val Default: Policy = ByClickId
+  /** When the configuration names none. Both fields: a fingerprint alone is shared by phones of one
+    * model and system, and a MAC alone changes when a phone rotates its private address.
+    */
+  val Default: Policy = ByMacAndFingerprint
 
   def fromConfig(value: Option[String]): Either[String, Policy] =
     value.map(_.trim).filter(_.nonEmpty) match

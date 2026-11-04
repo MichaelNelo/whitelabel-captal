@@ -37,11 +37,11 @@ final class ReturningGuestsSteps extends ScalaDsl with EN:
           s"${who.name}'s session is ${who.phase}, not $phase after $seconds seconds")
       Thread.sleep(1000)
 
-  /** The email a guest's phone answers with. Derived from the guest's own click id, so it is new
+  /** The email a guest's phone answers with. Derived from the guest's own fingerprint, so it is new
     * for every run and every guest, and a phone can give it again without storing it.
     */
   private def addressOf(who: Portal.Guest): String =
-    s"${who.name}.${who.clickId.stripPrefix("e2e-").take(8)}@example.com"
+    s"${who.name}.${who.fingerprint.stripPrefix("e2e-").take(8)}@example.com"
 
   /** The texts of the identification questions of `category`, in any locale. */
   private def questionTexts(category: String): Set[String] =

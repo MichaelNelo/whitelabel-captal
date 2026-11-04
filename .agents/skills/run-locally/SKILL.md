@@ -1,7 +1,7 @@
 ---
 name: run-locally
 description: Use to spin up the captal stack on your dev machine — the local configuration in LocalStack, the MCP backoffice, a deployed portal, the guest API, and the client bundle. Triggers on "run locally", "local dev", "start dev", "correr en local", "levantar local".
-version: 3.1.0
+version: 3.2.0
 ---
 
 # Run the stack locally
@@ -137,13 +137,13 @@ bundle, `assets/styles.css` and `brand-icon.svg` from disk — that's the dev lo
 ## Step 4 — Browse
 
 ```
-https://<id>.cloudfront.localhost.localstack.cloud:4567/<slug>/?id=AA:BB:CC:DD:EE:FF&ap=AA:BB:CC:DD:EE:01&ssid=Dev&url=http%3A%2F%2Fexample.com&click_id=local-dev-001
-http://localhost:8080/<slug>/?id=AA:BB:CC:DD:EE:FF&ap=AA:BB:CC:DD:EE:01&ssid=Dev&url=http%3A%2F%2Fexample.com&click_id=local-dev-001
+https://<id>.cloudfront.localhost.localstack.cloud:4567/<slug>/?id=AA:BB:CC:DD:EE:FF&ap=AA:BB:CC:DD:EE:01&ssid=Dev&url=http%3A%2F%2Fexample.com&fingerprint=local-dev-001
+http://localhost:8080/<slug>/?id=AA:BB:CC:DD:EE:FF&ap=AA:BB:CC:DD:EE:01&ssid=Dev&url=http%3A%2F%2Fexample.com&fingerprint=local-dev-001
 ```
 
 The first is a deployed location through the distribution; the second is `api.dev`.
 
-Required params: `id` (→ `X-Client-Mac`), `click_id` (→ `X-Click-Id`). Missing either on a fresh
+Required params: `id` (→ `X-Client-Mac`), `fingerprint` (→ `X-Fingerprint`). Missing either on a fresh
 session → `ApiError.SessionMissing` → the SPA shows the error page.
 
 ## Step 5 — Tests
@@ -186,7 +186,7 @@ The suites never touch the configuration's rqlite on 5001, which holds your loca
 | `No result set returned` after a restart | rqlite's data was wiped — it lives in LocalStack's tasks, and a recreated LocalStack starts it empty. Re-create the content through the backoffice. |
 | Reset button doesn't appear on the Ready page | `ENVIRONMENT=dev` wasn't set when building the client, or Mill cached the old `BuildInfo`. `mill clean client.generatedSources && ENVIRONMENT=dev mill client.bundle`. |
 | `[welcome.title]` literal shown in the SPA | The location's `localized_texts` don't cover that key yet. Check with the backoffice's `get_i18n_status`, write it with `set_translations` — see skill `add-i18n-key`. |
-| `SessionMissing` on every request | Missing `id=`/`click_id=` query params on the first visit (or `X-Client-Mac`/`X-Click-Id` headers in a curl test). |
+| `SessionMissing` on every request | Missing `id=`/`fingerprint=` query params on the first visit (or `X-Client-Mac`/`X-Fingerprint` headers in a curl test). |
 | Click "Start" → infinite spinner | The API likely returned 500. Tail the terminal `mill api.dev` is running in. |
 
 ## Anti-patterns

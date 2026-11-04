@@ -329,7 +329,7 @@ yes and declines any other. Their rows stay. `--keep` leaves them up, to look at
 left.
 * **Guests** are Playwright browser contexts (`Portal`), each a phone of its own — its own cookies
 and storage, mobile viewport and touch — sent to the portal the way the access point sends them,
-with a MAC, an access point and a click id in the query string. Certificate errors are ignored: the
+with a MAC, an access point and a fingerprint in the query string. Certificate errors are ignored: the
 distribution's name is two levels under the one LocalStack's certificate covers.
 * **Errors** are made to happen on demand for the recovery features. The run releases
 `client.local`'s bundle, which carries `Faults`, and the local configuration has every location

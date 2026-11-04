@@ -308,7 +308,7 @@ directly rather than going through the service.
 | `findPendingExpirations()` | the `(session_id, access_expires_at)` pairs for this location's authorized sessions that still have a deadline
 |===
 
-The captive-portal parameters travel as one `CaptivePortalParams(clientMac, apMac, redirectUrl, ssid, clickId)`.
+The captive-portal parameters travel as one `CaptivePortalParams(clientMac, apMac, redirectUrl, ssid, fingerprint)`.
 
 The service is location-scoped: `SessionService.layerWithLocation(locationId)` fixes the
 `location_id` written on every new session and filters `findPendingExpirations` by it. Each deployed

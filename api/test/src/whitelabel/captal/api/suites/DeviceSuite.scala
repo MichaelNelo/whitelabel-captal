@@ -5,31 +5,32 @@ import whitelabel.captal.api.TestHelpers.*
 import whitelabel.captal.core.user
 import zio.test.*
 
-/** Devices are found again by their fingerprint, and users are linked to the devices they are
-  * identified on. The suite's server runs the default policy, `ByClickId`.
+/** Devices are found again by the redirect's signals, and users are linked to the devices they are
+  * identified on. The suite's server runs the default policy, `ByMacAndFingerprint`.
   */
 object DeviceSuite:
   val suite: Spec[TestEnv, Throwable] =
     zio
       .test
       .suite("Devices")(
-        test("a click id seen before is the same device, whatever the MAC"):
+        test("the same MAC and fingerprint is the same device, and either one changed another"):
           for
-            backend <- testBackend
-            first   <- createSessionFrom(backend, "click-a", "AA:AA:AA:AA:AA:01")
-            again   <- createSessionFrom(backend, "click-a", "AA:AA:AA:AA:AA:02")
-            other   <- createSessionFrom(backend, "click-b", "AA:AA:AA:AA:AA:01")
-            state   <- TestFixtures.queryDbState
-            devices <- TestFixtures.getDevices
+            backend   <- testBackend
+            first     <- createSessionFrom(backend, "fp-a", "AA:AA:AA:AA:AA:01")
+            again     <- createSessionFrom(backend, "fp-a", "AA:AA:AA:AA:AA:01")
+            sameModel <- createSessionFrom(backend, "fp-a", "AA:AA:AA:AA:AA:02")
+            updated   <- createSessionFrom(backend, "fp-b", "AA:AA:AA:AA:AA:01")
+            state     <- TestFixtures.queryDbState
+            devices   <- TestFixtures.getDevices
             deviceOf =
               (cookie: String) =>
                 state.sessions.find(_.id == user.SessionId.unsafe(cookie)).map(_.deviceId)
           yield assertTrue(
             deviceOf(first) == deviceOf(again),
-            deviceOf(first) != deviceOf(other),
-            devices.size == 2,
-            // The field the policy did not compare follows the device.
-            devices.exists(d => d.clickId == "click-a" && d.clientMac == "AA:AA:AA:AA:AA:02")
+            // A phone of the same model and system, elsewhere on the network.
+            deviceOf(first) != deviceOf(sameModel),
+            deviceOf(first) != deviceOf(updated),
+            devices.size == 3
           )
         ,
         test("answering the email links the user to the device, and the answer records it"):

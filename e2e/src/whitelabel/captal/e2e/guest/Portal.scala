@@ -48,22 +48,22 @@ object Portal:
     .toOption
     .exists(response => response.ok && response.text.contains("ok"))
 
-  /** A guest on a phone of their own, `mac`, sent to the portal by the access point with the click
-    * id that tells the device apart, `clickId`.
+  /** A guest on a phone of their own, `mac`, sent to the portal by the access point with the
+    * fingerprint the link shortener gave the device, `fingerprint`.
     */
   final case class Guest(
       name: String,
       mac: String,
-      clickId: String,
+      fingerprint: String,
       location: Locations.Deployed,
       context: BrowserContext,
       page: Page):
     /** The same phone sent to `at`'s portal again, as on a later visit: same cookies, same MAC,
-      * same click id, in a new page.
+      * same fingerprint, in a new page.
       */
     def returnTo(at: Locations.Deployed = location): Guest =
       val again = context.newPage()
-      again.navigate(at.portal(mac, clickId))
+      again.navigate(at.portal(mac, fingerprint))
       copy(location = at, page = again)
 
     /** The session's phase, as the portal itself asks for it. */
@@ -117,9 +117,9 @@ object Portal:
     if streamThroughLoadBalancer then
       streamThrough(context)
     val page = context.newPage()
-    val clickId = s"e2e-${java.util.UUID.randomUUID}"
-    page.navigate(location.portal(mac, clickId))
-    Guest(name, mac, clickId, location, context, page)
+    val fingerprint = s"e2e-${java.util.UUID.randomUUID}"
+    page.navigate(location.portal(mac, fingerprint))
+    Guest(name, mac, fingerprint, location, context, page)
   end arrive
 
   /** Sends the phone's event streams to the load balancer rather than the distribution, the rest of

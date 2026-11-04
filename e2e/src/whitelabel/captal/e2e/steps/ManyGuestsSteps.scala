@@ -41,9 +41,10 @@ final class ManyGuestsSteps extends ScalaDsl with EN:
           s"${who.name}'s session is ${who.phase}, not $phase after $seconds seconds")
       Thread.sleep(1000)
 
-  /** The email a guest's phone answers with, from its own click id: new for every run and guest. */
+  /** The email a guest's phone answers with, from its own fingerprint: new for every run and guest.
+    */
   private def addressOf(who: Portal.Guest): String =
-    s"${who.name}.${who.clickId.stripPrefix("e2e-").take(8)}@example.com"
+    s"${who.name}.${who.fingerprint.stripPrefix("e2e-").take(8)}@example.com"
 
   /** The id of the promo titled `title` at `location`, as the backoffice lists it. */
   private def promoId(location: Locations.Deployed, title: String): String = Backoffice

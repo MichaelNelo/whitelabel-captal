@@ -94,9 +94,9 @@ See xref:unifi.adoc[UniFi integration].
 
 |`DEVICE_MATCHING`
 |`device.matching`
-|`""` → `ByClickId`
-|Which fingerprint fields make two sessions the same device: `ByClickId`, `ByMac` or
-`ByMacAndClickId`. Read at startup; a name that is not a policy stops the server. See
+|`""` → `ByMacAndFingerprint`
+|Which of the redirect's signals make two sessions the same device: `ByFingerprint`, `ByMac` or
+`ByMacAndFingerprint`. Read at startup; a name that is not a policy stops the server. See
 xref:core.adoc[Core] for the policies.
 
 |`BUNDLE_MANIFEST_URL`
@@ -609,7 +609,7 @@ GET /cafe-centro/api/status
 Cookie: captal_session_cafe-centro=…; captal_user=…
 User-Agent: …
 X-Client-Mac: aa:bb:cc:dd:ee:ff
-X-Click-Id: …
+X-Fingerprint: …
 X-Ap-Mac: 11:22:33:44:55:66
 X-Redirect-Url: http://example.com/
 X-Ssid: Guest
@@ -625,7 +625,7 @@ All seven inputs are optional at the codec level; the rules are in the handler.
 |Mandatory
 |One half of the pair that builds `CaptivePortalParams`.
 
-|`X-Click-Id`
+|`X-Fingerprint`
 |Mandatory, and must be non-empty
 |The other half.
 
@@ -647,7 +647,7 @@ non-empty.
 |Defaults to `"unknown"`.
 |===
 
-`CaptivePortalParams` is built only when `X-Client-Mac` and a non-empty `X-Click-Id` are both
+`CaptivePortalParams` is built only when `X-Client-Mac` and a non-empty `X-Fingerprint` are both
 present. If either is missing and the request has no resolvable session, `OnMissing.Create` has no
 params to create from and the route answers `ApiError.SessionMissing`.
 

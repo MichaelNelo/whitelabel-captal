@@ -1,7 +1,7 @@
 ---
 name: bump-api-version
 description: Use when releasing a new version of the captal-api or captal-mcp image. Covers how the version is computed from conventional commits and git tags, the release `mill ci.run` makes (images, terraform, every location rolled, client, tags), and rolling back. Triggers on "bump api version", "release api", "release mcp", "publish api image", "subir api", "deploy api", "nueva versión".
-version: 3.0.0
+version: 3.1.0
 ---
 
 # Release a new API or backoffice image
@@ -82,7 +82,7 @@ git ls-remote --tags origin 'api/v*'
 
 End-to-end:
 ```bash
-curl -i -H 'X-Client-Mac: aa:aa:...' -H 'X-Click-Id: test-001' \
+curl -i -H 'X-Client-Mac: aa:aa:...' -H 'X-Fingerprint: test-001' \
   https://<your-domain>/<slug>/api/status
 # → 200 + Set-Cookie: captal_session_<slug>=...
 ```

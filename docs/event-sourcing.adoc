@@ -308,9 +308,9 @@ One pass through the portal, with the endpoint, the phase it requires, the event
 | Step | Request | Phase required | Events and effects
 
 | 1. Connect
-| `GET /api/status` with the captive-portal headers (`X-Client-Mac`, `X-Ap-Mac`, `X-Redirect-Url`, `X-Ssid`, `X-Click-Id`)
+| `GET /api/status` with the captive-portal headers (`X-Client-Mac`, `X-Ap-Mac`, `X-Redirect-Url`, `X-Ssid`, `X-Fingerprint`)
 | any
-| No events. The session row is created at `Welcome` (both `clientMac` and `clickId` are required, else `SessionMissing`), the session cookie is set, and the `captal_user` cookie is used to pre-attach a returning user.
+| No events. The session row is created at `Welcome` (both `clientMac` and `fingerprint` are required, else `SessionMissing`), the session cookie is set, and the `captal_user` cookie is used to pre-attach a returning user.
 
 | 2. Ask for a question
 | `GET /api/survey/next`

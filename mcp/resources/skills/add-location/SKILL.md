@@ -1,7 +1,7 @@
 ---
 name: add-location
 description: Use this skill to onboard a location end-to-end — create it, give it translations, advertisers and videos, brand it, configure UniFi, set how its guests recover from errors, and check what is still missing. Composes the smaller skills into one flow. Triggers on "agregar location", "add new location", "onboard location", "nuevo cliente", "new client", "create location", "configurar unifi", "configure unifi", "desactivar unifi", "disable unifi", "espera de error", "error wait", "recovery policy", "readiness", "qué falta".
-version: 2.2.0
+version: 2.3.0
 ---
 
 # Onboard a location end-to-end
@@ -138,12 +138,13 @@ The portal expects to be reached through a UniFi redirect carrying identifying p
 with the location's AP MAC:
 
 ```
-https://<domain>/<slug>/?id=<CLIENT_MAC>&ap=<AP_MAC>&ssid=<SSID>&url=<ORIGINAL_URL>&click_id=<CLICK_ID>
+https://<domain>/<slug>/?id=<CLIENT_MAC>&ap=<AP_MAC>&ssid=<SSID>&url=<ORIGINAL_URL>&fingerprint=<FINGERPRINT>
 ```
 
-> **Agent instruction**: generate a fresh random `click_id` every single time — never reuse the
-> previous one or a literal. Each real UniFi redirect carries a unique one and the API persists it on
-> the session row for attribution. `printf 'test-%s\n' "$(openssl rand -hex 4)"` if you have a shell.
+> **Agent instruction**: generate a fresh random `fingerprint` every single time — never reuse the
+> previous one or a literal. The API tells devices apart by the MAC and the fingerprint together, so
+> a reused pair is the same device, which has already answered. `printf 'test-%s\n' "$(openssl rand -hex 4)"`
+> if you have a shell.
 
 The SPA reads these on load (`parseCaptivePortalHeaders` in `client/Main.scala`) and forwards them as
 headers on the first `/api/status` call.
@@ -151,12 +152,12 @@ headers on the first `/api/status` call.
 | Param | Header | Required | Purpose |
 |---|---|---|---|
 | `id` | `X-Client-Mac` | yes | The device's MAC; identifies the guest across visits |
-| `click_id` | `X-Click-Id` | yes | Per-redirect token, stored on the session for attribution |
+| `fingerprint` | `X-Fingerprint` | yes | The device fingerprint the link shortener computes; with the MAC, it tells the device apart |
 | `ap` | `X-Ap-Mac` | no | Soft-validated against the location's stored AP MAC; a mismatch only warns |
 | `ssid` | `X-Ssid` | no | Logged |
 | `url` | `X-Redirect-Url` | no | Logged. The SPA does not follow it — the guest finishes on the portal |
 
-Missing `id` or `click_id` on a session that does not exist yet gives `ApiError.SessionMissing` and
+Missing `id` or `fingerprint` on a session that does not exist yet gives `ApiError.SessionMissing` and
 the error page. Once the session cookie is set they are ignored. Real traffic also carries `t`, which
 the SPA ignores.
 

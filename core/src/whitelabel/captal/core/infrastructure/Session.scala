@@ -23,5 +23,5 @@ final case class SessionData(
     apMac: String = "",
     redirectUrl: String = "",
     ssid: String = "",
-    clickId: String = "",
+    fingerprint: String = "",
     accessExpiresAt: Option[Instant] = None)

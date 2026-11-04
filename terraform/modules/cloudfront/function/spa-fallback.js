@@ -38,8 +38,8 @@ function handler(event) {
   // /<slug> with no trailing slash: 301 redirect to /<slug>/
   // so the browser updates its URL bar and relative URLs in the SPA resolve under /<slug>/.
   // The query string MUST be preserved here — UniFi captive-portal lands users on
-  // /<slug>?id=...&ap=...&click_id=...&ssid=..., and the SPA reads those params from
-  // window.location.search to build the X-Client-Mac/X-Ap-Mac/X-Click-Id/X-Ssid headers
+  // /<slug>?id=...&ap=...&fingerprint=...&ssid=..., and the SPA reads those params from
+  // window.location.search to build the X-Client-Mac/X-Ap-Mac/X-Fingerprint/X-Ssid headers
   // for /api/status. Dropping them on the redirect leaves /api/status with no portal
   // context and the session resolver returns ApiError.SessionMissing.
   if (uri !== '/' && !uri.endsWith('/')) {

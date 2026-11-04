@@ -244,20 +244,21 @@ object HandlerTests extends TestSuite:
         )
 
     test("Device policy"):
-      import whitelabel.captal.core.device.{Fingerprint, Matching, Policy}
+      import whitelabel.captal.core.device.{Matching, Policy, Signals}
       test("configuration names a policy, and none means the default"):
         assert(
-          Policy.fromConfig(None) == Right(Policy.ByClickId),
+          Policy.fromConfig(None) == Right(Policy.ByMacAndFingerprint),
           Policy.fromConfig(Some("ByMac")) == Right(Policy.ByMac),
           Policy.fromConfig(Some("ByFoo")).isLeft)
-      test("each policy compares what it says, and only fingerprints carrying it"):
-        val known = Fingerprint("aa:bb", "click-1")
+      test("each policy compares what it says, and only signals carrying it"):
+        val known = Signals("aa:bb", "fp-1")
         assert(
-          Matching.ByClickId.matches(known, Fingerprint("cc:dd", "click-1")),
-          !Matching.ByMac.matches(known, Fingerprint("cc:dd", "click-1")),
-          Matching.ByMacAndClickId.matches(known, Fingerprint("aa:bb", "click-1")),
-          !Policy.ByClickId.covers(Fingerprint("aa:bb", "")),
-          Policy.ByMac.covers(Fingerprint("aa:bb", ""))
+          Matching.ByFingerprint.matches(known, Signals("cc:dd", "fp-1")),
+          !Matching.ByMac.matches(known, Signals("cc:dd", "fp-1")),
+          Matching.ByMacAndFingerprint.matches(known, Signals("aa:bb", "fp-1")),
+          !Matching.ByMacAndFingerprint.matches(known, Signals("aa:bb", "fp-2")),
+          !Policy.ByFingerprint.covers(Signals("aa:bb", "")),
+          Policy.ByMac.covers(Signals("aa:bb", ""))
         )
 
     test("AnswerProfilingHandler"):

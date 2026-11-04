@@ -343,7 +343,7 @@ One function, `function/spa-fallback.js`, does two jobs, the first ahead of the 
 * **SPA fallback and the slug redirect.** A request with a file extension passes through unchanged,
   and so does a video, `/<slug>/videos/<id>`, which is stored without one (its object carries its
   `Content-Type`); `/<slug>` with no trailing slash gets a `301` to `/<slug>/` with the query string preserved
-  (UniFi's captive portal lands a guest on `/<slug>?id=…&ap=…&click_id=…&ssid=…`, and dropping those
+  (UniFi's captive portal lands a guest on `/<slug>?id=…&ap=…&fingerprint=…&ssid=…`, and dropping those
   on the redirect leaves the SPA with no portal context for its first `/api/status` call); anything
   else without an extension rewrites to `/<slug>/index.html`.
 
@@ -352,7 +352,7 @@ The two cache policies are hand-written rather than lookups of AWS's managed one
 and the configuration has to plan against LocalStack too. `assets` caches on path alone for a day;
 `api` caches nothing (`default_ttl = min_ttl = max_ttl = 0`) and is paired with an origin request
 policy that forwards *every* header, cookie and query string to the ALB — because the API's session
-resolver reads `X-Client-Mac`, `X-Ap-Mac`, `X-Click-Id` and `X-Ssid` on every request (see
+resolver reads `X-Client-Mac`, `X-Ap-Mac`, `X-Fingerprint` and `X-Ssid` on every request (see
 xref:api.adoc[Guest API]'s captive-portal headers), and a cache key that ignored them while an origin
 policy withheld them would mean the API never saw them at all.
 

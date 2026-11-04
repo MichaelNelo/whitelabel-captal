@@ -2,7 +2,7 @@ package whitelabel.captal.platform.session
 
 import io.getquill.*
 import whitelabel.captal.core.application.Phase
-import whitelabel.captal.core.device.{Fingerprint, Matching, Policy}
+import whitelabel.captal.core.device.{Matching, Policy, Signals}
 import whitelabel.captal.core.infrastructure.SessionData
 import whitelabel.captal.core.survey.AdvertiserId
 import whitelabel.captal.core.survey.question.FullyQualifiedQuestionId
@@ -18,7 +18,7 @@ final case class CaptivePortalParams(
     apMac: String,
     redirectUrl: String,
     ssid: String,
-    clickId: String)
+    fingerprint: String)
 
 trait SessionService:
   def findById(sessionId: user.SessionId): Task[Option[SessionData]]
@@ -143,38 +143,38 @@ object SessionService:
       def findById(sessionId: user.SessionId): Task[Option[SessionData]] =
         run(findByIdQuery(lift(sessionId))).map(_.headOption.map(toSessionData)).orDie
 
-      /** The device a fingerprint is, found by the database with the configured policy; a new one
-        * when none matches, or when the fingerprint lacks what the policy compares.
+      /** The device the redirect's signals are, found by the database with the configured policy; a
+        * new one when none matches, or when the signals lack what the policy compares.
         */
       private def resolveDevice(
           portalParams: CaptivePortalParams,
           userAgent: String,
           now: String): Task[user.DeviceId] =
-        val seen = Fingerprint(portalParams.clientMac, portalParams.clickId)
+        val seen = Signals(portalParams.clientMac, portalParams.fingerprint)
         val found: Task[Option[user.DeviceId]] =
           if !devices.covers(seen) then
             ZIO.none
           else
             devices match
-              case Policy.ByClickId =>
-                deviceMatching(Matching.ByClickId, seen)
+              case Policy.ByFingerprint =>
+                deviceMatching(Matching.ByFingerprint, seen)
               case Policy.ByMac =>
                 deviceMatching(Matching.ByMac, seen)
-              case Policy.ByMacAndClickId =>
-                deviceMatching(Matching.ByMacAndClickId, seen)
+              case Policy.ByMacAndFingerprint =>
+                deviceMatching(Matching.ByMacAndFingerprint, seen)
         found
           .flatMap:
             case Some(deviceId) =>
               // The fields the policy did not compare move with the device: a MAC randomized per
-              // network, a click id the shortener reissued.
+              // network, a fingerprint the shortener computed anew.
               run(
                 query[DeviceRow]
                   .filter(_.id == lift(deviceId))
                   .update(
-                    _.userAgent -> lift(userAgent),
-                    _.clientMac -> lift(seen.clientMac),
-                    _.clickId   -> lift(seen.clickId),
-                    _.updatedAt -> lift(now))).as(deviceId)
+                    _.userAgent   -> lift(userAgent),
+                    _.clientMac   -> lift(seen.clientMac),
+                    _.fingerprint -> lift(seen.fingerprint),
+                    _.updatedAt   -> lift(now))).as(deviceId)
             case None =>
               val row = DeviceRow(
                 id = user.DeviceId.generate,
@@ -182,19 +182,19 @@ object SessionService:
                 createdAt = now,
                 updatedAt = now,
                 clientMac = seen.clientMac,
-                clickId = seen.clickId)
+                fingerprint = seen.fingerprint)
               run(query[DeviceRow].insertValue(lift(row))).as(row.id)
           .orDie
       end resolveDevice
 
       private inline def deviceMatching(
           inline m: Matching,
-          seen: Fingerprint): Task[Option[user.DeviceId]] = run(
+          seen: Signals): Task[Option[user.DeviceId]] = run(
         query[DeviceRow]
           .filter(d =>
             m.matches(
-              Fingerprint(d.clientMac, d.clickId),
-              Fingerprint(lift(seen.clientMac), lift(seen.clickId))))
+              Signals(d.clientMac, d.fingerprint),
+              Signals(lift(seen.clientMac), lift(seen.fingerprint))))
           .map(_.id)
           .take(1)).map(_.headOption)
 
@@ -224,7 +224,7 @@ object SessionService:
             apMac = portalParams.apMac,
             redirectUrl = portalParams.redirectUrl,
             ssid = portalParams.ssid,
-            clickId = portalParams.clickId
+            fingerprint = portalParams.fingerprint
           )
           _ <-
             run(
@@ -244,7 +244,7 @@ object SessionService:
                 _.apMac               -> lift(sessionRow.apMac),
                 _.redirectUrl         -> lift(sessionRow.redirectUrl),
                 _.ssid                -> lift(sessionRow.ssid),
-                _.clickId             -> lift(sessionRow.clickId)
+                _.fingerprint         -> lift(sessionRow.fingerprint)
               )).orDie
         yield SessionData(
           sessionId,
@@ -260,7 +260,7 @@ object SessionService:
           apMac = portalParams.apMac,
           redirectUrl = portalParams.redirectUrl,
           ssid = portalParams.ssid,
-          clickId = portalParams.clickId
+          fingerprint = portalParams.fingerprint
         )
       end create
 
@@ -291,7 +291,7 @@ object SessionService:
             apMac = portalParams.apMac,
             redirectUrl = portalParams.redirectUrl,
             ssid = portalParams.ssid,
-            clickId = portalParams.clickId
+            fingerprint = portalParams.fingerprint
           )
           _ <-
             run(
@@ -311,7 +311,7 @@ object SessionService:
                 _.apMac               -> lift(sessionRow.apMac),
                 _.redirectUrl         -> lift(sessionRow.redirectUrl),
                 _.ssid                -> lift(sessionRow.ssid),
-                _.clickId             -> lift(sessionRow.clickId)
+                _.fingerprint         -> lift(sessionRow.fingerprint)
               )).orDie
         yield SessionData(
           sessionId,
@@ -327,7 +327,7 @@ object SessionService:
           apMac = portalParams.apMac,
           redirectUrl = portalParams.redirectUrl,
           ssid = portalParams.ssid,
-          clickId = portalParams.clickId
+          fingerprint = portalParams.fingerprint
         )
       end createForUser
 
@@ -387,7 +387,7 @@ object SessionService:
       row.apMac,
       row.redirectUrl,
       row.ssid,
-      row.clickId,
+      row.fingerprint,
       row.accessExpiresAt.map(java.time.Instant.parse)
     )
   end toSessionData

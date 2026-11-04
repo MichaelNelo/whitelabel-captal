@@ -1,7 +1,7 @@
 ---
 name: client-patterns
 description: Reference for the Scala.js SPA conventions — Laminar signals, AppState, dom.fetch, cookies, BuildInfo, basePath. Use when working on any client/ change and want to follow project conventions. Triggers on "client patterns", "laminar conventions", "spa pattern", "client reference", "scala js patterns".
-version: 1.1.0
+version: 1.2.0
 ---
 
 # Client (Scala.js SPA) — reference
@@ -180,18 +180,18 @@ else
 When UniFi redirects an unauthenticated client to the captive portal, the URL carries:
 
 ```
-?id=<CLIENT_MAC>&ap=<AP_MAC>&ssid=<SSID>&url=<ORIGINAL_URL>&click_id=<TOKEN>&t=<TIMESTAMP>
+?id=<CLIENT_MAC>&ap=<AP_MAC>&ssid=<SSID>&url=<ORIGINAL_URL>&fingerprint=<FINGERPRINT>&t=<TIMESTAMP>
 ```
 
 `Main.parseCaptivePortalHeaders` reads these from `dom.URLSearchParams` and forwards as `X-*` headers on the first `/api/status` call. `t` (timestamp) is ignored.
 
-| URL param  | Forwarded header | Required for CREATE |
-|------------|------------------|---------------------|
-| `id`       | `X-Client-Mac`   | yes                 |
-| `click_id` | `X-Click-Id`     | yes                 |
-| `ap`       | `X-Ap-Mac`       | no (soft-validated) |
-| `ssid`     | `X-Ssid`         | no                  |
-| `url`      | `X-Redirect-Url` | no                  |
+| URL param     | Forwarded header | Required for CREATE |
+|---------------|------------------|---------------------|
+| `id`          | `X-Client-Mac`   | yes                 |
+| `fingerprint` | `X-Fingerprint`  | yes                 |
+| `ap`          | `X-Ap-Mac`       | no (soft-validated) |
+| `ssid`        | `X-Ssid`         | no                  |
+| `url`         | `X-Redirect-Url` | no                  |
 
 The mapping table lives in `Main.scala`'s `parseCaptivePortalHeaders` and is duplicated in `ErrorView.scala` for the retry button. If you add a new UniFi param, update both.
 
