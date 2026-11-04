@@ -7,6 +7,7 @@ import whitelabel.captal.api.routes.{
   LocaleRoutes,
   RecoveryRoutes,
   SurveyRoutes,
+  TermsRoutes,
   VideoRoutes
 }
 import whitelabel.captal.api.session.{
@@ -18,6 +19,7 @@ import whitelabel.captal.api.session.{
 import whitelabel.captal.platform.repositories.{
   RecoveryRepositoryQuill,
   SurveyRepositoryQuill,
+  TermsRepositoryQuill,
   UserRepositoryQuill,
   VideoRepositoryQuill
 }
@@ -47,7 +49,8 @@ private[api] object AppLayers:
       VideoRoutes.EndPlaybackFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType &
       RecoveryRoutes & RecoveryRoutes.RequestRecoveryFlowType &
-      RecoveryRoutes.CheckRecoveryFlowType & RecoveryRoutes.RedeemRecoveryFlowType & RecoveryFeed
+      RecoveryRoutes.CheckRecoveryFlowType & RecoveryRoutes.RedeemRecoveryFlowType & RecoveryFeed &
+      TermsRoutes & TermsRoutes.StartFlowType & TermsRoutes.AcceptTermsFlowType
 
   /** The location's bundle manifest, read over HTTP when `BUNDLE_MANIFEST_URL` names it. */
   private val bundleManifestLayer: ZLayer[ServerSettings, Nothing, BundleManifest] = ZLayer.fromZIO:
@@ -143,8 +146,10 @@ private[api] object AppLayers:
       AdvertiserSurveyRoutes.layer,
       FinishRoutes.layer,
       RecoveryRoutes.layer,
+      TermsRoutes.layer,
       bundleManifestLayer,
       RecoveryRepositoryQuill.layer,
+      TermsRepositoryQuill.layer,
       SurveyRepositoryQuill.layer,
       UserRepositoryQuill.layer,
       VideoRepositoryQuill.layer,
@@ -161,6 +166,8 @@ private[api] object AppLayers:
       Flows.endPlaybackFlowLayer,
       Flows.nextAdvertiserSurveyFlowLayer,
       Flows.answerAdvertiserFlowLayer,
+      Flows.startFlowLayer,
+      Flows.acceptTermsFlowLayer,
       Flows.finishFlowLayer,
       Flows.requestRecoveryFlowLayer,
       Flows.checkRecoveryFlowLayer,

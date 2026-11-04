@@ -19,6 +19,12 @@ enum ApiError:
   case UserNotIdentified
   case InvalidEmailFormat(value: String)
 
+  /** The device has not accepted the terms of service in force. */
+  case TermsNotAccepted
+
+  /** No version of the terms of service exists to accept. */
+  case NoTermsOfService
+
   // Survey validation errors
   case RequiredAnswerMissing(questionId: String)
   case InvalidOptionSelected(questionId: String, optionId: String)
@@ -82,6 +88,10 @@ object ApiError:
         ApiError.NoSurveyAssigned
       case AppError.UserNotIdentified =>
         ApiError.UserNotIdentified
+      case AppError.TermsNotAccepted =>
+        ApiError.TermsNotAccepted
+      case AppError.NoTermsOfService =>
+        ApiError.NoTermsOfService
       case AppError.InvalidEmailFormat(value) =>
         ApiError.InvalidEmailFormat(value)
       case AppError.Survey(errors) =>

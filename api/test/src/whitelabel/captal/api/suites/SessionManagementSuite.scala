@@ -22,13 +22,13 @@ object SessionManagementSuite:
             statusResp.body.contains("welcome"),
             verifyResp.body.contains("welcome"))
         ,
-        test("getNextSurvey transitions phase from welcome to identification_question"):
+        test("accepting the terms moves the session from the welcome to identification_question"):
           for
             _            <- TestFixtures.seedEmailSurvey
             backend      <- testBackend
-            cookie       <- createSession(backend)
+            cookie       <- createSessionAtWelcome(backend)
             statusBefore <- getStatus(backend, Some(cookie))
-            _            <- getNextSurvey(backend, cookie)
+            _            <- acceptTerms(backend, cookie)
             statusAfter  <- getStatus(backend, Some(cookie))
           yield assertTrue(
             statusBefore.body.contains("welcome"),

@@ -74,3 +74,6 @@ enum Event:
     * together again is what keeps the pair current.
     */
   case DeviceLinked(userId: user.Id, deviceId: user.DeviceId, occurredAt: Instant)
+
+  /** The device accepted the terms of service in force, the version `termsId`. */
+  case TermsAccepted(deviceId: user.DeviceId, termsId: String, occurredAt: Instant)

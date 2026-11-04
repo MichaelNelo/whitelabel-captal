@@ -141,7 +141,10 @@ object RecoverySuite:
             unknown <- postFault(backend, cookie, "nothing")
             errors  <- TestFixtures.getErrors
           yield assertTrue(
-            decode[StatusResponse](fault.body).toOption.exists(_.phase == Phase.Welcome),
+            // The session's own phase: past the welcome, since `createSession` accepted the terms.
+            decode[StatusResponse](fault.body)
+              .toOption
+              .exists(_.phase == Phase.IdentificationQuestion),
             errorOf(unknown.body).exists:
               case ApiError.InvalidRecoveryRequest(_) =>
                 true

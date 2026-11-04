@@ -40,6 +40,9 @@ package object schema:
     */
   inline given SchemaMeta[DeviceRow] = schemaMeta[DeviceRow]("devices")
   inline given SchemaMeta[DeviceUserRow] = schemaMeta[DeviceUserRow]("device_users")
+  inline given SchemaMeta[TermsRow] = schemaMeta[TermsRow]("terms")
+  inline given SchemaMeta[TermsTranslationRow] = schemaMeta[TermsTranslationRow](
+    "terms_translations")
   inline given SchemaMeta[SurveyRow] = schemaMeta[SurveyRow]("surveys")
   inline given SchemaMeta[QuestionRow] = schemaMeta[QuestionRow]("questions")
   inline given SchemaMeta[QuestionOptionRow] = schemaMeta[QuestionOptionRow]("question_options")

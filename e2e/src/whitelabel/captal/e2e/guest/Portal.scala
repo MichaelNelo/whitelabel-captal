@@ -166,6 +166,31 @@ object Portal:
     .foreach(dir =>
       options.setRecordVideoDir(dir.resolve(".raw")).setRecordVideoSize(width, height))
 
+  private def button(page: Page, key: String) = page.getByRole(
+    options.AriaRole.BUTTON,
+    Page.GetByRoleOptions().setName(Locations.text(key)))
+
+  /** Presses the welcome's start and waits for what it leads to: the terms of service's dialog, for
+    * a phone that has to accept them, or the welcome left behind. Answers whether it was the
+    * dialog.
+    */
+  def pressStart(page: Page): Boolean =
+    button(page, "welcome.button.start").click()
+    page.waitForFunction(
+      "() => document.querySelector('.terms-dialog') !== null || document.querySelector('.welcome-button') === null")
+    page.locator(".terms-dialog").count() > 0
+
+  /** Starts, accepting the terms of service when the welcome asks for them: a phone the portal
+    * knows nothing about always is asked, one that accepted the version in force is not.
+    */
+  def start(page: Page): Unit =
+    if pressStart(page) then
+      acceptTerms(page)
+
+  def acceptTerms(page: Page): Unit = button(page, "welcome.terms.accept").click()
+
+  def declineTerms(page: Page): Unit = button(page, "welcome.terms.decline").click()
+
   /** Closes `context`; when the scenario is recorded, each page leaves its video as `<name>.webm`.
     */
   private[e2e] def close(context: BrowserContext, named: List[(Page, String)]): Unit =

@@ -619,6 +619,84 @@ body {
   transform: none;
 }
 
+/* Terms of service: a dialog over the welcome, and the notice left after declining it */
+.terms-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-lg);
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.terms-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  width: 100%;
+  max-width: 480px;
+  max-height: 80vh;
+  padding: var(--space-xl);
+  background: var(--surface-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.terms-title {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--text-primary);
+}
+
+.terms-text {
+  overflow-y: auto;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-line;
+}
+
+.terms-actions {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.terms-accept,
+.terms-decline {
+  flex: 1;
+  padding: var(--space-sm) var(--space-md);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.terms-accept {
+  color: var(--text-inverse);
+  background: var(--color-success);
+  border: none;
+}
+
+.terms-accept:disabled {
+  background: var(--color-success-disabled);
+  cursor: not-allowed;
+}
+
+.terms-decline {
+  color: var(--text-secondary);
+  background: var(--surface-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.terms-required {
+  margin-top: var(--space-md);
+  font-size: var(--font-size-sm);
+  color: var(--text-inverse);
+  text-align: center;
+}
+
 /* Loading state - icon centered in full viewport */
 .welcome-loading {
   position: fixed;

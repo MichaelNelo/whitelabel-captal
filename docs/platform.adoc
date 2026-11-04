@@ -128,8 +128,13 @@ defaulting, naming the column and the V22 rename in the message.
 `rows.scala` is the flat, one-case-class-per-table description of the schema: `UserRow`,
 `SessionRow`, `SurveyRow`, `QuestionRow`, `QuestionOptionRow`, `QuestionRuleRow`, `AnswerRow`,
 `UserSurveyProgressRow`, `NextIdentificationSurveyRow`, `LocalizedTextRow`, `AdvertiserRow`,
-`AdvertiserVideoRow`, `VideoViewRow`, `DeviceRow`, `DeviceUserRow`, `LocationRow`,
-`LocationRecoveryRow`, `EventLogRow`.
+`AdvertiserVideoRow`, `VideoViewRow`, `DeviceRow`, `DeviceUserRow`, `TermsRow`,
+`TermsTranslationRow`, `LocationRow`, `LocationRecoveryRow`, `EventLogRow`.
+
+`Terms` (`platform/Terms.scala`) is how the portal and the backoffice read the terms of service:
+`current` (the highest version), `translations`, `locales` (those of the version in force, the ones
+a portal offers), `acceptedBy` (the version a device accepted last) and the two writes,
+`saveTranslation` and `accept`. `TermsRepositoryQuill` serves `core`'s `TermsRepository` from it.
 
 Conventions that hold across all of them:
 

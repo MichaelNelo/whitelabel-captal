@@ -83,11 +83,19 @@ by the MCP server (`mcp/resources/db/migration-mcp`, `V1` and `V2`).
 | `location_id`
 
 | `devices`
-| One row per device, found again by the redirect's signals: `client_mac`, UniFi's, and `fingerprint`, the link shortener's. Which of them a match compares is configuration (`DEVICE_MATCHING`). `user_agent` is the latest one seen, for diagnosis only. Rows from before V27 have neither field and match nothing.
+| One row per device, found again by the redirect's signals: `client_mac`, UniFi's, and `fingerprint`, the link shortener's. Which of them a match compares is configuration (`DEVICE_MATCHING`). `user_agent` is the latest one seen, for diagnosis only. Rows from before V27 have neither field and match nothing. `terms_id` and `terms_accepted_at` are the version of the terms of service the device accepted last, and when; NULL on one that never accepted any.
 | Global
 
 | `device_users`
 | Many-to-many between devices and users: written each time a user is identified on a device, with first/last seen timestamps. Composite primary key.
+| Global
+
+| `terms`
+| One row per version of the terms of service, the same for every location: `version` is unique, and the highest is the one in force. A change to the terms is a new row.
+| Global
+
+| `terms_translations`
+| A version's text in one locale (`body`), keyed by `(terms_id, locale)`. Adding or removing one is not a new version. The locales of the version in force are the ones every portal offers.
 | Global
 
 | `surveys`

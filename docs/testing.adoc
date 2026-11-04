@@ -50,7 +50,7 @@ guests through a browser and the distribution. See <<end-to-end>>.
 [source,scala]
 ----
 suite("E2E")(
-  suite("Identification Survey Flow")( /* eighteen suites */ ) @@ TestAspect.before(clearAndSeedNoise.orDie),
+  suite("Identification Survey Flow")( /* nineteen suites */ ) @@ TestAspect.before(clearAndSeedNoise.orDie),
   MigrationLockSuite.suite,   // migrates itself; must stay in this spec, not its own ZIOSpecDefault
   WireContractSuite.suite     // pure serialisation; needs none of the layers above
 ) @@ TestAspect.sequential
@@ -60,8 +60,11 @@ The inner suite — `LocaleSessionSuite`, `SessionManagementSuite`, `EmailSurvey
 `SurveyProgressionSuite`, `MultiQuestionSurveySuite`, `ValidationSuite`, `PhaseValidationSuite`,
 `ProtocolRejectionSuite`, `ClientDecodeSuite`, `SessionIsolationSuite`, `VideoSuite`,
 `AdvertiserVideoSurveySuite`, `FinishSuite`, `AuthorizedSuite`, `SoftDeleteSuite`,
-`UnreadableRuleSuite`, `DeviceSuite`, `RecoverySuite` — runs `TestFixtures.clearAllData *> TestFixtures.seedNoiseData *>
-TestUnifiClient.disable *> TestUnifiClient.reset` before each test. `MigrationLockSuite` and
+`UnreadableRuleSuite`, `DeviceSuite`, `RecoverySuite`, `TermsSuite` — runs `TestFixtures.clearAllData *> TestFixtures.seedNoiseData *>
+TestFixtures.seedTerms() *> TestUnifiClient.disable *> TestUnifiClient.reset` before each test. Every
+test so starts with version 1 of the terms of service in es, en and pt, and `TestHelpers.createSession`
+accepts it, which leaves the session at the identification questions where most suites begin;
+`createSessionAtWelcome` is the session still at the welcome, asked to accept them. `MigrationLockSuite` and
 `WireContractSuite` sit outside that block deliberately: the first runs its own migration against
 its own history table and clearing the application schema around it would prove nothing; the
 second needs no database at all. Keeping `MigrationLockSuite` inside this one spec class rather
@@ -318,7 +321,9 @@ content security policy is applied: the pages' declared CSP is not tested.
 * **Locations** are created through the tools and deployed (`Locations`): one per name a feature
 uses, shared by its scenarios for the run, since a deploy takes minutes; each run creates its own
 under a slug of its own, `e2e-<name>-<4 characters>`, in the local database. The identification
-surveys belong to the whole deployment, so they are created only when missing. Every text a guest
+surveys and the terms of service belong to the whole deployment, so they are created only when
+missing; `terms_of_service.feature` publishes new versions of the terms, which every later guest
+accepts like any other. Every text a guest
 sees is written as `text <key>` in `en` and `es`, which is how a step finds a button. The video is
 `e2e/resources/spot.webm`, six seconds of VP9: Playwright's Chromium plays no H.264. Once the
 scenarios are over, an `AfterAll` hook (`RunHooks`) destroys every `e2e-` location whose latest run
@@ -330,7 +335,9 @@ left.
 * **Guests** are Playwright browser contexts (`Portal`), each a phone of its own — its own cookies
 and storage, mobile viewport and touch — sent to the portal the way the access point sends them,
 with a MAC, an access point and a fingerprint in the query string. Certificate errors are ignored: the
-distribution's name is two levels under the one LocalStack's certificate covers.
+distribution's name is two levels under the one LocalStack's certificate covers. A guest starts
+through `Portal.start`, which accepts the terms of service when the welcome asks for them: a phone
+the portal knows nothing about is always asked.
 * **Errors** are made to happen on demand for the recovery features. The run releases
 `client.local`'s bundle, which carries `Faults`, and the local configuration has every location
 mount the API's dev endpoints (`enable_location_faults`). A step dispatches `captal-fault` in the

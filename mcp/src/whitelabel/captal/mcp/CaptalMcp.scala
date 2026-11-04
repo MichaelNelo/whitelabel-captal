@@ -18,6 +18,7 @@ import whitelabel.captal.mcp.tools.{
   RecoveryTools,
   SkillTools,
   SurveyTools,
+  TermsTools,
   TokenTools,
   UnifiTools,
   VideoTools
@@ -147,7 +148,8 @@ object CaptalMcp:
     val withPrompts = Prompts.all(promptEnv).foldLeft(withResources)(_.prompt(_))
     val withData = (
       LocationTools.all ++ I18nTools.all ++ AdvertiserTools.all ++ SurveyTools.all ++
-        UnifiTools.all(uiOrigin) ++ RecoveryTools.all ++ TokenTools.all ++ SkillTools.all
+        UnifiTools.all(uiOrigin) ++ RecoveryTools.all ++ TermsTools.all ++ TokenTools.all ++
+        SkillTools.all
     ).map(restrictToApps).foldLeft[McpServer[QuillSqlite]](withPrompts)(_.tool(_))
     // `deploy_location` is here rather than above because it copies the shared bundle under the new
     // slug, which is S3 and therefore `AssetStore`.

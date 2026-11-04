@@ -18,6 +18,7 @@ import whitelabel.captal.platform.{
   QuestionRow,
   SurveyCategory as StoredCategory,
   SurveyRow,
+  Terms,
   UnifiAccess,
   VideoStatus
 }
@@ -99,6 +100,12 @@ object Readiness:
       @description(
         "Which of the three identification surveys — email, profiling, location — are unusable: absent, retired, or active with no active question left. The last case matters as much as the first, because the query that serves them joins questions, so a survey whose questions were all retired returns nothing and the guest is never identified. Deployment-wide rather than this location's, but a guest here cannot be identified without the email one; creating or reviving it fixes every location at once.")
       missingIdentificationSurveys: List[String],
+      @description(
+        "The version of the terms of service in force, the same for every location. Absent before the first is created, and until then deploy_location refuses: a portal asks every guest to accept them before the flow begins.")
+      termsVersion: Option[Int],
+      @description(
+        "Locales this location has translations in that the terms in force are not written in. A portal offers only the terms' locales, so a guest cannot pick these.")
+      localesWithoutTerms: List[String],
       @description(
         "What is left to do, in the order worth doing it. Empty means nothing here blocks a deploy.")
       nextSteps: List[String])
@@ -184,8 +191,26 @@ object Readiness:
               .missingIdentificationSurveys
               .mkString(
                 " and ")} survey(s) do not exist, so a guest is never identified and nothing past the first screen is reached. Call create_identification_survey. They are deployment-wide: this fixes every location at once, and needs identity:write.")
-    identification ++ translations ++ advertisers ++ videos ++ stranded ++ surveys ++ branding ++
-      unifi
+    // With the identification surveys, ahead of the rest: without a version, the deploy is refused.
+    val terms =
+      r.termsVersion match
+        case None =>
+          List(
+            "No terms of service exist, so deploy_location refuses: every portal asks its guests to accept them before the flow begins. Call create_terms_version with a text in each of this location's locales. They are the same for every location.")
+        case Some(_) if r.localesWithoutTerms.nonEmpty =>
+          List(
+            s"The terms of service in force have no text in ${r
+                .localesWithoutTerms
+                .mkString(", ")}, so the portal does not offer ${
+                if r.localesWithoutTerms.sizeIs == 1 then
+                  "that locale"
+                else
+                  "those locales"
+              }. Add the text with set_terms_translation.")
+        case _ =>
+          Nil
+    identification ++ terms ++ translations ++ advertisers ++ videos ++ stranded ++ surveys ++
+      branding ++ unifi
   end steps
 
   def of(slug: String): ZIO[QuillSqlite & AssetStore, String, LocationReadiness] = ZIO
@@ -201,6 +226,8 @@ object Readiness:
         surveys     <- run(query[SurveyRow]).orDie
         advertisers <- run(query[AdvertiserRow]).orDie
         questions   <- run(query[QuestionRow]).orDie
+        terms       <- Terms.current(quill).orDie
+        termLocales <- Terms.locales(quill).orDie
         store       <- ZIO.service[AssetStore]
         styles      <- store.exists(store.key(slug, Asset.Styles))
         icon        <- store.exists(store.key(slug, Asset.BrandIcon))
@@ -262,6 +289,13 @@ object Readiness:
               surveys.exists(s =>
                 s.category == category && s.isActive == 1 &&
                   questions.exists(q => q.surveyId == s.id && q.isActive == 1))),
+          termsVersion = terms.map(_.version),
+          localesWithoutTerms =
+            if terms.isEmpty then
+              Nil
+            else
+              byLocale.map(_.locale).filterNot(termLocales.contains)
+          ,
           nextSteps = Nil
         )
       yield bare.copy(nextSteps = steps(bare))

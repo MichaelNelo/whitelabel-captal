@@ -1,7 +1,7 @@
 ---
 name: style-reference
 description: How to theme a location's portal through set_location_styles — the per-screen DOM structure, the class hooks, the state modifiers, and which variable drives which part. Call get_css_schema for the variable list itself; it is derived from the portal's stylesheet and this document is not. Use when customizing branding, colors, typography, layout, or specific screens (welcome, question, video, video-survey, ready). Triggers on "custom styles", "branding", "theme", "css variables", "override styles", "style screen", "estilos", "marca", "colores", "personalizar pantalla", "vista previa", "preview", "cómo se ve".
-version: 2.2.0
+version: 2.3.0
 ---
 
 # Style customization reference
@@ -98,11 +98,22 @@ The first screen the user sees once i18n is loaded. Full-bleed gradient backgrou
             ├── (numeric badge / icon, styled by ::before or inline)
             └── .step-text       (span) — i18n keys welcome.steps.step1..3
             (inline animation-delay: 0.1s × index for stagger)
+    ├── .terms-required         (p)  — i18n key welcome.terms.required, after declining the terms
+    └── .terms-overlay          — the terms of service's dialog, while it is open (fixed, full screen)
+        └── .terms-dialog
+            ├── .terms-title    (h2) — i18n key welcome.terms.title
+            ├── .terms-text     (div) — the terms themselves, not a translation (scrolls)
+            └── .terms-actions
+                ├── .terms-decline (button) — i18n key welcome.terms.decline
+                └── .terms-accept  (button) — i18n key welcome.terms.accept
 
 .layout-footer
-├── .locale-button               (select) — language picker
+├── .locale-button               (select) — language picker; only the locales the terms are in
 └── .welcome-button              (button) — i18n key welcome.button.start / .connecting
 ```
+
+A guest the portal knows nothing about presses start and gets the terms' dialog before anything
+else; one whose phone accepted the version in force goes straight on.
 
 **Authorized variant.** Once a guest already has access, the same route renders a second
 `.welcome-view` with the expiry countdown instead of the steps and the CTA:

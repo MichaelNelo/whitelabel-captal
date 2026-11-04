@@ -25,7 +25,9 @@ object OnboardingSpec extends ZIOSpecDefault:
       // Defaults to the healthy case, so a test that wants a failure has to ask for it.
       adVideos: Int = 1,
       advertiserSurveys: Int = 1,
-      strandedAdVideos: Int = 0) = Readiness.LocationReadiness(
+      strandedAdVideos: Int = 0,
+      termsVersion: Option[Int] = Some(1),
+      localesWithoutTerms: List[String] = Nil) = Readiness.LocationReadiness(
     slug = "spec",
     name = "Spec",
     active = true,
@@ -42,6 +44,8 @@ object OnboardingSpec extends ZIOSpecDefault:
     strandedAdVideos = strandedAdVideos,
     advertisers = advertisers,
     missingIdentificationSurveys = missingIdentificationSurveys,
+    termsVersion = termsVersion,
+    localesWithoutTerms = localesWithoutTerms,
     nextSteps = Nil
   )
 

@@ -4,6 +4,7 @@ import com.microsoft.playwright.options.AriaRole
 import com.microsoft.playwright.{Locator, Page}
 import io.cucumber.scala.{EN, ScalaDsl}
 import whitelabel.captal.e2e.backoffice.Locations
+import whitelabel.captal.e2e.guest.Portal
 import whitelabel.captal.e2e.scenario.World
 import whitelabel.captal.e2e.venue.Venue
 
@@ -43,7 +44,7 @@ final class GuestSteps extends ScalaDsl with EN:
   }
 
   When("""{word} starts""") { (name: String) =>
-    button(World.guest(name).page, "welcome.button.start").click()
+    Portal.start(World.guest(name).page)
   }
 
   When("""{word} answers the email question with {string}""") { (name: String, email: String) =>

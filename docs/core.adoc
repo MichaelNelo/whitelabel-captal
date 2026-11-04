@@ -111,13 +111,14 @@ Errors surface as `Flow.HandlerError(errors: NonEmptyChain[Error])`, a `java.lan
 
 === Phase
 
-`application/phase.scala` holds the portal's eight phases plus their database spelling. `sessions.phase` stores the string.
+`application/phase.scala` holds the portal's nine phases plus their database spelling. `sessions.phase` stores the string.
 
 [cols="2,2,3"]
 |===
 | `Phase` | DB string | What the guest is doing
 
-| `Welcome` | `welcome` | landed on the portal, no survey assigned yet
+| `Welcome` | `welcome` | landed on the portal, no survey assigned yet; its device accepted the terms of service in force
+| `WelcomeNeedsToS` | `welcome_needs_tos` | the welcome, with the terms of service still to accept: never accepted, an older version accepted, or a request with neither the session nor the user cookie
 | `IdentificationQuestion` | `identification_question` | answering email / profiling / location questions
 | `AdvertiserVideo` | `advertiser_video` | watching the assigned video
 | `AdvertiserVideoSurvey` | `advertiser_video_survey` | answering the question that follows the video
@@ -197,6 +198,8 @@ enum Event:
 enum Error:
   case NoSurveyAssigned
   case UserNotIdentified
+  case TermsNotAccepted
+  case NoTermsOfService
   case InvalidEmailFormat(value: String)
   case Survey(errors: NonEmptyChain[survey.Error])
   case User(errors: NonEmptyChain[user.Error])
@@ -235,6 +238,18 @@ All under `core/src/whitelabel/captal/core/application/commands/`. Every command
 | `NextStep`
 | `SurveyRepository`, `UserRepository`
 | `QuestionAnswered(AdvertiserQuestionAnswered)`
+
+| `StartCommand(occurredAt)`
+| `StartHandler`
+| `NextStep(IdentificationQuestion)`
+| `TermsRepository`
+| none; fails with `TermsNotAccepted` unless the device accepted the version in force, `NoTermsOfService` when none exists
+
+| `AcceptTermsCommand(occurredAt)`
+| `AcceptTermsHandler`
+| `NextStep(IdentificationQuestion)`
+| `TermsRepository`
+| `TermsAccepted(deviceId, termsId, occurredAt)` for the version in force; `NoTermsOfService` when none exists
 
 | `ProvideNextIdentificationSurveyCommand(deviceId, occurredAt)`
 | `ProvideNextIdentificationSurveyHandler`
@@ -327,6 +342,8 @@ The other three `Answer*` handlers follow one shape: find the user in the state 
 `ProvideNextVideoHandler` fails with `Error.UserNotIdentified` when no user has an email: reaching the video phase unidentified is treated as a broken flow, not as a case to serve. With a user and no video, it returns `NextStep(fallback.phase)` and emits nothing.
 
 `MarkVideoWatchedHandler` has two constructors. `withSession` is the one the server uses — it reads `session.currentVideoId`, looks the video up to recover `advertiserId` and `videoType`, and emits `VideoVisualized` plus a `PlaybackEnded` for each playback `VideoRepository.openPlaybacks` reports: watched, the file is no longer being fetched. A missing `currentVideoId` fails with `video.Error.NoVideoAvailable` and an unknown id with `video.Error.VideoNotFound`. The plain `apply` emits no event and returns the next step unchanged.
+
+`StartHandler` and `AcceptTermsHandler` are the only way out of the welcome, and both answer `NextStep(IdentificationQuestion)`: the identification questions hand the guest on themselves when none is left to ask. The version a device accepts is the one `TermsRepository.current` has when the acceptance arrives — the page never names one — and `TermsRepository` (`infrastructure/TermsRepository.scala`) reads that and the version a device accepted last, `TermsVersion(id, number)`.
 
 `StartPlaybackHandler` emits `PlaybackStarted` only when `fileUrl` is the session's video's current file, and fails with `video.Error.StaleFile` otherwise — the video got a new file after the page was given that one. `EndPlaybackHandler` emits `PlaybackEnded` unconditionally: ending one that already ended, or another session's, is the persistence's no-op, because the page sends it on its way out and cannot wait to be told.
 
@@ -513,7 +530,7 @@ What the network says about the device a session runs on, and the rule for findi
 | `Signals` | `clientMac` (a `Mac`, when the redirect carried a readable one) and `fingerprint`, both from the redirect: the MAC is UniFi's, the fingerprint the link shortener's, computed from what the browser reports
 | `Matching` | `inline def matches(known, seen)`, implemented by `ByFingerprint`, `ByMac` and `ByMacAndFingerprint`. Inline so a repository can splice it into its query and the database finds the device: Quill reduces it to a `WHERE` at compile time, and it runs as plain Scala everywhere else. It cannot be called through the trait — the compiler refuses to inline it there — only on a concrete policy
 | `Policy` | which `Matching` configuration names, `ByMacAndFingerprint` by default: a fingerprint alone is shared by phones of one model and system, and a MAC alone changes when a phone rotates its private address. `covers(seen)` says whether the signals carry what it compares; ones that do not are a new device, since an empty fingerprint would match every other empty one
-| `Event` | `DeviceLinked(userId, deviceId, occurredAt)`
+| `Event` | `DeviceLinked(userId, deviceId, occurredAt)`; `TermsAccepted(deviceId, termsId, occurredAt)`, the device accepting the terms of service in force
 |===
 
 A configured policy reaches the query through a `match` where the query is written, one branch per

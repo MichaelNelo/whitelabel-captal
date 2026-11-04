@@ -14,6 +14,7 @@ object AppState:
   // Current phase
   private val phaseVar: Var[Option[Phase]] = Var(None)
   val phase: Signal[Option[Phase]] = phaseVar.signal
+  def currentPhase: Option[Phase] = phaseVar.now()
   def setPhase(p: Phase): Unit = phaseVar.set(Some(p))
 
   // Current identification survey (shared between views)

@@ -4,6 +4,12 @@ import io.circe.{Decoder, Encoder}
 
 enum Phase:
   case Welcome
+
+  /** The welcome, for a device that has to accept the terms of service before it starts: it never
+    * accepted them, accepted a version that is no longer the current one, or came with neither the
+    * session nor the user cookie. Only accepting them leaves it.
+    */
+  case WelcomeNeedsToS
   case IdentificationQuestion
   case AdvertiserVideo
   case AdvertiserVideoSurvey
@@ -21,6 +27,8 @@ object Phase:
     phase match
       case Welcome =>
         "welcome"
+      case WelcomeNeedsToS =>
+        "welcome_needs_tos"
       case IdentificationQuestion =>
         "identification_question"
       case AdvertiserVideo =>
@@ -40,6 +48,8 @@ object Phase:
     s match
       case "welcome" =>
         Welcome
+      case "welcome_needs_tos" =>
+        WelcomeNeedsToS
       case "identification_question" =>
         IdentificationQuestion
       case "advertiser_video" =>

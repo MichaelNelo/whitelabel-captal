@@ -210,7 +210,7 @@ object Progress:
   /** The final phases are taken as `Watched`; they have no way out, so it is never asked. */
   def of(phase: Phase): Progress =
     phase match
-      case Phase.Welcome | Phase.IdentificationQuestion =>
+      case Phase.Welcome | Phase.WelcomeNeedsToS | Phase.IdentificationQuestion =>
         Started
       case Phase.AdvertiserVideo =>
         Identified

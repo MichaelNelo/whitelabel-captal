@@ -12,8 +12,10 @@ import whitelabel.captal.api.{ApiBase, ApiErrors, SessionEndpoint, WireCheck}
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Flow, NextStep, Phase}
 import whitelabel.captal.core.device.Mac
+import whitelabel.captal.core.infrastructure.SessionData
 import whitelabel.captal.core.user
 import whitelabel.captal.messages.{AnswerRequest, ApiError, StatusResponse, SurveyResponse}
+import whitelabel.captal.platform.Terms
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.session.{CaptivePortalParams, SessionContext, SessionService}
 import zio.*
@@ -134,6 +136,29 @@ final class SurveyRoutes(
   /** Resolve the on-missing-session strategy: `CreateForUser` when the cross-location `captal_user`
     * cookie carries a valid, existing user id, plain `Create` otherwise.
     */
+  /** The welcome a device is shown, recorded on its session: `WelcomeNeedsToS` until it accepts the
+    * terms of service in force — when it never accepted them, accepted an older version, or came
+    * with neither the session nor the user cookie, a visitor nothing is known about.
+    */
+  private def welcomeFor(
+      session: SessionData,
+      anonymous: Boolean): ZIO[QuillSqlite & SessionService, ApiError, Phase] =
+    for
+      quill    <- ZIO.service[QuillSqlite]
+      current  <- Terms.current(quill).orDie
+      accepted <- Terms.acceptedBy(quill, session.deviceId).orDie
+      phase =
+        if !anonymous && current.exists(terms => accepted.contains(terms.id)) then
+          Phase.Welcome
+        else
+          Phase.WelcomeNeedsToS
+      _ <-
+        ZIO.when(phase != session.phase)(
+          ZIO
+            .serviceWithZIO[SessionService](_.setPhase(session.sessionId, phase))
+            .mapError(ApiError.fromThrowable))
+    yield phase
+
   private def resolveOnMissing(
       userCookie: Option[String],
       userAgent: String,
@@ -193,19 +218,11 @@ final class SurveyRoutes(
       yield result,
     nextSurvey.implementReadable: cookie =>
       for
+        // Out of the welcome only through `POST /api/start` or `POST /api/terms` (TermsRoutes).
         session <- SessionEndpoint.authorise(
           cookieConfig.valueFrom(cookie),
           SessionEndpoint.OnMissing.Fail,
-          Seq(Phase.Welcome, Phase.IdentificationQuestion))
-        // Transition from Welcome to IdentificationQuestion when user requests next survey
-        _ <-
-          if session.phase == Phase.Welcome then
-            ZIO
-              .serviceWithZIO[SessionService](
-                _.setPhase(session.sessionId, Phase.IdentificationQuestion))
-              .mapError(ApiError.fromThrowable)
-          else
-            ZIO.unit
+          Seq(Phase.IdentificationQuestion))
         flow   <- ZIO.service[NextSurveyFlowType]
         now    <- Clock.instant
         result <- asApiError(
@@ -261,8 +278,15 @@ final class SurveyRoutes(
                 session.locale,
                 Option(session.redirectUrl).filter(_.nonEmpty),
                 StatusResponse.secondsRemainingFrom(session.accessExpiresAt, now)))
-        _ <- WireCheck.readable(response)
-      yield (response, Some(cookieConfig.asSetCookie(session.sessionId.asString)))
+        anonymous =
+          cookieConfig.valueFrom(cookies).isEmpty && userCookieConfig.valueFrom(cookies).isEmpty
+        gated <-
+          if response.phase == Phase.Welcome || response.phase == Phase.WelcomeNeedsToS then
+            welcomeFor(session, anonymous).map(phase => response.copy(phase = phase))
+          else
+            ZIO.succeed(response)
+        _ <- WireCheck.readable(gated)
+      yield (gated, Some(cookieConfig.asSetCookie(session.sessionId.asString)))
       end for
   )
 

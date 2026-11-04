@@ -64,7 +64,7 @@ final class ReturningGuestsSteps extends ScalaDsl with EN:
   /** A whole first visit: the welcome page, the email, the video, its survey, and access. */
   private def firstVisit(name: String): Unit =
     val who = World.arrive(name)
-    button(who.page, "welcome.button.start").click()
+    Portal.start(who.page)
     answer(who.page, addressOf(who))
     watch(who.page)
     answer(who.page, "Yes")

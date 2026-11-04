@@ -246,6 +246,7 @@ under any slug.
 | `Phase` | `Page`
 
 | `Welcome` | `Welcome`
+| `WelcomeNeedsToS` | `Welcome`
 | `IdentificationQuestion` | `IdentificationQuestion`
 | `AdvertiserVideo` | `AdvertiserVideo`
 | `AdvertiserVideoSurvey` | `AdvertiserVideoSurvey`
@@ -425,8 +426,12 @@ Every view is an object under `client/src/whitelabel/captal/client/views/` expos
 | `WelcomeView`
 | `/`
 | Two modes on one route. Normally: title, subtitle, three steps, a locale `<select>` and the start
-  button, which sets the locale server-side, asks `GET /survey/next` and routes to the phase the
-  answer names. When `AppState.phase` is `Authorized` and `secondsRemaining` is defined: the
+  button. In `WelcomeNeedsToS` the button opens the terms of service's dialog (`GET /terms`, after
+  setting the locale): accepting calls `POST /terms`, declining closes it and leaves the
+  `welcome.terms.required` notice. In `Welcome` it calls `POST /start`. Either operation answers the
+  next step; for `IdentificationQuestion` the view asks `GET /survey/next` and routes to the phase
+  the answer names. A `TermsNotAccepted` from `start` — a version published since the page asked —
+  opens the dialog. When `AppState.phase` is `Authorized` and `secondsRemaining` is defined: the
   mm:ss countdown card, decremented locally and re-checked against `GET /status` by a single
   clamped `setTimeout`.
 

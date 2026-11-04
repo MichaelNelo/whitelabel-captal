@@ -6,8 +6,8 @@ import zio.test.*
 
 object E2ETests extends ZIOSpecDefault:
   private val clearAndSeedNoise =
-    TestFixtures.clearAllData *> TestFixtures.seedNoiseData *> TestUnifiClient.disable *>
-      TestUnifiClient.reset *> TestUnifiSwitch.set(true)
+    TestFixtures.clearAllData *> TestFixtures.seedNoiseData *> TestFixtures.seedTerms() *>
+      TestUnifiClient.disable *> TestUnifiClient.reset *> TestUnifiSwitch.set(true)
 
   def spec: Spec[Any, Throwable] = (
     suite("E2E")(
@@ -29,7 +29,8 @@ object E2ETests extends ZIOSpecDefault:
         SoftDeleteSuite.suite,
         UnreadableRuleSuite.suite,
         DeviceSuite.suite,
-        RecoverySuite.suite
+        RecoverySuite.suite,
+        TermsSuite.suite
       ) @@ TestAspect.before(clearAndSeedNoise.orDie),
       // Outside the block above: it migrates, so clearing the application data around it would
       // prove nothing. It must stay in this spec rather than its own `ZIOSpecDefault` — see the

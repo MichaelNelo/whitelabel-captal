@@ -9,6 +9,7 @@ import whitelabel.captal.api.routes.{
   LocaleRoutes,
   RecoveryRoutes,
   SurveyRoutes,
+  TermsRoutes,
   VideoRoutes
 }
 import zio.*
@@ -141,11 +142,12 @@ private[api] object HttpApp:
       videoRoutes: VideoRoutes,
       advertiserSurveyRoutes: AdvertiserSurveyRoutes,
       finishRoutes: FinishRoutes,
-      recoveryRoutes: RecoveryRoutes): Routes[FullEnv, Nothing] =
+      recoveryRoutes: RecoveryRoutes,
+      termsRoutes: TermsRoutes): Routes[FullEnv, Nothing] =
     val mounted =
       HealthRoutes.routes(base) ++ finishRoutes.routes ++ localeRoutes.routes ++
         videoRoutes.routes ++ surveyRoutes.routes ++ advertiserSurveyRoutes.routes ++
-        recoveryRoutes.routes
+        recoveryRoutes.routes ++ termsRoutes.routes
     val all =
       if devEndpoints then
         mounted ++ localeRoutes.devRoutes ++ recoveryRoutes.devRoutes
@@ -164,7 +166,8 @@ private[api] object HttpApp:
       videoRoutes: VideoRoutes,
       advertiserSurveyRoutes: AdvertiserSurveyRoutes,
       finishRoutes: FinishRoutes,
-      recoveryRoutes: RecoveryRoutes): Routes[FullEnv, Response] =
+      recoveryRoutes: RecoveryRoutes,
+      termsRoutes: TermsRoutes): Routes[FullEnv, Response] =
     val served = apiRoutes(
       devEndpoints,
       base,
@@ -173,7 +176,8 @@ private[api] object HttpApp:
       videoRoutes,
       advertiserSurveyRoutes,
       finishRoutes,
-      recoveryRoutes)
+      recoveryRoutes,
+      termsRoutes)
     val baseRoutes =
       if devMode then
         devLinkerOutput(devStaticRoutes(base.slug) ++ served ++ spaCatchAllRoutes(base.slug))

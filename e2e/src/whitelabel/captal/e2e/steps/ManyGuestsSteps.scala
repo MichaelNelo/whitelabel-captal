@@ -76,7 +76,7 @@ final class ManyGuestsSteps extends ScalaDsl with EN:
   }
 
   When("""the crowd starts""") { () =>
-    guests.foreach(who => button(who.page, "welcome.button.start").click())
+    guests.foreach(who => Portal.start(who.page))
   }
 
   When("""the crowd answers the email question with an address of their own""") { () =>

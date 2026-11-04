@@ -120,15 +120,15 @@ object PhaseValidationSuite:
         // ─────────────────────────────────────────────────────────────────────────
         // GET /api/survey/next - requires Welcome OR IdentificationQuestion
         // ─────────────────────────────────────────────────────────────────────────
-        test("nextSurvey endpoint accepts Welcome phase"):
+        test("nextSurvey endpoint rejects the welcome: only start or the terms leave it"):
           for
             _          <- TestFixtures.seedEmailSurvey
             backend    <- testBackend
             statusResp <- getStatus(backend, None)
             cookie = extractSessionCookie(statusResp).get
-            // Session starts in Welcome phase
+            // Session starts at the welcome, asked to accept the terms
             response <- getNextSurvey(backend, cookie)
-          yield assertTrue(response.code.isSuccess)
+          yield assertTrue(response.code.code == 400, response.body.contains("WrongPhase"))
         ,
         test("nextSurvey endpoint accepts IdentificationQuestion phase"):
           for

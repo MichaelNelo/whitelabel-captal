@@ -5,11 +5,17 @@ import com.raquo.laminar.api.L.*
 import whitelabel.captal.client.Promises.*
 import whitelabel.captal.client.i18n.I18nClient
 import whitelabel.captal.client.{AppState, ErrorHandler, Router, Runtime, StatusApi, WelcomeApi}
-import whitelabel.captal.core.application.Phase
-import whitelabel.captal.messages.SurveyResponse
+import whitelabel.captal.core.application.{NextStep, Phase}
+import whitelabel.captal.messages.{ApiError, SurveyResponse, TermsResponse}
 
 object WelcomeView:
   private val isStarting: Var[Boolean] = Var(false)
+
+  /** The terms of service on screen, while their dialog is open. */
+  private val openedTerms: Var[Option[TermsResponse]] = Var(None)
+
+  /** Whether the guest declined them last: the welcome says they have to be accepted. */
+  private val termsDeclined: Var[Boolean] = Var(false)
   private val availableLocales: Var[List[String]] = Var(List("es", "en"))
 
   def render: HtmlElement = Layout(
@@ -45,6 +51,15 @@ object WelcomeView:
       step(I18nClient.i18n.map(_.welcome.steps.step2), 2),
       step(I18nClient.i18n.map(_.welcome.steps.step3), 3)
     ),
+    child.maybe <--
+      termsDeclined
+        .signal
+        .map(declined =>
+          Option.when(declined)(
+            p(
+              cls := "terms-required",
+              child.text <-- I18nClient.i18n.map(_.welcome.terms.required)))),
+    child.maybe <-- openedTerms.signal.map(_.map(termsDialog)),
     onMountCallback { _ =>
       loadLocales()
     }
@@ -173,15 +188,54 @@ object WelcomeView:
   private def setLocaleOnServer(locale: String): Unit = Runtime.run:
     WelcomeApi.setLocale(locale)
 
+  /** Leaves the welcome: at once for a device that accepted the terms of service in force, through
+    * their dialog for one that has to.
+    */
   private def startFlow(): Unit =
+    if AppState.currentPhase.contains(Phase.WelcomeNeedsToS) then
+      openTerms()
+    else
+      leave(WelcomeApi.start())
+
+  /** Opens the dialog with the terms in the session's locale, set first so they are the ones the
+    * guest picked.
+    */
+  private def openTerms(): Unit =
     isStarting.set(true)
+    Runtime.run:
+      for
+        _     <- WelcomeApi.setLocale(I18nClient.currentLocale)
+        terms <- WelcomeApi.getTerms()
+      yield
+        isStarting.set(false)
+        terms match
+          case Right(read) =>
+            termsDeclined.set(false)
+            openedTerms.set(Some(read))
+          case Left(err) =>
+            ErrorHandler.escalate(err)
+
+  /** Runs the operation that leaves the welcome, and goes where the step it answers leads: for the
+    * identification questions, with the first one already fetched.
+    */
+  private def leave(operation: => js.Promise[Either[ApiError, NextStep]]): Unit =
+    isStarting.set(true)
+    openedTerms.set(None)
     AppState.setNavigating(true)
     Runtime.run:
       for
-        _            <- WelcomeApi.setLocale(I18nClient.currentLocale)
-        surveyResult <- WelcomeApi.getNextSurvey()
+        _    <- WelcomeApi.setLocale(I18nClient.currentLocale)
+        step <- operation
+        next <-
+          step match
+            case Right(NextStep(Phase.IdentificationQuestion)) =>
+              WelcomeApi.getNextSurvey()
+            case Right(other) =>
+              js.Promise.resolve(Right(SurveyResponse.Step(other)))
+            case Left(err) =>
+              js.Promise.resolve(Left(err))
       yield
-        surveyResult match
+        next match
           case Right(SurveyResponse.Survey(survey)) =>
             AppState.setCurrentSurvey(survey)
             AppState.setPhase(Phase.IdentificationQuestion)
@@ -189,10 +243,46 @@ object WelcomeView:
           case Right(SurveyResponse.Step(nextStep)) =>
             AppState.setPhase(nextStep.phase)
             Router.syncWithPhase(nextStep.phase)
+          case Left(ApiError.TermsNotAccepted) =>
+            // The terms changed since this page asked: they have to be accepted again.
+            AppState.setNavigating(false)
+            AppState.setPhase(Phase.WelcomeNeedsToS)
+            openTerms()
           case Left(err) =>
             ErrorHandler.escalate(err)
         isStarting.set(false)
         // The nav-loader is deliberately not turned off here: the destination view's Layout does
         // it on mount, once its lazy chunk has come down.
-  end startFlow
+  end leave
+
+  /** The terms of service in force, over the welcome, until the guest accepts or declines them.
+    * Declining closes it and leaves a notice: nothing begins without them.
+    */
+  private def termsDialog(terms: TermsResponse): HtmlElement = div(
+    cls := "terms-overlay",
+    div(
+      cls  := "terms-dialog",
+      role := "dialog",
+      h2(cls  := "terms-title", child.text <-- I18nClient.i18n.map(_.welcome.terms.title)),
+      div(cls := "terms-text", terms.text),
+      div(
+        cls := "terms-actions",
+        button(
+          cls := "terms-decline",
+          child.text <-- I18nClient.i18n.map(_.welcome.terms.decline),
+          onClick --> { _ =>
+            openedTerms.set(None)
+            termsDeclined.set(true)
+          }),
+        button(
+          cls := "terms-accept",
+          disabled <-- isStarting.signal,
+          child.text <-- I18nClient.i18n.map(_.welcome.terms.accept),
+          onClick --> { _ =>
+            leave(WelcomeApi.acceptTerms())
+          }
+        )
+      )
+    )
+  )
 end WelcomeView

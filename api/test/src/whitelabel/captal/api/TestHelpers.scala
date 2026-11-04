@@ -12,6 +12,7 @@ import whitelabel.captal.api.routes.{
   LocaleRoutes,
   RecoveryRoutes,
   SurveyRoutes,
+  TermsRoutes,
   VideoRoutes
 }
 import whitelabel.captal.core.application.commands.{
@@ -115,7 +116,8 @@ object TestHelpers:
           HealthRoutes.routes(env.get[ApiBase]) ++ env.get[FinishRoutes].routes ++
             localeRoutes.routes ++ localeRoutes.devRoutes ++ env.get[VideoRoutes].routes ++
             env.get[SurveyRoutes].routes ++ env.get[AdvertiserSurveyRoutes].routes ++
-            env.get[RecoveryRoutes].routes ++ env.get[RecoveryRoutes].devRoutes
+            env.get[RecoveryRoutes].routes ++ env.get[RecoveryRoutes].devRoutes ++
+            env.get[TermsRoutes].routes
         ).provideEnvironment(env))
 
   /** The health check. */
@@ -154,9 +156,39 @@ object TestHelpers:
     val withCookie = sessionCookie.fold(withHeaders)(c => withHeaders.cookie("captal_session", c))
     withCookie.send(backend)
 
-  /** Create a new session via /api/status and return the session cookie */
-  def createSession(backend: SttpBackend[Task, Any]): Task[String] = getStatus(backend, None).map(
-    r => extractSessionCookie(r).get)
+  /** A new session via /api/status, still at the welcome: a device nothing is known about, so in
+    * `WelcomeNeedsToS`. Answers the session cookie.
+    */
+  def createSessionAtWelcome(backend: SttpBackend[Task, Any]): Task[String] = getStatus(
+    backend,
+    None).map(r => extractSessionCookie(r).get)
+
+  /** A new session past the welcome: its device accepted the terms of service, which leaves it at
+    * the identification questions, where most suites begin. Answers the session cookie.
+    */
+  def createSession(backend: SttpBackend[Task, Any]): Task[String] =
+    for
+      cookie <- createSessionAtWelcome(backend)
+      _      <- acceptTerms(backend, cookie)
+    yield cookie
+
+  def getTerms(backend: SttpBackend[Task, Any], sessionCookie: String) = basicRequest
+    .get(uri"http://test/api/terms")
+    .cookie("captal_session", sessionCookie)
+    .response(asStringAlways)
+    .send(backend)
+
+  def acceptTerms(backend: SttpBackend[Task, Any], sessionCookie: String) = basicRequest
+    .post(uri"http://test/api/terms")
+    .cookie("captal_session", sessionCookie)
+    .response(asStringAlways)
+    .send(backend)
+
+  def start(backend: SttpBackend[Task, Any], sessionCookie: String) = basicRequest
+    .post(uri"http://test/api/start")
+    .cookie("captal_session", sessionCookie)
+    .response(asStringAlways)
+    .send(backend)
 
   /** A new session from a device the redirect describes differently: its own fingerprint and MAC. */
   def createSessionFrom(
@@ -164,13 +196,16 @@ object TestHelpers:
       fingerprint: String,
       mac: String): Task[String] =
     val headers = defaultPortalHeaders ++ Map("X-Fingerprint" -> fingerprint, "X-Client-Mac" -> mac)
-    headers
-      .foldLeft(basicRequest.get(uri"http://test/api/status").response(asStringAlways)) {
-        case (req, (k, v)) =>
-          req.header(k, v)
-      }
-      .send(backend)
-      .map(r => extractSessionCookie(r).get)
+    for
+      cookie <- headers
+        .foldLeft(basicRequest.get(uri"http://test/api/status").response(asStringAlways)) {
+          case (req, (k, v)) =>
+            req.header(k, v)
+        }
+        .send(backend)
+        .map(r => extractSessionCookie(r).get)
+      _ <- acceptTerms(backend, cookie)
+    yield cookie
 
   def getLocales(backend: SttpBackend[Task, Any]) = basicRequest
     .get(uri"http://test/api/locales")

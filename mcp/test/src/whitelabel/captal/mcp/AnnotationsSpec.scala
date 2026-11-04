@@ -11,6 +11,7 @@ import whitelabel.captal.mcp.tools.{
   RecoveryTools,
   SkillTools,
   SurveyTools,
+  TermsTools,
   TokenTools,
   UnifiTools,
   VideoTools
@@ -25,7 +26,7 @@ object AnnotationsSpec extends ZIOSpecDefault:
   private def all(uiOrigin: String): List[McpToolHandlerR[?]] =
     LocationTools.all ++ I18nTools.all ++ AdvertiserTools.all ++ SurveyTools.all ++
       AssetTools.all ++ VideoTools.all ++ TokenTools.all ++ SkillTools.all ++ Readiness.all ++
-      UnifiTools.all(uiOrigin) ++ RecoveryTools.all ++ PreviewTools.all
+      UnifiTools.all(uiOrigin) ++ RecoveryTools.all ++ PreviewTools.all ++ TermsTools.all
 
   private val tools = all("http://localhost:8081")
 

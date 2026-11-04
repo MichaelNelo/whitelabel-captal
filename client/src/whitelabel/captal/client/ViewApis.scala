@@ -4,6 +4,7 @@ import scala.scalajs.js
 
 import io.circe.syntax.*
 import org.scalajs.dom
+import whitelabel.captal.core.application.NextStep
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.core.survey.question.AnswerValue
 import whitelabel.captal.messages.i18n.given
@@ -18,6 +19,7 @@ import whitelabel.captal.messages.{
   StartPlaybackRequest,
   StatusResponse,
   SurveyResponse,
+  TermsResponse,
   VideoResponse,
   VideoWatchedResponse
 }
@@ -35,12 +37,24 @@ object WelcomeApi:
   def getNextSurvey(): js.Promise[Either[ApiError, SurveyResponse]] = ApiClient.get(
     ApiClient.url("/survey/next"))
 
+  /** Leaves the welcome, for a device that accepted the terms of service in force. */
+  def start(): js.Promise[Either[ApiError, NextStep]] = ApiClient.post(ApiClient.url("/start"))
+
+  /** The terms of service in force, in the session's locale. */
+  def getTerms(): js.Promise[Either[ApiError, TermsResponse]] = ApiClient.get(
+    ApiClient.url("/terms"))
+
+  /** Accepts them, and leaves the welcome. The server records the version in force. */
+  def acceptTerms(): js.Promise[Either[ApiError, NextStep]] = ApiClient.post(
+    ApiClient.url("/terms"))
+
   def setLocale(locale: String): js.Promise[Either[ApiError, StatusResponse]] = ApiClient.putJson(
     ApiClient.url("/session/locale"),
     SetLocaleRequest(locale))
 
   def getLocales(): js.Promise[Either[ApiError, List[String]]] = ApiClient.get(
     ApiClient.url("/locales"))
+end WelcomeApi
 
 object QuestionApi:
   def answerEmail(answer: AnswerValue): js.Promise[Either[ApiError, SurveyResponse]] = ApiClient

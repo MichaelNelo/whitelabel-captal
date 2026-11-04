@@ -10,6 +10,7 @@ import whitelabel.captal.api.routes.{
   LocaleRoutes,
   RecoveryRoutes,
   SurveyRoutes,
+  TermsRoutes,
   VideoRoutes
 }
 import whitelabel.captal.api.session.{
@@ -33,6 +34,7 @@ import whitelabel.captal.core.recovery.Manifest
 import whitelabel.captal.platform.repositories.{
   RecoveryRepositoryQuill,
   SurveyRepositoryQuill,
+  TermsRepositoryQuill,
   UserRepositoryQuill,
   VideoRepositoryQuill
 }
@@ -256,7 +258,8 @@ object TestLayers:
       SurveyRoutes & LocaleRoutes & VideoRoutes & AdvertiserSurveyRoutes & FinishRoutes &
       RecoveryRoutes & RecoveryRoutes.RequestRecoveryFlowType &
       RecoveryRoutes.CheckRecoveryFlowType & RecoveryRoutes.RedeemRecoveryFlowType & RecoveryFeed &
-      TestUnifiClient & TestUnifiSwitch & JobQueue & JobRunner.ExpireFlow & JobRunner
+      TestUnifiClient & TestUnifiSwitch & JobQueue & JobRunner.ExpireFlow & JobRunner &
+      TermsRoutes & TermsRoutes.StartFlowType & TermsRoutes.AcceptTermsFlowType
 
   /** The bundle the suite's location serves, so a report can be found consistent with it or not. */
   val TestBundle: Manifest = Manifest(
@@ -300,6 +303,10 @@ object TestLayers:
     AdvertiserSurveyRoutes.layer,
     FinishRoutes.layer,
     RecoveryRoutes.layer,
+    TermsRoutes.layer,
+    TermsRepositoryQuill.layer,
+    Flows.startFlowLayer,
+    Flows.acceptTermsFlowLayer,
     ZLayer.succeed[BundleManifest](
       new BundleManifest:
         def current: UIO[Option[Manifest]] = ZIO.some(TestBundle)),

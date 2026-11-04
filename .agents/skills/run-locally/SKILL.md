@@ -1,7 +1,7 @@
 ---
 name: run-locally
 description: Use to spin up the captal stack on your dev machine — the local configuration in LocalStack, the MCP backoffice, a deployed portal, the guest API, and the client bundle. Triggers on "run locally", "local dev", "start dev", "correr en local", "levantar local".
-version: 3.2.0
+version: 3.3.0
 ---
 
 # Run the stack locally
@@ -83,7 +83,8 @@ If the `locations` table is empty, it also prints a reminder that nothing is see
 ## Step 2 — Create content through the backoffice
 
 Point an MCP client at the config above, and drive it through a model (or by hand). At minimum, to
-get a portal that boots: `create_location`, plus enough of `create_identification_survey` /
+get a portal that boots: `create_location`, `create_terms_version` (no guest leaves the welcome
+without terms to accept, and `deploy_location` refuses), plus enough of `create_identification_survey` /
 `create_advertiser` / `create_advertiser_video` / `create_promo_video` and `set_translations` that
 the guest journey has something to serve. See `docs/mcp.adoc` for the tool catalogue, or the
 `onboard-location` MCP prompt, which reads the database and tells you exactly what's missing for a

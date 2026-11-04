@@ -236,7 +236,8 @@ object WireContractSuite:
       steps = I18n.Welcome.Steps("steps.1", "steps.2", "steps.3"),
       button = I18n.Welcome.Button("button.start", "button.connecting"),
       selectLanguage = "welcome.selectLanguage",
-      authorized = I18n.Welcome.Authorized("authorized.title", "authorized.remaining")
+      authorized = I18n.Welcome.Authorized("authorized.title", "authorized.remaining"),
+      terms = I18n.Welcome.Terms("terms.title", "terms.accept", "terms.decline", "terms.required")
     ),
     ready = I18n.Ready("ready.title", "ready.subtitle", "ready.resetButton"),
     loading = I18n.Loading("loading.message"),

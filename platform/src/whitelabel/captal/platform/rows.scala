@@ -221,7 +221,19 @@ final case class DeviceRow(
     createdAt: String,
     updatedAt: String,
     clientMac: Option[Mac],
-    fingerprint: String)
+    fingerprint: String,
+    termsId: Option[String] = None,
+    termsAcceptedAt: Option[String] = None)
+
+/** A version of the terms of service, the same for every location. */
+final case class TermsRow(id: String, version: Int, createdAt: String)
+
+/** A version's text in one locale. */
+final case class TermsTranslationRow(
+    termsId: String,
+    locale: String,
+    body: String,
+    updatedAt: String)
 
 final case class DeviceUserRow(
     deviceId: user.DeviceId,

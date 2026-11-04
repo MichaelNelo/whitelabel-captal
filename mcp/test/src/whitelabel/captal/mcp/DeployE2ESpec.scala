@@ -40,6 +40,7 @@ import whitelabel.captal.mcp.tools.{
   LocationTools,
   PlaybackExpiry,
   SurveyTools,
+  TermsTools,
   VideoFileCollector,
   VideoTools
 }
@@ -410,6 +411,12 @@ object DeployE2ESpec extends ZIOSpecDefault:
               client.tool[SurveyTools.CreateQuestionRequest, SurveyTools.CreateQuestionResponse](
                 "create_identification_question",
                 identificationQuestion(category, survey.surveyId))
+
+      // The terms of service, in the location's locale: `deploy_location` refuses without a
+      // version, and the portal offers only the locales they are written in.
+      _ <- client.tool[TermsTools.CreateRequest, TermsTools.TermsView](
+        "create_terms_version",
+        TermsTools.CreateRequest(List(TermsTools.Translation(Locale, "Terms e2e"))))
 
       // An advertiser's video, created together with the survey it is followed by — a video whose
       // survey has nothing left to ask is never drawn.

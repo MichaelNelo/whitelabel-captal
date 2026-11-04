@@ -128,7 +128,7 @@ xref:development.adoc[Local development].
 `FullEnv & Server.Config & JobRunner` from `ServerSettings`. `FullEnv` is the type alias for
 everything a request handler may ask for: `SessionContext`, `SessionService`, `LocaleService`,
 `QuillSqlite`, `SessionCookieConfig`, `ApiBase`, `CurrentLocation`, `UserCookieConfig`,
-`UserLookup`, the six route classes, and the fourteen `Flow.Aux` refinements the routes resolve by
+`UserLookup`, the seven route classes, and the sixteen `Flow.Aux` refinements the routes resolve by
 type.
 
 `JobRunner` is produced by the composition but deliberately absent from `FullEnv`: `Main.run`
@@ -149,8 +149,9 @@ Location-aware:: `locationServiceLayer`, `sessionServiceLayer`, `localeServiceLa
 `UnifiClient.layer`. Each of these reads `ServerSettings.locationSlug`; the session and locale
 services take an `Option[String]` location id and scope their queries by it.
 
-Routes and flows:: the six `*Routes.layer` values plus `Flows.eventHandlerLayer` and the fifteen
-`Flows.*FlowLayer` values (fourteen reachable from an endpoint, plus `expireAccessFlowLayer`).
+Routes and flows:: the seven `*Routes.layer` values plus `Flows.eventHandlerLayer` and the
+seventeen `Flows.*FlowLayer` values (sixteen reachable from an endpoint, plus
+`expireAccessFlowLayer`).
 
 `Flows.scala` builds one layer per command. `eventHandlerLayer` is the chain every flow writes
 through — see <<request-lifecycle>>. `expireAccessFlowLayer` is the one flow no endpoint calls: the
@@ -310,7 +311,7 @@ The browser's own report still covers them.
 
 == Endpoints
 
-Twenty routes. Paths below are literal; when `LOCATION_SLUG` is set every one of them is prefixed
+Twenty-three routes. Paths below are literal; when `LOCATION_SLUG` is set every one of them is prefixed
 with `/<slug>` (so `/cafe-centro/api/status`). All session-bearing routes take the whole `Cookie`
 header as an optional input and pick their cookie out of it. Every route except `/api/health`
 declares `outError[ApiError](Status.BadRequest)`.
@@ -380,10 +381,28 @@ declares `outError[ApiError](Status.BadRequest)`.
 |any; creates a session when missing
 
 |GET
+|`/api/terms`
+|–
+|`TermsResponse` (`version`, `text` in the session's locale)
+|`Welcome`, `WelcomeNeedsToS`
+
+|POST
+|`/api/terms`
+|–
+|`NextStep`
+|`Welcome`, `WelcomeNeedsToS`
+
+|POST
+|`/api/start`
+|–
+|`NextStep`
+|`Welcome`
+
+|GET
 |`/api/survey/next`
 |–
 |`SurveyResponse` (`Survey` or `Step`)
-|`Welcome`, `IdentificationQuestion`
+|`IdentificationQuestion`
 
 |POST
 |`/api/survey/email`
@@ -467,6 +486,9 @@ Where each is defined:
 |`api/src/whitelabel/captal/api/routes/FinishRoutes.scala`
 |`/api/finish`
 
+|`api/src/whitelabel/captal/api/routes/TermsRoutes.scala`
+|`/api/terms` (`GET` and `POST`), `/api/start`
+
 |`api/src/whitelabel/captal/api/routes/RecoveryRoutes.scala`
 |`/api/recovery`, `/api/recovery/{errorId}/events`, `/api/recovery/redeem`
 
@@ -531,12 +553,20 @@ gated by the separate `server.dev-mode` / `SERVER_DEV_MODE` flag and serves no A
 
 === Phase transitions owned by routes
 
-Three routes write a phase themselves rather than relying on the event handlers:
+These routes write a phase themselves rather than relying on the event handlers:
 
-* `GET /api/survey/next` moves `Welcome → IdentificationQuestion` before executing the flow, and
-  when the flow answers `SurveyResponse.Step(step)` it writes `step.phase` onto the session. The
-  event-driven `SessionPhaseHandler` only reacts to events that imply progress, and a fallback
-  `NextStep` emits none.
+* `GET /api/status` decides which welcome a session at the welcome is shown and records it:
+  `WelcomeNeedsToS` when its device never accepted the terms of service, accepted a version that
+  is no longer the current one, or the request carried neither the session nor the `captal_user`
+  cookie; `Welcome` otherwise.
+* `POST /api/terms` and `POST /api/start` are the only way out of the welcome. Each runs its
+  operation — `AcceptTermsHandler`, which records the version in force on the device, or
+  `StartHandler`, which requires that the device accepted it (`TermsNotAccepted` otherwise) — and
+  writes the `NextStep` it answers, `IdentificationQuestion`, onto the session. The page sends no
+  version: the server records the one in force when the acceptance arrives.
+* `GET /api/survey/next`, when the flow answers `SurveyResponse.Step(step)`, writes `step.phase`
+  onto the session. The event-driven `SessionPhaseHandler` only reacts to events that imply
+  progress, and a fallback `NextStep` emits none.
 * `GET /api/video/next` does the same for `VideoResponse.Step(step)`.
 * `GET /api/survey/advertiser/next` does the same for `AdvertiserSurveyResponse.Step(step)`, and
   `POST /api/survey/advertiser` sets `Phase.Ready` unconditionally after the answer — one advertiser
@@ -657,11 +687,17 @@ created with. Only `X-Ap-Mac` is still inspected, by `softValidateApMac`, which 
 resolution on every call.
 
 AP-MAC validation is soft by design. When an incoming `X-Ap-Mac`, a snapshotted
-`CurrentLocation.apMac` and a slug are all present and the two MACs differ after normalisation
-(lowercased, `-` replaced by `:`, trimmed), the route logs a warning naming both values and the
-client MAC, then proceeds. A mismatch never produces an error response.
+`CurrentLocation.apMac` and a slug are all present and the two MACs differ — both read as a `Mac`,
+so their spelling does not count — the route logs a warning naming both values and the client MAC,
+then proceeds. A mismatch never produces an error response.
 
-New sessions are created at `Phase.Welcome` with locale `"es"` (`SurveyRoutes.defaultLocale`). The
+`GET /api/locales` offers only the locales the terms of service in force are written in, so a guest
+reads them in the language they picked; before any version exists it offers every locale with
+translations.
+
+New sessions are created at `Phase.Welcome` with locale `"es"` (`SurveyRoutes.defaultLocale`), and
+the same `/api/status` turns them to `WelcomeNeedsToS`: a session nothing is known about has
+accepted nothing. The
 locale is not negotiated: `session/LocaleDetector.scala` parses `Accept-Language` with quality
 values and falls back to `"es"`, but it has no call site — no route reads `Accept-Language`. A
 client changes language with `PUT /api/session/locale`.

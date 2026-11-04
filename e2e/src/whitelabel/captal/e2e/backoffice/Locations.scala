@@ -17,6 +17,7 @@ import whitelabel.captal.mcp.tools.{
   LocationTools,
   RecoveryTools,
   SurveyTools,
+  TermsTools,
   UnifiTools,
   VideoTools
 }
@@ -82,6 +83,7 @@ object Locations:
       LocationTools.CreateRequest(location.slug, location.name))
     configureUnifi(location.slug, accessMinutes)
     ensureIdentification()
+    ensureTerms()
     translate(location, key => text(key))
     location
 
@@ -255,6 +257,38 @@ object Locations:
         None
       ,
       Some(_))
+
+  /** The terms of service in force, read as the operator would. */
+  def terms(): TermsTools.TermsView = Backoffice.tool[TermsTools.GetRequest, TermsTools.TermsView](
+    "get_terms_of_service",
+    TermsTools.GetRequest())
+
+  /** Publishes a new version of the terms, in every locale the one in force has and the features'
+    * own, which every device is asked to accept again.
+    */
+  def publishTerms(): TermsTools.TermsView =
+    val current = terms().current
+    val locales = (Locales ++ current.toList.flatMap(_.translations.map(_.locale))).distinct
+    val next = current.fold(1)(_.version + 1)
+    Backoffice.tool[TermsTools.CreateRequest, TermsTools.TermsView](
+      "create_terms_version",
+      TermsTools.CreateRequest(
+        locales.map(locale => TermsTools.Translation(locale, s"E2E terms v$next ($locale)"))))
+
+  /** Terms in force in every locale of [[Locales]]: a location is not deployed without them, and
+    * the portal offers only their locales. Deployment-wide, so written once and kept.
+    */
+  private def ensureTerms(): Unit =
+    terms().current match
+      case None =>
+        val _ = publishTerms()
+      case Some(version) =>
+        Locales
+          .filterNot(locale => version.translations.exists(_.locale == locale))
+          .foreach: locale =>
+            Backoffice.tool[TermsTools.SetTranslationRequest, TermsTools.TermsView](
+              "set_terms_translation",
+              TermsTools.SetTranslationRequest(locale, s"E2E terms v${version.version} ($locale)"))
 
   private def ensureIdentification(): Unit =
     val present =

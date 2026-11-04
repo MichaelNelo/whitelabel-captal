@@ -1,7 +1,7 @@
 ---
 name: deploy-location
 description: Use this skill for anything that changes whether a location's portal is serving — deploying it, giving it a newer bundle, closing it for a while, bringing it back, or removing it for good. It says which of deploy_location, pause_location, resume_location and destroy_location fits, what each one leaves behind, and how to follow the run each one starts with get_deploy_status. Triggers on "deploy location", "push location", "deploy", "publicar location", "provision location", "publish bundle", "subir el bundle", "go live", "pause location", "pausar", "mantenimiento", "maintenance page", "cerrar temporalmente", "resume location", "reanudar", "reactivar", "destroy location", "eliminar location", "borrar location", "dar de baja", "tear down".
-version: 5.1.0
+version: 5.2.0
 ---
 
 # A location's portal: deploying, pausing, removing
@@ -59,6 +59,10 @@ Asset writes through the tools already invalidate their own key; this is only fo
 Creating a location row does not create anything in AWS. `create_location` writes to the database;
 until a deploy happens, a guest opening `https://…/<slug>/` gets a 403 from the load balancer on
 every API call, because no rule matches the path.
+
+`deploy_location` refuses, before it starts anything, while no version of the terms of service
+exists: a portal asks every guest to accept them before the flow begins, so without one it could
+start nobody. `get_terms_of_service` says whether there is one; `create_terms_version` publishes it.
 
 `deploy_location(slug)` creates the five things that fixes, in an order that is not arbitrary:
 

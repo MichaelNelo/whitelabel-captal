@@ -495,6 +495,8 @@ object TestFixtures:
         stmt.execute("DELETE FROM sessions")
         stmt.execute("DELETE FROM device_users")
         stmt.execute("DELETE FROM devices")
+        stmt.execute("DELETE FROM terms_translations")
+        stmt.execute("DELETE FROM terms")
         stmt.execute("DELETE FROM localized_texts")
         stmt.execute("DELETE FROM question_rules")
         stmt.execute("DELETE FROM question_options")
@@ -540,6 +542,21 @@ object TestFixtures:
     ZIO
       .foreach(rows)(row => run(query[LocalizedTextRow].insertValue(lift(row)).onConflictIgnore))
       .unit
+
+  /** A version of the terms of service, `version`, written in `locales`: what every suite starts
+    * with, since no session leaves the welcome without one. Answers its id.
+    */
+  def seedTerms(
+      version: Int = 1,
+      locales: List[String] = List("es", "en", "pt")): ZIO[QuillSqlite, Throwable, String] = ZIO
+    .serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      val terms = TermsRow(UUID.randomUUID.toString, version, FixedNow)
+      val texts = locales.map(locale =>
+        TermsTranslationRow(terms.id, locale, s"Terms v$version ($locale)", FixedNow))
+      run(query[TermsRow].insertValue(lift(terms))) *>
+        ZIO.foreachDiscard(texts)(text => run(query[TermsTranslationRow].insertValue(lift(text)))) as
+        terms.id
 
   def countSessions: ZIO[QuillSqlite, Throwable, Long] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*

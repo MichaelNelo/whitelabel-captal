@@ -18,7 +18,8 @@ object I18n:
       steps: Welcome.Steps,
       button: Welcome.Button,
       selectLanguage: String,
-      authorized: Welcome.Authorized)
+      authorized: Welcome.Authorized,
+      terms: Welcome.Terms)
 
   object Welcome:
     final case class Steps(step1: String, step2: String, step3: String)
@@ -36,8 +37,17 @@ object I18n:
       given Decoder[Authorized] = deriveDecoder[Authorized]
       given Encoder[Authorized] = deriveEncoder[Authorized]
 
+    /** The dialog around the terms of service. Their text is not a translation: it is the terms'
+      * own, one per locale of each version.
+      */
+    final case class Terms(title: String, accept: String, decline: String, required: String)
+    object Terms:
+      given Decoder[Terms] = deriveDecoder[Terms]
+      given Encoder[Terms] = deriveEncoder[Terms]
+
     given Decoder[Welcome] = deriveDecoder[Welcome]
     given Encoder[Welcome] = deriveEncoder[Welcome]
+  end Welcome
 
   final case class Ready(title: String, subtitle: String, resetButton: String)
   object Ready:
@@ -111,7 +121,14 @@ object I18n:
       selectLanguage = "Label of the locale picker.",
       authorized = Welcome.Authorized(
         title = "Heading shown while the guest already has access.",
-        remaining = "Countdown of the access left. Use {seconds}.")
+        remaining = "Countdown of the access left. Use {seconds}."),
+      terms = Welcome.Terms(
+        title = "Heading of the terms of service dialog the welcome opens before the flow begins.",
+        accept = "Button that accepts the terms of service and begins the flow.",
+        decline = "Button that closes the dialog without accepting.",
+        required =
+          "Notice on the welcome after declining: the terms have to be accepted to connect."
+      )
     ),
     ready = Ready(
       title = "Thank-you heading once the flow is complete.",

@@ -10,7 +10,7 @@ import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.session.SessionContext
-import whitelabel.captal.platform.{DeviceUserRow, SessionRow, UserRow}
+import whitelabel.captal.platform.{DeviceUserRow, SessionRow, Terms, UserRow}
 import zio.*
 
 /** The session's user, as `core` resolved it: a new one is inserted, a recognized one only becomes
@@ -43,22 +43,29 @@ object UserPersistenceHandler:
         val links = events.collect:
           case Event.Device(e: DeviceEvent.DeviceLinked) =>
             e
-        ZIO.whenDiscard(identified.nonEmpty || links.nonEmpty):
-          for
-            sessionData <- ctx.getOrFail
-            instant     <- Clock.instant
-            _           <-
-              ZIO.foreachDiscard(identified): (userId, created) =>
-                for
-                  _ <-
-                    ZIO.foreachDiscard(created): event =>
-                      val userRow = toUserRow(event, sessionData, instant.toString)
-                      run(insertUserQuery(liftQuery(List(userRow)))).unit
-                  _ <- run(updateSessionUserQuery(lift(sessionData.sessionId), lift(userId)))
-                  _ <- ctx.set(sessionData.copy(userId = Some(userId)))
-                yield ()
-            _ <- ZIO.foreachDiscard(links)(link(quill, _))
-          yield ()
+        val accepted = events.collect:
+          case Event.Device(e: DeviceEvent.TermsAccepted) =>
+            e
+        val acceptances =
+          ZIO.foreachDiscard(accepted)(e =>
+            Terms.accept(quill, e.deviceId, e.termsId, e.occurredAt.toString))
+        acceptances *>
+          ZIO.whenDiscard(identified.nonEmpty || links.nonEmpty):
+            for
+              sessionData <- ctx.getOrFail
+              instant     <- Clock.instant
+              _           <-
+                ZIO.foreachDiscard(identified): (userId, created) =>
+                  for
+                    _ <-
+                      ZIO.foreachDiscard(created): event =>
+                        val userRow = toUserRow(event, sessionData, instant.toString)
+                        run(insertUserQuery(liftQuery(List(userRow)))).unit
+                    _ <- run(updateSessionUserQuery(lift(sessionData.sessionId), lift(userId)))
+                    _ <- ctx.set(sessionData.copy(userId = Some(userId)))
+                  yield ()
+              _ <- ZIO.foreachDiscard(links)(link(quill, _))
+            yield ()
       end handle
 
   /** Seen together again only moves `last_seen_at`. */

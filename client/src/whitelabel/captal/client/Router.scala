@@ -134,7 +134,8 @@ object Router:
 
   private def phaseToPage(phase: Phase): Page =
     phase match
-      case Phase.Welcome =>
+      // The terms of service are a dialog on the welcome, not a page of their own.
+      case Phase.Welcome | Phase.WelcomeNeedsToS =>
         Page.Welcome
       case Phase.IdentificationQuestion =>
         Page.IdentificationQuestion

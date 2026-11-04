@@ -133,6 +133,15 @@ object EventLogHandler:
               "deviceId"   -> Json.fromString(deviceId.asString),
               "occurredAt" -> Json.fromString(occurredAt.toString)),
             occurredAt))
+      case Event.Device(DeviceEvent.TermsAccepted(deviceId, termsId, occurredAt)) =>
+        Some(
+          (
+            "device.terms_accepted",
+            Json.obj(
+              "deviceId"   -> Json.fromString(deviceId.asString),
+              "termsId"    -> Json.fromString(termsId),
+              "occurredAt" -> Json.fromString(occurredAt.toString)),
+            occurredAt))
 
   private def extractUserEvent(event: UserEvent): Option[(String, Json, Instant)] =
     event match

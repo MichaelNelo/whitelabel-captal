@@ -6,7 +6,7 @@ import whitelabel.captal.mcp.access.{Auth, Tokens}
 import whitelabel.captal.mcp.apps.{RunRoutes, RunTicket, RunUi}
 import whitelabel.captal.mcp.aws.{AssetStore, BundleCopy, InfraStore, Runs}
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
-import whitelabel.captal.platform.LocationRow
+import whitelabel.captal.platform.{LocationRow, Terms}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
 import zio.*
@@ -81,6 +81,18 @@ object DeployTools:
         .someOrFail(
           s"No location with slug '$slug'. Call create_location first — every resource this creates is named after the slug.")
 
+  /** A portal asks every guest to accept the terms of service before the flow begins, so one with
+    * no version to accept could not start anyone.
+    */
+  private def requireTerms: ZIO[QuillSqlite, String, Unit] = ZIO.serviceWithZIO[QuillSqlite]:
+    quill =>
+      Terms
+        .current(quill)
+        .orDie
+        .someOrFail(
+          "No terms of service exist yet, and a portal cannot start a guest without them. Create the first version with create_terms_version, then deploy.")
+        .unit
+
   /** The token behind the call, which a run records as the one that started it. */
   private def callerOf(ctx: McpToolContext): IO[String, String] = ZIO
     .fromOption(Auth.callerId(ctx.principal))
@@ -120,6 +132,7 @@ object DeployTools:
     .handleWithContext: (in: DeployRequest, ctx: McpToolContext) =>
       for
         location <- requireLocation(in.slug)
+        _        <- requireTerms
         caller   <- callerOf(ctx)
         launched <-
           Runs.launch(in.slug, "deploy", DeploySteps.all, caller)(run =>

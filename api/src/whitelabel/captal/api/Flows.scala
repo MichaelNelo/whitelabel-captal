@@ -8,6 +8,7 @@ import whitelabel.captal.core.infrastructure.{
   RecoveryRepository,
   SessionData,
   SurveyRepository,
+  TermsRepository,
   UserRepository,
   VideoRepository
 }
@@ -165,6 +166,21 @@ private[api] object Flows:
         userRepo: UserRepository[Task],
         eventHandler: EventHandler[Task, Event]) =>
       Flow(AnswerAdvertiserHandler(surveyRepo, userRepo, nextAfterAdvertiserSurvey), eventHandler)
+
+  /** Built per request: leaving the welcome looks at the session's device. */
+  val startFlowLayer: ZLayer[
+    TermsRepository[Task] & SessionContext & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[Task, StartCommand, NextStep]] = ZLayer.fromFunction:
+    (terms: TermsRepository[Task], ctx: SessionContext, eventHandler: EventHandler[Task, Event]) =>
+      perSession(ctx, eventHandler)(StartHandler.withSession(terms, _))
+
+  val acceptTermsFlowLayer: ZLayer[
+    TermsRepository[Task] & SessionContext & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[Task, AcceptTermsCommand, NextStep]] = ZLayer.fromFunction:
+    (terms: TermsRepository[Task], ctx: SessionContext, eventHandler: EventHandler[Task, Event]) =>
+      perSession(ctx, eventHandler)(AcceptTermsHandler.withSession(terms, _))
 
   /** Built per request: what `finish` requires depends on the session's phase. */
   val finishFlowLayer: ZLayer[

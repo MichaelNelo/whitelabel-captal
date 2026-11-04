@@ -15,6 +15,8 @@ object i18n:
   given CirceDecoder[I18n.Welcome.Button] = deriveDecoder
   given CirceEncoder[I18n.Welcome.Authorized] = deriveEncoder
   given CirceDecoder[I18n.Welcome.Authorized] = deriveDecoder
+  given CirceEncoder[I18n.Welcome.Terms] = deriveEncoder
+  given CirceDecoder[I18n.Welcome.Terms] = deriveDecoder
   given CirceEncoder[I18n.Welcome] = deriveEncoder
   given CirceDecoder[I18n.Welcome] = deriveDecoder
   given CirceEncoder[I18n.Loading] = deriveEncoder

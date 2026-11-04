@@ -6,6 +6,7 @@ import whitelabel.captal.api.routes.{
   LocaleRoutes,
   RecoveryRoutes,
   SurveyRoutes,
+  TermsRoutes,
   VideoRoutes
 }
 import whitelabel.captal.api.session.SessionCookieConfig
@@ -36,6 +37,7 @@ object Main extends ZIOAppDefault:
         advertiserSurveyRoutes <- ZIO.service[AdvertiserSurveyRoutes]
         finishRoutes           <- ZIO.service[FinishRoutes]
         recoveryRoutes         <- ZIO.service[RecoveryRoutes]
+        termsRoutes            <- ZIO.service[TermsRoutes]
         cookieConfig           <- ZIO.service[SessionCookieConfig]
         base                   <- ZIO.service[ApiBase]
         served = HttpApp.routes(
@@ -47,7 +49,8 @@ object Main extends ZIOAppDefault:
           videoRoutes,
           advertiserSurveyRoutes,
           finishRoutes,
-          recoveryRoutes)
+          recoveryRoutes,
+          termsRoutes)
         // The API half of `served`, enumerated for the log.
         routeInfos =
           HttpApp
@@ -59,7 +62,8 @@ object Main extends ZIOAppDefault:
               videoRoutes,
               advertiserSurveyRoutes,
               finishRoutes,
-              recoveryRoutes)
+              recoveryRoutes,
+              termsRoutes)
             .routes
             .map(route => s"  ${route.routePattern.render}")
             .toList

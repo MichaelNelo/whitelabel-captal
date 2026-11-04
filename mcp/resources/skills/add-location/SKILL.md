@@ -1,7 +1,7 @@
 ---
 name: add-location
 description: Use this skill to onboard a location end-to-end — create it, give it translations, advertisers and videos, brand it, configure UniFi, set how its guests recover from errors, and check what is still missing. Composes the smaller skills into one flow. Triggers on "agregar location", "add new location", "onboard location", "nuevo cliente", "new client", "create location", "configurar unifi", "configure unifi", "desactivar unifi", "disable unifi", "espera de error", "error wait", "recovery policy", "readiness", "qué falta".
-version: 2.3.0
+version: 2.4.0
 ---
 
 # Onboard a location end-to-end
@@ -34,6 +34,13 @@ The three surveys asked before a guest is identified — email, profiling, locat
 video is drawn and nothing past the first screen is reached. `get_location_readiness` reports them
 as `missingIdentificationSurveys`; `create_identification_survey` creates one and fixes every
 location at once. Needs `identity:write`. Read `read_skill('add-survey')` first.
+
+The terms of service are deployment-wide too: every portal asks a guest to accept them before the
+flow begins, and `deploy_location` refuses while none exist. `get_location_readiness` reports the
+version in force as `termsVersion`, and the location's locales the terms have no text in as
+`localesWithoutTerms` — a portal offers only the terms' locales. Ask the operator for the terms
+themselves, in each locale, and publish them with `create_terms_version`; a missing locale is
+`set_terms_translation`. Never write the terms yourself.
 
 ## 3. Translations
 

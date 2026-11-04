@@ -7,6 +7,7 @@ import whitelabel.captal.api.{ApiBase, SessionEndpoint, WireCheck}
 import whitelabel.captal.core.application.Phase
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.messages.{ApiError, SetLocaleRequest, StatusResponse}
+import whitelabel.captal.platform.Terms
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.services.LocaleService
 import whitelabel.captal.platform.session.{SessionContext, SessionService}
@@ -70,7 +71,19 @@ final class LocaleRoutes(cookieConfig: SessionCookieConfig, base: ApiBase):
   // ─── Aggregate ────────────────────────────────────────────────────────────
 
   val routes: Routes[FullEnv, Nothing] = Routes(
-    listLocales.implement(_ => LocaleService.listAvailable().mapError(ApiError.fromThrowable)),
+    // Only the locales the terms of service in force are written in, so a guest always reads them
+    // in the language they chose. Before any version exists, every locale with translations.
+    listLocales.implement: _ =>
+      for
+        available <- LocaleService.listAvailable().mapError(ApiError.fromThrowable)
+        quill     <- ZIO.service[QuillSqlite]
+        terms     <- Terms.locales(quill).mapError(ApiError.fromThrowable)
+      yield
+        if terms.isEmpty then
+          available
+        else
+          available.filter(terms.contains)
+    ,
     getI18n.implement(locale => LocaleService.getI18n(locale).mapError(ApiError.fromThrowable)),
     setLocale.implement: (cookie, request) =>
       for

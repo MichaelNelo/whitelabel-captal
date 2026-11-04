@@ -646,6 +646,38 @@ takes effect without a redeploy; a wait already offered keeps its length, and a 
 timed its deadline.
 |===
 
+=== Terms of service (`TermsTools`)
+
+The terms every portal asks a guest to accept before the flow begins, the same for every location:
+`terms` holds one row per version, the highest in force, and `terms_translations` its text per
+locale (see xref:database.adoc[Database]). A portal offers only the locales of the version in force,
+and `deploy_location` refuses while none exists.
+
+[cols="2,1,4"]
+|===
+|Tool |Scope |
+
+|`get_terms_of_service`
+|read-only
+|The version in force, with its text in each locale, and the numbers of the earlier ones.
+
+|`create_terms_version`
+|`content:write`
+|A new version, in force at once: every device is asked to accept it on its next welcome. Refused
+before any write without a text in every locale the version in force has, with a locale given twice,
+or with an empty text.
+
+|`set_terms_translation`
+|`content:write`
+|Adds a locale to the version in force or replaces its text in one. Not a new version: nobody is
+asked again.
+
+|`remove_terms_translation`
+|`content:write`
+|Takes a locale out of the version in force. Not a new version. Refused for the version's last
+text.
+|===
+
 === Skills (`SkillTools`)
 
 One tool, `read_skill`, read-only, no scope: the whole catalogue in a single parameterised call
@@ -685,7 +717,8 @@ alone.
 |`infra:deploy`
 |Idempotent — an already-deployed location gets its service rolled onto a fresh task definition
 rather than a second one created. The run waits for a task of the new revision to be running, then
-for the service's deployment of that revision to reach `COMPLETED`.
+for the service's deployment of that revision to reach `COMPLETED`. Refused before any run while
+no version of the terms of service exists: the portal could start nobody.
 
 |`pause_location`
 |`infra:deploy`
@@ -735,7 +768,8 @@ With no `slug` argument it lists existing location slugs (from `LocationTools.sl
 are none yet, tells the model to call `create_location` first. With a slug, it calls `Readiness.of`
 and renders a full status block — active state, per-locale translation coverage, whether the
 location has its own stylesheet or icon, video counts by status, advertiser-survey coverage, how
-many advertisers are registered deployment-wide, and whether UniFi is configured — followed by the
+many advertisers are registered deployment-wide, whether UniFi is configured, the version of the
+terms of service in force and the location's locales those terms are not written in — followed by the
 numbered `nextSteps` list `Readiness.steps` derives from that same state, or "Nothing here blocks a
 deploy" when there is nothing left. The rendered text instructs the model explicitly: work through
 the steps in order, ask the operator for anything only they can supply (question wording, an

@@ -18,6 +18,7 @@ import whitelabel.captal.messages.{
   SetLocaleRequest,
   StartPlaybackRequest,
   StatusResponse,
+  TermsResponse,
   SurveyResponse,
   VideoResponse,
   VideoWatchedResponse
@@ -45,6 +46,8 @@ object wire:
   given Schema[ApiError] = DeriveSchema.gen[ApiError]
 
   given Schema[StatusResponse] = DeriveSchema.gen[StatusResponse]
+
+  given Schema[TermsResponse] = DeriveSchema.gen[TermsResponse]
 
   given Schema[SetLocaleRequest] = DeriveSchema.gen[SetLocaleRequest]
 
