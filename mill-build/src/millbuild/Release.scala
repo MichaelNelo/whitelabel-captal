@@ -348,7 +348,7 @@ def runningTasks(target: ReleaseTarget, cluster: String, service: String): Seq[u
 /** Whether `service` runs as many tasks as it wants, all on its current task definition and none of
   * `replaced`, the tasks it ran before it was told to start fresh ones on the same definition. Once it
   * does, its target group is left holding them alone ([[syncLocalTargets]]). Tasks are told apart by
-  * their ARNs rather than by when they started: LocalStack's clock is its VM's, not this machine's.
+  * their ARNs rather than by when they started: LocalStack's clock need not agree with the host's.
   */
 def settledLocally(
     target: ReleaseTarget,

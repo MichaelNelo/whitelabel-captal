@@ -95,7 +95,7 @@ As production does: call `deploy_location` and open
 `https://<id>.cloudfront.localhost.localstack.cloud:4567/<slug>/` with the query string below. The
 `<id>` is the distribution's, which `PUBLIC_BASE_URL` carries.
 
-Or, for the faster loop, run the guest API on this machine:
+Or, for the faster loop, run the guest API on the host:
 
 ```bash
 mill api.dev --slug <that location's slug>

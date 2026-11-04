@@ -37,7 +37,7 @@ def ensureRqlite(name: String, hostPort: Int, env: Map[String, String]): String 
   s"jdbc:rqlite:$url"
 end ensureRqlite
 
-/** The local configuration's rqlite, as this machine reaches it, at its `rqlite_http_port`. `api.dev` and
+/** The local configuration's rqlite, as the host reaches it, at its `rqlite_http_port`. `api.dev` and
   * `mcp.dev` must share this database. Deploy tasks use the `rqlite_url` output instead.
   */
 def localDbUrl(configDir: os.Path): String =

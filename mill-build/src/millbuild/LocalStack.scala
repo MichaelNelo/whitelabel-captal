@@ -3,7 +3,7 @@ package millbuild
 /** The LocalStack container's name, shared by `mcp` and `client`. */
 val localStackContainer = "localstack-dev"
 
-/** LocalStack's port, on the host and inside the container alike. Not its default 4566. */
+/** LocalStack's port, on the host and inside the container alike. */
 val localStackPort = 4567
 
 /** The LocalStack image version, the same for licensed and free editions. Versions are dates, such as `2026.9.1`.
@@ -80,7 +80,7 @@ def ensureLocalStack(
     else
       "1"
   // One port inside and out: `LOCALSTACK_HOST` is written into every URL LocalStack returns, so it must
-  // name the port it listens on. `GATEWAY_LISTEN` moves that listener off 4566.
+  // name the port it listens on. `GATEWAY_LISTEN` sets that port.
   val localStackHost = s"localhost.localstack.cloud:$hostPort"
   val gatewayListen = s"0.0.0.0:$hostPort,0.0.0.0:443"
   // `DISABLE_CORS_CHECKS`: LocalStack answers 403 to a request whose `Origin` it does not know, before

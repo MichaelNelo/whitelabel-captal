@@ -195,7 +195,7 @@ output "unifi_fake_port" {
 }
 
 output "unifi_fake_records_url" {
-  description = "The stand-in's record of calls, as this machine reaches it. Null unless `enable_unifi_fake`."
+  description = "The stand-in's record of calls, as the host reaches it. Null unless `enable_unifi_fake`."
   value       = var.enable_unifi_fake ? module.unifi_fake[0].records_url : null
 }
 

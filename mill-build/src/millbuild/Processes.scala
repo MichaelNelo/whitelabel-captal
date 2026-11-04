@@ -162,11 +162,11 @@ object Processes:
       println("[processes] stopped devenv's process manager and its processes")
 end Processes
 
-/** A `ready` snippet that succeeds once something listens on `port` on this machine. */
+/** A `ready` snippet that succeeds once something listens on `port` locally. */
 def portOpen(port: Int): String = s"timeout 1 bash -c 'echo > /dev/tcp/127.0.0.1/$port' 2>/dev/null"
 
-/** Whether something listens on `port` on this machine. Bounded: on WSL a connection to a port nobody
-  * listens on hangs instead of being refused.
+/** Whether something listens on `port` locally. Bounded: a connection to a port nobody listens on can
+  * hang instead of being refused.
   */
 def listening(port: Int): Boolean = scala
   .util

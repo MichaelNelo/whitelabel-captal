@@ -9,7 +9,7 @@ output "port" {
 }
 
 output "records_url" {
-  description = "Its record of calls, as this machine reaches it"
+  description = "Its record of calls, as the host reaches it"
   value       = "http://localhost:${var.records_port}"
 }
 

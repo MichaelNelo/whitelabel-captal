@@ -183,12 +183,10 @@ The task definitions differ from production only in the addresses `environments/
   of its container, along with credentials of its own account. The backoffice's IAM policy is
   therefore not exercised by the task here; `DeployE2ESpec` exercises it.
 
-LocalStack runs on port **4567**, not its default 4566, so it coexists with other projects' LocalStack
-containers. It is the same port inside the container and out: `GATEWAY_LISTEN` moves the listener and
-`LOCALSTACK_HOST` names it, because LocalStack writes that host into every URL it returns — an ECR
-repository URI, the endpoint its own ECS tasks are given — and `awslocal` dials it from inside the
-container. A URL saying 4566 would reach whichever LocalStack holds that port; one saying 4567 while
-LocalStack listened on 4566 inside would reach nothing. LocalStack started with any other command —
+LocalStack runs on port **4567**, the same inside the container and out: `GATEWAY_LISTEN` sets the
+listener and `LOCALSTACK_HOST` names it, because LocalStack writes that host into every URL it
+returns — an ECR repository URI, the endpoint its own ECS tasks are given — and `awslocal` dials it
+from inside the container. LocalStack started with any other command —
 another port, image, service list or IAM mode — is replaced, not reused.
 
 LocalStack runs with `DISABLE_CORS_CHECKS=1`. Its gateway otherwise answers `403` to a request

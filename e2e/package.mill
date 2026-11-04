@@ -148,14 +148,7 @@ object `package` extends BaseModule:
         stderr = os.Inherit
       )
     if os.exists(recordings) then
-      // Under WSL, the same folder as Windows' Explorer reaches it.
-      val windows = scala
-        .util
-        .Try(os.proc("wslpath", "-w", recordings).call().out.trim())
-        .toOption
-        .filter(_.nonEmpty)
       println(s"[e2e] Every guest's screen, by feature and scenario: $recordings")
-      windows.foreach(path => println(s"[e2e]   from Windows: $path"))
     if ran.exitCode != 0 then
       sys.error("[e2e] some scenarios failed")
 end `package`

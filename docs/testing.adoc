@@ -368,7 +368,7 @@ browser opens, and when the scenario ends `World` moves them to
 guest who came back, and `operator-<n>-<tool>.webm` for each page a tool opened; a failed
 scenario's folder ends in `(failed)`. The folder is outside the command's own, which Mill empties
 on every run: a scenario that runs again replaces its own recordings and no other, so features run
-one at a time leave a whole set. The run prints the folder, and under WSL its Windows path.
+one at a time leave a whole set. The run prints the folder.
 Headless Chromium renders the page as a window would — the bundle runs, the stylesheet applies, the
 video plays — so the recording is what a phone would have shown.
 

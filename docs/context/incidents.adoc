@@ -616,15 +616,15 @@ GET /api/health              -> 200 {"status":"ok"}
 
 == Long-running local processes
 
-Found while moving them under devenv, on 2026-10-29, with devenv 2.1.2 on WSL 2.
+Found while moving them under devenv, on 2026-10-29, with devenv 2.1.2.
 
 * **A failed `api.dev` took two minutes to say so.** With a slug that has no location, the API exits
-  at once, yet the task waited for its port until its own deadline. On this WSL a TCP connection to a
-  local port nobody listens on is not refused, it hangs: `curl` to `127.0.0.1:8080` timed out after
-  10 s instead of failing. The port check had no timeout, so each attempt sat out the kernel's
+  at once, yet the task waited for its port until its own deadline. A TCP connection to a local port
+  nobody listens on was not refused, it hung: `curl` to `127.0.0.1:8080` timed out after 10 s
+  instead of failing. The port check had no timeout, so each attempt sat out the kernel's
   ~2-minute connect timeout and the loop never got to notice the dead process. **Fix:** `listening`
-  connects with a 1 s timeout, `answers` and every readiness `curl` carry `-m`. **Lesson:** on this
-  machine, "nothing listens" looks like "slow", not like "closed".
+  connects with a 1 s timeout, `answers` and every readiness `curl` carry `-m`. **Lesson:** "nothing
+  listens" can look like "slow", not like "closed".
 * **`devenv processes status` said `exited` about a process that was serving.** After a failed start,
   `devenv processes restart api` brought the API up, but the phase stayed `exited` until the process
   passed its readiness check — and stays so forever for a process without one; `devenv processes
@@ -792,7 +792,7 @@ then reverted in its entirety once actually wired into the published bundle.
   balancer sent every request to the first target it held: `500` from LocalStack, connection
   refused, while the new task answered `ok` on its own port. LocalStack registers a task that starts
   and never deregisters one that stops; the first registration also named the host gateway and a
-  published port (`192.168.65.254:53553`), the later ones the task's address and the container port.
+  published port, the later ones the task's address and the container port.
   Found 2026-10-31, with `mcp.dev` first releasing the backoffice into LocalStack. **Fix:**
   `syncLocalTargets` (`mill-build/src/millbuild/Release.scala`) leaves a service's target group
   holding its running tasks alone, and `mcp.dev` waits for the backoffice's service to settle and

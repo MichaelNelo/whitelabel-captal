@@ -149,7 +149,7 @@ object `package` extends BaseModule with Released:
         println("[dev]   (a new one can take a few seconds to resolve)")
       case None =>
         tunnelProcesses.foreach(Processes.stop)
-        println("[dev]   no --tunnel, so the backoffice answers on this machine only")
+        println("[dev]   no --tunnel, so the backoffice answers on localhost only")
     val variables = tunnels.toSeq.flatMap: (server, assets) =>
       Seq(s"-var=mcp_public_origin=$server", s"-var=assets_endpoint_url=$assets")
 

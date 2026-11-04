@@ -384,7 +384,7 @@ xref:context/incidents.adoc[Incidents].
 
 There is no local rqlite to install. The database `api.dev` and `mcp.dev` share — on purpose, since
 the backoffice writes what the portal reads — is the local configuration's rqlite service: three
-nodes in LocalStack, applied by `mcp.dev`, reached from this machine on `localhost:5001` and from a
+nodes in LocalStack, applied by `mcp.dev`, reached from the host on `localhost:5001` and from a
 deployed location's task as `rqlite.captal.local:5001`, as in production. The test suites each have a
 container of their own instead, run as a devenv process of the same name: `ensureRqlite(name, port,
 env)` reuses it while it runs `rqlite/rqlite:<rqliteVersion>` on that port, starts it again otherwise,
