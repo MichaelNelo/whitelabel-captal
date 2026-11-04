@@ -28,11 +28,6 @@ object Terms:
     case Some(terms) =>
       translations(quill, terms.id).map(_.map(_.locale))
 
-  /** The version a device accepted last. */
-  def acceptedBy(quill: QuillSqlite, device: user.DeviceId): Task[Option[String]] =
-    import quill.*
-    run(query[DeviceRow].filter(_.id == lift(device)).map(_.termsId)).map(_.headOption.flatten)
-
   /** Writes a version's text in one locale, replacing the one it had. Answers the rows written. */
   def saveTranslation(quill: QuillSqlite, text: TermsTranslationRow): Task[Long] =
     import quill.*

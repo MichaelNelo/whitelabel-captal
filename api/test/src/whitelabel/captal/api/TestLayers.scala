@@ -32,6 +32,7 @@ import whitelabel.captal.core.infrastructure.{SurveyRepository, UserRepository, 
 import whitelabel.captal.platform.eventhandlers.*
 import whitelabel.captal.core.recovery.Manifest
 import whitelabel.captal.platform.repositories.{
+  DeviceRepositoryQuill,
   RecoveryRepositoryQuill,
   SurveyRepositoryQuill,
   TermsRepositoryQuill,
@@ -250,7 +251,8 @@ object TestLayers:
   type TestEnv =
     SessionContext & SessionService & LocaleService & SurveyRoutes.AnswerEmailFlowType &
       SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
-      SurveyRoutes.NextSurveyFlowType & VideoRoutes.NextVideoFlowType &
+      SurveyRoutes.NextSurveyFlowType & SurveyRoutes.ResolveWelcomeFlowType &
+      VideoRoutes.NextVideoFlowType &
       VideoRoutes.MarkVideoWatchedFlowType & VideoRoutes.StartPlaybackFlowType &
       VideoRoutes.EndPlaybackFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType & QuillSqlite &
@@ -305,6 +307,8 @@ object TestLayers:
     RecoveryRoutes.layer,
     TermsRoutes.layer,
     TermsRepositoryQuill.layer,
+    DeviceRepositoryQuill.layer,
+    Flows.resolveWelcomeFlowLayer,
     Flows.startFlowLayer,
     Flows.acceptTermsFlowLayer,
     ZLayer.succeed[BundleManifest](

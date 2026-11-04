@@ -5,6 +5,7 @@ import whitelabel.captal.api.session.CurrentLocation
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Event, EventHandler, Flow, NextStep}
 import whitelabel.captal.core.infrastructure.{
+  DeviceRepository,
   RecoveryRepository,
   SessionData,
   SurveyRepository,
@@ -167,20 +168,37 @@ private[api] object Flows:
         eventHandler: EventHandler[Task, Event]) =>
       Flow(AnswerAdvertiserHandler(surveyRepo, userRepo, nextAfterAdvertiserSurvey), eventHandler)
 
-  /** Built per request: leaving the welcome looks at the session's device. */
+  /** Built per request, as the three below: the welcome turns on the session's device. */
+  val resolveWelcomeFlowLayer: ZLayer[
+    DeviceRepository[Task] & SessionContext & EventHandler[Task, Event],
+    Nothing,
+    Flow.Aux[Task, ResolveWelcomeCommand, NextStep]] = ZLayer.fromFunction:
+    (
+        devices: DeviceRepository[Task],
+        ctx: SessionContext,
+        eventHandler: EventHandler[Task, Event]) =>
+      perSession(ctx, eventHandler)(ResolveWelcomeHandler.withSession(devices, _))
+
   val startFlowLayer: ZLayer[
-    TermsRepository[Task] & SessionContext & EventHandler[Task, Event],
+    DeviceRepository[Task] & SessionContext & EventHandler[Task, Event],
     Nothing,
     Flow.Aux[Task, StartCommand, NextStep]] = ZLayer.fromFunction:
-    (terms: TermsRepository[Task], ctx: SessionContext, eventHandler: EventHandler[Task, Event]) =>
-      perSession(ctx, eventHandler)(StartHandler.withSession(terms, _))
+    (
+        devices: DeviceRepository[Task],
+        ctx: SessionContext,
+        eventHandler: EventHandler[Task, Event]) =>
+      perSession(ctx, eventHandler)(StartHandler.withSession(devices, _))
 
   val acceptTermsFlowLayer: ZLayer[
-    TermsRepository[Task] & SessionContext & EventHandler[Task, Event],
+    TermsRepository[Task] & DeviceRepository[Task] & SessionContext & EventHandler[Task, Event],
     Nothing,
     Flow.Aux[Task, AcceptTermsCommand, NextStep]] = ZLayer.fromFunction:
-    (terms: TermsRepository[Task], ctx: SessionContext, eventHandler: EventHandler[Task, Event]) =>
-      perSession(ctx, eventHandler)(AcceptTermsHandler.withSession(terms, _))
+    (
+        terms: TermsRepository[Task],
+        devices: DeviceRepository[Task],
+        ctx: SessionContext,
+        eventHandler: EventHandler[Task, Event]) =>
+      perSession(ctx, eventHandler)(AcceptTermsHandler.withSession(terms, devices, _))
 
   /** Built per request: what `finish` requires depends on the session's phase. */
   val finishFlowLayer: ZLayer[

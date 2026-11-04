@@ -239,17 +239,23 @@ All under `core/src/whitelabel/captal/core/application/commands/`. Every command
 | `SurveyRepository`, `UserRepository`
 | `QuestionAnswered(AdvertiserQuestionAnswered)`
 
+| `ResolveWelcomeCommand(anonymous, occurredAt)`
+| `ResolveWelcomeHandler`
+| `NextStep(Welcome)` or `NextStep(WelcomeNeedsToS)`
+| `DeviceRepository`
+| none
+
 | `StartCommand(occurredAt)`
 | `StartHandler`
 | `NextStep(IdentificationQuestion)`
-| `TermsRepository`
-| none; fails with `TermsNotAccepted` unless the device accepted the version in force, `NoTermsOfService` when none exists
+| `DeviceRepository`
+| none; fails with `TermsNotAccepted` unless `findAccepted` finds the device
 
 | `AcceptTermsCommand(occurredAt)`
 | `AcceptTermsHandler`
 | `NextStep(IdentificationQuestion)`
-| `TermsRepository`
-| `TermsAccepted(deviceId, termsId, occurredAt)` for the version in force; `NoTermsOfService` when none exists
+| `TermsRepository`, `DeviceRepository`
+| `TermsAccepted(deviceId, termsId, occurredAt)` from a `NotAccepted` device; nothing from one that already accepted; `NoTermsOfService` when no version exists
 
 | `ProvideNextIdentificationSurveyCommand(deviceId, occurredAt)`
 | `ProvideNextIdentificationSurveyHandler`
@@ -343,7 +349,7 @@ The other three `Answer*` handlers follow one shape: find the user in the state 
 
 `MarkVideoWatchedHandler` has two constructors. `withSession` is the one the server uses — it reads `session.currentVideoId`, looks the video up to recover `advertiserId` and `videoType`, and emits `VideoVisualized` plus a `PlaybackEnded` for each playback `VideoRepository.openPlaybacks` reports: watched, the file is no longer being fetched. A missing `currentVideoId` fails with `video.Error.NoVideoAvailable` and an unknown id with `video.Error.VideoNotFound`. The plain `apply` emits no event and returns the next step unchanged.
 
-`StartHandler` and `AcceptTermsHandler` are the only way out of the welcome, and both answer `NextStep(IdentificationQuestion)`: the identification questions hand the guest on themselves when none is left to ask. The version a device accepts is the one `TermsRepository.current` has when the acceptance arrives — the page never names one — and `TermsRepository` (`infrastructure/TermsRepository.scala`) reads that and the version a device accepted last, `TermsVersion(id, number)`.
+`StartHandler` and `AcceptTermsHandler` are the only way out of the welcome, and both answer `NextStep(IdentificationQuestion)`: the identification questions hand the guest on themselves when none is left to ask. Where a device stands with the terms is a typestate, as a user's place in the flow is: `Device[S <: State]` (`device/State.scala`), with `State.NotAccepted` — never, or a version that is no longer in force — and `State.Accepted(termsId, acceptedAt)`. `acceptTerms` (`device/ops.scala`) exists only on `Device[State.NotAccepted.type]`, emits `TermsAccepted` and answers the `Accepted` device. `DeviceRepository` finds the session's device in one state or the other (`findAccepted`, `findNotAccepted`), reading it against the version in force; `TermsRepository` answers that version, `TermsVersion(id, number)`, which is the one a device accepts — the page never names one.
 
 `StartPlaybackHandler` emits `PlaybackStarted` only when `fileUrl` is the session's video's current file, and fails with `video.Error.StaleFile` otherwise — the video got a new file after the page was given that one. `EndPlaybackHandler` emits `PlaybackEnded` unconditionally: ending one that already ended, or another session's, is the persistence's no-op, because the page sends it on its way out and cannot wait to be told.
 

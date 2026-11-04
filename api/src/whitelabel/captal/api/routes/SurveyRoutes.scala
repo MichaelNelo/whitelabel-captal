@@ -15,7 +15,6 @@ import whitelabel.captal.core.device.Mac
 import whitelabel.captal.core.infrastructure.SessionData
 import whitelabel.captal.core.user
 import whitelabel.captal.messages.{AnswerRequest, ApiError, StatusResponse, SurveyResponse}
-import whitelabel.captal.platform.Terms
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.session.{CaptivePortalParams, SessionContext, SessionService}
 import zio.*
@@ -32,10 +31,11 @@ object SurveyRoutes:
     Task,
     ProvideNextIdentificationSurveyCommand,
     NextIdentificationSurvey | NextStep]
+  type ResolveWelcomeFlowType = Flow.Aux[Task, ResolveWelcomeCommand, NextStep]
 
   type FullEnv =
     SessionContext & SessionService & QuillSqlite & UserLookup & AnswerEmailFlowType &
-      AnswerProfilingFlowType & AnswerLocationFlowType & NextSurveyFlowType
+      AnswerProfilingFlowType & AnswerLocationFlowType & NextSurveyFlowType & ResolveWelcomeFlowType
 
   val layer: ZLayer[
     SessionCookieConfig & ApiBase & CurrentLocation & UserCookieConfig & UserLookup,
@@ -136,28 +136,19 @@ final class SurveyRoutes(
   /** Resolve the on-missing-session strategy: `CreateForUser` when the cross-location `captal_user`
     * cookie carries a valid, existing user id, plain `Create` otherwise.
     */
-  /** The welcome a device is shown, recorded on its session: `WelcomeNeedsToS` until it accepts the
-    * terms of service in force — when it never accepted them, accepted an older version, or came
-    * with neither the session nor the user cookie, a visitor nothing is known about.
+  /** The welcome a device is shown, as `ResolveWelcomeHandler` decides it, recorded on its session.
     */
-  private def welcomeFor(
-      session: SessionData,
-      anonymous: Boolean): ZIO[QuillSqlite & SessionService, ApiError, Phase] =
+  private def welcomeFor(session: SessionData, anonymous: Boolean) =
     for
-      quill    <- ZIO.service[QuillSqlite]
-      current  <- Terms.current(quill).orDie
-      accepted <- Terms.acceptedBy(quill, session.deviceId).orDie
-      phase =
-        if !anonymous && current.exists(terms => accepted.contains(terms.id)) then
-          Phase.Welcome
-        else
-          Phase.WelcomeNeedsToS
-      _ <-
-        ZIO.when(phase != session.phase)(
+      flow <- ZIO.service[ResolveWelcomeFlowType]
+      now  <- Clock.instant
+      step <- asApiError(flow.execute(ResolveWelcomeCommand(anonymous, now)))
+      _    <-
+        ZIO.when(step.phase != session.phase)(
           ZIO
-            .serviceWithZIO[SessionService](_.setPhase(session.sessionId, phase))
+            .serviceWithZIO[SessionService](_.setPhase(session.sessionId, step.phase))
             .mapError(ApiError.fromThrowable))
-    yield phase
+    yield step.phase
 
   private def resolveOnMissing(
       userCookie: Option[String],

@@ -133,8 +133,10 @@ defaulting, naming the column and the V22 rename in the message.
 
 `Terms` (`platform/Terms.scala`) is how the portal and the backoffice read the terms of service:
 `current` (the highest version), `translations`, `locales` (those of the version in force, the ones
-a portal offers), `acceptedBy` (the version a device accepted last) and the two writes,
-`saveTranslation` and `accept`. `TermsRepositoryQuill` serves `core`'s `TermsRepository` from it.
+a portal offers) and the two writes, `saveTranslation` and `accept`. `TermsRepositoryQuill` serves
+`core`'s `TermsRepository` from it, and `DeviceRepositoryQuill` the `DeviceRepository`: the
+session's device, `Accepted` when the version it accepted last is the one in force and
+`NotAccepted` otherwise.
 
 Conventions that hold across all of them:
 

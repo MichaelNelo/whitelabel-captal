@@ -128,7 +128,7 @@ xref:development.adoc[Local development].
 `FullEnv & Server.Config & JobRunner` from `ServerSettings`. `FullEnv` is the type alias for
 everything a request handler may ask for: `SessionContext`, `SessionService`, `LocaleService`,
 `QuillSqlite`, `SessionCookieConfig`, `ApiBase`, `CurrentLocation`, `UserCookieConfig`,
-`UserLookup`, the seven route classes, and the sixteen `Flow.Aux` refinements the routes resolve by
+`UserLookup`, the seven route classes, and the seventeen `Flow.Aux` refinements the routes resolve by
 type.
 
 `JobRunner` is produced by the composition but deliberately absent from `FullEnv`: `Main.run`
@@ -150,7 +150,7 @@ Location-aware:: `locationServiceLayer`, `sessionServiceLayer`, `localeServiceLa
 services take an `Option[String]` location id and scope their queries by it.
 
 Routes and flows:: the seven `*Routes.layer` values plus `Flows.eventHandlerLayer` and the
-seventeen `Flows.*FlowLayer` values (sixteen reachable from an endpoint, plus
+eighteen `Flows.*FlowLayer` values (seventeen reachable from an endpoint, plus
 `expireAccessFlowLayer`).
 
 `Flows.scala` builds one layer per command. `eventHandlerLayer` is the chain every flow writes
@@ -555,10 +555,10 @@ gated by the separate `server.dev-mode` / `SERVER_DEV_MODE` flag and serves no A
 
 These routes write a phase themselves rather than relying on the event handlers:
 
-* `GET /api/status` decides which welcome a session at the welcome is shown and records it:
-  `WelcomeNeedsToS` when its device never accepted the terms of service, accepted a version that
-  is no longer the current one, or the request carried neither the session nor the `captal_user`
-  cookie; `Welcome` otherwise.
+* `GET /api/status`, for a session at the welcome, runs `ResolveWelcomeHandler` and records the
+  phase it answers: `WelcomeNeedsToS` when its device has not accepted the terms of service in
+  force — never, or an older version — or the request carried neither the session nor the
+  `captal_user` cookie; `Welcome` otherwise.
 * `POST /api/terms` and `POST /api/start` are the only way out of the welcome. Each runs its
   operation — `AcceptTermsHandler`, which records the version in force on the device, or
   `StartHandler`, which requires that the device accepted it (`TermsNotAccepted` otherwise) — and

@@ -17,6 +17,7 @@ import whitelabel.captal.api.session.{
   UserLookup
 }
 import whitelabel.captal.platform.repositories.{
+  DeviceRepositoryQuill,
   RecoveryRepositoryQuill,
   SurveyRepositoryQuill,
   TermsRepositoryQuill,
@@ -44,9 +45,10 @@ private[api] object AppLayers:
       CurrentLocation & UserCookieConfig & UserLookup & SurveyRoutes & LocaleRoutes & VideoRoutes &
       AdvertiserSurveyRoutes & FinishRoutes & SurveyRoutes.AnswerEmailFlowType &
       SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
-      SurveyRoutes.NextSurveyFlowType & VideoRoutes.NextVideoFlowType &
-      VideoRoutes.MarkVideoWatchedFlowType & VideoRoutes.StartPlaybackFlowType &
-      VideoRoutes.EndPlaybackFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
+      SurveyRoutes.NextSurveyFlowType & SurveyRoutes.ResolveWelcomeFlowType &
+      VideoRoutes.NextVideoFlowType & VideoRoutes.MarkVideoWatchedFlowType &
+      VideoRoutes.StartPlaybackFlowType & VideoRoutes.EndPlaybackFlowType &
+      AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType &
       RecoveryRoutes & RecoveryRoutes.RequestRecoveryFlowType &
       RecoveryRoutes.CheckRecoveryFlowType & RecoveryRoutes.RedeemRecoveryFlowType & RecoveryFeed &
@@ -150,6 +152,7 @@ private[api] object AppLayers:
       bundleManifestLayer,
       RecoveryRepositoryQuill.layer,
       TermsRepositoryQuill.layer,
+      DeviceRepositoryQuill.layer,
       SurveyRepositoryQuill.layer,
       UserRepositoryQuill.layer,
       VideoRepositoryQuill.layer,
@@ -166,6 +169,7 @@ private[api] object AppLayers:
       Flows.endPlaybackFlowLayer,
       Flows.nextAdvertiserSurveyFlowLayer,
       Flows.answerAdvertiserFlowLayer,
+      Flows.resolveWelcomeFlowLayer,
       Flows.startFlowLayer,
       Flows.acceptTermsFlowLayer,
       Flows.finishFlowLayer,
