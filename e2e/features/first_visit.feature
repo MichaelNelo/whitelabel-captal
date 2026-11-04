@@ -10,6 +10,7 @@ Feature: A guest's first visit
   Scenario: A new guest goes from the welcome page to internet access
     When Ana opens the portal on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And Ana answers the email question with "ana@example.com"
     And Ana watches the advertiser video to the end
     And Ana answers the video's survey with "Yes"

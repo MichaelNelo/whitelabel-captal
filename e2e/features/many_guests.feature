@@ -9,6 +9,7 @@ Feature: Many guests at one location
     Given a deployed location "plaza" with an advertiser video and its survey
     When the crowd opens the portal on new phones
     And the crowd starts
+    And the crowd accepts the terms of service
     And the crowd answers the email question with an address of their own
     And the crowd watches the video to the end
     And the crowd answers the video's survey with "Yes"
@@ -19,6 +20,7 @@ Feature: Many guests at one location
     Given a deployed location "promos" whose venue has three promos, in rotation order
     When the crowd opens the portal on new phones
     And the crowd starts
+    And the crowd accepts the terms of service
     And the crowd answers the email question with an address of their own
     Then each of the crowd is shown the promo "Alpha"
     When the crowd watches the video to the end

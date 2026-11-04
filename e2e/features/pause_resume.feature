@@ -10,6 +10,7 @@ Feature: Pausing, resuming and destroying a location
     Given a location "pause-mid" of its own, deployed with an advertiser video
     When Ana opens the portal on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And the operator pauses "pause-mid"
     And Ana carries on with the email question, if her portal still shows it
     Then Ana is shown the maintenance page
@@ -20,6 +21,7 @@ Feature: Pausing, resuming and destroying a location
     Given a location "resume" of its own, deployed with an advertiser video
     When Ana opens the portal on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And the operator pauses "resume"
     And the operator resumes "resume"
     And Ana comes back to the portal on the same phone
@@ -31,6 +33,7 @@ Feature: Pausing, resuming and destroying a location
     And the venue's controller let Ana's phone in for 60 minutes
     When Ben opens the portal on a new phone
     And Ben starts
+    And Ben accepts the terms of service
     And Ben answers the email question with a new address
     And Ben watches the advertiser video to the end
     And Ben answers the video's survey with "Yes"
@@ -45,6 +48,7 @@ Feature: Pausing, resuming and destroying a location
     Then the API of "destroyed" answers nothing for Cy
     When Ana opens the portal of "kept" on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And Ana answers the email question with a new address
     And Ana watches the advertiser video to the end
     And Ana answers the video's survey with "Yes"

@@ -11,22 +11,28 @@ Feature: Terms of service
 
   Scenario: Declining the terms leaves the guest at the welcome, and accepting them starts
     When Ana opens the portal of "terms" on a new phone
+    And Ana starts
     And Ana declines the terms of service
     Then Ana is told the terms of service have to be accepted
     When Ana starts
+    And Ana accepts the terms of service
     And Ana answers the email question with a new address
 
   Scenario: A phone that accepted the terms is not asked again at another location
     When Ana opens the portal of "terms" on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And Ana answers the email question with a new address
     And Ana comes back to the portal of "terms-b" on the same phone
-    Then Ana starts without being asked for the terms of service
+    And Ana starts
+    Then Ana is not asked to accept the terms of service
 
   Scenario: A new version of the terms is asked for again
     When Ana opens the portal of "terms" on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And Ana answers the email question with a new address
     And the operator publishes a new version of the terms of service
     And Ana comes back to the portal of "terms-b" on the same phone
+    And Ana starts
     Then Ana is asked to accept the terms of service

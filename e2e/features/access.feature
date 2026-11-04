@@ -9,6 +9,7 @@ Feature: Guest access
     Given a deployed location "expiry" whose guests get one minute of access
     When Ana opens the portal on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And Ana answers the email question with "ana@example.com"
     And Ana watches the advertiser video to the end
     And Ana answers the video's survey with "Yes"
@@ -22,6 +23,7 @@ Feature: Guest access
     Given a deployed location "quiet" with UniFi turned off
     When Ana opens the portal on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And Ana answers the email question with "ana@example.com"
     And Ana watches the advertiser video to the end
     And Ana answers the video's survey with "Yes"
@@ -32,6 +34,7 @@ Feature: Guest access
     Given a deployed location "unreachable" whose controller cannot be reached
     When Ana opens the portal on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And Ana answers the email question with "ana@example.com"
     And Ana watches the advertiser video to the end
     And Ana answers the video's survey with "Yes"

@@ -61,10 +61,13 @@ final class ReturningGuestsSteps extends ScalaDsl with EN:
       Locations.addPromo(location, "E2E promo", priority = 1, question = Some("Did you like it?"))
       Locations.deploy(location)
 
-  /** A whole first visit: the welcome page, the email, the video, its survey, and access. */
+  /** A whole first visit: the welcome page, the terms of service, the email, the video, its survey,
+    * and access.
+    */
   private def firstVisit(name: String): Unit =
     val who = World.arrive(name)
     Portal.start(who.page)
+    Portal.acceptTerms(who.page)
     answer(who.page, addressOf(who))
     watch(who.page)
     answer(who.page, "Yes")

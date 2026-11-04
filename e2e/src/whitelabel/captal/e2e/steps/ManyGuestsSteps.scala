@@ -79,6 +79,12 @@ final class ManyGuestsSteps extends ScalaDsl with EN:
     guests.foreach(who => Portal.start(who.page))
   }
 
+  When("""the crowd accepts the terms of service""") { () =>
+    guests.foreach: who =>
+      assert(Portal.askedForTerms(who.page), s"${who.name} was not asked to accept the terms")
+      Portal.acceptTerms(who.page)
+  }
+
   When("""the crowd answers the email question with an address of their own""") { () =>
     guests.foreach(who => answer(who.page, addressOf(who)))
   }

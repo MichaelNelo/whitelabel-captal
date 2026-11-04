@@ -24,6 +24,7 @@ Feature: Releasing the build, and the change data capture relay restarting
     When the relay restarts
     And Ana opens the portal of "relay" on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And Ana answers the email question with a new address
     Then Ana is watching the first file of "E2E spot" at "relay"
     When Ana pauses the advertiser video part way through

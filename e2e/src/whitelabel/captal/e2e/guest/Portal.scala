@@ -171,23 +171,21 @@ object Portal:
     Page.GetByRoleOptions().setName(Locations.text(key)))
 
   /** Presses the welcome's start and waits for what it leads to: the terms of service's dialog, for
-    * a phone that has to accept them, or the welcome left behind. Answers whether it was the
-    * dialog.
+    * a phone that has to accept them, or the welcome left behind. A phone the portal knows nothing
+    * about always is asked; one that accepted the version in force is not.
     */
-  def pressStart(page: Page): Boolean =
+  def start(page: Page): Unit =
     button(page, "welcome.button.start").click()
     page.waitForFunction(
       "() => document.querySelector('.terms-dialog') !== null || document.querySelector('.welcome-button') === null")
-    page.locator(".terms-dialog").count() > 0
 
-  /** Starts, accepting the terms of service when the welcome asks for them: a phone the portal
-    * knows nothing about always is asked, one that accepted the version in force is not.
-    */
-  def start(page: Page): Unit =
-    if pressStart(page) then
-      acceptTerms(page)
+  /** Whether the terms of service's dialog is open. */
+  def askedForTerms(page: Page): Boolean = page.locator(".terms-dialog").count() > 0
 
-  def acceptTerms(page: Page): Unit = button(page, "welcome.terms.accept").click()
+  /** Accepts the terms of service in the open dialog, and waits for the welcome left behind. */
+  def acceptTerms(page: Page): Unit =
+    button(page, "welcome.terms.accept").click()
+    page.waitForFunction("() => document.querySelector('.welcome-button') === null")
 
   def declineTerms(page: Page): Unit = button(page, "welcome.terms.decline").click()
 

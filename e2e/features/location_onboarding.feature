@@ -53,6 +53,7 @@ Feature: Building a location
   Scenario: A new guest gives their email, watches the location's video and gets access
     When Ana opens the portal on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And Ana answers the email question with a new address
     Then Ana is shown the video "Brasa spot"
     When Ana watches the advertiser video to the end

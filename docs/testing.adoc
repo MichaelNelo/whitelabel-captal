@@ -335,9 +335,10 @@ left.
 * **Guests** are Playwright browser contexts (`Portal`), each a phone of its own — its own cookies
 and storage, mobile viewport and touch — sent to the portal the way the access point sends them,
 with a MAC, an access point and a fingerprint in the query string. Certificate errors are ignored: the
-distribution's name is two levels under the one LocalStack's certificate covers. A guest starts
-through `Portal.start`, which accepts the terms of service when the welcome asks for them: a phone
-the portal knows nothing about is always asked.
+distribution's name is two levels under the one LocalStack's certificate covers. Starting only
+presses the welcome's button; a scenario says when the guest accepts the terms of service, a step
+of its own that fails when the dialog is not open. A phone the portal knows nothing about is always
+asked; one that comes back on the same phone, having accepted the version in force, is not.
 * **Errors** are made to happen on demand for the recovery features. The run releases
 `client.local`'s bundle, which carries `Faults`, and the local configuration has every location
 mount the API's dev endpoints (`enable_location_faults`). A step dispatches `captal-fault` in the

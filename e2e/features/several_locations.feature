@@ -18,16 +18,19 @@ Feature: Several locations
   Scenario: Each portal plays its own video, and a promo never plays at another location
     When Ana opens the portal of "north" on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And Ana answers the email question with a new address
     Then Ana is shown the video "North spot"
     When Ben opens the portal of "south" on a new phone
     And Ben starts
+    And Ben accepts the terms of service
     And Ben answers the email question with a new address
     Then Ben is shown the video "South promo"
 
   Scenario: A guest recognised on the same phone at the other location is not asked their email again
     When Ana opens the portal of "north" on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And Ana answers the email question with a new address
     And Ana watches the advertiser video to the end
     And Ana answers the video's survey with "Yes"

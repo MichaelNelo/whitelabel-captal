@@ -16,6 +16,7 @@ Feature: Recovery from an error
   Scenario: A server error takes the guest back into the portal at once
     When Ana opens the portal on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And the portal fails for Ana with a server error
     Then Ana is taken back into the portal within 15 seconds
     And Ana has internet access
@@ -24,6 +25,7 @@ Feature: Recovery from an error
   Scenario: A client error makes a new guest wait the location's maximum, then takes them back in
     When Ana opens the portal on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And the portal's code throws for Ana
     Then Ana sees the error page
     And Ana is told to wait about 60 seconds
@@ -33,6 +35,7 @@ Feature: Recovery from an error
   Scenario: A guest who has given an email waits less for a client error
     When Ana opens the portal on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And Ana answers the email question with "ana@example.com"
     And the portal's code throws for Ana
     Then Ana sees the error page
@@ -47,10 +50,12 @@ Feature: Recovery from an error
     Given the location "plaza" makes a new guest wait 300 seconds for an error in its portal's code
     When Ana opens the portal on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And the portal's code throws for Ana
     Then Ana is told to wait about 300 seconds
     When Bruno opens the portal on a new phone
     And Bruno starts
+    And Bruno accepts the terms of service
     And Bruno hits the same error on another phone
     Then Ana's countdown reads at most 30 seconds
     And Ana is told that other guests ran into the same problem
@@ -59,6 +64,7 @@ Feature: Recovery from an error
   Scenario: Reloading the error page resumes the countdown
     When Ana opens the portal on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And the portal's code throws for Ana
     Then Ana is told to wait about 60 seconds
     When Ana waits 20 seconds
@@ -73,6 +79,7 @@ Feature: Recovery from an error
     Given a deployed location "unreachable" whose controller cannot be reached
     When Ana opens the portal on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And Ana answers the email question with a new address
     And Ana watches the advertiser video to the end
     And Ana answers the video's survey with "Yes"

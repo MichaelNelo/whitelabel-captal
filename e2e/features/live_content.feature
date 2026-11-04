@@ -10,6 +10,7 @@ Feature: Changing a deployed location while guests use it
     When the operator retires the survey question "Did you like it?" of the advertiser video at "questions"
     And Ana opens the portal on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And Ana answers the email question with "ana.live@example.com"
     And Ana watches the advertiser video to the end
     Then Ana is shown the survey question "Would you recommend it?"
@@ -21,6 +22,7 @@ Feature: Changing a deployed location while guests use it
     Given the operator's own deployed location "replacement" with one advertiser video
     When Ana opens the portal on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And Ana answers the email question with "ana.live@example.com"
     Then Ana is watching the first file of "E2E spot" at "replacement"
     When the operator replaces the file of the advertiser video "E2E spot" at "replacement"
@@ -30,6 +32,7 @@ Feature: Changing a deployed location while guests use it
     Then Ana has internet access
     When Ben opens the portal on a new phone
     And Ben starts
+    And Ben accepts the terms of service
     And Ben answers the email question with "ben.live@example.com"
     Then Ben is given the new file of "E2E spot" at "replacement"
     And the old file of "E2E spot" at "replacement" is deleted
@@ -39,6 +42,7 @@ Feature: Changing a deployed location while guests use it
     When the operator takes the advertiser video "E2E spot" out of rotation at "rotation"
     And Ana opens the portal on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And Ana answers the email question with "ana.live@example.com"
     And Ana watches the advertiser video to the end
     Then Ana is shown the survey question "Did you like the second one?"
@@ -57,6 +61,7 @@ Feature: Changing a deployed location while guests use it
     And the location "abandoned" closes a playback its page never ended 120 seconds after its file ends
     When Ana opens the portal on a new phone
     And Ana starts
+    And Ana accepts the terms of service
     And Ana answers the email question with "ana.live@example.com"
     Then Ana is watching the first file of "E2E spot" at "abandoned"
     When Ana leaves the WiFi while the advertiser video plays

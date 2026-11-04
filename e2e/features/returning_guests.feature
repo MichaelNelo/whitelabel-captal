@@ -26,6 +26,7 @@ Feature: Returning guests
     And Ana has internet access
     When Ben opens the portal on a new phone
     And Ben starts
+    And Ben accepts the terms of service
     And Ben answers the email question with the address of Ana
     Then Ben is shown the video straight away
     When Ben watches the advertiser video to the end
