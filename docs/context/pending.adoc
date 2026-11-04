@@ -204,17 +204,3 @@ processes"). The setup would have to move out of `forkEnv` into the test command
 
 Only the `SKILL.md` files are still Markdown, and they stay that way by name: both the agent harness
 and `Skills.load` find them by that exact filename.
-
-== Commit history
-
-All 285 commits now carry a single `<scope>: <Message>` subject and nothing else. The tags
-`backup/pre-flatten-rewrite`, `backup/pre-message-rewrite` and `backup/pre-branch-repoint` mark
-earlier states; the nine commits of the `terraform/` subtree's original history are reachable only
-from the first of them, and the explanatory message bodies only from the second.
-
-A further rewrite is wanted, and has not been done. It should remove the points in the history where
-the documentation was in Spanish, was wrong, or contradicted the code, and squash the commits that
-only exist because a change took several attempts. The reason it is worth doing: anyone bisecting or
-reading back through this history will find states that describe a system that was never true, and a
-document that lies is worse than a missing one. Doing it means another full rewrite of every sha, so
-it waits until there is no branch outstanding.
