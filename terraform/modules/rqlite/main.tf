@@ -5,7 +5,7 @@ locals {
   dns_name    = "rqlite.${var.service_discovery_namespace_name}"
 
   # Single-instance branch: EFS-backed persistence, stop-then-start, FARGATE.
-  # Multi-instance branch: Raft quorum on ephemeral storage, rolling deploy, FARGATE_SPOT.
+  # Multi-instance branch: Raft quorum on ephemeral storage, rolling deploy, FARGATE.
   # Zero takes this branch too, which is what keeps the derived deployment percentages from
   # dividing by the count -- `ceil(quorum * 100 / 0)` is `+Inf` and the API wants a whole number.
   # Nothing runs at zero, so the branch only has to be arithmetically safe.
@@ -486,10 +486,10 @@ resource "aws_ecs_service" "rqlite" {
   task_definition = aws_ecs_task_definition.rqlite.arn
   desired_count   = var.desired_count
 
-  # Single-node uses on-demand FARGATE (no eviction). Multi-node tolerates spot
-  # eviction because Raft + S3 backup recover from individual node loss.
+  # On-demand in every shape. Spot reclaims by capacity pool, not by node: one reclamation can take
+  # two of three nodes at once and, with them, the quorum.
   capacity_provider_strategy {
-    capacity_provider = local.single_node ? "FARGATE" : "FARGATE_SPOT"
+    capacity_provider = "FARGATE"
     weight            = 1
   }
 

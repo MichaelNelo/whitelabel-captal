@@ -14,7 +14,7 @@ variable "aws_region" {
 }
 
 variable "public_origin" {
-  description = "Scheme, host and port clients reach the server at, when not its hostname or the load balancer: a tunnel to a local one. Empty derives it."
+  description = "Scheme, host and port clients reach the server at: the CloudFront domain it shares with the portals, or a tunnel to a local one. Empty derives it from the load balancer's own name."
   type        = string
   default     = ""
 }
@@ -107,12 +107,7 @@ variable "alb_arn" {
 }
 
 variable "alb_dns_name" {
-  description = "Load balancer's own name, for the DNS record pointing the hostname at it"
-  type        = string
-}
-
-variable "alb_zone_id" {
-  description = "Load balancer's hosted zone, for the same record"
+  description = "Load balancer's own name, which the server is reached at when nothing stands in front of it"
   type        = string
 }
 
@@ -122,19 +117,7 @@ variable "http_listener_arn" {
 }
 
 variable "https_listener_arn" {
-  description = "Port 443 listener, or empty when DNS is off and no certificate exists to present"
-  type        = string
-  default     = ""
-}
-
-variable "hostname" {
-  description = "Public hostname, e.g. backoffice.captal.centauroads.com. Empty when DNS is off, and then the rule matches on path instead of host and no record is written."
-  type        = string
-  default     = ""
-}
-
-variable "zone_id" {
-  description = "Route 53 zone the hostname's record goes in. Empty when DNS is off."
+  description = "Port 443 listener, or empty when DNS is off and no certificate exists to present. When given, the server's rule and every location's go on it."
   type        = string
   default     = ""
 }

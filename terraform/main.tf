@@ -361,13 +361,14 @@ module "tailscale_proxy" {
   container_memory             = var.tailscale_proxy_memory
 }
 
-# Route 53 zone — production/staging → CloudFront (no apex)
+# Route 53 zone, and the CloudFront domain pointed at the distribution: the one name every portal
+# and the backoffice are reached at, each under a path of its own.
 module "route53" {
   source = "./modules/route53"
   count  = var.enable_dns ? 1 : 0
 
   domain_name         = var.domain_name
-  env_prefix          = var.environment == "prod" ? "production" : "staging"
+  record_name         = var.cloudfront_domain
   cloudfront_dns_name = module.cloudfront.distribution_domain_name
   cloudfront_zone_id  = module.cloudfront.distribution_hosted_zone_id
 }
@@ -437,7 +438,11 @@ module "mcp" {
   environment  = var.environment
   aws_region   = var.aws_region
 
-  public_origin       = var.mcp_public_origin
+  # The portals' own origin when there is a domain: CloudFront sends the server's paths to it.
+  public_origin = (
+    var.mcp_public_origin != "" ? var.mcp_public_origin :
+    var.enable_dns ? "https://${var.cloudfront_domain}" : ""
+  )
   public_port         = var.public_port
   assets_endpoint_url = var.assets_endpoint_url
 
@@ -457,11 +462,8 @@ module "mcp" {
 
   alb_arn            = module.alb.alb_arn
   alb_dns_name       = module.alb.alb_dns_name
-  alb_zone_id        = module.alb.alb_zone_id
   http_listener_arn  = module.alb.http_listener_arn
   https_listener_arn = var.enable_dns ? aws_lb_listener.https[0].arn : ""
-  hostname           = var.enable_dns ? "backoffice.${var.domain_name}" : ""
-  zone_id            = var.enable_dns ? module.route53[0].zone_id : ""
 
   db_url                      = module.rqlite.http_url
   cdc_feed_address            = module.cdc.feed_address

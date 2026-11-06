@@ -2,6 +2,11 @@ locals {
   bucket_name = "${var.project_name}-${var.environment}-assets"
   s3_origin   = "s3-assets"
   alb_origin  = "alb-api"
+
+  # The backoffice's paths, at the portals' origin: its MCP endpoint, its OAuth metadata, and the
+  # two posts its MCP App pages make. Under `/ui/` only those two: the rest of `/ui/` is the pages'
+  # scripts, in S3.
+  backoffice_paths = ["/mcp", "/mcp/*", "/.well-known/*", "/ui/runs/*", "/ui/unifi"]
 }
 
 # S3 bucket holding the bundle (`bundle/`) + per-location copies (`<slug>/`)
@@ -255,6 +260,25 @@ resource "aws_cloudfront_distribution" "main" {
     function_association {
       event_type   = "viewer-request"
       function_arn = aws_cloudfront_function.spa_fallback.arn
+    }
+  }
+
+  # The backoffice: to the ALB, never cached, every header forwarded — `Authorization` among them,
+  # which CloudFront removes unless a policy forwards all viewer headers. Before `/ui/*`: the first
+  # behavior that matches wins. Not compressed, so a stream of events reaches the page as the server
+  # writes it.
+  dynamic "ordered_cache_behavior" {
+    for_each = local.backoffice_paths
+    content {
+      path_pattern           = ordered_cache_behavior.value
+      target_origin_id       = local.alb_origin
+      viewer_protocol_policy = "redirect-to-https"
+      allowed_methods        = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+      cached_methods         = ["GET", "HEAD"]
+      compress               = false
+
+      cache_policy_id          = aws_cloudfront_cache_policy.api.id
+      origin_request_policy_id = aws_cloudfront_origin_request_policy.api.id
     }
   }
 

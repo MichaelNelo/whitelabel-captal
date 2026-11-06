@@ -4,82 +4,24 @@ Work that is known, decided or diagnosed but not finished. Each entry says what 
 is wrong with it, and what settling it would involve. Nothing here is speculative — every claim was
 verified against the configuration or the code at the path given.
 
-== rqlite: production selects FARGATE_SPOT
-
-`terraform/modules/rqlite/main.tf`, in `aws_ecs_service.rqlite`:
-
-[source,hcl]
-----
-capacity_provider = local.single_node ? "FARGATE" : "FARGATE_SPOT"
-----
-
-`single_node` is `var.desired_count <= 1`. `environments/prod/terraform.tfvars` sets
-`rqlite_desired_count = 3`, so production resolves to Spot and dev — one node — resolves to
-on-demand. The branch with less redundancy has the more reliable compute.
-
-The comment justifies it as tolerating "individual node loss", which Raft and the S3 backup do
-cover. Spot reclamation is not individual: AWS reclaims on capacity pressure in a pool, so three
-Spot tasks share the signal. With quorum 2 of 3, losing two at once stops the cluster — no leader,
-no writes. Storage is ephemeral, so each lost node returns empty and rebuilds rather than catching
-up from its own log.
-
-Not yet applied to production: the deployed state predates this configuration. A `tofu apply` moves
-it onto Spot.
-
-To settle: decide the cost question. Three on-demand removes it; two on-demand and one Spot keeps
-quorum through a single reclamation.
-
 == rqlite: continue_on_failure turns data loss into a healthy boot
 
 `docker/rqlite-entrypoint.sh` writes one backup config used for both `-auto-backup` and
 `-auto-restore`, with `"continue_on_failure": true`. The comment justifies it for a missing backup
-on first boot, which is a development concern; the entrypoint does not distinguish environments.
+on first boot, which every environment has once, production included; the entrypoint does not tell
+that case from a backup that exists and cannot be read.
 
 In production that means: if all three nodes are replaced together and the S3 backup cannot be
 downloaded — object deleted, permission broken, bucket misconfigured — the cluster does not fail.
 It boots empty, answers its health check, and the load balancer marks it good. A portal then serves
 with no surveys, no locations and no users.
 
-`false` is the correct value for production: the task should die rather than serve an empty
-database.
+Once a backup exists, `false` is the correct value: the task should die rather than serve an empty
+database. Settling it means booting empty only when no backup exists, and failing when one exists
+and cannot be restored.
 
-`backup_interval` defaults to `1m` (`terraform/modules/rqlite/variables.tf`) and neither dev nor
-prod overrides it, so one minute of writes is the RPO on total cluster loss.
-
-== The VPC change is configured but not applied
-
-Commit `49eed79` deleted `terraform/modules/vpc` (164 lines across three files) and rewrote
-`main.tf` to consume the account's default VPC through a data source. The reasoning is sound — the
-module was building private subnets, route tables, an EIP and a NAT gateway that nothing used, at
-roughly USD 32/month per availability zone, because `enable_nat_gateway` defaulted to false and no
-environment set it.
-
-It was never applied. Deployed dev lives in the VPC the old module created; the configuration now
-resolves a different VPC id. A `tofu plan` against dev reports:
-
-----
-Plan: 33 to add, 8 to change, 48 to destroy.
-----
-
-Twenty of those are replacements cascading from one line:
-
-----
-~ vpc_id = "vpc-06aaccfb0c4d74832" -> "vpc-0f401994632773082"  # forces replacement
-----
-
-Six resources carry `vpc_id` in their identity (the security groups for ecs_tasks, alb, dispatcher,
-rqlite and tailscale_proxy, plus the service discovery namespace); the rest follow from a changed
-`security_group_id`, `namespace_id` or `zone_id`. The remaining 28 destroys are resources the
-configuration no longer declares — the `releases` bucket, the `captal-provision` and
-`captal-locations` ECR repositories, the `derived` lifecycle policies — which is the cleanup from
-commit `53a5e94`.
-
-Consequence to know: applying this to a live environment replaces its network-attached resources. A
-destroy-and-rebuild is fine; an in-place upgrade is not.
-
-What the change gave up, per the comment on the data source: the private-subnet option. Every ECS
-task now runs in a public subnet with its own address, isolated by security group alone. A rule with
-a CIDR source rather than a group source is exposed the moment it applies.
+`backup_interval` defaults to `1m` (`terraform/modules/rqlite/variables.tf`) and neither `local`
+nor `prod` overrides it, so one minute of writes is the RPO on total cluster loss.
 
 == Destroying an environment does not come clean
 
@@ -139,15 +81,6 @@ on the JVM and fails in the browser reaches the guest as a client error report, 
 
 Covering it means running the contract's values through the decoders on Scala.js: a test module for
 `client`, or for `messages-js`, which needs a JavaScript runtime in the build.
-
-== Nothing pins the images prod would run
-
-`prod/terraform.tfvars` names `rqlite_image_tag = "1.0.8"`, as `local` does (2026-10-31), but no
-release has run against AWS: what prod's rqlite runs is whatever was last applied by hand, likely the
-variable's old default `1.0.0`, which captures no changes at all. `image_tag`, `mcp_image_tag` and
-`cdc_image_tag` are the modules' versions, which `ci.run` passes; no `api/v*`, `mcp/v*` or `cdc/v*`
-tag exists, and every image in a deployed environment was pushed by hand. The first `ci.run`
-against prod replaces every rqlite node: check the backup bucket holds a recent version first.
 
 == First paint on slow links waits on brand-icon.svg
 

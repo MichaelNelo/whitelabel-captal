@@ -11,10 +11,10 @@ moved {
   to   = aws_route53_record.cloudfront
 }
 
-# CloudFront — production or staging depending on environment
+# The name CloudFront answers for, which is its alias: the zone's apex when they are the same.
 resource "aws_route53_record" "cloudfront" {
   zone_id = aws_route53_zone.main.zone_id
-  name    = "${var.env_prefix}.${var.domain_name}"
+  name    = var.record_name
   type    = "A"
 
   alias {

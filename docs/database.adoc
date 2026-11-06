@@ -53,7 +53,7 @@ view that means:
 | `build.mill`, `object platform` `mvnDeps`
 
 | Custom rqlite image tag (ECR)
-| `1.0.4` in `dev` and `local`; unset in `prod`, which falls back to the `1.0.0` default
+| `1.0.8` in `local` and `prod`; no default, so each environment names its own
 | `terraform/environments/*/terraform.tfvars`, `terraform/variables.tf`
 |===
 

@@ -101,19 +101,57 @@ plan run by hand has to pass the released ones too, `-var=image_tag=<api version
 -var=mcp_image_tag=<mcp version> -var=cdc_image_tag=<cdc version>`, which `git describe --tags
 --abbrev=0 --match 'api/v*'` (and `mcp/v*`, `cdc/v*`) names.
 
+=== An environment with nothing in AWS yet
+
+Two things have to exist before the configuration can be applied whole, and the configuration
+creates both. The state bucket, `<project>-terraform-state-<env>` from `modules/s3-backend`, is the
+bucket the environment's `backend.tfvars` names, so `tofu init` against the backend fails until it
+exists: it goes up first under a local state, and the state then moves into it. The zone's
+nameservers are named by Route 53 when it creates the zone, so the parent zone's `NS` records can
+only be written after that, and both certificates validate against the zone: everything that hangs
+off them waits for the delegation. The zone alone is the target, not `module.route53`, whose record
+reaches CloudFront, which needs the validated certificate, which needs the delegation.
+
+[source,bash]
+----
+cd terraform
+
+# The state bucket, under a local state; then the state into it.
+mv backend.tf backend.tf.off
+tofu init
+tofu apply -var-file=environments/prod/terraform.tfvars \
+  -var=image_tag=bootstrap -var=mcp_image_tag=bootstrap -var=cdc_image_tag=bootstrap \
+  -target=module.s3_backend
+mv backend.tf.off backend.tf
+tofu init -migrate-state -backend-config=environments/prod/backend.tfvars
+
+# The zone alone; its nameservers go into the parent zone as NS records for the domain.
+tofu apply -var-file=environments/prod/terraform.tfvars \
+  -var=image_tag=bootstrap -var=mcp_image_tag=bootstrap -var=cdc_image_tag=bootstrap \
+  -target='module.route53[0].aws_route53_zone.main'
+tofu output name_servers
+dig +short NS captal.centauroads.com @1.1.1.1   # the same four, once the parent delegates
+----
+
+The image tags are required variables, and neither targeted apply creates anything that reads them.
+The rest is a release, `mill ci.run` with `CAPTAL_ENV=prod` (see xref:development.adoc#release[Releasing]):
+it builds and pushes the images, applies everything, and publishes the client. A location can be
+deployed only once the terms of service have a version (`create_terms_version`), since
+`deploy_location` refuses without one.
+
 Per-environment sizing, as committed:
 
-[cols="2,1,1,1"]
+[cols="2,1,1"]
 |===
-|Variable |`local` |`dev` |`prod`
+|Variable |`local` |`prod`
 
-|`rqlite_desired_count` |0 |1 (EFS) |3 (Raft)
-|`container_cpu` / `container_memory` (API) |256 / 512 |256 / 512 |512 / 1024
-|`desired_count` (API tasks) |1 |1 |2
-|`enable_dns` |false |true |true
-|`enable_tailscale` |false |true |true
-|`enable_global_accelerator` |false |true |true
-|`mcp_create_test_user` |true |true |(unset → false)
+|`rqlite_desired_count` |0 |3 (Raft)
+|`container_cpu` / `container_memory` (API) |256 / 512 |512 / 1024
+|`desired_count` (API tasks) |1 |2
+|`enable_dns` |false |true
+|`enable_tailscale` |false |true
+|`enable_global_accelerator` |false |true
+|`mcp_create_test_user` |true |(unset → false)
 |===
 
 == Local: LocalStack and the keyed state pairing
@@ -177,9 +215,9 @@ The root module (`terraform/main.tf`) wires fifteen child modules together. The 
 is a data source rather than a module — `data "aws_vpc" "default"` and `data "aws_subnets" "default"`
 resolve the account's default VPC and its one-per-AZ default subnets, which are public and
 auto-assign addresses, letting every Fargate task reach ECR without a NAT gateway: there are no
-private subnets and no NAT gateway to pay for (about USD 32/month per availability zone). The
-configuration is **not yet applied to prod** — see xref:context/pending.adoc[Pending work] for the
-resource replacements its first `tofu apply` there triggers.
+private subnets and no NAT gateway to pay for (about USD 32/month per availability zone). Every ECS
+task runs in a public subnet with its own address, isolated by security group alone, so a rule with
+a CIDR source rather than a group source is exposed the moment it applies.
 
 === S3 and ECR
 
@@ -208,9 +246,9 @@ Two *more* kinds of rule live on this same listener and are created by things ot
 module:
 
 * The backoffice's own target group and listener rule — `aws_lb_target_group.mcp`,
-  `aws_lb_listener_rule.mcp_https`/`mcp_http` — are declared inside `modules/mcp`, matched on
-  `host_header` when DNS is enabled and on `path_pattern` (`/mcp`, `/mcp/*`, `/.well-known/*`,
-  `/ui/*`, `/health`) when it is not.
+  `aws_lb_listener_rule.mcp` — are declared inside `modules/mcp`, matched on `path_pattern` (`/mcp`,
+  `/mcp/*`, `/.well-known/*`, `/ui/*`, `/health`) on the HTTPS listener when DNS is enabled and on
+  the HTTP one when it is not.
 * A **location's** target group and rule are created by the MCP backoffice's deploy tools at request
   time, through the AWS SDK — see <<What the deploy tool creates that tofu does not>>.
 
@@ -244,7 +282,8 @@ one level up.
 
 |Capacity provider
 |`FARGATE` (on-demand)
-|`FARGATE_SPOT`
+|`FARGATE` (on-demand): Spot reclaims by capacity pool, so one reclamation could take two of three
+nodes and the quorum with them
 
 |Deploy strategy
 |Stop-then-start (`min_healthy_percent = 0`, `max_percent = 100`) — SQLite cannot tolerate two
@@ -271,7 +310,7 @@ EFS state "can take well over the default 60s."
 
 S3 auto-backup is unconditional — a dedicated, versioned, encrypted `aws_s3_bucket.rqlite_backup`
 that only the rqlite task role can read and write — with `backup_interval` defaulting to `1m` and
-neither `dev` nor `prod` overriding it. The security group's inline `ingress` rules only cover HTTP
+neither `local` nor `prod` overriding it. The security group's inline `ingress` rules only cover HTTP
 (from the app tasks and between rqlite peers, port 4001) and Raft (between peers, port 4002); it
 carries `lifecycle { ignore_changes = [ingress] }` specifically because sibling modules
 (`portal-dispatcher`, and the root-level Tailscale debug rule) attach their own ingress as separate
@@ -313,11 +352,9 @@ get a gap. `CDC_BUFFER` (1000) is how many change sets it keeps for subscribers 
 The module outputs `ingest_url`, passed to rqlite, and `feed_address`, `cdc.<namespace>:9090`,
 passed to the backoffice as `CDC_FEED_ADDRESS`.
 
-See xref:context/pending.adoc[Pending work] for two risks this shape carries that have not yet been
-settled — production's `FARGATE_SPOT` choice sharing a single reclamation signal across all three
-nodes despite tolerating only individual node loss, and `continue_on_failure: true` in the backup
-entrypoint turning a missing or unreachable S3 backup into a healthy, empty boot rather than a dead
-task. See xref:database.adoc[Database] and xref:platform.adoc[Platform] for rqlite as the database
+See xref:context/pending.adoc[Pending work] for a risk rqlite's shape carries that has not yet been
+settled: `continue_on_failure: true` in the backup entrypoint turning a missing or unreachable S3
+backup into a healthy, empty boot rather than a dead task. See xref:database.adoc[Database] and xref:platform.adoc[Platform] for rqlite as the database
 rather than as a deployed topology.
 
 === CloudFront
@@ -329,7 +366,10 @@ two origins (the S3 bucket through the OAC, and the ALB as a custom HTTPS-only o
 behavior serving the S3 origin with one CloudFront Function attached, an `ordered_cache_behavior`
 on `/ui/*` serving the MCP App pages' scripts from S3 with `Access-Control-Allow-Origin: *` added by
 a response headers policy, and one on `/*/api/*` forwarding to the ALB with every HTTP method
-including the four that write. The bucket carries a CORS rule allowing `PUT`, `GET` and `HEAD` from
+including the four that write. The backoffice shares the distribution's domain: its paths (`/mcp`,
+`/mcp/*`, `/.well-known/*`, and under `/ui/` only `/ui/runs/*` and `/ui/unifi`, the posts its pages
+make) go to the ALB with the same policies as the API, uncompressed so its streams of events arrive
+as the server writes them, and ahead of `/ui/*`, because the first behavior that matches wins. The bucket carries a CORS rule allowing `PUT`, `GET` and `HEAD` from
 any origin, for the upload page's presigned `PUT`. See xref:mcp-iam.adoc[MCP IAM] for why both.
 
 One function, `function/spa-fallback.js`, does two jobs, the first ahead of the second on purpose:
@@ -354,7 +394,8 @@ and the configuration has to plan against LocalStack too. `assets` caches on pat
 policy that forwards *every* header, cookie and query string to the ALB — because the API's session
 resolver reads `X-Client-Mac`, `X-Ap-Mac`, `X-Fingerprint` and `X-Ssid` on every request (see
 xref:api.adoc[Guest API]'s captive-portal headers), and a cache key that ignored them while an origin
-policy withheld them would mean the API never saw them at all.
+policy withheld them would mean the API never saw them at all. Forwarding all viewer headers is also
+what carries the backoffice's `Authorization` header, which CloudFront otherwise removes.
 
 `aliases` on the distribution is empty unless a certificate ARN is supplied — in `local`, with
 `enable_dns = false`, the distribution answers at its own generated `*.cloudfront.net` domain with
@@ -362,8 +403,10 @@ CloudFront's own default certificate.
 
 === Route 53 and ACM
 
-`modules/route53` creates the hosted zone and one alias A record, `<staging|production>.<domain>`,
-pointed at the CloudFront distribution. `modules/acm` requests *two* certificates — one regional
+`modules/route53` creates the hosted zone and one alias A record for `cloudfront_domain`, the
+distribution's alias, pointed at the distribution: in `prod` that is the zone's apex,
+`captal.centauroads.com`, the one name every portal and the backoffice are reached at, each under a
+path of its own. `modules/acm` requests *two* certificates — one regional
 (for the ALB listener) and an identical one through the `aws.us_east_1` provider alias (because
 CloudFront and its certificates must live in `us-east-1` regardless of where everything else runs)
 — both DNS-validated against the zone `modules/route53` created. ACM has no enable flag of its own:
@@ -472,9 +515,10 @@ LocalStack's IAM enforcement evaluates in soft mode during `mcp.test`. See
 xref:context/decisions.adoc[Decisions] for why hard enforcement is not yet the default.
 
 The service itself: one task definition (container name `mcp`), one target group, and a listener
-rule matched on `host_header` (HTTPS, when `enable_dns`) or on a fixed set of paths (`/mcp`,
-`/mcp/*`, `/.well-known/*`, `/ui/*`, `/health`, over HTTP otherwise) — unlike a location's own rule,
-this one *is* declared in Tofu. Its container definition carries roughly seventeen environment
+rule matched on a fixed set of paths (`/mcp`, `/mcp/*`, `/.well-known/*`, `/ui/*`, `/health`), on
+the HTTPS listener when `enable_dns` and on HTTP otherwise — unlike a location's own rule, this one
+*is* declared in Tofu. With a domain, the server is reached at it, behind CloudFront:
+`MCP_RESOURCE_URI` is `https://<cloudfront_domain>/mcp`. Its container definition carries roughly seventeen environment
 variables; the ones that matter architecturally are the seven that describe what a deploy attaches
 to — `ECS_CLUSTER`, `VPC_ID`, `SUBNET_IDS`, `SECURITY_GROUP_ID`, `ALB_LISTENER_ARN`,
 `TASK_EXECUTION_ROLE_ARN`, `TASK_ROLE_ARN` — plus `API_IMAGE` and `DB_URL`. All eight are read

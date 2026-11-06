@@ -28,10 +28,10 @@ object LocationTools:
   private val SlugPattern = "[a-z0-9]+(-[a-z0-9]+)*".r
 
   /** Top-level prefixes the bucket and the distribution already give a meaning: the shared bundle,
-    * the MCP App pages' scripts with their own edge behavior, and the client's published releases.
-    * A location there would share its prefix with them.
+    * the MCP App pages' scripts with their own edge behavior, the client's published releases, and
+    * this server's own endpoint. A location there would share its prefix with them.
     */
-  private val ReservedSlugs = Set("bundle", "ui", "releases")
+  private val ReservedSlugs = Set("bundle", "ui", "releases", "mcp")
 
   final case class LocationView(
       @description("What every other tool here takes to address this location.")
@@ -93,7 +93,7 @@ object LocationTools:
         s"Slug '$slug' is not kebab-case. Use lowercase letters, digits and single hyphens between them — no spaces, underscores, capitals, or leading, trailing or doubled hyphens.")
     else if ReservedSlugs.contains(slug) then
       ZIO.fail(
-        s"Slug '$slug' is reserved: the assets bucket already uses '$slug/' for something every location shares. Pick another.")
+        s"Slug '$slug' is reserved: '/$slug/' already means something every location shares, in the assets bucket or at the distribution. Pick another.")
     else
       ZIO.succeed(slug)
 

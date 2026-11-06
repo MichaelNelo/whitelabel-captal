@@ -106,17 +106,20 @@ object LocationToolsSpec extends ZIOSpecDefault:
           ui       <- create("ui", "Scripts")
           bundle   <- create("bundle", "Bundle")
           releases <- create("releases", "Releases")
+          mcp      <- create("mcp", "Backoffice")
           written  <- ZIO.serviceWithZIO[QuillSqlite]: quill =>
             import quill.*
             quill
               .run(query[LocationRow])
-              .map(_.filter(row => Set("ui", "bundle", "releases").contains(row.slug)))
+              .map(_.filter(row => Set("ui", "bundle", "releases", "mcp").contains(row.slug)))
         yield assertTrue(
           ui.isError.contains(true),
           bundle.isError.contains(true),
           releases.isError.contains(true),
+          mcp.isError.contains(true),
           textOf(ui).contains("reserved"),
-          written.isEmpty)
+          written.isEmpty
+        )
       ,
       test("a slug too long for the ALB target group name is refused, and the message says why"):
         for

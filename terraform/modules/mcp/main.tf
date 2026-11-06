@@ -12,13 +12,15 @@
 locals {
   name = "${var.project_name}-${var.environment}-mcp"
 
-  dns_enabled = var.hostname != "" && var.zone_id != ""
+  # On the HTTPS listener where there is a certificate to present, behind CloudFront at the portals'
+  # own origin; on HTTP where there is not, reached at the load balancer's own name. The listener
+  # the server's rule goes on is the one `deploy_location` puts every location's rule on.
+  listener_arn = var.https_listener_arn != "" ? var.https_listener_arn : var.http_listener_arn
 
-  # Where clients reach the server: the given origin, else its hostname, else the load balancer on
-  # the port it answers on from outside.
+  # Where clients reach the server: the given origin, else the load balancer on the port it answers
+  # on from outside.
   origin = (
     var.public_origin != "" ? var.public_origin :
-    local.dns_enabled ? "https://${var.hostname}" :
     "http://${var.alb_dns_name}${var.public_port == 0 ? "" : ":${var.public_port}"}"
   )
 
@@ -58,7 +60,7 @@ locals {
     { name = "VPC_ID", value = var.vpc_id },
     { name = "SUBNET_IDS", value = join(",", var.subnet_ids) },
     { name = "SECURITY_GROUP_ID", value = var.security_group_id },
-    { name = "ALB_LISTENER_ARN", value = local.dns_enabled ? var.https_listener_arn : var.http_listener_arn },
+    { name = "ALB_LISTENER_ARN", value = local.listener_arn },
     { name = "TASK_EXECUTION_ROLE_ARN", value = var.execution_role_arn },
     { name = "TASK_ROLE_ARN", value = var.location_task_role_arn },
     { name = "API_IMAGE", value = var.api_image },
@@ -372,33 +374,17 @@ resource "aws_lb_target_group" "mcp" {
   }
 }
 
-# On the HTTPS listener where there is a certificate to present, on HTTP where there is not. Only
-# one of the two exists at a time, so the server's `MCP_RESOURCE_URI` and `ALB_LISTENER_ARN` are
-# derived from the same condition.
-resource "aws_lb_listener_rule" "mcp_https" {
-  count = local.dns_enabled ? 1 : 0
-
-  listener_arn = var.https_listener_arn
-  priority     = var.listener_rule_priority
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.mcp.arn
-  }
-
-  condition {
-    host_header {
-      values = [var.hostname]
-    }
-  }
+moved {
+  from = aws_lb_listener_rule.mcp_http[0]
+  to   = aws_lb_listener_rule.mcp
 }
 
-# Matches on path rather than host: locally the load balancer is reached at its own name, and
-# there is no hostname to match on.
-resource "aws_lb_listener_rule" "mcp_http" {
-  count = local.dns_enabled ? 0 : 1
-
-  listener_arn = var.http_listener_arn
+# Matches on path, as the locations' rules do: behind CloudFront every request carries the portals'
+# host, and locally the load balancer is reached at its own name. CloudFront sends only the
+# server's paths here (`modules/cloudfront`, `backoffice_paths`); `/ui/*` is wider than those
+# because locally nothing stands in front of the load balancer to narrow it.
+resource "aws_lb_listener_rule" "mcp" {
+  listener_arn = local.listener_arn
   priority     = var.listener_rule_priority
 
   action {
@@ -439,21 +425,5 @@ resource "aws_ecs_service" "mcp" {
   # `createService` with a `loadBalancers` block fails with "no associated load balancer" when the
   # target group is not yet reachable through a listener. The same ordering `deploy_location` has
   # to respect, recorded there as a historical bug.
-  depends_on = [aws_lb_listener_rule.mcp_https, aws_lb_listener_rule.mcp_http]
-}
-
-# ─── The hostname ───────────────────────────────────────────────────────────
-
-resource "aws_route53_record" "mcp" {
-  count = local.dns_enabled ? 1 : 0
-
-  zone_id = var.zone_id
-  name    = var.hostname
-  type    = "A"
-
-  alias {
-    name                   = var.alb_dns_name
-    zone_id                = var.alb_zone_id
-    evaluate_target_health = false
-  }
+  depends_on = [aws_lb_listener_rule.mcp]
 }
