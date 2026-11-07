@@ -368,8 +368,8 @@ on `/ui/*` serving the MCP App pages' scripts from S3 with `Access-Control-Allow
 a response headers policy, and one on `/*/api/*` forwarding to the ALB with every HTTP method
 including the four that write. The backoffice shares the distribution's domain: its paths (`/mcp`,
 `/mcp/*`, `/.well-known/*`, and under `/ui/` only `/ui/runs/*` and `/ui/unifi`, the posts its pages
-make) go to the ALB with the same policies as the API, uncompressed so its streams of events arrive
-as the server writes them, and ahead of `/ui/*`, because the first behavior that matches wins. The bucket carries a CORS rule allowing `PUT`, `GET` and `HEAD` from
+make) go to the ALB with the same policies as the API, and ahead of `/ui/*`, because the first
+behavior that matches wins. The bucket carries a CORS rule allowing `PUT`, `GET` and `HEAD` from
 any origin, for the upload page's presigned `PUT`. See xref:mcp-iam.adoc[MCP IAM] for why both.
 
 One function, `function/spa-fallback.js`, does two jobs, the first ahead of the second on purpose:
@@ -390,8 +390,11 @@ One function, `function/spa-fallback.js`, does two jobs, the first ahead of the 
 The two cache policies are hand-written rather than lookups of AWS's managed ones
 (`Managed-CachingOptimized` and the like), because a managed policy "exists only in a real account,"
 and the configuration has to plan against LocalStack too. `assets` caches on path alone for a day;
-`api` caches nothing (`default_ttl = min_ttl = max_ttl = 0`) and is paired with an origin request
-policy that forwards *every* header, cookie and query string to the ALB — because the API's session
+`api` caches nothing (`default_ttl = min_ttl = max_ttl = 0`), and so normalizes no
+`Accept-Encoding` either: CloudFront refuses that on a policy with caching disabled, a check
+LocalStack does not make. Neither the API's behavior nor the backoffice's compresses at the edge —
+CloudFront compresses only under such a policy — and a stream of events reaches its page as the
+server writes it. The policy is paired with an origin request policy that forwards *every* header, cookie and query string to the ALB — because the API's session
 resolver reads `X-Client-Mac`, `X-Ap-Mac`, `X-Fingerprint` and `X-Ssid` on every request (see
 xref:api.adoc[Guest API]'s captive-portal headers), and a cache key that ignored them while an origin
 policy withheld them would mean the API never saw them at all. Forwarding all viewer headers is also

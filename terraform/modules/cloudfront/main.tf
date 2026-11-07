@@ -148,9 +148,13 @@ resource "aws_cloudfront_cache_policy" "api" {
   min_ttl     = 0
   max_ttl     = 0
 
+  # No `Accept-Encoding` normalization: CloudFront refuses it on a policy that caches nothing
+  # ("EnableAcceptEncodingGzip is invalid for policy with caching disabled"), which LocalStack does
+  # not check. The header still reaches the origin through the origin request policy, which
+  # forwards every viewer header, so compressing is the origin's to do.
   parameters_in_cache_key_and_forwarded_to_origin {
-    enable_accept_encoding_gzip   = true
-    enable_accept_encoding_brotli = true
+    enable_accept_encoding_gzip   = false
+    enable_accept_encoding_brotli = false
 
     headers_config {
       header_behavior = "none"
@@ -265,8 +269,8 @@ resource "aws_cloudfront_distribution" "main" {
 
   # The backoffice: to the ALB, never cached, every header forwarded — `Authorization` among them,
   # which CloudFront removes unless a policy forwards all viewer headers. Before `/ui/*`: the first
-  # behavior that matches wins. Not compressed, so a stream of events reaches the page as the server
-  # writes it.
+  # behavior that matches wins. Not compressed, as the API is not, so a stream of events reaches the
+  # page as the server writes it.
   dynamic "ordered_cache_behavior" {
     for_each = local.backoffice_paths
     content {
@@ -295,14 +299,16 @@ resource "aws_cloudfront_distribution" "main" {
     response_headers_policy_id = aws_cloudfront_response_headers_policy.ui.id
   }
 
-  # API behavior: forward to ALB, no caching, preserve all headers/cookies
+  # API behavior: forward to ALB, no caching, preserve all headers/cookies. Not compressed at the
+  # edge: CloudFront compresses only under a cache policy that normalizes `Accept-Encoding`, which
+  # `api` cannot.
   ordered_cache_behavior {
     path_pattern           = "/*/api/*"
     target_origin_id       = local.alb_origin
     viewer_protocol_policy = "redirect-to-https"
     allowed_methods        = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
     cached_methods         = ["GET", "HEAD"]
-    compress               = true
+    compress               = false
 
     cache_policy_id          = aws_cloudfront_cache_policy.api.id
     origin_request_policy_id = aws_cloudfront_origin_request_policy.api.id
