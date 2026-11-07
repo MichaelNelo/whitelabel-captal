@@ -172,7 +172,8 @@ def applyConfiguration(
     fail("init", initialised)
 
   // The images go up inside the apply, so its output carries the pushes' lines.
-  println(s"[tofu] planning the ${target.environment} environment (minutes, on a fresh LocalStack)")
+  val slow = if target.local then " (minutes, on a fresh LocalStack)" else ""
+  println(s"[tofu] planning the ${target.environment} environment$slow")
   val planned = tofu(Seq("plan", "-input=false", s"-out=$plan") ++ variables*)
   if planned.exitCode != 0 then
     fail("plan", planned)
