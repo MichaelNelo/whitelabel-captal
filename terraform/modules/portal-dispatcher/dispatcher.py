@@ -1,11 +1,11 @@
 """Captive portal dispatcher Lambda.
 
 Triggered by ALB target group on /guest/s/* (UCG-redirected captive portal hits).
-Looks up the location by AP MAC in rqlite, then returns a 302 to either:
-  - the location's custom `unifi_redirect_url` if set and the location is not paused (with all
-    UCG query params appended),
-  - or the default `https://<cloudfront_host>/<slug>/?<params>` otherwise, which a paused
-    location's page answers with the maintenance page.
+Looks up the locations with that AP MAC in rqlite and takes the newest that is not paused — or,
+when every one is, the newest, whose page is then the maintenance page. Then returns a 302 to:
+  - its custom `unifi_redirect_url` if set and it is not paused (with all UCG query params
+    appended),
+  - or the default `https://<cloudfront_host>/<slug>/?<params>` otherwise.
 
 UCG-generated URL example:
   /guest/s/default/?ap=94:2a:6f:d0:30:57&id=1c:71:25:63:e4:24
@@ -45,9 +45,10 @@ def handler(event, context):
 
     # Escape single quotes (defense in depth — ap is bounded to MAC format).
     escaped = ap_mac.replace("'", "''")
+    # Newest first: where several running locations share an AP, the newest takes its guests.
     query = (
         "SELECT slug, unifi_redirect_url FROM locations "
-        f"WHERE LOWER(unifi_ap_mac) = '{escaped}'"
+        f"WHERE LOWER(unifi_ap_mac) = '{escaped}' ORDER BY created_at DESC"
     )
     url = f"{RQLITE_URL}/db/query?level=none&q={urllib.parse.quote(query)}"
 
@@ -61,15 +62,26 @@ def handler(event, context):
     if not rows:
         return _error(404, f"No location registered for AP {ap_mac}")
 
-    slug, redirect_url = rows[0][0], rows[0][1]
+    candidates = [(row[0], row[1]) for row in rows]
+    # A paused location takes no guests: they go to a running one with the same AP. S3 is asked
+    # only when there is a choice to make or a redirect URL to skip; otherwise every answer leads
+    # to the same place.
+    paused = _paused_slugs() if len(candidates) > 1 or candidates[0][1] else set()
+    running = [c for c in candidates if c[0] not in paused]
+    if len(running) > 1:
+        print(
+            f"AP {ap_mac} matches several running locations, "
+            f"{', '.join(slug for slug, _ in running)}: sending its guests to the newest"
+        )
+    # With every one paused, the newest: its page is the maintenance page.
+    slug, redirect_url = (running or candidates)[0]
     qs = urllib.parse.urlencode(qsp, doseq=True)
 
     # Custom redirect URL wins over the default cloudfront/<slug>/ destination, unless the location
     # is paused: then its guests go to its own page, which the pause made the maintenance page.
-    # Asked only where there is a redirect URL; otherwise both go to the same place.
     # Append the original UCG query params with '?' or '&' depending on whether the
     # operator-provided URL already has a query string.
-    if redirect_url and not _paused(slug):
+    if redirect_url and slug not in paused:
         sep = "&" if "?" in redirect_url else "?"
         location = f"{redirect_url}{sep}{qs}"
     else:
@@ -87,21 +99,23 @@ def handler(event, context):
     }
 
 
-def _paused(slug):
-    """Whether the location is paused.
+def _paused_slugs():
+    """The locations that are paused, in one listing.
 
     A pause keeps the page it replaced at `_paused/<slug>/site.html`, and a resume or a deploy
     takes it away, so the object is there exactly while the location is paused. Failing to tell is
-    logged and read as running, which redirects as before pauses were looked at.
+    logged and reads as none paused, which redirects as before pauses were looked at.
     """
     try:
-        listed = S3.list_objects_v2(
-            Bucket=ASSETS_BUCKET, Prefix=f"_paused/{slug}/site.html", MaxKeys=1
-        )
+        listed = S3.list_objects_v2(Bucket=ASSETS_BUCKET, Prefix="_paused/")
     except Exception as e:
-        print(f"Could not tell whether '{slug}' is paused, so it is taken as running: {e}")
-        return False
-    return listed.get("KeyCount", 0) > 0
+        print(f"Could not tell which locations are paused, so none is taken as paused: {e}")
+        return set()
+    return {
+        key.split("/")[1]
+        for key in (item["Key"] for item in listed.get("Contents", []))
+        if key.endswith("/site.html")
+    }
 
 
 def _error(status, msg):
