@@ -528,9 +528,18 @@ forwards to a Lambda target group running `dispatcher.py`:
 . `SELECT slug, unifi_redirect_url FROM locations WHERE LOWER(unifi_ap_mac) = '<ap>'` against rqlite
   over its HTTP API (`http://rqlite.<namespace>:4001`, `level=none`, 5-second timeout). An
   unreachable database is a 503; no matching row is a 404 naming the AP.
-. 302 to `<unifi_redirect_url><?|&><params>` when the override is set, otherwise to
-  `https://<CLOUDFRONT_HOST>/<slug>/?<params>`, with `Cache-Control: no-store`. Every query
-  parameter the controller sent is forwarded verbatim.
+. 302 to `<unifi_redirect_url><?|&><params>` when the override is set and the location is not
+  paused, otherwise to `https://<CLOUDFRONT_HOST>/<slug>/?<params>`, with `Cache-Control:
+  no-store`. Every query parameter the controller sent is forwarded verbatim. The override sends
+  the location's guests to a portal hosted elsewhere instead of this one; it is not where a guest
+  goes after authorizing.
+
+Whether a location is paused is read from the assets bucket: `pause_location` keeps the page it
+replaces at `_paused/<slug>/site.html`, and `resume_location` and `deploy_location` remove it, so the
+object exists exactly while the location is paused. The Lambda lists that key — only where there is
+an override, since without one both destinations are the same — and sends a paused location's
+guests to its own page, which the pause made the maintenance page. A listing that fails is logged
+and read as running.
 
 So the AP MAC is what selects the portal: one static IP serves every location, and a new location
 needs only its `unifi_ap_mac` row filled in. The whole accelerator-plus-dispatcher pair is behind
