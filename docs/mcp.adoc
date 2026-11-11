@@ -73,6 +73,11 @@ background for as long as it serves.
 . Serves `GET /health` (`ok`, the load balancer's health check) `++ UiRoutes.routes ++ RunRoutes.routes
 ++ OauthMetadata.routes(uiOrigin) ++ CaptalMcp.server(...).statelessRoutes`.
 
+The handshake's `serverInfo` carries the server's icons (SEP-973), which a client may show as the
+connector's: `favicon.svg` and `favicon-180.png` at the root of the assets bucket, named through
+`AssetStore.publicUrl` — the backoffice's mark, which `modules/cloudfront` uploads. Without them a
+client guesses an icon from the domain, and falls back to the parent domain's.
+
 The final startup log line counts skills, resources and tools by *summing* `.all.size` across every
 tool object rather than a hardcoded figure, "so the number tracks the lists," and appends `(no
 ECS_CLUSTER, so the deploy, pause and destroy tools are not registered)` when `InfraStore` is

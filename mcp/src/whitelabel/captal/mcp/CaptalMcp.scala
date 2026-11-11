@@ -105,6 +105,28 @@ object CaptalMcp:
         .mapError(error =>
           new IllegalStateException(s"Could not build the MCP extension registry: $error"))
 
+  /** Who this server says it is in the handshake, with its icon (SEP-973), which a client may show
+    * as the connector's: the backoffice's mark, at the root of the assets bucket where
+    * `modules/cloudfront` puts it. Without one a client guesses the icon from the domain, and falls
+    * back to the parent domain's, which is not this project's.
+    */
+  private def identity(name: String, version: String, store: AssetStore): ServerInfoSource[Any] =
+    val info = Implementation(
+      name,
+      version,
+      icons = List(
+        Icon(
+          src = store.publicUrl("favicon.svg"),
+          mimeType = Some("image/svg+xml"),
+          sizes = List("any")),
+        Icon(
+          src = store.publicUrl("favicon-180.png"),
+          mimeType = Some("image/png"),
+          sizes = List("180x180"))
+      )
+    )
+    ServerInfoSource(_ => ZIO.succeed(info))
+
   /** Auth is not optional: the SDK silently ignores every `requireScopes` declaration when no
     * `.auth(...)` is configured, leaving every tool open to anyone who can reach the port.
     */
@@ -143,8 +165,11 @@ object CaptalMcp:
       else
         tool.visibleTo(McpAppsVisibility.Model)
     val withResources =
-      resources.foldLeft(McpServer(name, version).instructions(instructions).auth(auth))(
-        _.resource(_))
+      resources.foldLeft(
+        McpServer(name, version)
+          .serverInfo(identity(name, version, promptEnv.get[AssetStore]))
+          .instructions(instructions)
+          .auth(auth))(_.resource(_))
     val withPrompts = Prompts.all(promptEnv).foldLeft(withResources)(_.prompt(_))
     val withData = (
       LocationTools.all ++ I18nTools.all ++ AdvertiserTools.all ++ SurveyTools.all ++
