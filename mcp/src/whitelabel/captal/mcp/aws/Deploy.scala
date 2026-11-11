@@ -71,6 +71,10 @@ import zio.*
   * which a location's API follows to tell a waiting page its error recurred. Its tasks reach it by
   * the same name this server does.
   *
+  * `otlpEndpoint`, this server's own `OTEL_EXPORTER_OTLP_ENDPOINT`, where its traces go: a
+  * location's API sends its own there, as the service `captal-api`, each span carrying the
+  * location's slug as `captal.location`. `None` and the API keeps none.
+  *
   * `publicBaseUrl` is where the edge serves each location's copy of the bundle; a task is told its
   * own `manifest.json` under it, as `BUNDLE_MANIFEST_URL`. `None` tells it none, and the API judges
   * client error reports without one.
@@ -95,6 +99,7 @@ final case class DeployTargets(
     unifiProxyUrl: Option[String] = None,
     publicBaseUrl: Option[String] = None,
     cdcFeedAddress: Option[String] = None,
+    otlpEndpoint: Option[String] = None,
     devEndpoints: Boolean = false):
 
   /** `captal-<slug>`. AWS caps a target group name at 32 characters, which is where
@@ -160,8 +165,12 @@ object DeployTargets:
             proxy  <- System.env("UNIFI_PROXY_URL").orDie.map(_.map(_.trim).filter(_.nonEmpty))
             base   <- System.env("PUBLIC_BASE_URL").orDie.map(_.map(_.trim).filter(_.nonEmpty))
             feed   <- System.env("CDC_FEED_ADDRESS").orDie.map(_.map(_.trim).filter(_.nonEmpty))
-            dev    <- System.env("LOCATION_DEV_ENDPOINTS").orDie.map(_.exists(_.trim == "true"))
-            _      <-
+            otlp   <- System
+              .env("OTEL_EXPORTER_OTLP_ENDPOINT")
+              .orDie
+              .map(_.map(_.trim).filter(_.nonEmpty))
+            dev <- System.env("LOCATION_DEV_ENDPOINTS").orDie.map(_.exists(_.trim == "true"))
+            _   <-
               ZIO.when(proxy.isEmpty)(
                 ZIO.logWarning(
                   "UNIFI_PROXY_URL is unset: locations deployed from here call their UniFi gateway directly, which works only if the gateway is reachable from where the task runs."))
@@ -181,6 +190,7 @@ object DeployTargets:
               unifiProxyUrl = proxy,
               publicBaseUrl = base,
               cdcFeedAddress = feed,
+              otlpEndpoint = otlp,
               devEndpoints = dev
             ))
 end DeployTargets
@@ -336,6 +346,23 @@ final case class InfraStore(
                 .cdcFeedAddress
                 .map(address =>
                   KeyValuePair.builder().name("CDC_FEED_ADDRESS").value(address).build()) ++
+              targets
+                .otlpEndpoint
+                .toList
+                .flatMap(endpoint =>
+                  List(
+                    KeyValuePair
+                      .builder()
+                      .name("OTEL_EXPORTER_OTLP_ENDPOINT")
+                      .value(endpoint)
+                      .build(),
+                    KeyValuePair.builder().name("OTEL_SERVICE_NAME").value("captal-api").build(),
+                    KeyValuePair
+                      .builder()
+                      .name("OTEL_RESOURCE_ATTRIBUTES")
+                      .value(s"captal.location=$slug")
+                      .build()
+                  )) ++
               Option.when(targets.devEndpoints)(
                 KeyValuePair.builder().name("SERVER_DEV_ENDPOINTS").value("true").build())
           )*)
