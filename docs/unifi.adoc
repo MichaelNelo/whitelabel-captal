@@ -35,7 +35,8 @@ The integration is not a module. Its moving parts are spread across four of them
   xref:platform.adoc[Platform].
 
 | `mcp/src/whitelabel/captal/mcp/tools/UnifiTools.scala`
-| The backoffice tools `configure_unifi`, `get_unifi_config` and `set_unifi_enabled`.
+| The backoffice tools `configure_unifi`, `get_unifi_config`, `set_unifi_enabled` and
+  `update_unifi_settings`.
 
 | `mcp/src/whitelabel/captal/mcp/apps/UnifiUi.scala`
 | The server-rendered MCP App that collects the credentials, with
@@ -392,8 +393,8 @@ the uniform `/proxy/network/integration/v1` path made irrelevant. **V19** rename
 === Which tool writes them
 
 `configure_unifi` (`UnifiTools.configure`, scope `content:write`) is the only writer of the
-credentials and the rest of the settings. It takes a slug and nothing else: no token travels through
-the conversation. The tool returns a short-lived
+credentials, and writes the rest of the settings with them. It takes a slug and nothing else: no
+token travels through the conversation. The tool returns a short-lived
 ticket, an absolute `postUrl`, and the location's current values with `tokenSet: Boolean` in place of
 the token, and points the host at the MCP App `ui://configure-unifi`. The operator types the
 credentials into that page and the browser posts them directly to `POST /ui/unifi`
@@ -420,6 +421,15 @@ never returned by any tool.
 `unifi_is_enabled`. It takes a slug and `enabled`, leaves every other column alone, and answers with
 the same report as `get_unifi_config`. The readiness resource reports the switch as `unifiEnabled`
 and stops listing missing credentials as a step while it is off.
+
+`update_unifi_settings` (`UnifiTools.updateSettings`, scope `content:write`) changes the settings that
+are not secret without the form: host, port, site id, AP MAC, redirect URL and access duration. Each
+field given replaces the stored one and every field left out stays; an empty AP MAC or redirect URL
+removes it. Each is checked as the portal will read it: host and site id cannot be blank, the port
+is 1 to 65535, the duration positive, the AP MAC has to parse as a MAC and is stored lowercase with
+colons, the redirect URL is http or https. It never touches the token or the switch, and answers
+with the same report as `get_unifi_config`. Like a form submission, it reaches a location's portal
+on its next task start, so after a redeploy with `deploy_location`.
 
 === The proxy URL
 

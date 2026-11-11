@@ -623,6 +623,12 @@ xref:platform.adoc[Platform] and xref:unifi.adoc[UniFi integration]. Also report
 |Turns the location's calls to its controller off or back on (`unifi_is_enabled`), keeping the
 stored settings. Off, the portal runs its whole flow and never authorizes or revokes a guest. The API
 reads the switch on every event, so it takes effect without a redeploy.
+
+|`update_unifi_settings`
+|`content:write`
+|Changes the settings that are not secret — host, port, site id, AP MAC, redirect URL, duration —
+without the form, each field given replacing the stored one. Never the token. The portal reads them
+when its task starts, so they apply after a redeploy. See xref:unifi.adoc[UniFi integration].
 |===
 
 === Recovery (`RecoveryTools`)
