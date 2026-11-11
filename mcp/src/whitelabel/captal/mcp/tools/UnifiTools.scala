@@ -62,7 +62,8 @@ object UnifiTools:
       siteId: Option[String],
       @description("The AP the captive portal dispatcher matches on.")
       apMac: Option[String],
-      @description("Where a guest is sent after authorizing.")
+      @description(
+        "Where the portal dispatcher sends this location's guests instead of its portal, for a portal hosted elsewhere; unset, they go to the portal. Not used while the location is paused.")
       redirectUrl: Option[String],
       @description("Defaults to 1440 when unset.")
       durationMinutes: Option[Int],
@@ -92,7 +93,7 @@ object UnifiTools:
         "The MAC of the AP the captive portal dispatcher matches on, in any spelling; stored lowercase with colons. An empty string removes it. Left as it is when omitted.")
       apMac: Option[String] = None,
       @description(
-        "Where a guest is sent after authorizing, an http or https URL. An empty string removes it. Left as it is when omitted.")
+        "Where the portal dispatcher sends this location's guests instead of its portal, an http or https URL, for a portal hosted elsewhere. Not where a guest goes after authorizing. An empty string removes it, and guests go to the portal. Left as it is when omitted.")
       redirectUrl: Option[String] = None,
       @description("Minutes of access each guest is granted. Left as it is when omitted.")
       durationMinutes: Option[Int] = None)
