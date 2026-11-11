@@ -17,6 +17,7 @@ import whitelabel.captal.core.recovery.WaitPolicy
 import whitelabel.captal.platform.{LocationRecovery, UnifiClient}
 import whitelabel.captal.platform.eventhandlers.{
   AnswerPersistenceHandler,
+  DbEventHandler,
   EventLogHandler,
   PlaybackHandler,
   RecoveryHandler,
@@ -25,6 +26,7 @@ import whitelabel.captal.platform.eventhandlers.{
   SessionSurveyHandler,
   SessionVideoHandler,
   SurveyProgressHandler,
+  TracedEventHandler,
   TransactionalEventHandler,
   UnifiAccessHandler,
   UserPersistenceHandler
@@ -34,6 +36,7 @@ import whitelabel.captal.platform.services.LocationService
 import whitelabel.captal.platform.session.{JobQueue, SessionContext, SessionService}
 import zio.*
 import zio.interop.catz.*
+import whitelabel.captal.telemetry.Tracing
 
 /** One layer per command the portal can execute, plus the handler chain they all write through.
   *
@@ -42,8 +45,10 @@ import zio.interop.catz.*
   */
 private[api] object Flows:
 
+  /** Each handler in a span of its own, named after it, so a trace shows which one wrote what. */
   val eventHandlerLayer: ZLayer[
-    QuillSqlite & SessionContext & CurrentLocation & SessionService & UnifiClient & JobQueue,
+    QuillSqlite & SessionContext & CurrentLocation & SessionService & UnifiClient & JobQueue &
+      Tracing,
     Nothing,
     EventHandler[Task, Event]] = ZLayer.fromFunction:
     (
@@ -52,16 +57,23 @@ private[api] object Flows:
         currentLocation: CurrentLocation,
         sessionService: SessionService,
         unifiClient: UnifiClient,
-        jobQueue: JobQueue) =>
-      val dbHandler = EventLogHandler(ctx)
-        .andThen(AnswerPersistenceHandler(ctx))
-        .andThen(UserPersistenceHandler(ctx))
-        .andThen(SessionPhaseHandler(ctx, nextAfterIdentification.phase, nextAfterVideo.phase))
-        .andThen(SessionSurveyHandler(ctx))
-        .andThen(SessionVideoHandler(ctx))
-        .andThen(SessionExpirationHandler(ctx))
-        .andThen(SurveyProgressHandler())
-        .andThen(RecoveryHandler())
+        jobQueue: JobQueue,
+        tracing: Tracing) =>
+      def traced(name: String)(handler: EventHandler[Task, Event]) =
+        TracedEventHandler(name, tracing)(handler)
+      def tracedDb(name: String)(handler: DbEventHandler[Event]) =
+        TracedEventHandler.db(name, tracing)(handler)
+      val dbHandler = tracedDb("EventLog")(EventLogHandler(ctx))
+        .andThen(tracedDb("AnswerPersistence")(AnswerPersistenceHandler(ctx)))
+        .andThen(tracedDb("UserPersistence")(UserPersistenceHandler(ctx)))
+        .andThen(
+          tracedDb("SessionPhase")(
+            SessionPhaseHandler(ctx, nextAfterIdentification.phase, nextAfterVideo.phase)))
+        .andThen(tracedDb("SessionSurvey")(SessionSurveyHandler(ctx)))
+        .andThen(tracedDb("SessionVideo")(SessionVideoHandler(ctx)))
+        .andThen(tracedDb("SessionExpiration")(SessionExpirationHandler(ctx)))
+        .andThen(tracedDb("SurveyProgress")(SurveyProgressHandler()))
+        .andThen(tracedDb("Recovery")(RecoveryHandler()))
       val transactional = TransactionalEventHandler(dbHandler, quill)
       val unifiAccess = UnifiAccessHandler(
         currentLocation.unifi,
@@ -72,7 +84,9 @@ private[api] object Flows:
         jobQueue)
       // Both run after the commit: a UniFi call failing must not undo the chain, and a playback
       // has to see its own insert, which a transaction defers.
-      transactional.andThen(PlaybackHandler(quill)).andThen(unifiAccess)
+      transactional
+        .andThen(traced("Playback")(PlaybackHandler(quill)))
+        .andThen(traced("UnifiAccess")(unifiAccess))
 
   /** The served location's UniFi switch, read from its row on every call. Without a location (dev,
     * standalone) there is no switch, and the UniFi config alone decides.

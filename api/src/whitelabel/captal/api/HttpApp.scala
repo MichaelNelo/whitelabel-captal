@@ -12,9 +12,12 @@ import whitelabel.captal.api.routes.{
   TermsRoutes,
   VideoRoutes
 }
+import io.opentelemetry.api.trace.SpanKind
+import whitelabel.captal.telemetry.Telemetry
 import zio.*
 import zio.http.*
 import zio.http.codec.{CodecConfig, PathCodec}
+import whitelabel.captal.telemetry.Tracing
 
 /** What a request reaching port 8080 finds: the API, and in dev the SPA and its assets. */
 private[api] object HttpApp:
@@ -26,6 +29,33 @@ private[api] object HttpApp:
     * checking the wire format must read this value rather than declare their own.
     */
   val codecConfig: CodecConfig = CodecConfig(ignoreEmptyCollections = false)
+
+  /** Every request in a server span named by its method and path, continuing the trace a W3C
+    * `traceparent` header carries, or starting one. Outside the logging, so its lines fall inside.
+    */
+  private val tracingMiddleware: Middleware[Tracing] =
+    new Middleware[Tracing]:
+      def apply[Env1 <: Tracing, Err](routes: Routes[Env1, Err]): Routes[Env1, Err] = routes
+        .transform[Env1]: handler =>
+          zio
+            .http
+            .Handler
+            .fromFunctionZIO[Request]: request =>
+              val headers =
+                request
+                  .headers
+                  .toList
+                  .map(header => header.headerName.toLowerCase -> header.renderedValue)
+                  .toMap
+              Telemetry.continuing(
+                headers,
+                s"${request.method} ${request.url.path}",
+                SpanKind.SERVER)(
+                handler
+                  .runZIO(request)
+                  .tap: response =>
+                    ZIO.serviceWithZIO[Tracing](
+                      _.setAttribute("http.response.status_code", response.status.code.toLong)))
 
   private def loggingMiddleware[R]: Middleware[R] =
     new Middleware[R]:
@@ -183,7 +213,7 @@ private[api] object HttpApp:
         devLinkerOutput(devStaticRoutes(base.slug) ++ served ++ spaCatchAllRoutes(base.slug))
       else
         served
-    baseRoutes @@ loggingMiddleware
+    baseRoutes @@ loggingMiddleware @@ tracingMiddleware
   end routes
 
 end HttpApp

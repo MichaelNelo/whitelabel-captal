@@ -1,6 +1,5 @@
 package whitelabel.captal.api
 
-import io.getquill.jdbczio.Quill
 import whitelabel.captal.api.routes.{
   AdvertiserSurveyRoutes,
   FinishRoutes,
@@ -24,12 +23,14 @@ import whitelabel.captal.platform.repositories.{
   UserRepositoryQuill,
   VideoRepositoryQuill
 }
-import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.platform.schema.{QuillSqlite, TracedSqlite}
 import whitelabel.captal.platform.services.{LocaleService, LocaleServiceQuill, LocationService}
 import whitelabel.captal.platform.session.{JobQueue, JobRunner, SessionContext, SessionService}
 import whitelabel.captal.platform.{BundleManifest, RqliteDataSource, UnifiAccess, UnifiClient}
+import whitelabel.captal.telemetry.Telemetry
 import zio.*
 import zio.http.{Client, Server}
+import whitelabel.captal.telemetry.Tracing
 
 /** What the application is made of, and in what order it can be built: the layers needing
   * `ServerSettings` to resolve a location, the plain wiring, `appLayers` composing them all, and
@@ -52,7 +53,7 @@ private[api] object AppLayers:
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType &
       RecoveryRoutes & RecoveryRoutes.RequestRecoveryFlowType &
       RecoveryRoutes.CheckRecoveryFlowType & RecoveryRoutes.RedeemRecoveryFlowType & RecoveryFeed &
-      TermsRoutes & TermsRoutes.StartFlowType & TermsRoutes.AcceptTermsFlowType
+      TermsRoutes & TermsRoutes.StartFlowType & TermsRoutes.AcceptTermsFlowType & Tracing
 
   /** The location's bundle manifest, read over HTTP when `BUNDLE_MANIFEST_URL` names it. */
   private val bundleManifestLayer: ZLayer[ServerSettings, Nothing, BundleManifest] = ZLayer.fromZIO:
@@ -133,7 +134,8 @@ private[api] object AppLayers:
     .makeSome[ServerSettings, FullEnv & Server.Config & JobRunner](
       SessionContext.make,
       RqliteDataSource.layer,
-      Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase),
+      Telemetry.layer("captal-api"),
+      TracedSqlite.layer,
       locationServiceLayer,
       sessionServiceLayer,
       localeServiceLayer,
