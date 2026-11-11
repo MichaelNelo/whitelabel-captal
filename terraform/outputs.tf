@@ -209,6 +209,17 @@ output "cdc_feed_address" {
   value       = module.cdc.feed_address
 }
 
+output "otlp_endpoint" {
+  description = "Where every service sends its traces: Jaeger, over OTLP. A release sets it on every location it moves."
+  value       = local.otlp_endpoint
+  depends_on  = [module.jaeger]
+}
+
+output "jaeger_service_name" {
+  description = "Jaeger's ECS service, to find the private address of its task, where the UI answers on 16686"
+  value       = module.jaeger.service_name
+}
+
 output "cdc_service_name" {
   description = "ECS service name of the relay, for `aws ecs update-service --force-new-deployment` after pushing a new image"
   value       = module.cdc.service_name

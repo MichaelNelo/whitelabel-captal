@@ -95,3 +95,9 @@ variable "desired_count" {
   description = "How many relay tasks: one, or zero where it runs elsewhere"
   type        = number
 }
+
+variable "otlp_endpoint" {
+  description = "Where the relay sends its traces over OTLP. Empty, and it keeps none."
+  type        = string
+  default     = ""
+}

@@ -68,11 +68,14 @@ resource "aws_ecs_task_definition" "cdc" {
       { containerPort = var.grpc_port, protocol = "tcp" },
     ]
 
-    environment = [
+    environment = concat([
       { name = "CDC_PORT", value = tostring(var.http_port) },
       { name = "CDC_GRPC_PORT", value = tostring(var.grpc_port) },
       { name = "CDC_BUFFER", value = tostring(var.buffer) },
-    ]
+      ], var.otlp_endpoint == "" ? [] : [
+      { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = var.otlp_endpoint },
+      { name = "OTEL_SERVICE_NAME", value = "captal-cdc" },
+    ])
 
     logConfiguration = {
       logDriver = "awslogs"

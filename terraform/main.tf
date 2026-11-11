@@ -1,6 +1,11 @@
 locals {
   name_prefix                 = "${var.project_name}-${var.environment}"
   service_discovery_namespace = "${var.project_name}.local"
+
+  # Where every service sends its traces: Jaeger's name in Cloud Map, fixed in `modules/jaeger`.
+  # Written out here rather than read from the module, so the services that send to it do not
+  # depend on the group that admits them.
+  otlp_endpoint = "http://jaeger.${local.service_discovery_namespace}:4317"
 }
 
 # ECS tasks security group (created here for shared reference by app and rqlite modules)
@@ -234,6 +239,24 @@ module "cdc" {
   container_cpu    = var.cdc_cpu
   container_memory = var.cdc_memory
   desired_count    = var.cdc_desired_count
+  otlp_endpoint    = local.otlp_endpoint
+}
+
+# Jaeger, where every service's traces go: the backoffice's, the relay's and every location's API.
+# Its UI is reached from the tailnet, through the Tailscale proxy.
+module "jaeger" {
+  source = "./modules/jaeger"
+
+  project_name                   = var.project_name
+  environment                    = var.environment
+  aws_region                     = var.aws_region
+  cluster_id                     = module.ecs.cluster_id
+  vpc_id                         = local.vpc_id
+  subnet_ids                     = local.workload_subnet_ids
+  service_discovery_namespace_id = aws_service_discovery_private_dns_namespace.main.id
+  execution_role_arn             = module.ecs.execution_role_arn
+  sender_security_group_ids      = [aws_security_group.ecs_tasks.id, module.cdc.security_group_id]
+  ui_security_group_ids          = var.enable_tailscale ? [module.tailscale_proxy[0].security_group_id] : []
 }
 
 # A stand-in for a venue's UniFi controller, which the end-to-end features point their locations at.
@@ -467,6 +490,7 @@ module "mcp" {
 
   db_url                      = module.rqlite.http_url
   cdc_feed_address            = module.cdc.feed_address
+  otlp_endpoint               = local.otlp_endpoint
   location_dev_endpoints      = var.enable_location_faults
   assets_bucket_name          = module.cloudfront.assets_bucket_name
   assets_bucket_arn           = module.cloudfront.assets_bucket_arn

@@ -189,6 +189,12 @@ variable "unifi_proxy_url" {
   default     = ""
 }
 
+variable "otlp_endpoint" {
+  description = "Where the server sends its traces over OTLP, and where `deploy_location` tells every location's API to send its own. Empty, and neither keeps any."
+  type        = string
+  default     = ""
+}
+
 variable "create_test_user" {
   description = "An IAM user with the same policy, for running the server outside ECS where the task role is not reachable. Worth having locally: with LocalStack's IAM enforcement on, a permission missing here fails in the test suite rather than in front of an operator."
   type        = bool

@@ -40,6 +40,12 @@ locals {
     value = var.unifi_proxy_url
   }]
 
+  # Read by this server for its own traces, and forwarded by `deploy_location` to every location.
+  otlp_env = var.otlp_endpoint == "" ? [] : [
+    { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = var.otlp_endpoint },
+    { name = "OTEL_SERVICE_NAME", value = "captal-mcp" },
+  ]
+
   environment = concat([
     { name = "MCP_PORT", value = tostring(var.container_port) },
     { name = "MCP_RESOURCE_URI", value = "${local.origin}/mcp" },
@@ -64,7 +70,7 @@ locals {
     { name = "TASK_EXECUTION_ROLE_ARN", value = var.execution_role_arn },
     { name = "TASK_ROLE_ARN", value = var.location_task_role_arn },
     { name = "API_IMAGE", value = var.api_image },
-  ], local.assets_endpoint_env, local.unifi_proxy_env)
+  ], local.assets_endpoint_env, local.unifi_proxy_env, local.otlp_env)
 }
 
 # ─── The admin token ────────────────────────────────────────────────────────
