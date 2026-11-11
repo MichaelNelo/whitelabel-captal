@@ -38,3 +38,18 @@ variable "rqlite_http_port" {
   type        = number
   default     = 4001
 }
+
+variable "aws_region" {
+  description = "Region of the VPC, which names the S3 service its gateway endpoint is for"
+  type        = string
+}
+
+variable "assets_bucket_name" {
+  description = "The assets bucket, where a pause keeps a location's page under `_paused/<slug>/`"
+  type        = string
+}
+
+variable "assets_bucket_arn" {
+  description = "The assets bucket's ARN, which the Lambda may list under `_paused/`"
+  type        = string
+}

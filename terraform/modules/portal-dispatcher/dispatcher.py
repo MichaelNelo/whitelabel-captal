@@ -2,8 +2,10 @@
 
 Triggered by ALB target group on /guest/s/* (UCG-redirected captive portal hits).
 Looks up the location by AP MAC in rqlite, then returns a 302 to either:
-  - the location's custom `unifi_redirect_url` if set (with all UCG query params appended),
-  - or the default `https://<cloudfront_host>/<slug>/?<params>` otherwise.
+  - the location's custom `unifi_redirect_url` if set and the location is not paused (with all
+    UCG query params appended),
+  - or the default `https://<cloudfront_host>/<slug>/?<params>` otherwise, which a paused
+    location's page answers with the maintenance page.
 
 UCG-generated URL example:
   /guest/s/default/?ap=94:2a:6f:d0:30:57&id=1c:71:25:63:e4:24
@@ -19,8 +21,19 @@ import os
 import urllib.parse
 import urllib.request
 
+import boto3
+from botocore.config import Config
+
 RQLITE_URL = os.environ["RQLITE_URL"]
 CLOUDFRONT_HOST = os.environ["CLOUDFRONT_HOST"]
+ASSETS_BUCKET = os.environ["ASSETS_BUCKET"]
+
+# Short and tried once: a guest is waiting on this redirect, and an S3 that does not answer is no
+# reason to keep them waiting.
+S3 = boto3.client(
+    "s3",
+    config=Config(connect_timeout=2, read_timeout=2, retries={"max_attempts": 1}),
+)
 
 
 def handler(event, context):
@@ -51,10 +64,12 @@ def handler(event, context):
     slug, redirect_url = rows[0][0], rows[0][1]
     qs = urllib.parse.urlencode(qsp, doseq=True)
 
-    # Custom redirect URL wins over the default cloudfront/<slug>/ destination.
+    # Custom redirect URL wins over the default cloudfront/<slug>/ destination, unless the location
+    # is paused: then its guests go to its own page, which the pause made the maintenance page.
+    # Asked only where there is a redirect URL; otherwise both go to the same place.
     # Append the original UCG query params with '?' or '&' depending on whether the
     # operator-provided URL already has a query string.
-    if redirect_url:
+    if redirect_url and not _paused(slug):
         sep = "&" if "?" in redirect_url else "?"
         location = f"{redirect_url}{sep}{qs}"
     else:
@@ -70,6 +85,23 @@ def handler(event, context):
         "body": "",
         "isBase64Encoded": False,
     }
+
+
+def _paused(slug):
+    """Whether the location is paused.
+
+    A pause keeps the page it replaced at `_paused/<slug>/site.html`, and a resume or a deploy
+    takes it away, so the object is there exactly while the location is paused. Failing to tell is
+    logged and read as running, which redirects as before pauses were looked at.
+    """
+    try:
+        listed = S3.list_objects_v2(
+            Bucket=ASSETS_BUCKET, Prefix=f"_paused/{slug}/site.html", MaxKeys=1
+        )
+    except Exception as e:
+        print(f"Could not tell whether '{slug}' is paused, so it is taken as running: {e}")
+        return False
+    return listed.get("KeyCount", 0) > 0
 
 
 def _error(status, msg):

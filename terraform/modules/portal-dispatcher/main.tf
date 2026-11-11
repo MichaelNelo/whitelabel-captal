@@ -64,6 +64,44 @@ resource "aws_iam_role_policy_attachment" "dispatcher_vpc" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
 
+# Whether a location is paused is whether a pause left its page under `_paused/<slug>/`, which a
+# listing of that prefix answers without reading the page. Listing rather than a HEAD of the object:
+# without a bucket-wide list, a HEAD of a missing object is a 403, not a 404.
+resource "aws_iam_role_policy" "dispatcher_paused_pages" {
+  name = "paused-pages"
+  role = aws_iam_role.dispatcher.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "s3:ListBucket"
+      Resource  = var.assets_bucket_arn
+      Condition = { StringLike = { "s3:prefix" = "_paused/*" } }
+    }]
+  })
+}
+
+# ─── S3 from inside the VPC ──────────────────────────────────────────────────
+# A Lambda attached to a VPC gets no public address, even in a public subnet, and with no NAT here
+# it reaches nothing outside the VPC. A gateway endpoint gives it S3. Free, and from then on it also
+# carries every other task's S3 traffic in this VPC, which no longer leaves through the internet
+# gateway.
+data "aws_route_tables" "vpc" {
+  vpc_id = var.vpc_id
+}
+
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = var.vpc_id
+  service_name      = "com.amazonaws.${var.aws_region}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = data.aws_route_tables.vpc.ids
+
+  tags = {
+    Name = "${local.name_prefix}-s3"
+  }
+}
+
 # ─── Lambda function ─────────────────────────────────────────────────────────
 data "archive_file" "dispatcher" {
   type        = "zip"
@@ -94,6 +132,7 @@ resource "aws_lambda_function" "dispatcher" {
     variables = {
       RQLITE_URL      = "http://rqlite.${var.service_discovery_namespace_name}:${var.rqlite_http_port}"
       CLOUDFRONT_HOST = var.cloudfront_host
+      ASSETS_BUCKET   = var.assets_bucket_name
     }
   }
 }

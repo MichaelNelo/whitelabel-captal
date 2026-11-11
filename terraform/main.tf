@@ -307,6 +307,9 @@ module "portal_dispatcher" {
   service_discovery_namespace_name = local.service_discovery_namespace
   cloudfront_host                  = var.cloudfront_domain
   rqlite_http_port                 = var.rqlite_http_port
+  aws_region                       = var.aws_region
+  assets_bucket_name               = module.cloudfront.assets_bucket_name
+  assets_bucket_arn                = module.cloudfront.assets_bucket_arn
 }
 
 # Global Accelerator — static IPv4 in front of the ALB so UniFi External Portal
