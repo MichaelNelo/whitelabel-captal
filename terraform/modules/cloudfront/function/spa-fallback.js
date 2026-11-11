@@ -20,6 +20,17 @@ function handler(event) {
     };
   }
 
+  // The bucket's root. S3 answers a request for it with a listing of every key in the bucket,
+  // because CloudFront may list it (so that a missing optional asset is a 404 rather than a 403;
+  // see the bucket policy). Nothing is served at the root but the files named in it.
+  if (uri === '/') {
+    return {
+      statusCode: 404,
+      statusDescription: 'Not Found',
+      headers: { 'cache-control': { value: 'no-store' } }
+    };
+  }
+
   var parts = uri.split('/');
 
   // A location's video, `/<slug>/videos/<id>`: stored without an extension, its object carrying its

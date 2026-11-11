@@ -379,7 +379,9 @@ One function, `function/spa-fallback.js`, does two jobs, the first ahead of the 
   location's prefix is copied from) and `/releases/*` (every published client, kept to put an
   earlier one back) — with a `403` before the extension check below would otherwise
   let a direct request straight through to a 200, since the bucket policy grants CloudFront the
-  whole bucket.
+  whole bucket. The root, `/`, gets a `404`: the bucket policy also lets CloudFront list the bucket
+  — so that a missing optional asset is a `404` rather than a `403` — and S3 answers a request for
+  the bucket's root with a listing of every key.
 * **SPA fallback and the slug redirect.** A request with a file extension passes through unchanged,
   and so does a video, `/<slug>/videos/<id>`, which is stored without one (its object carries its
   `Content-Type`); `/<slug>` with no trailing slash gets a `301` to `/<slug>/` with the query string preserved
