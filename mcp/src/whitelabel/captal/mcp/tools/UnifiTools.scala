@@ -1,6 +1,7 @@
 package whitelabel.captal.mcp.tools
 
 import com.jamesward.ziohttp.mcp.*
+import whitelabel.captal.core.device.Mac
 import whitelabel.captal.mcp.access.{Auth, Tokens}
 import whitelabel.captal.mcp.apps.{UiRoutes, UiTicket, UnifiUi}
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
@@ -78,11 +79,30 @@ object UnifiTools:
         "False stops every call to the location's UniFi controller; true resumes them. The stored settings are kept either way.")
       enabled: Boolean)
 
+  final case class UpdateSettingsRequest(
+      @description("Which location. Call list_locations for the slugs.")
+      slug: String,
+      @description("The controller's host name or IP. Left as it is when omitted.")
+      host: Option[String] = None,
+      @description("The controller's port, 1 to 65535. Left as it is when omitted.")
+      port: Option[Int] = None,
+      @description("The UniFi site id. Left as it is when omitted.")
+      siteId: Option[String] = None,
+      @description(
+        "The MAC of the AP the captive portal dispatcher matches on, in any spelling; stored lowercase with colons. An empty string removes it. Left as it is when omitted.")
+      apMac: Option[String] = None,
+      @description(
+        "Where a guest is sent after authorizing, an http or https URL. An empty string removes it. Left as it is when omitted.")
+      redirectUrl: Option[String] = None,
+      @description("Minutes of access each guest is granted. Left as it is when omitted.")
+      durationMinutes: Option[Int] = None)
+
   given Schema[ConfigureRequest] = DeriveSchema.gen
   given Schema[ConfigureResponse] = DeriveSchema.gen
   given Schema[StatusRequest] = DeriveSchema.gen
   given Schema[StatusResponse] = DeriveSchema.gen
   given Schema[SetEnabledRequest] = DeriveSchema.gen
+  given Schema[UpdateSettingsRequest] = DeriveSchema.gen
 
   /** @param origin
     *   Where this server is reached, used to build an absolute `postUrl`. The CSP that lets the
@@ -134,6 +154,86 @@ object UnifiTools:
     .handle: (in: SetEnabledRequest) =>
       UiRoutes.setEnabled(in.slug.trim, in.enabled).map(statusOf)
 
+  def updateSettings(): McpToolHandlerR[QuillSqlite] = McpTool("update_unifi_settings")
+    .description(
+      "Change a location's UniFi settings that are not secret — host, port, site id, AP MAC, redirect URL, access duration — without opening the form. Each field given replaces the stored one; every field left out stays as it is. The API token is set only through configure_unifi. A location's portal reads these settings when its task starts, so they apply once the location is redeployed with deploy_location.")
+    .requireScopes(Auth.ContentWrite)
+    .handle: (in: UpdateSettingsRequest) =>
+      for
+        current <- UiRoutes.currentFor(in.slug.trim)
+        changed <- ZIO.fromEither(applied(in, current))
+        stored  <- UiRoutes.storeSettings(changed)
+      yield statusOf(stored)
+
+  /** `current` with the fields `in` gives, each checked as the portal will read it. */
+  private def applied(
+      in: UpdateSettingsRequest,
+      current: UiRoutes.UnifiSettings): Either[String, UiRoutes.UnifiSettings] =
+    def required(sent: Option[String], kept: Option[String], name: String) =
+      sent.map(_.trim) match
+        case None =>
+          Right(kept)
+        case Some("") =>
+          Left(s"$name no puede quedar vacío: el portal lo necesita para llegar al controlador.")
+        case Some(value) =>
+          Right(Some(value))
+    def between(sent: Option[Int], kept: Option[Int], name: String, max: Int) =
+      sent match
+        case None =>
+          Right(kept)
+        case Some(value) if value >= 1 && value <= max =>
+          Right(Some(value))
+        case Some(value) =>
+          Left(s"$name debe estar entre 1 y $max, no $value.")
+    // An empty string removes the value; anything else has to read as the portal will read it.
+    def removable(sent: Option[String], kept: Option[String])(
+        read: String => Either[String, String]) =
+      sent.map(_.trim) match
+        case None =>
+          Right(kept)
+        case Some("") =>
+          Right(None)
+        case Some(value) =>
+          read(value).map(Some(_))
+    val nothingGiven =
+      in.host.isEmpty && in.port.isEmpty && in.siteId.isEmpty && in.apMac.isEmpty &&
+        in.redirectUrl.isEmpty && in.durationMinutes.isEmpty
+    for
+      _ <- Either.cond(
+        !nothingGiven,
+        (),
+        "No hay nada que cambiar: indicá al menos host, port, siteId, apMac, redirectUrl o durationMinutes.")
+      host     <- required(in.host, current.host, "host")
+      siteId   <- required(in.siteId, current.siteId, "siteId")
+      port     <- between(in.port, current.port, "port", 65535)
+      duration <- between(
+        in.durationMinutes,
+        current.durationMinutes,
+        "durationMinutes",
+        Int.MaxValue)
+      apMac <-
+        removable(in.apMac, current.apMac)(raw =>
+          Mac
+            .parse(raw)
+            .map(_.show)
+            .toRight(
+              s"'$raw' no es una MAC: seis pares de dígitos hexadecimales, separados por ':' o '-' o juntos."))
+      redirectUrl <-
+        removable(in.redirectUrl, current.redirectUrl)(url =>
+          Either.cond(
+            url.startsWith("https://") || url.startsWith("http://"),
+            url,
+            s"'$url' no es una URL http o https."))
+    yield current.copy(
+      host = host,
+      port = port,
+      siteId = siteId,
+      apMac = apMac,
+      redirectUrl = redirectUrl,
+      durationMinutes = duration)
+    end for
+  end applied
+
   private def statusOf(current: UiRoutes.UnifiSettings): StatusResponse = StatusResponse(
     slug = current.slug,
     configured = current.host.isDefined && current.siteId.isDefined && current.tokenSet,
@@ -150,5 +250,6 @@ object UnifiTools:
   def all(origin: String): List[McpToolHandlerR[QuillSqlite]] = List(
     configure(origin),
     status(),
-    setEnabled())
+    setEnabled(),
+    updateSettings())
 end UnifiTools

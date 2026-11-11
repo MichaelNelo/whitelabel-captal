@@ -115,6 +115,28 @@ object UiRoutes:
         current <- currentFor(slug)
       yield current
 
+  /** Stores the settings that are not secret, as given, leaving the token and the switch as they
+    * are.
+    */
+  private[mcp] def storeSettings(settings: UnifiSettings): ZIO[QuillSqlite, String, UnifiSettings] =
+    ZIO.serviceWithZIO[QuillSqlite]: quill =>
+      import quill.*
+      for
+        affected <-
+          run(
+            bySlug(lift(settings.slug)).update(
+              _.unifiHost            -> lift(settings.host),
+              _.unifiPort            -> lift(settings.port),
+              _.unifiSiteId          -> lift(settings.siteId),
+              _.unifiApMac           -> lift(settings.apMac),
+              _.unifiRedirectUrl     -> lift(settings.redirectUrl),
+              _.unifiDurationMinutes -> lift(settings.durationMinutes),
+              _.updatedAt            -> lift(Instant.now.toString)
+            )).orDie
+        _       <- Writes.expectOne(affected, s"Cambiando UniFi de '${settings.slug}'")
+        current <- currentFor(settings.slug)
+      yield current
+
   private def save(slug: String, form: Form): ZIO[QuillSqlite, String, String] = ZIO.serviceWithZIO[
     QuillSqlite]: quill =>
     import quill.*
