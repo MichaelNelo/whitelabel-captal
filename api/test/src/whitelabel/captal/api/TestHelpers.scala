@@ -33,6 +33,12 @@ import whitelabel.captal.messages.{
   VideoResponse,
   VideoWatchedResponse
 }
+import whitelabel.captal.api.session.{
+  CurrentLocation,
+  SessionCookieConfig,
+  UserCookieConfig,
+  UserLookup
+}
 import zio.*
 import zio.http.codec.CodecConfig
 
@@ -189,6 +195,31 @@ object TestHelpers:
     .cookie("captal_session", sessionCookie)
     .response(asStringAlways)
     .send(backend)
+
+  /** `/api/status` alone, served as the API of `location` serves it: the tests' own serves none. */
+  def statusBackendAt(location: CurrentLocation): ZIO[TestEnv, Nothing, SttpBackend[Task, Any]] =
+    ZIO
+      .environment[TestEnv]
+      .map: env =>
+        serveZioHttp(
+          SurveyRoutes(
+            env.get[SessionCookieConfig],
+            env.get[ApiBase],
+            location,
+            env.get[UserCookieConfig],
+            env.get[UserLookup]).routes.provideEnvironment(env))
+
+  /** `/api/status` from a redirect that carries no fingerprint. Answers the session cookie, which a
+    * refused request does not set.
+    */
+  def statusWithoutFingerprint(backend: SttpBackend[Task, Any], mac: String): Task[Option[String]] =
+    (defaultPortalHeaders - "X-Fingerprint" + ("X-Client-Mac" -> mac))
+      .foldLeft(basicRequest.get(uri"http://test/api/status").response(asStringAlways)) {
+        case (req, (k, v)) =>
+          req.header(k, v)
+      }
+      .send(backend)
+      .map(extractSessionCookie)
 
   /** A new session from a device the redirect describes differently: its own fingerprint and MAC.
     */

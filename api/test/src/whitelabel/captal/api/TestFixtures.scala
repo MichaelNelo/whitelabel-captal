@@ -380,10 +380,22 @@ object TestFixtures:
     run(query[SessionRow].filter(_.id == lift(sessionId)).update(_.phase -> lift(phase))).unit
 
   /** A location row whose id, slug and name are all `locationId`. */
-  def seedLocation(locationId: String): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[
-    QuillSqlite]: quill =>
+  def seedLocation(locationId: String, fingerprintRequired: Boolean = true)
+      : ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*
-    val location = LocationRow(locationId, locationId, locationId, 1, FixedNow, FixedNow, None)
+    val location = LocationRow(
+      locationId,
+      locationId,
+      locationId,
+      1,
+      FixedNow,
+      FixedNow,
+      None,
+      fingerprintIsRequired =
+        if fingerprintRequired then
+          1
+        else
+          0)
     run(query[LocationRow].insertValue(lift(location))).unit
 
   /** Moves a session to a location, as if the API serving it were that location's: the tests' own

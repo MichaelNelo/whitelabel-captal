@@ -16,6 +16,7 @@ import whitelabel.captal.core.infrastructure.SessionData
 import whitelabel.captal.core.user
 import whitelabel.captal.messages.{AnswerRequest, ApiError, StatusResponse, SurveyResponse}
 import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.platform.services.LocationService
 import whitelabel.captal.platform.session.{CaptivePortalParams, SessionContext, SessionService}
 import zio.*
 import zio.http.codec.HeaderCodec
@@ -41,6 +42,31 @@ object SurveyRoutes:
     SessionCookieConfig & ApiBase & CurrentLocation & UserCookieConfig & UserLookup,
     Nothing,
     SurveyRoutes] = ZLayer.fromFunction(SurveyRoutes(_, _, _, _, _))
+
+  /** The fingerprint a guest is given where the location does not require one and the redirect
+    * carries none. One value for all of them, so under the default policy, which compares the MAC
+    * and the fingerprint, their devices are told apart by the MAC alone; under `ByFingerprint` they
+    * would all be one device.
+    */
+  val NoFingerprint = "no-fingerprint"
+
+  /** The fingerprint a session is created with: the redirect's, or [[NoFingerprint]] where the
+    * served location does not require one. The switch is read from the location's row on every
+    * call, so changing it needs no restart. Without a location (dev, standalone) one is required.
+    */
+  private[api] def fingerprintOf(
+      quill: QuillSqlite,
+      location: CurrentLocation,
+      sent: Option[String]): Task[Option[String]] =
+    (sent.filter(_.nonEmpty), location.id) match
+      case (Some(fingerprint), _) =>
+        ZIO.some(fingerprint)
+      case (None, Some(id)) =>
+        LocationService(quill)
+          .fingerprintRequired(id)
+          .map(required => Option.unless(required)(NoFingerprint))
+      case (None, None) =>
+        ZIO.none
 
 end SurveyRoutes
 
@@ -234,18 +260,21 @@ final class SurveyRoutes(
       yield result,
     status.implement: (cookies, userAgentOpt, clientMac, apMac, redirectUrl, ssid, fingerprint) =>
       val userAgent = userAgentOpt.getOrElse(defaultUserAgent)
-      // portalParams only when both a readable clientMac AND a fingerprint are present (both
-      // required by the captive-portal redirect contract). If either is missing on a CREATE flow,
-      // session resolution falls through to ApiError.SessionMissing.
       val mac = clientMac.flatMap(Mac.parse)
       val ap = apMac.flatMap(Mac.parse)
-      val portalParams =
-        (mac, fingerprint) match
-          case (Some(m), Some(fp)) if fp.nonEmpty =>
-            Some(CaptivePortalParams(m, ap, redirectUrl.getOrElse(""), ssid.getOrElse(""), fp))
-          case _ =>
-            None
       for
+        quill <- ZIO.service[QuillSqlite]
+        sent  <- fingerprintOf(quill, currentLocation, fingerprint).mapError(ApiError.fromThrowable)
+        // portalParams only when both a readable clientMac AND a fingerprint are present (both
+        // required by the captive-portal redirect contract, the fingerprint unless the location
+        // stands one in). If either is missing on a CREATE flow, session resolution falls through
+        // to ApiError.SessionMissing.
+        portalParams =
+          (mac, sent) match
+            case (Some(m), Some(fp)) =>
+              Some(CaptivePortalParams(m, ap, redirectUrl.getOrElse(""), ssid.getOrElse(""), fp))
+            case _ =>
+              None
         _         <- softValidateApMac(ap, mac)
         onMissing <- resolveOnMissing(userCookieConfig.valueFrom(cookies), userAgent, portalParams)
         session   <- SessionEndpoint.resolveSession(cookieConfig.valueFrom(cookies), onMissing)

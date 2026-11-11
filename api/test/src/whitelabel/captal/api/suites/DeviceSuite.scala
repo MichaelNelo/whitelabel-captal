@@ -2,7 +2,11 @@ package whitelabel.captal.api.suites
 
 import whitelabel.captal.api.TestFixtures
 import whitelabel.captal.api.TestHelpers.*
+import whitelabel.captal.api.routes.SurveyRoutes
+import whitelabel.captal.api.session.CurrentLocation
 import whitelabel.captal.core.user
+import whitelabel.captal.platform.schema.QuillSqlite
+import zio.ZIO
 import zio.test.*
 
 /** Devices are found again by the redirect's signals, and users are linked to the devices they are
@@ -77,5 +81,58 @@ object DeviceSuite:
             state.answers.count(_.userId == owner) == 1,
             state.answers.forall(a => state.users.exists(_.id == a.userId))
           )
+        ,
+        test("the fingerprint switch is read from the location's row, and defaults to required"):
+          for
+            _        <- TestFixtures.seedLocation("fp-required")
+            _        <- TestFixtures.seedLocation("fp-optional", fingerprintRequired = false)
+            quill    <- ZIO.service[QuillSqlite]
+            required <- SurveyRoutes.fingerprintOf(quill, servedAt("fp-required"), None)
+            optional <- SurveyRoutes.fingerprintOf(quill, servedAt("fp-optional"), None)
+            blank    <- SurveyRoutes.fingerprintOf(quill, servedAt("fp-optional"), Some(""))
+            sent     <- SurveyRoutes.fingerprintOf(quill, servedAt("fp-optional"), Some("fp-x"))
+            missing  <- SurveyRoutes.fingerprintOf(quill, servedAt("no-such-location"), None)
+            noRow    <- SurveyRoutes.fingerprintOf(quill, CurrentLocation.empty, None)
+          yield assertTrue(
+            required.isEmpty,
+            optional.contains(SurveyRoutes.NoFingerprint),
+            blank.contains(SurveyRoutes.NoFingerprint),
+            // A fingerprint the redirect does carry is kept, wherever it is optional.
+            sent.contains("fp-x"),
+            missing.isEmpty,
+            noRow.isEmpty
+          )
+        ,
+        test(
+          "where the fingerprint is optional, a redirect without one gets the stand-in, and the MAC tells devices apart"):
+          for
+            _        <- TestFixtures.seedLocation("no-shortener", fingerprintRequired = false)
+            _        <- TestFixtures.seedLocation("with-shortener")
+            optional <- statusBackendAt(servedAt("no-shortener"))
+            required <- statusBackendAt(servedAt("with-shortener"))
+            first    <- statusWithoutFingerprint(optional, "DD:DD:DD:DD:DD:01")
+            again    <- statusWithoutFingerprint(optional, "DD:DD:DD:DD:DD:01")
+            other    <- statusWithoutFingerprint(optional, "DD:DD:DD:DD:DD:02")
+            refused  <- statusWithoutFingerprint(required, "DD:DD:DD:DD:DD:03")
+            state    <- TestFixtures.queryDbState
+            devices  <- TestFixtures.getDevices
+            deviceOf =
+              (cookie: Option[String]) =>
+                cookie.flatMap(c =>
+                  state.sessions.find(_.id == user.SessionId.unsafe(c)).map(_.deviceId))
+          yield assertTrue(
+            first.isDefined,
+            deviceOf(first) == deviceOf(again),
+            deviceOf(first) != deviceOf(other),
+            devices.size == 2,
+            devices.forall(_.fingerprint == SurveyRoutes.NoFingerprint),
+            refused.isEmpty
+          )
       )
+
+  private def servedAt(id: String): CurrentLocation = CurrentLocation(
+    Some(id),
+    Some(id),
+    None,
+    None)
 end DeviceSuite
