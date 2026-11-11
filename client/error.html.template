@@ -18,6 +18,7 @@
   </script>
   <link rel="stylesheet" href="{{CSS_PATH}}">
   <link rel="stylesheet" href="./custom-styles.css" onerror="this.remove()">
+  <link rel="icon" type="image/svg+xml" href="./brand-icon.svg">
 </head>
 <body>
   <!-- The way out of an error. Static, with its own script and no part of the bundle, because the

@@ -21,6 +21,7 @@
   </script>
   <link rel="stylesheet" href="{{CSS_PATH}}">
   <link rel="stylesheet" href="./custom-styles.css" onerror="this.remove()">
+  <link rel="icon" type="image/svg+xml" href="./brand-icon.svg">
   <!-- Written by the build, not by hand: the chunk names carry a content hash. Naming them here is
        what lets them be requested together with the entry instead of after it has been parsed, and
        that is one round trip off the critical path. -->
