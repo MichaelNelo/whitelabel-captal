@@ -222,6 +222,7 @@ def release(
     locations,
     output("api_image"),
     outputs.get("cdc_feed_address"),
+    outputs.get("otlp_endpoint"),
     await = awaitLocations)
 
   // Published once per version: skipped when the bucket holds it already. Locally it is always published.
@@ -428,10 +429,11 @@ val RegisterableFields = Seq(
   "runtimePlatform"
 )
 
-/** Moves every location onto `api`, the API image by digest, following the relay at `feed`: a new task
-  * definition revision that differs only in the image and `CDC_FEED_ADDRESS`, and its service pointed at it.
+/** Moves every location onto `api`, the API image by digest, following the relay at `feed` and sending
+  * its traces to `otlp`: a new task definition revision that differs only in the image,
+  * `CDC_FEED_ADDRESS` and the `OTEL_*` variables `deploy_location` sets, and its service pointed at it.
   * The service keeps its task count, so a paused location stays paused and runs the new image on resume. A
-  * location already on both is left as it is.
+  * location already on all of them is left as it is.
   *
   * With `await`, waits for the moved services to settle and fails naming the ones that did not.
   */
@@ -441,6 +443,7 @@ def rollLocations(
     locations: Seq[LocationService],
     api: String,
     feed: Option[String],
+    otlp: Option[String],
     await: Boolean): Unit =
   def pairs(environment: Seq[ujson.Value]) =
     environment.map(variable => variable("name").str -> variable("value").str).toSet
@@ -451,9 +454,13 @@ def rollLocations(
       .get("environment")
       .map(_.arr.toSeq)
       .getOrElse(Nil)
-    val following = feed.fold(environment): address =>
-      environment.filterNot(_("name").str == "CDC_FEED_ADDRESS") :+
-        ujson.Obj("name" -> "CDC_FEED_ADDRESS", "value" -> address)
+    val set = feed.map("CDC_FEED_ADDRESS" -> _).toList ++ otlp.toList.flatMap(endpoint =>
+      List(
+        "OTEL_EXPORTER_OTLP_ENDPOINT" -> endpoint,
+        "OTEL_SERVICE_NAME" -> "captal-api",
+        "OTEL_RESOURCE_ATTRIBUTES" -> s"captal.location=${location.slug}"))
+    val following = environment.filterNot(variable => set.exists(_._1 == variable("name").str)) ++
+      set.map((name, value) => ujson.Obj("name" -> name, "value" -> value))
     if location.image != api || pairs(following) != pairs(environment) then
       val input = ujson.Obj.from(RegisterableFields.flatMap(field =>
         location.taskDefinition.obj.get(field).filterNot(_.isNull).map(field -> _)))
