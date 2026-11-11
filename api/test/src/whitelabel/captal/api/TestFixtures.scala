@@ -555,8 +555,8 @@ object TestFixtures:
       val texts = locales.map(locale =>
         TermsTranslationRow(terms.id, locale, s"Terms v$version ($locale)", FixedNow))
       run(query[TermsRow].insertValue(lift(terms))) *>
-        ZIO.foreachDiscard(texts)(text => run(query[TermsTranslationRow].insertValue(lift(text)))) as
-        terms.id
+        ZIO.foreachDiscard(texts)(text =>
+          run(query[TermsTranslationRow].insertValue(lift(text)))) as terms.id
 
   def countSessions: ZIO[QuillSqlite, Throwable, Long] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*

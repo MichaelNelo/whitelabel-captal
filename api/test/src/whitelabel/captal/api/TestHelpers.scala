@@ -190,7 +190,8 @@ object TestHelpers:
     .response(asStringAlways)
     .send(backend)
 
-  /** A new session from a device the redirect describes differently: its own fingerprint and MAC. */
+  /** A new session from a device the redirect describes differently: its own fingerprint and MAC.
+    */
   def createSessionFrom(
       backend: SttpBackend[Task, Any],
       fingerprint: String,

@@ -252,9 +252,9 @@ object TestLayers:
     SessionContext & SessionService & LocaleService & SurveyRoutes.AnswerEmailFlowType &
       SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
       SurveyRoutes.NextSurveyFlowType & SurveyRoutes.ResolveWelcomeFlowType &
-      VideoRoutes.NextVideoFlowType &
-      VideoRoutes.MarkVideoWatchedFlowType & VideoRoutes.StartPlaybackFlowType &
-      VideoRoutes.EndPlaybackFlowType & AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
+      VideoRoutes.NextVideoFlowType & VideoRoutes.MarkVideoWatchedFlowType &
+      VideoRoutes.StartPlaybackFlowType & VideoRoutes.EndPlaybackFlowType &
+      AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType & QuillSqlite &
       SessionCookieConfig & ApiBase & CurrentLocation & UserCookieConfig & UserLookup &
       SurveyRoutes & LocaleRoutes & VideoRoutes & AdvertiserSurveyRoutes & FinishRoutes &
