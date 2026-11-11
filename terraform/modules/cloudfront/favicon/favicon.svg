@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- The backoffice's mark: the project's C, on the dark tile that keeps an operator's tab apart
+       from a portal's. The border keeps the tile visible on a dark tab bar. -->
+  <rect x="0.75" y="0.75" width="30.5" height="30.5" rx="6.25" fill="#111827" stroke="#4b5563" stroke-width="1.5"/>
+  <g fill="none" stroke="#a5b4fc" stroke-width="2.6" stroke-linecap="round">
+    <path d="M24.66 9.57A10 10 0 1 0 24.66 22.43"/>
+    <path d="M21.21 12.46A5.5 5.5 0 1 0 21.21 19.54"/>
+  </g>
+  <rect x="15" y="14" width="4" height="4" rx="1" fill="#ffffff"/>
+</svg>

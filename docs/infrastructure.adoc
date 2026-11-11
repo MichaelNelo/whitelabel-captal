@@ -360,8 +360,10 @@ rather than as a deployed topology.
 === CloudFront
 
 `modules/cloudfront` owns the assets bucket (`<project>-<env>-assets`, holding `bundle/`, every
-location's own `<slug>/` prefix, the MCP App scripts under `ui/` and every published client under
-`releases/client/<version>/`) behind an Origin Access Control, and the distribution itself:
+location's own `<slug>/` prefix, the MCP App scripts under `ui/`, every published client under
+`releases/client/<version>/`, and at its root the domain's own icon — `favicon.svg`, `favicon.ico`
+and `favicon-180.png`, the backoffice's mark, which the module uploads from its `favicon/` folder)
+behind an Origin Access Control, and the distribution itself:
 two origins (the S3 bucket through the OAC, and the ALB as a custom HTTPS-only origin), a default
 behavior serving the S3 origin with one CloudFront Function attached, an `ordered_cache_behavior`
 on `/ui/*` serving the MCP App pages' scripts from S3 with `Access-Control-Allow-Origin: *` added by

@@ -79,6 +79,31 @@ resource "aws_s3_bucket_policy" "assets" {
   policy = data.aws_iam_policy_document.bucket.json
 }
 
+# The domain's own icon, at the bucket's root where a browser or a favicon service asks for it:
+# the backoffice's mark, since the domain's root is the backoffice's and every portal declares its
+# own location's icon. Each location's prefix is copied from `bundle/` and never touches these.
+# Rendered from `favicon/favicon.svg` inside `devenv shell`:
+#   rsvg-convert -w <size> -h <size> favicon.svg -o favicon-<size>.png   (16, 32, 48 and 180)
+#   magick favicon-16.png favicon-32.png favicon-48.png favicon.ico
+locals {
+  favicons = {
+    "favicon.svg"     = "image/svg+xml"
+    "favicon.ico"     = "image/x-icon"
+    "favicon-180.png" = "image/png"
+  }
+}
+
+resource "aws_s3_object" "favicon" {
+  for_each = local.favicons
+
+  bucket        = aws_s3_bucket.assets.id
+  key           = each.key
+  source        = "${path.module}/favicon/${each.key}"
+  etag          = filemd5("${path.module}/favicon/${each.key}")
+  content_type  = each.value
+  cache_control = "public, max-age=86400"
+}
+
 # The upload page PUTs the video straight to this bucket with a presigned URL. Its `Content-Type`,
 # `video/mp4`, is not CORS-safelisted, so the browser asks with a preflight first, and a bucket with
 # no CORS configuration refuses it: the upload fails before it starts. Any origin, because the page
