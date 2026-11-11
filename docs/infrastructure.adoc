@@ -444,14 +444,14 @@ accelerator. Its health check tolerates the ALB's own `301` HTTP→HTTPS redirec
 
 `modules/portal-dispatcher` is the Lambda (Python 3.12, VPC-attached, 128 MB, 10-second timeout) that
 the accelerator's listener and an ALB rule (`/guest/s/*`, priority 100) feed: it looks up the AP MAC
-in rqlite and answers a `302` to the matching location's CloudFront URL, or to its redirect URL
-unless the location is paused. Its own security group opens port 4001 toward rqlite's and 443
+in rqlite and answers a `302` to the CloudFront URL of the newest matching location that is not
+paused, or to its redirect URL when it has one. Its own security group opens port 4001 toward rqlite's and 443
 outbound to AWS APIs ("VPC interface endpoints for logs aren't provisioned here"); the reciprocal
 ingress on rqlite's own security group is declared at the *root* module rather than inside either
 module, specifically to avoid a dependency cycle between the two.
 
-Whether a location is paused it reads from the assets bucket, listing `_paused/<slug>/` — the only
-S3 permission its role has. A Lambda attached to a VPC gets no public address, and with no NAT the
+Which locations are paused it reads from the assets bucket, listing `_paused/` — the only S3
+permission its role has. A Lambda attached to a VPC gets no public address, and with no NAT the
 module adds a gateway endpoint for S3 to the VPC's route tables: free, and from then on every task's
 S3 traffic in the VPC goes through it rather than the internet gateway. See
 xref:unifi.adoc#static-ipv4-and-the-portal-dispatcher[the portal dispatcher].
