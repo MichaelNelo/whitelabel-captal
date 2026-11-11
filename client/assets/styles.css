@@ -619,16 +619,19 @@ body {
   transform: none;
 }
 
-/* Terms of service: a dialog over the welcome, and the notice left after declining it */
+/* Terms of service: a dialog over the welcome, and the notice left after declining it.
+   The overlay is mounted on `body`, outside the app's transformed containers, so `fixed` is the
+   viewport's and it darkens all of it, above everything the app draws. The dialog takes 95% of the
+   screen, the overlay's padding the 5% around it. */
 .terms-overlay {
   position: fixed;
   inset: 0;
-  z-index: 10;
+  z-index: 100;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--space-lg);
-  background: rgba(0, 0, 0, 0.5);
+  padding: 2.5vh 2.5vw;
+  background: rgba(0, 0, 0, 0.7);
 }
 
 .terms-dialog {
@@ -636,8 +639,7 @@ body {
   flex-direction: column;
   gap: var(--space-md);
   width: 100%;
-  max-width: 480px;
-  max-height: 80vh;
+  height: 100%;
   padding: var(--space-xl);
   background: var(--surface-primary);
   border-radius: var(--radius-lg);
@@ -651,7 +653,10 @@ body {
 }
 
 .terms-text {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   font-size: var(--font-size-sm);
   line-height: 1.5;
   color: var(--text-secondary);
@@ -1728,15 +1733,30 @@ body {
   min-width: 220px;
 }
 
+/* One line, whatever the time left: the size follows the screen's width up to 56px, so the longest,
+   `24 h 00 min 00 s` — about 5.2 times the font size with the units at 0.4em — fits a 320px phone
+   inside the card's padding. */
 .welcome-countdown {
-  font-size: 56px;
+  font-size: clamp(28px, 11vw, 56px);
   font-weight: var(--font-weight-bold);
   color: var(--text-inverse);
   margin: 0;
-  /* tabular-nums keeps the mm:ss columns from jittering each tick. */
+  white-space: nowrap;
+  /* tabular-nums keeps the digits from jittering each tick. */
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
   line-height: 1.1;
+}
+
+.welcome-countdown-unit {
+  font-size: 0.4em;
+  font-weight: var(--font-weight-semibold);
+  margin: 0 0.5em 0 0.15em;
+  opacity: 0.85;
+}
+
+.welcome-countdown-unit:last-child {
+  margin-right: 0;
 }
 
 .welcome-countdown-label {

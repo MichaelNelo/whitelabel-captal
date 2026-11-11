@@ -1,7 +1,9 @@
 package whitelabel.captal.client.views
 import scala.scalajs.js
 
+import com.raquo.laminar.api.L
 import com.raquo.laminar.api.L.*
+import org.scalajs.dom
 import whitelabel.captal.client.Promises.*
 import whitelabel.captal.client.i18n.I18nClient
 import whitelabel.captal.client.{AppState, ErrorHandler, Router, Runtime, StatusApi, WelcomeApi}
@@ -41,29 +43,49 @@ object WelcomeView:
               welcomeFooter)
   )
 
-  private def welcomeContent: HtmlElement = div(
-    cls := "welcome-view",
-    h1(cls := "welcome-title", child.text <-- I18nClient.i18n.map(_.welcome.title)),
-    p(cls  := "welcome-subtitle", child.text <-- I18nClient.i18n.map(_.welcome.subtitle)),
+  private def welcomeContent: HtmlElement =
+    // Takes the open dialog off `document.body`; nothing while none is open.
+    var closeTerms: () => Unit = () => ()
     div(
-      cls := "welcome-steps",
-      step(I18nClient.i18n.map(_.welcome.steps.step1), 1),
-      step(I18nClient.i18n.map(_.welcome.steps.step2), 2),
-      step(I18nClient.i18n.map(_.welcome.steps.step3), 3)
-    ),
-    child.maybe <--
-      termsDeclined
-        .signal
-        .map(declined =>
-          Option.when(declined)(
-            p(
-              cls := "terms-required",
-              child.text <-- I18nClient.i18n.map(_.welcome.terms.required)))),
-    child.maybe <-- openedTerms.signal.map(_.map(termsDialog)),
-    onMountCallback { _ =>
-      loadLocales()
-    }
-  )
+      cls := "welcome-view",
+      h1(cls := "welcome-title", child.text <-- I18nClient.i18n.map(_.welcome.title)),
+      p(cls  := "welcome-subtitle", child.text <-- I18nClient.i18n.map(_.welcome.subtitle)),
+      div(
+        cls := "welcome-steps",
+        step(I18nClient.i18n.map(_.welcome.steps.step1), 1),
+        step(I18nClient.i18n.map(_.welcome.steps.step2), 2),
+        step(I18nClient.i18n.map(_.welcome.steps.step3), 3)
+      ),
+      child.maybe <--
+        termsDeclined
+          .signal
+          .map(declined =>
+            Option.when(declined)(
+              p(
+                cls := "terms-required",
+                child.text <-- I18nClient.i18n.map(_.welcome.terms.required)))),
+      // The dialog is mounted on `document.body`, not in this view: `.view-content`'s transform
+      // makes `position: fixed` relative to it, so the overlay would cover that box alone, inside
+      // its stacking context, under the footer and its locale picker.
+      openedTerms.signal --> { opened =>
+        closeTerms()
+        closeTerms = () => ()
+        opened.foreach: terms =>
+          val container = dom.document.createElement("div")
+          val _ = dom.document.body.appendChild(container)
+          // `L.render`: this view's own `render` shadows Laminar's here.
+          val root = L.render(container, termsDialog(terms))
+          closeTerms =
+            () =>
+              val _ = root.unmount()
+              val _ = dom.document.body.removeChild(container)
+      },
+      onMountCallback { _ =>
+        loadLocales()
+      },
+      onUnmountCallback(_ => closeTerms())
+    )
+  end welcomeContent
 
   private def welcomeFooter: HtmlElement = div(
     select(
@@ -116,10 +138,19 @@ object WelcomeView:
         cls := "welcome-countdown-wrapper",
         div(
           cls := "welcome-countdown-card",
-          p(cls := "welcome-countdown", child.text <-- remaining.signal.map(formatRemaining)),
+          p(
+            cls := "welcome-countdown",
+            children <--
+              remaining
+                .signal
+                .map(seconds =>
+                  remainingParts(seconds).flatMap((value, unit) =>
+                    List(span(value), span(cls := "welcome-countdown-unit", unit))))
+          ),
           p(
             cls := "welcome-countdown-label",
-            child.text <-- I18nClient.i18n.map(_.welcome.authorized.remaining))
+            child.text <--
+              I18nClient.i18n.map(i18n => remainingLabel(i18n.welcome.authorized.remaining)))
         )
       ),
       tickStream --> { _ =>
@@ -157,16 +188,40 @@ object WelcomeView:
         case Left(err) =>
           ErrorHandler.escalate(err)
 
-  /** `mm:ss`, padded by hand: the `f` interpolator would pull `java.util.Formatter` into the
-    * bundle.
+  /** The time left as numbers with their units, the largest first — `1 h 05 min 12 s`,
+    * `59 min 16 s`, `16 s` — since a bare `59:16` does not say whether it is minutes or hours. Each
+    * unit is its own element, smaller than its number, which keeps the line short enough to fit.
+    * `h`, `min` and `s` are the international symbols, written the same in Spanish and English, so
+    * they need no translation. Padded by hand: the `f` interpolator would pull
+    * `java.util.Formatter` into the bundle.
     */
-  private def formatRemaining(seconds: Int): String =
+  private def remainingParts(seconds: Int): List[(String, String)] =
     def twoDigits(n: Int): String =
       if n < 10 then
         "0" + n.toString
       else
         n.toString
-    twoDigits(seconds / 60) + ":" + twoDigits(seconds % 60)
+    val hours = seconds / 3600
+    val minutes = seconds / 60 % 60
+    val secs = seconds         % 60
+    if hours > 0 then
+      List(hours.toString -> "h", twoDigits(minutes) -> "min", twoDigits(secs) -> "s")
+    else if minutes > 0 then
+      List(minutes.toString -> "min", twoDigits(secs) -> "s")
+    else
+      List(secs.toString -> "s")
+
+  /** The label under the countdown, which shows the time itself: a `{seconds}` in the translation,
+    * in any case, is dropped with the colon before it.
+    */
+  private def remainingLabel(text: String): String =
+    val placeholder = "{seconds}"
+    text.toLowerCase.indexOf(placeholder) match
+      case -1 =>
+        text
+      case at =>
+        (text.take(at).trim.stripSuffix(":").trim + " " + text.drop(at + placeholder.length).trim)
+          .trim
 
   private def step(textSignal: Signal[String], index: Int): HtmlElement = div(
     cls       := "step",
