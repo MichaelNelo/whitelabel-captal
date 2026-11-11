@@ -121,7 +121,9 @@ object I18n:
       selectLanguage = "Label of the locale picker.",
       authorized = Welcome.Authorized(
         title = "Heading shown while the guest already has access.",
-        remaining = "Countdown of the access left. Use {seconds}."),
+        remaining =
+          "Label under the countdown of the access left, such as \"Time left\". The countdown shows the time itself, so it takes no placeholder."
+      ),
       terms = Welcome.Terms(
         title = "Heading of the terms of service dialog the welcome opens before the flow begins.",
         accept = "Button that accepts the terms of service and begins the flow.",
