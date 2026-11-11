@@ -34,6 +34,12 @@ message ChangeSet {
   // The change set exactly as rqlite posted it, {"index": n, "events": [...]}: rows stay as rqlite
   // wrote them, numbers included, and the relay has no need to understand them.
   string json = 2;
+
+  // The trace the relay received it in, as W3C trace context (`traceparent`, `tracestate`): a
+  // subscriber handling it continues that trace, so one trace shows every subscriber it reached.
+  // Per change set rather than in the stream's metadata, which is the subscription's and is sent
+  // once.
+  map<string, string> trace_context = 3;
 }
 
 // Change sets were dropped: whatever a subscriber keeps from them, it has to rebuild from the

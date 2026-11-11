@@ -17,8 +17,10 @@ import zio.stream.ZStream
   */
 object ChangeFeedFollower:
   enum Event:
-    /** One change set, exactly as rqlite posted it: `{"index": n, "events": [...]}`. */
-    case Changed(index: Long, json: String)
+    /** One change set, exactly as rqlite posted it: `{"index": n, "events": [...]}`, and the trace
+      * the relay received it in, as W3C trace context headers, for the subscriber to continue.
+      */
+    case Changed(index: Long, json: String, context: Map[String, String] = Map.empty)
 
     /** Change sets may be missing. */
     case Gap
@@ -80,7 +82,9 @@ object ChangeFeedFollower:
       val events =
         delivery.kind match
           case Delivery.Kind.Change(change) =>
-            (List(Event.Changed(change.index, change.json)), now.copy(last = Some(change.index)))
+            (
+              List(Event.Changed(change.index, change.json, change.traceContext)),
+              now.copy(last = Some(change.index)))
           case Delivery.Kind.Gap(_) =>
             (List(Event.Gap), now)
           case Delivery.Kind.Empty =>

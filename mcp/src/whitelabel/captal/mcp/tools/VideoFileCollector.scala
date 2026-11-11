@@ -1,6 +1,8 @@
 package whitelabel.captal.mcp.tools
 
 import io.getquill.*
+import io.opentelemetry.api.common.{AttributeKey, Attributes}
+import io.opentelemetry.api.trace.SpanKind
 import whitelabel.captal.cdc.protocol.ChangeFeedFollower
 import whitelabel.captal.core.video
 import whitelabel.captal.mcp.aws.AssetStore
@@ -8,6 +10,7 @@ import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.{VideoFileRow, VideoFiles, VideoPlaybackRow}
+import whitelabel.captal.telemetry.{Telemetry, Tracing}
 import zio.*
 import zio.stream.ZStream
 
@@ -88,9 +91,21 @@ object VideoFileCollector:
       timers <- PlaybackExpiry.make(asked)
     yield Running(asked, timers)
 
-  /** Follows the change feed for as long as it runs: see [[changed]]. */
-  def follow(running: Running, feed: ZStream[Any, Nothing, ChangeFeedFollower.Event]): UIO[Unit] =
-    feed.foreach(changed(running, _))
+  /** Follows the change feed for as long as it runs: see [[changed]]. Each change set is handled in
+    * a span continuing the trace the relay received it in, so that trace shows the backoffice among
+    * the subscribers it reached.
+    */
+  def follow(
+      running: Running,
+      feed: ZStream[Any, Nothing, ChangeFeedFollower.Event]): URIO[Tracing, Unit] = feed.foreach:
+    case event @ ChangeFeedFollower.Event.Changed(index, _, context) =>
+      Telemetry.continuing(
+        context,
+        "cdc VideoFileCollector",
+        SpanKind.CONSUMER,
+        Attributes.of(AttributeKey.longKey("cdc.change.index"), index))(changed(running, event))
+    case event =>
+      changed(running, event)
 
   /** Every change set that touches `video_playbacks` asks for a pass; a playback starting starts
     * its timer, and one ending cancels it. A change set of any other table is not this collector's.
@@ -99,7 +114,7 @@ object VideoFileCollector:
     */
   def changed(running: Running, event: ChangeFeedFollower.Event): UIO[Unit] =
     event match
-      case ChangeFeedFollower.Event.Changed(_, json) =>
+      case ChangeFeedFollower.Event.Changed(_, json, _) =>
         ZIO
           .when(playbackEvents(json).nonEmpty)(
             ZIO

@@ -1,6 +1,9 @@
 package whitelabel.captal.api
 
+import io.opentelemetry.api.common.{AttributeKey, Attributes}
+import io.opentelemetry.api.trace.SpanKind
 import whitelabel.captal.cdc.protocol.ChangeFeedFollower
+import whitelabel.captal.telemetry.{Telemetry, Tracing}
 import zio.*
 import zio.json.ast.Json
 
@@ -34,8 +37,11 @@ object RecoveryFeed:
   /** Following the relay at `CDC_FEED_ADDRESS` (`host:port`) for as long as the server runs. A
     * warning and not a failure without it: a waiting page then learns of a recurrence when it
     * connects again, and its wait still ends.
+    *
+    * Each change set is read in a span continuing the trace the relay received it in, so that trace
+    * shows this location among the subscribers it reached.
     */
-  val layer: ZLayer[Any, Nothing, RecoveryFeed] = ZLayer.scoped:
+  val layer: ZLayer[Tracing, Nothing, RecoveryFeed] = ZLayer.scoped:
     for
       feed    <- make
       address <- System.env("CDC_FEED_ADDRESS").orDie.map(_.map(_.trim).filter(_.nonEmpty))
@@ -45,14 +51,26 @@ object RecoveryFeed:
             ZIO.logInfo(s"Following the change feed at $at") *>
               ChangeFeedFollower
                 .follow(at)
-                .mapConcat(signalsOf)
-                .foreach(feed.publish)
+                .foreach(event => traced(event)(ZIO.foreachDiscard(signalsOf(event))(feed.publish)))
                 .forkScoped
                 .unit
           case None =>
             ZIO.logWarning(
               "No CDC_FEED_ADDRESS: a waiting page hears that its error recurred only when it connects again")
     yield feed
+
+  /** `read` in a consumer span under the change set's trace; a gap carries none, and is read as is.
+    */
+  private def traced(event: ChangeFeedFollower.Event)(read: UIO[Unit]): URIO[Tracing, Unit] =
+    event match
+      case ChangeFeedFollower.Event.Changed(index, _, context) =>
+        Telemetry.continuing(
+          context,
+          "cdc RecoveryFeed",
+          SpanKind.CONSUMER,
+          Attributes.of(AttributeKey.longKey("cdc.change.index"), index))(read)
+      case ChangeFeedFollower.Event.Gap =>
+        read
 
   /** What one delivery of the feed says: an `INSERT` into `errors` with a fingerprint, read from
     * the row in `after`; or a gap. Anything else, including what is not rqlite's, says nothing.
@@ -61,7 +79,7 @@ object RecoveryFeed:
     event match
       case ChangeFeedFollower.Event.Gap =>
         List(Signal.Gap)
-      case ChangeFeedFollower.Event.Changed(_, json) =>
+      case ChangeFeedFollower.Event.Changed(_, json, _) =>
         def field(at: Json, name: String): Option[Json] = at.asObject.flatMap(_.get(name))
         Json
           .decoder

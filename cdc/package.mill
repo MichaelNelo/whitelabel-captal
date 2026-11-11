@@ -15,7 +15,7 @@ object `package` extends BaseModule with Released:
   /** Empty, as the backoffice's: the image runs `java -jar`. */
   def prependShellScript = ""
 
-  def moduleDeps = Seq(build.cdc.protocol)
+  def moduleDeps = Seq(build.cdc.protocol, build.telemetry)
 
   // zio-http at the version `platform` uses, for the one route rqlite posts to.
   def mvnDeps = Seq(mvn"dev.zio::zio-http:3.0.1")

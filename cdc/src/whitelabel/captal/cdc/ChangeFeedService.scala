@@ -12,7 +12,9 @@ final class ChangeFeedService(relay: Relay) extends ZioCdc.ChangeFeed:
     .subscribe(request.since)
     .map:
       case Relayed.Changed(change) =>
-        Delivery(relay.instance, Delivery.Kind.Change(ChangeSet(change.index, change.json)))
+        Delivery(
+          relay.instance,
+          Delivery.Kind.Change(ChangeSet(change.index, change.json, change.context)))
       case Relayed.Gap =>
         Delivery(relay.instance, Delivery.Kind.Gap(Gap()))
 end ChangeFeedService

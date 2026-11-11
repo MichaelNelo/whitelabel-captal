@@ -32,9 +32,9 @@ object RelaySpec extends ZIOSpecDefault:
       _     <- Main.serve(port, relay)
     yield relay
 
-  private def untilFollowed(relay: Relay): UIO[Unit] = (ZIO.sleep(20.millis) *> relay.subscribers)
-    .repeatUntil(_ > 0)
-    .unit
+  /** Until `followers` subscribers follow `relay`. */
+  private def untilFollowed(relay: Relay, followers: Int = 1): UIO[Unit] =
+    (ZIO.sleep(20.millis) *> relay.subscribers).repeatUntil(_ >= followers).unit
 
   def spec =
     suite("Relay")(
@@ -80,11 +80,32 @@ object RelaySpec extends ZIOSpecDefault:
               events   <- follower.join
             yield assertTrue(
               events.map {
-                case ChangeFeedFollower.Event.Changed(index, json) =>
+                case ChangeFeedFollower.Event.Changed(index, json, _) =>
                   s"$index:${json.contains(s""""id":"e$index"""")}"
                 case ChangeFeedFollower.Event.Gap =>
                   "gap"
               } == Chunk("7:true", "8:true"))
+        ,
+        test("every follower gets the trace a change set was received in, to continue it"):
+          val received = Map(
+            "traceparent" -> "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")
+          ZIO.scoped:
+            for
+              port   <- freePort
+              relay  <- serving(port)
+              first  <- ChangeFeedFollower.follow(s"localhost:$port").take(1).runCollect.fork
+              second <- ChangeFeedFollower.follow(s"localhost:$port").take(1).runCollect.fork
+              _      <- untilFollowed(relay, 2)
+              _      <- relay.receive(post(7), received)
+              events <- first.join.zipWith(second.join)(_ ++ _)
+            yield assertTrue(
+              events.size == 2,
+              events.forall {
+                case ChangeFeedFollower.Event.Changed(_, _, context) =>
+                  context == received
+                case ChangeFeedFollower.Event.Gap =>
+                  false
+              })
         ,
         test("a follower whose relay restarted is told it may have missed changes, and carries on"):
           for
@@ -112,7 +133,7 @@ object RelaySpec extends ZIOSpecDefault:
                     1,
                     events
                       .headOption
-                      .collect { case ChangeFeedFollower.Event.Changed(_, json) =>
+                      .collect { case ChangeFeedFollower.Event.Changed(_, json, _) =>
                         json
                       }
                       .getOrElse("")),
@@ -123,7 +144,7 @@ object RelaySpec extends ZIOSpecDefault:
                     2,
                     events
                       .lastOption
-                      .collect { case ChangeFeedFollower.Event.Changed(_, json) =>
+                      .collect { case ChangeFeedFollower.Event.Changed(_, json, _) =>
                         json
                       }
                       .getOrElse(""))

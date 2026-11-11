@@ -7,10 +7,10 @@ import zio.json.*
 import zio.json.ast.Json
 import zio.stream.ZStream
 
-/** One change set as rqlite commits it: its Raft index, and the change set itself, as rqlite wrote
-  * it, on one line.
+/** One change set as rqlite commits it: its Raft index, the change set itself, as rqlite wrote it,
+  * on one line, and the trace it was received in, as W3C trace context headers.
   */
-final case class Change(index: Long, json: String)
+final case class Change(index: Long, json: String, context: Map[String, String] = Map.empty)
 
 /** What a subscriber is handed. */
 enum Relayed:
@@ -41,27 +41,29 @@ final class Relay private (
   /** How many subscribers are following right now. */
   def subscribers: UIO[Int] = following.get
 
-  /** The change sets of one post, published in index order. The number published: the ones not seen
-    * before.
+  /** The change sets of one post, published in index order, each carrying `context`, the trace the
+    * post was received in. The number published: the ones not seen before.
     */
-  def receive(body: String): UIO[Int] = oneAtATime.withPermit:
-    for
-      fresh <- state.modify: s =>
-        val news = Relay
-          .changesOf(body)
-          .filter(_.index > s.last)
-          .distinctBy(_.index)
-          .sortBy(_.index)
-        val all = s.buffer ++ news
-        val (evicted, kept) = all.splitAt(math.max(0, all.size - capacity))
-        (
-          news,
-          Relay.State(
-            kept,
-            news.lastOption.fold(s.last)(_.index),
-            evicted.lastOption.fold(s.evictedUpTo)(_.index)))
-      _ <- hub.publishAll(fresh)
-    yield fresh.size
+  def receive(body: String, context: Map[String, String] = Map.empty): UIO[Int] = oneAtATime
+    .withPermit:
+      for
+        fresh <- state.modify: s =>
+          val news = Relay
+            .changesOf(body)
+            .filter(_.index > s.last)
+            .distinctBy(_.index)
+            .sortBy(_.index)
+            .map(_.copy(context = context))
+          val all = s.buffer ++ news
+          val (evicted, kept) = all.splitAt(math.max(0, all.size - capacity))
+          (
+            news,
+            Relay.State(
+              kept,
+              news.lastOption.fold(s.last)(_.index),
+              evicted.lastOption.fold(s.evictedUpTo)(_.index)))
+        _ <- hub.publishAll(fresh)
+      yield fresh.size
 
   /** Every change set from now on, and before them those after `since` this relay still keeps. */
   def subscribe(since: Option[Long]): ZStream[Any, Nothing, Relayed] = ZStream.unwrapScoped:

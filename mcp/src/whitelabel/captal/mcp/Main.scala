@@ -71,17 +71,18 @@ object Main extends ZIOAppDefault:
     * and on every replacement, and playbacks open at startup still expire; only playbacks that
     * start or end afterwards go unheard.
     */
-  private def followChanges(collector: VideoFileCollector.Running): URIO[Scope, Unit] = System
-    .env("CDC_FEED_ADDRESS")
-    .orDie
-    .map(_.map(_.trim).filter(_.nonEmpty))
-    .flatMap:
-      case Some(address) =>
-        ZIO.logInfo(s"Following the change feed at $address") *>
-          VideoFileCollector.follow(collector, ChangeFeedFollower.follow(address)).forkScoped.unit
-      case None =>
-        ZIO.logWarning(
-          "No CDC_FEED_ADDRESS: playbacks that start or end from now on are not heard of until the next restart")
+  private def followChanges(collector: VideoFileCollector.Running): URIO[Scope & Tracing, Unit] =
+    System
+      .env("CDC_FEED_ADDRESS")
+      .orDie
+      .map(_.map(_.trim).filter(_.nonEmpty))
+      .flatMap:
+        case Some(address) =>
+          ZIO.logInfo(s"Following the change feed at $address") *>
+            VideoFileCollector.follow(collector, ChangeFeedFollower.follow(address)).forkScoped.unit
+        case None =>
+          ZIO.logWarning(
+            "No CDC_FEED_ADDRESS: playbacks that start or end from now on are not heard of until the next restart")
 
   /** The load balancer's health check, `GET /health` answering `ok`: served once the server is, so
     * a task still migrating or one that failed to start is not sent requests.

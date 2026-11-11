@@ -4,6 +4,7 @@ import java.util.concurrent.TimeUnit
 
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder
 import scalapb.zio_grpc.ZBindableService
+import whitelabel.captal.telemetry.Telemetry
 import zio.*
 import zio.http.Server
 
@@ -23,7 +24,9 @@ object Main extends ZIOAppDefault:
       _ <- ZIO.logInfo(
         s"Relaying change data capture from :$httpPort to :$grpcPort as $instance, keeping $capacity")
       _ <-
-        Server.serve(RelayRoutes(relay)).provide(Server.defaultWithPort(httpPort)) <&>
+        Server
+          .serve(RelayRoutes(relay))
+          .provide(Server.defaultWithPort(httpPort), Telemetry.layer("captal-cdc")) <&>
           ZIO.scoped(serve(grpcPort, relay) *> ZIO.never)
     yield ()
 
