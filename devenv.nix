@@ -52,9 +52,10 @@ in
   # from a newer version, and `.terraform.lock.hcl` records provider hashes from whichever registry
   # wrote it -- registry.terraform.io or registry.opentofu.org. The build has to run the same
   # binary an operator runs by hand. `awscli2` because an apply against AWS logs in to ECR with it
-  # before pushing the images.
+  # before pushing the images. `librsvg` and `imagemagick` render the favicons from their SVG
+  # sources: `rsvg-convert` draws each size, `magick` packs the sizes into one `.ico`.
   dotenv.enable = true;
-  packages = [ pkgs.git pkgs.terraform pkgs.opentofu pkgs.scalafmt pkgs.scalafix pkgs.cloudflared pkgs.git-cliff pkgs.awscli2 ];
+  packages = [ pkgs.git pkgs.terraform pkgs.opentofu pkgs.scalafmt pkgs.scalafix pkgs.cloudflared pkgs.git-cliff pkgs.awscli2 pkgs.librsvg pkgs.imagemagick ];
 
   # https://devenv.sh/languages/
   languages.scala.enable = true;
