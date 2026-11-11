@@ -14,6 +14,11 @@ trait LocationService:
     */
   def unifiEnabled(id: String): Task[Boolean]
 
+  /** Whether the location with this id requires the redirect's fingerprint, read now rather than at
+    * startup. True when no such location exists.
+    */
+  def fingerprintRequired(id: String): Task[Boolean]
+
 object LocationService:
 
   /** Error raised when the configured LOCATION_SLUG matches no row in the locations table. */
@@ -27,6 +32,9 @@ object LocationService:
   inline def unifiEnabledQuery = quote: (idParam: String) =>
     query[LocationRow].filter(_.id == idParam).map(_.unifiIsEnabled).take(1)
 
+  inline def fingerprintRequiredQuery = quote: (idParam: String) =>
+    query[LocationRow].filter(_.id == idParam).map(_.fingerprintIsRequired).take(1)
+
   def apply(quill: QuillSqlite): LocationService =
     new LocationService:
       import quill.*
@@ -36,6 +44,9 @@ object LocationService:
 
       def unifiEnabled(id: String): Task[Boolean] = run(unifiEnabledQuery(lift(id))).map(
         _.headOption.contains(1))
+
+      def fingerprintRequired(id: String): Task[Boolean] = run(fingerprintRequiredQuery(lift(id)))
+        .map(!_.headOption.contains(0))
 
   /** Resolve a slug to a location ID, failing with LocationNotFound if not found. */
   def resolveSlug(slug: String): ZIO[LocationService, LocationNotFound, String] = ZIO

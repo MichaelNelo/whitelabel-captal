@@ -255,7 +255,8 @@ final case class LocationRow(
     unifiApiToken: Option[String] = None,
     unifiDurationMinutes: Option[Int] = None,
     unifiRedirectUrl: Option[String] = None,
-    unifiIsEnabled: Int = 1)
+    unifiIsEnabled: Int = 1,
+    fingerprintIsRequired: Int = 1)
 
 /** What a location changed of the recovery defaults; `None` takes the default. See
   * [[LocationRecovery]].
