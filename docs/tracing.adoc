@@ -1,0 +1,144 @@
+= Tracing
+
+Every service sends OpenTelemetry traces to Jaeger: the backoffice, the change data capture relay,
+and every location's API. Spans are opened at the platform and presentation levels — the HTTP
+servers, the backoffice's tools, the database context, the UniFi client, the event handlers and the
+relay — and never in `core`, which depends on nothing that knows a span.
+
+== The model: `telemetry`
+
+`telemetry` is a module of its own, on OpenTelemetry's Java SDK 1.65.0. `platform` and the relay
+depend on it; `core` does not.
+
+`Tracing` (`telemetry/Tracing.scala`) opens spans over the Java API and keeps the current one in a
+`FiberRef[Context]`, not in OpenTelemetry's thread-local: a fiber moves between threads, so a span
+kept on one would be lost on the next, and a forked fiber inherits the `FiberRef` and so its parent.
+Every span is opened explicitly, in ZIO. Its four operations:
+
+* `span(name, kind, attributes)(effect)` — `effect` in a child of the current span.
+* `continuing(headers, name, kind)(effect)` — `effect` in a span continuing the trace `headers`
+  carry as W3C trace context (`traceparent`, `tracestate`), or starting one when they carry none.
+* `context` — the current span as those headers, for a message to carry.
+* `setAttribute(name, value)` on the current span.
+
+A span ends with its effect, as an error when the effect failed with a `Throwable` or died. A typed
+failure that is an answer — an HTTP error response, say — leaves the span's status unset.
+
+It is not zio-opentelemetry. The backoffice's MCP library pins zio-opentelemetry's 4.0 release
+candidate, and a process loads one version, so the rest could not use 3.x beside it; and 4.0 has no
+public way to continue a trace another process started, which the relay needs. The Java SDK is the
+version that library already brings.
+
+`Telemetry.layer(scope)` builds the SDK from the standard `OTEL_*` environment variables
+(`AutoConfiguredOpenTelemetrySdk`) and exports over OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT`. Without
+that variable it builds nothing and records nothing, which is how tests and a process with nowhere
+to send its spans run. `Telemetry.noop` is the same, explicitly. Closing the layer flushes what is
+still buffered.
+
+The tests (`telemetry/test`, `TracingSpec`) run spans into the SDK's in-memory exporter: nesting,
+a fork, the headers continued as the same trace, a fresh trace for headers that carry none, and the
+error status.
+
+== What is traced
+
+[cols="1,3"]
+|===
+|Span |Where, and what it carries
+
+|`<METHOD> <path>`, server
+|Every request to the API (`HttpApp`) and to the backoffice (`Main`), continuing a `traceparent`
+header when one comes, with `http.response.status_code`. The two middlewares are separate: the API
+is on zio-http 3.0 and the backoffice on 3.11, where a handler runs in the request's `Scope`.
+
+|`tool <name>`
+|Every call to a backoffice tool (`ToolSchema.traced`), applied with the visibility rule in
+`CaptalMcp`, the one place every tool passes through. Every MCP call is a `POST /mcp`, so the
+request's span does not say which tool it was.
+
+|`<OPERATION> <table>`, client
+|Every statement sent to rqlite (`TracedSqlite`, the Quill context every module queries through),
+with `db.system.name` `rqlite`, `db.operation.name`, `db.collection.name` and `db.query.text`. The
+statement's values are bound parameters, never in its text, so none of them reaches a span.
+`transaction` wraps the statements a transaction runs. rqlite emits no traces itself: this is where
+the database shows in one.
+
+|`events <handler>`
+|Each event handler of the API's chain (`TracedEventHandler`), the transactional ones inside the
+`transaction` span: which handler a write came from.
+
+|`UniFi <action>`, client
+|Each call to a venue's controller (`UnifiClient.traced`), with `server.address`. The guest's MAC
+stays out: it identifies a person's device.
+
+|`cdc ingest`, server
+|Each post rqlite sends the relay, with `cdc.change_sets`, the number published.
+
+|`cdc RecoveryFeed`, `cdc VideoFileCollector`, consumer
+|A subscriber handling a change set — a location's API and the backoffice — with
+`cdc.change.index`.
+|===
+
+Flows have no span of their own: a request's span holds the statements its handler reads and the
+event handlers' spans hold what it writes.
+
+== Across the relay
+
+The trace of a change set crosses the relay with it, so one trace shows every subscriber the change
+reached:
+
+. rqlite posts a change set; the relay's `cdc ingest` span starts a trace.
+. Each change set keeps that span's context (`Change.context`), and the relay hands it on in the
+  feed: `ChangeSet.trace_context` in `cdc.proto`, per change set, since gRPC metadata belongs to the
+  subscription and is sent once.
+. `ChangeFeedFollower` reads it into `Event.Changed`'s `context`, and each subscriber continues the
+  trace in a consumer span.
+
+The write that caused the change set is in another trace, the request's: rqlite carries no trace
+context, so nothing at the relay can name it.
+
+== Configuration
+
+[cols="1,3"]
+|===
+|Variable |Set by
+
+|`OTEL_EXPORTER_OTLP_ENDPOINT`
+|`modules/mcp` and `modules/cdc`, from the configuration's `otlp_endpoint` output,
+`http://jaeger.<namespace>:4317`; `deploy_location` forwards the backoffice's own to every
+location's task, and a release (`rollLocations`) sets it on every location it moves.
+
+|`OTEL_SERVICE_NAME`
+|`captal-mcp`, `captal-cdc`, and `captal-api` for every location.
+
+|`OTEL_RESOURCE_ATTRIBUTES`
+|`captal.location=<slug>`, on every location's API, to tell the portals apart.
+|===
+
+Everything else is the SDK's default: OTLP over gRPC, `parentbased_always_on`. The standard
+variables (`OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG`) change it without a build.
+
+== Jaeger
+
+`modules/jaeger` runs `cr.jaegertracing.io/jaegertracing/jaeger:2.23.0` as one Fargate task
+(512 CPU, 2048 MiB), registered in Cloud Map as `jaeger.<namespace>`, with its default
+configuration: the traces in memory, up to its `max_traces`, lost when the task is replaced.
+`JAEGER_LISTEN_HOST=0.0.0.0`, since that configuration listens on `localhost` otherwise.
+
+Its security group admits OTLP (4317) from the ECS tasks group — the backoffice and every location —
+and from the relay's, and the UI (16686) from the Tailscale proxy's alone. The UI has no
+authentication of its own, and a trace carries every path a guest asked for, so nothing public
+reaches it.
+
+The UI is reached from the tailnet, through the Tailscale proxy, which advertises the VPC's routes.
+From a device on the tailnet that accepts routes (`tailscale up --accept-routes`), at the task's
+private address, which changes whenever the task is replaced:
+
+[source,bash]
+----
+cd terraform
+task=$(aws ecs list-tasks --cluster "$(tofu output -raw ecs_cluster_name)" \
+  --service-name "$(tofu output -raw jaeger_service_name)" --query 'taskArns[0]' --output text)
+aws ecs describe-tasks --cluster "$(tofu output -raw ecs_cluster_name)" --tasks "$task" \
+  --query 'tasks[0].attachments[0].details[?name==`privateIPv4Address`].value' --output text
+# then http://<that address>:16686
+----

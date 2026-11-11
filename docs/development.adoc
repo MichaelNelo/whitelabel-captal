@@ -320,9 +320,11 @@ the first four against LocalStack:
   images built and, against AWS, the `aws` CLI for the ECR login, wherever it runs: a `tofu apply`
   run by hand without them fails at the push, before any service changes.
 . **Locations.** Every location's service — the ones whose task runs a single container named
-  `api`, which is how `deploy_location` registers them — not already on the API image's digest and
-  following the relay gets a new revision of its task definition differing only in the image and
-  `CDC_FEED_ADDRESS` (the configuration's `cdc_feed_address` output), and is pointed at it. The rest
+  `api`, which is how `deploy_location` registers them — not already on the API image's digest,
+  following the relay and sending its traces to Jaeger gets a new revision of its task definition
+  differing only in the image, `CDC_FEED_ADDRESS` (the configuration's `cdc_feed_address` output)
+  and the `OTEL_*` variables `deploy_location` sets (from its `otlp_endpoint` output; see
+  xref:tracing.adoc[Tracing]), and is pointed at it. The rest
   of its environment, roles and sizes carry over as the last deploy registered them, so a change to
   those is still a `deploy_location`. The
   service keeps its task count: a paused location stays paused and runs the new image when it is

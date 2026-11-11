@@ -19,6 +19,9 @@ The repository is built by Mill. The build is a set of modules: one `package.mil
 | `messages/package.mill`
 | The `messages` module, the wire vocabulary shared by `api` and `client`.
 
+| `telemetry/package.mill`
+| The `telemetry` module: OpenTelemetry tracing for the deployables, with its test suite.
+
 | `platform/package.mill`
 | The `platform` module: repositories, services, migrations and their JDBC and Flyway dependencies. Its `migrate` command.
 
@@ -73,9 +76,13 @@ The repository is built by Mill. The build is a set of modules: one `package.mil
 | 3.8.0, JVM and Scala.js
 | `core` and `core-js`. `messages-js` compiles the sources of `messages`.
 
+| `telemetry`
+| 3.8.0, JVM
+| Nothing. OpenTelemetry's Java SDK; see xref:tracing.adoc[Tracing].
+
 | `platform`
 | 3.8.0, JVM
-| `core`.
+| `core`, `telemetry`.
 
 | `api`
 | 3.8.0, JVM
@@ -95,7 +102,7 @@ The repository is built by Mill. The build is a set of modules: one `package.mil
 
 | `cdc`
 | 3.8.0, JVM
-| `cdc.protocol`.
+| `cdc.protocol`, `telemetry`.
 
 | `e2e`
 | 3.10.0, JVM; not a test module, so `mill __.test` leaves it out

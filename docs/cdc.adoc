@@ -35,7 +35,7 @@ service ChangeFeed { rpc Subscribe(SubscribeRequest) returns (stream Delivery); 
 
 message SubscribeRequest { optional uint64 since = 1; }
 message Delivery { string instance = 1; oneof kind { ChangeSet change = 2; Gap gap = 3; } }
-message ChangeSet { uint64 index = 1; string json = 2; }
+message ChangeSet { uint64 index = 1; string json = 2; map<string, string> trace_context = 3; }
 message Gap {}
 ----
 
@@ -77,8 +77,11 @@ reconnect. It permits keepalive pings every 10 seconds, also without calls in fl
 
 == Following the feed
 
-`ChangeFeedFollower.follow(address)` is a `ZStream` of `Changed(index, json)` and `Gap` that never
-fails and never ends:
+`ChangeFeedFollower.follow(address)` is a `ZStream` of `Changed(index, json, context)` and `Gap`
+that never fails and never ends. `context` is the change set's `trace_context`: the trace the relay
+received it in, which each post from rqlite starts (`cdc ingest`) and which every subscriber
+continues as it handles the change set, so one trace shows every subscriber a change reached; see
+xref:tracing.adoc[Tracing].
 
 * It opens a channel to `address` (`host:port`), with keepalive pings every 30 seconds so a relay
   that went away is noticed on a quiet stream.

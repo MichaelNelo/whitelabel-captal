@@ -70,6 +70,11 @@ type QuillSqlite = Quill.Sqlite[SnakeCase]
 per-field declaration. `Quill.Sqlite` is correct against rqlite because rqlite *is* SQLite — see
 xref:database.adoc[Database].
 
+The deployables build it as `TracedSqlite` (`schema/TracedSqlite.scala`), a `Quill.Sqlite` that puts
+each statement in a client span, `transaction` around a transaction's; the event handlers are
+wrapped by `TracedEventHandler`, and the UniFi client by `UnifiClient.traced`. See
+xref:tracing.adoc[Tracing].
+
 The same file holds the SQLite function escapes the generated SQL needs, as `inline def`s returning
 `Quoted`: `sqliteRandom`, `sqliteAbs`, `sqliteLog`, `nullif`, `castAsReal`, `castAsRealOpt`,
 `datetimeMinusSeconds` and `strGt`. They exist because Quill's parser cannot see through the Scala

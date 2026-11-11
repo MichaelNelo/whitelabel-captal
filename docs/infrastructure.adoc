@@ -211,7 +211,7 @@ every `.tf` and `.tfvars` in the tree.
 
 == Module inventory
 
-The root module (`terraform/main.tf`) wires fifteen child modules together. The account's networking
+The root module (`terraform/main.tf`) wires sixteen child modules together. The account's networking
 is a data source rather than a module — `data "aws_vpc" "default"` and `data "aws_subnets" "default"`
 resolve the account's default VPC and its one-per-AZ default subnets, which are public and
 auto-assign addresses, letting every Fargate task reach ECR without a NAT gateway: there are no
@@ -356,6 +356,17 @@ See xref:context/pending.adoc[Pending work] for a risk rqlite's shape carries th
 settled: `continue_on_failure: true` in the backup entrypoint turning a missing or unreachable S3
 backup into a healthy, empty boot rather than a dead task. See xref:database.adoc[Database] and xref:platform.adoc[Platform] for rqlite as the database
 rather than as a deployed topology.
+
+=== Jaeger
+
+`modules/jaeger` runs Jaeger as one Fargate task with no load balancer, registered in Cloud Map as
+`jaeger.<namespace>`, where every service sends its traces over OTLP (4317). Its security group
+admits OTLP from the ECS tasks group and the relay's, and the UI (16686) from the Tailscale proxy's
+alone: the UI has no authentication of its own. The root module names the endpoint itself, as the
+local `otlp_endpoint`, so the services that send to it do not depend on the group that admits them;
+the backoffice and the relay get it as `OTEL_EXPORTER_OTLP_ENDPOINT`, and the backoffice hands it to
+every location it deploys. Storage is in memory. See xref:tracing.adoc[Tracing] for what is traced
+and how to reach the UI.
 
 === CloudFront
 

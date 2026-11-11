@@ -138,7 +138,8 @@ as the process.
 
 Three groups of layers:
 
-Infrastructure:: `RqliteDataSource.layer`, `Quill.Sqlite.fromNamingStrategy(SnakeCase)`,
+Infrastructure:: `RqliteDataSource.layer`, `Telemetry.layer("captal-api")`, `TracedSqlite.layer`
+(the Quill context, each statement in a span: see xref:tracing.adoc[Tracing]),
 `SurveyRepositoryQuill.layer`, `UserRepositoryQuill.layer`, `VideoRepositoryQuill.layer`,
 `RecoveryRepositoryQuill.layer`, `bundleManifestLayer` (`BundleManifest.fromUrl` when
 `BUNDLE_MANIFEST_URL` is set, `BundleManifest.absent` otherwise), `SessionContext.make`,
@@ -257,6 +258,8 @@ match a route and then fail to decode.
   `out/client/fastLinkJS.dest` and `out/client/bundle.dest`).
 * `loggingMiddleware` wraps everything and logs `METHOD path -> status (Nms)` per response, or
   `-> ERROR (Nms): …` on a failed handler.
+* `tracingMiddleware`, outside it, puts every request in a server span named `METHOD path`,
+  continuing a `traceparent` header when one comes; see xref:tracing.adoc[Tracing].
 
 `HttpApp.codecConfig` is `CodecConfig(ignoreEmptyCollections = false)`, which keeps empty
 collections in responses. It is part of the wire format: the browser's derived circe decoders read
