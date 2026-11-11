@@ -1,5 +1,7 @@
 = Captal
 
+image::docs/assets/captal.svg[Captal,96]
+
 A white-label captive portal. A guest connects to a venue's WiFi, the venue's gateway holds their
 traffic and redirects them here, the portal asks them a question, plays them an advertiser's video
 and asks about it, and on completion the system tells the gateway to let that device online for a
