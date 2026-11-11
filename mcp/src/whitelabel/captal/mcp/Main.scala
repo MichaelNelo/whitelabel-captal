@@ -1,6 +1,6 @@
 package whitelabel.captal.mcp
 
-import io.getquill.jdbczio.Quill
+import io.opentelemetry.api.trace.SpanKind
 import whitelabel.captal.cdc.protocol.ChangeFeedFollower
 import whitelabel.captal.mcp.access.{Auth, OauthMetadata, Tokens}
 import whitelabel.captal.mcp.apps.{RunRoutes, UiRoutes}
@@ -24,9 +24,11 @@ import whitelabel.captal.mcp.tools.{
   VideoTools
 }
 import whitelabel.captal.platform.RqliteDataSource
-import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.platform.schema.{QuillSqlite, TracedSqlite}
+import whitelabel.captal.telemetry.Telemetry
 import zio.*
-import zio.http.{Method, Response, Routes, Server, handler}
+import zio.http.{Handler, Method, Middleware, Request, Response, Routes, Server, handler}
+import whitelabel.captal.telemetry.Tracing
 
 /** Entry point for the backoffice MCP server.
   *
@@ -86,6 +88,30 @@ object Main extends ZIOAppDefault:
     */
   private val health = Routes(Method.GET / "health" -> handler(Response.text("ok")))
 
+  /** Every request in a server span named by its method and path, continuing the trace a W3C
+    * `traceparent` header carries, or starting one. The API has its own: the two are built against
+    * different zio-http versions, and in this one a handler runs in the request's `Scope`, which
+    * `Handler.scoped` hands on.
+    */
+  private val tracingMiddleware: Middleware[Tracing] =
+    new Middleware[Tracing]:
+      def apply[Env1 <: Tracing, Err](routes: Routes[Env1, Err]): Routes[Env1, Err] = routes
+        .transform[Env1]: handler =>
+          Handler.scoped[Env1]:
+            Handler.fromFunctionZIO[Request]: request =>
+              val headers =
+                request
+                  .headers
+                  .toList
+                  .map(header => header.headerName.toLowerCase -> header.renderedValue)
+                  .toMap
+              Telemetry.continuing(
+                headers,
+                s"${request.method} ${request.url.path}",
+                SpanKind.SERVER)(
+                handler(request).tap: response =>
+                  Telemetry.setAttribute("http.response.status_code", response.status.code.toLong))
+
   def run: ZIO[Any, Throwable, Unit] =
     for
       p        <- port
@@ -111,7 +137,7 @@ object Main extends ZIOAppDefault:
       _ <- ZIO
         // `Option[InfraStore]`: a deployment that only edits content has no cluster configured and
         // no clients to build, so the layer answers `None` and the deploy tools are not registered.
-        .environment[QuillSqlite & AssetStore & Option[InfraStore]]
+        .environment[QuillSqlite & AssetStore & Option[InfraStore] & Tracing]
         .flatMap: env =>
           val infra = env.get[Option[InfraStore]]
           // A warning and not a failure: the published script belongs to `client.publish`, and a
@@ -148,17 +174,19 @@ object Main extends ZIOAppDefault:
               // cannot disagree.
               val scriptOrigin = env.get[AssetStore].scriptOrigin
               Server.serve(
-                health ++ UiRoutes.routes ++ RunRoutes.routes ++ OauthMetadata.routes(uiOrigin) ++
-                  CaptalMcp
-                    .server(
-                      Auth.mcpAuth(resource),
-                      env,
-                      origin,
-                      scriptOrigin,
-                      uiOrigin,
-                      infra,
-                      extensions)
-                    .statelessRoutes)
+                (
+                  health ++ UiRoutes.routes ++ RunRoutes.routes ++ OauthMetadata.routes(uiOrigin) ++
+                    CaptalMcp
+                      .server(
+                        Auth.mcpAuth(resource),
+                        env,
+                        origin,
+                        scriptOrigin,
+                        uiOrigin,
+                        infra,
+                        extensions)
+                      .statelessRoutes
+                ) @@ tracingMiddleware)
           // Added here rather than to `tools` above because whether the deploy tools exist depends
           // on `infra`, which is only known inside this block.
           val registered = tools + DeployTools.all(infra, uiOrigin).size
@@ -180,7 +208,8 @@ object Main extends ZIOAppDefault:
           // be wrong should stop the server rather than surface on the first deploy.
           DeployTargets.layer,
           InfraStore.layer,
-          Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)
+          Telemetry.layer("captal-mcp"),
+          TracedSqlite.layer
         )
     yield ()
 end Main

@@ -24,9 +24,10 @@ import whitelabel.captal.mcp.tools.{
   VideoTools
 }
 import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.telemetry.Tracing
 import zio.{Chunk, IO, ZEnvironment, ZIO}
 
-import ToolSchema.visibleTo
+import ToolSchema.{traced, visibleTo}
 
 /** Assembles the backoffice server: its instructions, resources, prompts, tools and extensions.
   *
@@ -152,18 +153,20 @@ object CaptalMcp:
       // effect and this assembly is pure.
       extensions: McpExtensions[Any],
       name: String = "captal-backoffice",
-      version: String = "0.1.0"): McpServer[QuillSqlite & AssetStore] =
+      version: String = "0.1.0"): McpServer[QuillSqlite & AssetStore & Tracing] =
     /** Default-deny for the rendered pages: a tool is callable from an App only by being named
       * here, where the extension's own default is callable by both the model and any App.
       *
       * `confirm_video_upload` is the whole list — the upload page calls it with the duration it
       * read from the file, and the model calls it for a WebM whose header carries none.
+      *
+      * Every tool is traced here too, in the one place every tool passes through.
       */
-    def restrictToApps[R](tool: McpToolHandlerR[R]): McpToolHandlerR[R] =
+    def restrictToApps[R](tool: McpToolHandlerR[R]): McpToolHandlerR[R & Tracing] =
       if tool.name.value == "confirm_video_upload" then
-        tool.visibleTo(McpAppsVisibility.Model, McpAppsVisibility.App)
+        tool.visibleTo(McpAppsVisibility.Model, McpAppsVisibility.App).traced
       else
-        tool.visibleTo(McpAppsVisibility.Model)
+        tool.visibleTo(McpAppsVisibility.Model).traced
     val withResources =
       resources.foldLeft(
         McpServer(name, version)
@@ -175,13 +178,14 @@ object CaptalMcp:
       LocationTools.all ++ I18nTools.all ++ AdvertiserTools.all ++ SurveyTools.all ++
         UnifiTools.all(uiOrigin) ++ RecoveryTools.all ++ TermsTools.all ++ TokenTools.all ++
         SkillTools.all
-    ).map(restrictToApps).foldLeft[McpServer[QuillSqlite]](withPrompts)(_.tool(_))
+    ).map(restrictToApps).foldLeft[McpServer[QuillSqlite & Tracing]](withPrompts)(_.tool(_))
     // `deploy_location` is here rather than above because it copies the shared bundle under the new
     // slug, which is S3 and therefore `AssetStore`.
     val withAssets = (
       AssetTools.all ++ VideoTools.all ++ PreviewTools.all ++ Readiness.all ++
         DeployTools.all(infra, uiOrigin)
-    ).map(restrictToApps).foldLeft[McpServer[QuillSqlite & AssetStore]](withData)(_.tool(_))
+    ).map(restrictToApps)
+      .foldLeft[McpServer[QuillSqlite & AssetStore & Tracing]](withData)(_.tool(_))
     // One source for everything: `McpServer` holds a single `resourceSrc`, so the upload page and
     // the entity tree cannot be registered separately.
     val withSource = withAssets.resourceSource(

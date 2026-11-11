@@ -47,6 +47,7 @@ import whitelabel.captal.mcp.tools.{
 import whitelabel.captal.core.{user, video}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
+import whitelabel.captal.telemetry.{Telemetry, Tracing}
 import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.{
   AdvertiserRow,
@@ -334,6 +335,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
       _          <- Tokens.seedAdmin(Token, "e2e").mapError(new IllegalStateException(_))
       resource   <- Auth.resourceUri
       env        <- ZIO.environment[QuillSqlite & AssetStore]
+      tracing    <- Telemetry.noop.build.map(_.get[Tracing])
       extensions <- CaptalMcp.extensions
       routes = CaptalMcp
         .server(
@@ -345,7 +347,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
           infra,
           extensions)
         .statelessRoutes
-        .provideEnvironment(env)
+        .provideEnvironment(env.add(tracing))
       _ <- TestClient.addRoutes(routes)
       // The run page's stream, which lives beside the protocol rather than inside it.
       _        <- TestClient.addRoutes(RunRoutes.routes.provideEnvironment(env))

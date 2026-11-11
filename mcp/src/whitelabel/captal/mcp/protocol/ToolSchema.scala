@@ -1,8 +1,10 @@
 package whitelabel.captal.mcp.protocol
 
 import com.jamesward.ziohttp.mcp.*
+import whitelabel.captal.telemetry.Telemetry
 import zio.json.ast.Json
-import zio.{Chunk, NonEmptyChunk}
+import whitelabel.captal.telemetry.Tracing
+import zio.{Chunk, NonEmptyChunk, ZIO}
 
 /** Pointing a tool at its MCP App.
   *
@@ -89,5 +91,23 @@ object ToolSchema:
           .callWithContext(args, ctx)
       end new
     end visibleTo
+
+    /** Every call in a span named after the tool, under the request's: every MCP call is a `POST`
+      * to `/mcp`, so the request's own span does not say which tool it was. Forwards every member,
+      * as [[visibleTo]] does, for the same reason.
+      */
+    def traced: McpToolHandlerR[R & Tracing] =
+      new McpToolHandlerR[R & Tracing]:
+        private def span[A](call: ZIO[R, Nothing, A]) =
+          Telemetry.span(s"tool ${handler.name.value}")(call)
+        def name: ToolName = handler.name
+        def definition: ToolDefinition = handler.definition
+        override def requiredScopes: Set[auth.OauthScope] = handler.requiredScopes
+        override def taskPolicy: TaskPolicy = handler.taskPolicy
+        def call(args: Option[Json.Obj]) = span(handler.call(args))
+        override def callWithContext(args: Option[Json.Obj], ctx: McpToolContext) = span(
+          handler.callWithContext(args, ctx))
+      end new
+    end traced
   end extension
 end ToolSchema
