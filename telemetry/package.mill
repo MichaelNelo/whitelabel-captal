@@ -1,0 +1,28 @@
+package build.telemetry
+
+import com.goyeau.mill.scalafix.ScalafixModule
+import mill.*, scalalib.*, scalafmt.*
+import millbuild.*
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Telemetry: OpenTelemetry tracing for the deployables, JVM only. `platform` and the CDC relay
+// depend on it; `core` does not, and never sees a span.
+// ─────────────────────────────────────────────────────────────────────────────
+
+object `package` extends BaseModule:
+  // OpenTelemetry's Java SDK, not zio-opentelemetry: see `Tracing`. 1.65.0, the API version the
+  // backoffice's MCP library already brings, so every process loads one.
+  def mvnDeps = Seq(
+    mvn"dev.zio::zio:2.1.26",
+    mvn"io.opentelemetry:opentelemetry-sdk:1.65.0",
+    mvn"io.opentelemetry:opentelemetry-exporter-otlp:1.65.0",
+    mvn"io.opentelemetry:opentelemetry-sdk-extension-autoconfigure:1.65.0"
+  )
+
+  object test extends ScalaTests with ScalafmtModule with ScalafixModule:
+    def mvnDeps = Seq(
+      mvn"dev.zio::zio-test:2.1.26",
+      mvn"dev.zio::zio-test-sbt:2.1.26",
+      mvn"io.opentelemetry:opentelemetry-sdk-testing:1.65.0")
+    def testFramework = "zio.test.sbt.ZTestFramework"
+end `package`

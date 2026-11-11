@@ -1,10 +1,13 @@
 package whitelabel.captal.platform
 
 import io.circe.{Decoder, Json, parser as circeParser}
+import io.opentelemetry.api.common.{AttributeKey, Attributes}
+import io.opentelemetry.api.trace.SpanKind
 import whitelabel.captal.core.device.Mac
 import zio.*
 import zio.http.*
 import zio.http.netty.NettyConfig
+import whitelabel.captal.telemetry.Tracing
 
 /** Thin client over the UniFi Network Integration v1 API.
   *
@@ -187,8 +190,25 @@ object UnifiClient:
     yield ()
   end postAction
 
-  val layer: ZLayer[Client, Nothing, UnifiClient] = ZLayer.fromFunction((client: Client) =>
-    live(client))
+  val layer: ZLayer[Client & Tracing, Nothing, UnifiClient] = ZLayer.fromFunction(
+    (client: Client, tracing: Tracing) => traced(live(client), tracing))
+
+  /** `underlying`, with each operation in a client span of its own, named by the action it posts.
+    * The guest's MAC stays out of it: it identifies a person's device.
+    */
+  def traced(underlying: UnifiClient, tracing: Tracing): UnifiClient =
+    new UnifiClient:
+      private def span(action: String, unifi: UnifiAccess)(call: Task[Unit]) =
+        tracing.span(
+          s"UniFi $action",
+          SpanKind.CLIENT,
+          Attributes.of(AttributeKey.stringKey("server.address"), unifi.host))(call)
+
+      def authorizeGuest(unifi: UnifiAccess, clientMac: Mac): Task[Unit] =
+        span(AuthorizeAction, unifi)(underlying.authorizeGuest(unifi, clientMac))
+
+      def revokeGuestAccess(unifi: UnifiAccess, clientMac: Mac): Task[Unit] =
+        span(RevokeAction, unifi)(underlying.revokeGuestAccess(unifi, clientMac))
 
   /** No-op for tests, which must never reach a real controller. Explicitly typed so
     * `ZLayer.succeed(UnifiClient.noop)` picks up the `UnifiClient` tag.
