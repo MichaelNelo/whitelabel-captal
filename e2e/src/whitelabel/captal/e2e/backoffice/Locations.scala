@@ -35,8 +35,8 @@ object Locations:
     /** The portal as UniFi sends a guest to it, from the device `mac` behind the access point. */
     def portal(mac: String, fingerprint: String): String =
       val back = java.net.URLEncoder.encode("http://example.com", "UTF-8")
-      s"${Run.setting(
-          "E2E_PORTAL")}/$slug/?id=$mac&ap=AA:BB:CC:DD:EE:01&ssid=E2E&url=$back&fingerprint=$fingerprint"
+      s"${Run.setting("E2E_PORTAL")}/$slug/?id=$mac&ap=${Venue.apFor(
+          slug)}&ssid=E2E&url=$back&fingerprint=$fingerprint"
 
     def api(path: String): String = s"${Run.setting("E2E_PORTAL")}/$slug/api/$path"
 
@@ -169,10 +169,11 @@ object Locations:
 
   def texts(value: String): List[LocalizedText] = Locales.map(LocalizedText(_, value))
 
-  /** The controller's settings, entered on the page `configure_unifi` opens and saved by it. Then
-    * the calls are turned on, which a new location has by default anyway. The controller is the
-    * stand-in unless `host` and `port` name another, such as one that is not there. Read by a
-    * location's API when its task starts: settings entered after a deploy wait for the next one.
+  /** The location's access point ([[Venue.apFor]]) with its controller's settings, entered on the
+    * page `configure_unifi` opens and saved by it. Then the calls are turned on, which a new
+    * location has by default anyway. The controller is the stand-in unless `host` and `port` name
+    * another, such as one that is not there. Read by a location's API as it authorizes a guest, so
+    * settings entered after a deploy apply to the next one.
     */
   def configureUnifi(
       slug: String,
@@ -185,6 +186,7 @@ object Locations:
     val form = opened.app
     form.locator("#form.ready").waitFor(Locator.WaitForOptions().setTimeout(60_000))
     opened.linger()
+    form.locator("#apMac").fill(Venue.apFor(slug))
     form.locator("#host").fill(host)
     form.locator("#port").fill(port)
     form.locator("#siteId").fill(Venue.Site)

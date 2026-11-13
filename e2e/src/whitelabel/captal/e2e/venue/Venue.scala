@@ -13,6 +13,14 @@ object Venue:
   val Site = "88f7af54-98f8-306a-a1c7-c9349722b1f6"
   val ApiKey = "e2e-api-key"
 
+  /** The access point a location's guests come through, and the one it is registered with: one of
+    * its own, since an AP takes the guests of a single running location. Locally administered
+    * (`02:`), from a digest of the slug.
+    */
+  def apFor(slug: String): String =
+    val digest = java.security.MessageDigest.getInstance("SHA-256").digest(slug.getBytes("UTF-8"))
+    ("02" :: digest.take(5).map(b => f"${b & 0xff}%02x").toList).mkString(":")
+
   /** How long a guest's access lasts, as the locations are configured unless a feature says. */
   val AccessMinutes = 60
 
