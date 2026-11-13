@@ -59,7 +59,12 @@ object I18n:
     given Decoder[Loading] = deriveDecoder[Loading]
     given Encoder[Loading] = deriveEncoder[Loading]
 
-  final case class Error(title: String, retry: String, generic: String, unknownAccessPoint: String)
+  final case class Error(
+      title: String,
+      retry: String,
+      generic: String,
+      unknownAccessPoint: String,
+      invalidClient: String)
   object Error:
     given Decoder[Error] = deriveDecoder[Error]
     given Encoder[Error] = deriveEncoder[Error]
@@ -143,7 +148,9 @@ object I18n:
       retry = "Label of the retry button.",
       generic = "Fallback error message body.",
       unknownAccessPoint =
-        "Error message body when the guest's network access point is not one of this location's, so the portal cannot connect them. Nothing the guest does fixes it: say so, and that the venue's staff can."
+        "Error message body when the guest's network access point is not one of this location's, so the portal cannot connect them. Nothing the guest does fixes it: say so, and that the venue's staff can.",
+      invalidClient =
+        "Error message body when the page was opened without coming through the venue's WiFi, so there is no device to connect. Tell the guest to join the venue's WiFi network and open the page it shows."
     ),
     question = Question(
       submit = "Submit button on the last question.",

@@ -77,7 +77,7 @@ object CaptalMcpSpec extends ZIOSpecDefault:
             val served = lines.map(_.takeWhile(_ != ':'))
             assertTrue(
               served == I18nSchema.keys[I18n],
-              served.size == 40,
+              served.size == 41,
               served.contains("welcome.steps.step1"),
               // Every line must carry a description, not just the bare key.
               lines.forall(l => l.split(": ", 2).lift(1).exists(_.trim.nonEmpty))
