@@ -48,8 +48,34 @@ object Portal:
     .toOption
     .exists(response => response.ok && response.text.contains("ok"))
 
-  /** A guest on a phone of their own, `mac`, sent to the portal by the access point with the
-    * fingerprint the link shortener gave the device, `fingerprint`.
+  /** How a phone reaches the portal. */
+  enum Arrival:
+    /** Through the venue's WiFi: the access point's redirect, with the link shortener's
+      * fingerprint.
+      */
+    case Redirect
+
+    /** Through the access point's redirect, from a link shortener that lost the fingerprint. */
+    case RedirectWithoutFingerprint
+
+    /** At the portal's address, outside the venue's WiFi: no redirect at all. */
+    case Address
+
+    /** The address the phone opens for `location`, as the device `mac` with `fingerprint`. */
+    def of(location: Locations.Deployed, mac: String, fingerprint: String): String =
+      this match
+        case Redirect =>
+          location.portal(mac, Some(fingerprint))
+        case RedirectWithoutFingerprint =>
+          location.portal(mac, None)
+        case Address =>
+          location.address
+  end Arrival
+
+  /** A guest on a phone of their own, `mac`, sent to the portal as `arrival` says, with the
+    * fingerprint the link shortener gave the device, `fingerprint`, when it says so. `trail` is
+    * every address the phone's pages showed, in order: a page the portal passes through on its own,
+    * such as the way out, is gone before a step can look at it.
     */
   final case class Guest(
       name: String,
@@ -57,14 +83,20 @@ object Portal:
       fingerprint: String,
       location: Locations.Deployed,
       context: BrowserContext,
-      page: Page):
+      page: Page,
+      arrival: Arrival = Arrival.Redirect,
+      trail: java.util.List[String] = java.util.concurrent.CopyOnWriteArrayList[String]()):
     /** The same phone sent to `at`'s portal again, as on a later visit: same cookies, same MAC,
       * same fingerprint, in a new page.
       */
     def returnTo(at: Locations.Deployed = location): Guest =
       val again = context.newPage()
-      again.navigate(at.portal(mac, fingerprint))
+      track(again, trail)
+      again.navigate(arrival.of(at, mac, fingerprint))
       copy(location = at, page = again)
+
+    /** Whether one of the phone's pages showed an address containing `part`. */
+    def passedThrough(part: String): Boolean = trail.asScala.exists(_.contains(part))
 
     /** The session's phase, as the portal itself asks for it. */
     def phase: String =
@@ -96,14 +128,22 @@ object Portal:
             )))
   end Guest
 
-  /** `name` on a new phone set to `locale`, sent by the access point to `location`'s portal. With
-    * `streamThroughLoadBalancer`, its event streams go to the load balancer ([[streamThrough]]).
+  /** Adds every address `page`'s own frame shows to `trail`. */
+  private def track(page: Page, trail: java.util.List[String]): Unit = page.onFrameNavigated:
+    frame =>
+      if frame.parentFrame == null then
+        trail.add(frame.url)
+
+  /** `name` on a new phone set to `locale`, sent to `location`'s portal as `arrival` says: by
+    * default, by the access point. With `streamThroughLoadBalancer`, its event streams go to the
+    * load balancer ([[streamThrough]]).
     */
   def arrive(
       name: String,
       location: Locations.Deployed,
       locale: String = "en-US",
-      streamThroughLoadBalancer: Boolean = false): Guest =
+      streamThroughLoadBalancer: Boolean = false,
+      arrival: Arrival = Arrival.Redirect): Guest =
     val mac = Seq.fill(6)(f"${scala.util.Random.nextInt(256)}%02X").mkString(":")
     val options = Browser
       .NewContextOptions()
@@ -117,9 +157,11 @@ object Portal:
     if streamThroughLoadBalancer then
       streamThrough(context)
     val page = context.newPage()
+    val trail = java.util.concurrent.CopyOnWriteArrayList[String]()
+    track(page, trail)
     val fingerprint = s"e2e-${java.util.UUID.randomUUID}"
-    page.navigate(location.portal(mac, fingerprint))
-    Guest(name, mac, fingerprint, location, context, page)
+    page.navigate(arrival.of(location, mac, fingerprint))
+    Guest(name, mac, fingerprint, location, context, page, arrival, trail)
   end arrive
 
   /** Sends the phone's event streams to the load balancer rather than the distribution, the rest of

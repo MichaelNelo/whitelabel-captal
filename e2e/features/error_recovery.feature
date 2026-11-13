@@ -1,13 +1,16 @@
 @error-recovery
 Feature: Recovery from an error
   Something that breaks never leaves a guest without internet. An error the server recorded opens
-  the way out at once. An error in the portal's own code makes the guest wait, as long as the
-  effort they have made on that phone asks, and the wait gets shorter when other guests run into
-  the same error. How long a new guest waits is the location's to set, and every other wait is
-  that one scaled: an identified guest waits three tenths of it, and one whose error other guests
-  ran into a tenth. Reloading the error page resumes the wait. Taking the way out grants access as
-  the end of the flow does. After the guest has finished, an error gives no way out, but staff a
-  code to look it up by.
+  the way out at once; so does a link into the portal that lost the fingerprint its location asks
+  for, which is the venue's setup failing, not the guest. A page opened outside the venue's WiFi
+  breaks nothing: there is no phone to let in, so the guest is told to join the network, with
+  nothing to retry and no way out. An error in the portal's own code makes the guest wait, as long
+  as the effort they have made on that phone asks, and the wait gets shorter when other guests run
+  into the same error. How long a new guest waits is the location's to set, and every other wait
+  is that one scaled: an identified guest waits three tenths of it, and one whose error other
+  guests ran into a tenth. Reloading the error page resumes the wait. Taking the way out grants
+  access as the end of the flow does. After the guest has finished, an error gives no way out, but
+  staff a code to look it up by.
 
   Background:
     Given a deployed location "plaza" with an advertiser video and its survey
@@ -21,6 +24,19 @@ Feature: Recovery from an error
     Then Ana is taken back into the portal within 15 seconds
     And Ana has internet access
     And the venue's controller let Ana's phone in for 60 minutes
+
+  @redirect-parameters
+  Scenario: A link that lost its fingerprint takes the guest out through the error page at once
+    When Ana opens the portal on a new phone, through a link that lost its fingerprint
+    Then Ana is taken through the error page back into the portal within 15 seconds
+    And Ana has internet access
+    And the venue's controller let Ana's phone in for 60 minutes
+
+  @redirect-parameters
+  Scenario: A phone outside the venue's WiFi is told to join it, with no way out
+    When Ana opens the portal's address on a new phone, outside the venue's WiFi
+    Then Ana is told to join the venue's WiFi, with no retry
+    And the venue's controller was not asked anything about Ana's phone
 
   Scenario: A client error makes a new guest wait the location's maximum, then takes them back in
     When Ana opens the portal on a new phone

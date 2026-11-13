@@ -217,6 +217,36 @@ final class ErrorRecoverySteps extends ScalaDsl with EN:
       backInPortal(name, seconds.toLong)
   }
 
+  /** The way out opened by the portal itself, at once: the error page comes and goes on its own, so
+    * it is looked for in the phone's trail rather than on screen.
+    */
+  Then("""{word} is taken through the error page back into the portal within {int} seconds""") {
+    (name: String, seconds: Int) =>
+      val who = World.guest(name)
+      try
+        who
+          .page
+          .waitForURL(
+            (url: String) => !url.contains("error.html") && who.passedThrough("error.html"),
+            Page.WaitForURLOptions().setTimeout(seconds * 1000.0))
+      catch
+        case _: TimeoutError =>
+          throw AssertionError(
+            s"$name was not taken through the error page back into the portal, within $seconds seconds: ${who
+                .trail}")
+  }
+
+  // The portal's own error view, not the error page: the location's copy, read as `text <key>`.
+  Then("""{word} is told to join the venue's WiFi, with no retry""") { (name: String) =>
+    val page = World.guest(name).page
+    val shown = page.locator(".error-message")
+    within(30, s"$name is not told to join the venue's WiFi: ${shown.textContent()}")(
+      shown.textContent() == Locations.text("error.invalidClient"))
+    val retry = page.getByText(Locations.text("error.retry"))
+    if retry.count() != 1 || retry.isVisible then
+      throw AssertionError(s"$name is offered a retry that cannot bring the venue's WiFi")
+  }
+
   Then("""{word} is shown a code for the staff and no way out""") { (name: String) =>
     val page = World.guest(name).page
     val code =

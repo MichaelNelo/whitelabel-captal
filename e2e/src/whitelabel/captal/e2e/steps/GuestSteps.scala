@@ -34,6 +34,16 @@ final class GuestSteps extends ScalaDsl with EN:
     World.arrive(name, World.location(at))
   }
 
+  When("""{word} opens the portal on a new phone, through a link that lost its fingerprint""") {
+    (name: String) =>
+      World.arrive(name, arrival = Portal.Arrival.RedirectWithoutFingerprint)
+  }
+
+  When("""{word} opens the portal's address on a new phone, outside the venue's WiFi""") {
+    (name: String) =>
+      World.arrive(name, arrival = Portal.Arrival.Address)
+  }
+
   When("""{word} comes back to the portal on the same phone""") { (name: String) =>
     World.keep(World.guest(name).returnTo())
   }

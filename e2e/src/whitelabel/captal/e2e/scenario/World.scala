@@ -53,12 +53,15 @@ object World:
     name,
     throw IllegalStateException(s"No guest called $name in this scenario"))
 
-  /** `name` on a phone of their own, set to `locale`, sent by the access point to `at`'s portal. */
+  /** `name` on a phone of their own, set to `locale`, sent to `at`'s portal as `arrival` says: by
+    * default, by the access point.
+    */
   def arrive(
       name: String,
       at: Locations.Deployed = location,
-      locale: String = "en-US"): Portal.Guest =
-    val guest = Portal.arrive(name, at, locale, streamThroughLoadBalancer)
+      locale: String = "en-US",
+      arrival: Portal.Arrival = Portal.Arrival.Redirect): Portal.Guest =
+    val guest = Portal.arrive(name, at, locale, streamThroughLoadBalancer, arrival)
     guests(name) = guest
     guest
 

@@ -32,11 +32,16 @@ import whitelabel.captal.mcp.tools.{
   */
 object Locations:
   final case class Deployed(slug: String, name: String):
-    /** The portal as UniFi sends a guest to it, from the device `mac` behind the access point. */
-    def portal(mac: String, fingerprint: String): String =
+    /** The portal as UniFi sends a guest to it, from the device `mac` behind the access point, with
+      * the fingerprint the link shortener gave the device, when it gave one.
+      */
+    def portal(mac: String, fingerprint: Option[String]): String =
       val back = java.net.URLEncoder.encode("http://example.com", "UTF-8")
-      s"${Run.setting("E2E_PORTAL")}/$slug/?id=$mac&ap=${Venue.apFor(
-          slug)}&ssid=E2E&url=$back&fingerprint=$fingerprint"
+      s"$address?id=$mac&ap=${Venue.apFor(slug)}&ssid=E2E&url=$back" +
+        fingerprint.fold("")(sent => s"&fingerprint=$sent")
+
+    /** The portal's address alone, as a phone opens it outside the venue's WiFi: no redirect. */
+    def address: String = s"${Run.setting("E2E_PORTAL")}/$slug/"
 
     def api(path: String): String = s"${Run.setting("E2E_PORTAL")}/$slug/api/$path"
 
