@@ -1,8 +1,9 @@
 """Captive portal dispatcher Lambda.
 
 Triggered by ALB target group on /guest/s/* (UCG-redirected captive portal hits).
-Looks up the locations with that AP MAC in rqlite and takes the newest that is not paused — or,
-when every one is, the newest, whose page is then the maintenance page. Then returns a 302 to:
+Looks up the locations that have an access point with that MAC in rqlite (`access_points`) and
+takes the newest that is not paused — or, when every one is, the newest, whose page is then the
+maintenance page. Then returns a 302 to:
   - its custom `unifi_redirect_url` if set and it is not paused (with all UCG query params
     appended),
   - or the default `https://<cloudfront_host>/<slug>/?<params>` otherwise.
@@ -43,22 +44,31 @@ def handler(event, context):
     if not ap_mac:
         return _error(400, "Missing 'ap' query parameter")
 
-    # Escape single quotes (defense in depth — ap is bounded to MAC format).
-    escaped = ap_mac.replace("'", "''")
+    # As `access_points.mac` is written: lowercase, with colons.
+    mac = _normalized(ap_mac)
+    # Escape single quotes (defense in depth — mac is bounded to MAC format).
+    escaped = mac.replace("'", "''")
     # Newest first: where several running locations share an AP, the newest takes its guests.
     query = (
+        "SELECT l.slug, l.unifi_redirect_url FROM access_points a "
+        "JOIN locations l ON l.id = a.location_id "
+        f"WHERE a.mac = '{escaped}' ORDER BY l.created_at DESC"
+    )
+    # Where the migration that brings `access_points` has not run yet: the AP each location had.
+    legacy = (
         "SELECT slug, unifi_redirect_url FROM locations "
         f"WHERE LOWER(unifi_ap_mac) = '{escaped}' ORDER BY created_at DESC"
     )
-    url = f"{RQLITE_URL}/db/query?level=none&q={urllib.parse.quote(query)}"
 
     try:
-        with urllib.request.urlopen(url, timeout=5) as resp:
-            data = json.loads(resp.read())
+        result = _query(query)
+        if "error" in result:
+            print(f"access_points unreadable ({result['error']}), reading locations' own AP")
+            result = _query(legacy)
     except Exception as e:
         return _error(503, f"rqlite unreachable: {e}")
 
-    rows = (data.get("results", [{}])[0] or {}).get("values") or []
+    rows = result.get("values") or []
     if not rows:
         return _error(404, f"No location registered for AP {ap_mac}")
 
@@ -97,6 +107,22 @@ def handler(event, context):
         "body": "",
         "isBase64Encoded": False,
     }
+
+
+def _normalized(mac):
+    """`mac` lowercase with colons, whatever separators it came with; unchanged if it is not a MAC."""
+    digits = mac.replace(":", "").replace("-", "")
+    if len(digits) != 12 or any(c not in "0123456789abcdef" for c in digits):
+        return mac
+    return ":".join(digits[i : i + 2] for i in range(0, 12, 2))
+
+
+def _query(sql):
+    """The first result of `sql` against rqlite: its `values`, or the `error` rqlite answered."""
+    url = f"{RQLITE_URL}/db/query?level=none&q={urllib.parse.quote(sql)}"
+    with urllib.request.urlopen(url, timeout=5) as resp:
+        data = json.loads(resp.read())
+    return (data.get("results", [{}])[0] or {})
 
 
 def _paused_slugs():
