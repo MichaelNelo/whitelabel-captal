@@ -51,15 +51,25 @@ object ErrorView:
       footer = div(
         button(
           cls := "welcome-button",
+          // Retrying cannot change an access point that is not the location's.
+          hidden <-- AppState.error.map(_.exists(_.isInstanceOf[ApiError.UnknownAccessPoint])),
           child.text <-- I18nClient.i18n.map(_.error.retry),
           onClick --> { _ =>
             retry()
-          }))
+          }
+        ))
     )
   end render
 
-  /** All API errors map to `error.generic`. */
-  private def messageFor(error: Option[ApiError], i18n: I18n): String = i18n.error.generic
+  /** An access point that is not the location's has its own message; every other error maps to
+    * `error.generic`.
+    */
+  private def messageFor(error: Option[ApiError], i18n: I18n): String =
+    error match
+      case Some(_: ApiError.UnknownAccessPoint) =>
+        i18n.error.unknownAccessPoint
+      case _ =>
+        i18n.error.generic
 
   /** With no locale loaded every copy binding renders empty, so `/api/locales` is queried and its
     * first entry used; on failure the `localeVar` default ("es") stays.

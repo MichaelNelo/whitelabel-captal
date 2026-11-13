@@ -17,7 +17,7 @@ object I18nClient:
     ),
     ready = I18n.Ready("", "", ""),
     loading = I18n.Loading(""),
-    error = I18n.Error("", "", ""),
+    error = I18n.Error("", "", "", ""),
     question = I18n.Question("", "", "", "", "", "", "", "", "", "", "", "", "", "", ""),
     video = I18n.Video("", "", "", "", "", "", "")
   )
