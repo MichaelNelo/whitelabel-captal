@@ -1,0 +1,283 @@
+= Plan: the relay hands its fan-out to SNS and SQS
+:toc:
+:toclevels: 2
+
+A plan agreed in conversation on 2026-11-13 and not started. The change data capture relay stops
+keeping change sets: it publishes each one to an SNS FIFO topic, and every subscriber reads its own
+SQS FIFO queue. The relay becomes stateless, so it deploys overlapped, and the gap of one to two
+minutes on every relay deploy goes away. Pick it up from <<migration>>.
+
+== The problem
+
+The relay (`cdc`) receives rqlite's change data capture over HTTP and fans it out to its subscribers
+over a gRPC stream, keeping the last `CDC_BUFFER` (1000) change sets in memory for those that
+reconnect (xref:../cdc.adoc[Change data capture relay]). Because that history lives in one process:
+
+* It deploys stop-then-start (`deployment_minimum_healthy_percent = 0`, `modules/cdc/main.tf:134`).
+  Two relays at once would split rqlite's posts: a subscriber that connected to the new one while
+  rqlite still posted to the old misses those change sets with no `Gap`, since its instance never
+  changed. DNS cannot coordinate the switch — `cdc.<namespace>` lists both tasks during an overlap,
+  ECS registers a task while it is still `ACTIVATING`, and an open connection never resolves again.
+* So every relay deploy leaves one to two minutes with no live feed. rqlite retries its posts, and
+  every subscriber gets a `Gap` from the new instance and rebuilds what it derives from the
+  database. Nothing is lost unnoticed; nothing arrives live either, and every subscriber does the
+  rebuild.
+
+What was considered on the way here, and why it was not taken:
+
+[cols="1,3"]
+|===
+| Option | Why not
+
+| An ALB in front of the relay
+| It moves no open stream (a deregistering target's connections end, and the client reconnects
+  anyway); its idle timeout ignores HTTP/2 PINGs, cutting quiet subscriptions every 60 s to 4,000 s;
+  gRPC needs an HTTPS listener; and it would round-robin rqlite's posts between two relays,
+  splitting them.
+
+| Fan-in in the follower
+| Every subscriber follows every relay address, with a cursor per relay and duplicates dropped by a
+  set of seen indexes. Works, but keeps the history in relay memory and puts the complexity in every
+  subscriber.
+
+| Explicit handoff between relays
+| The old relay, on SIGTERM, hands its buffer, its last index and its instance id to the new one
+  (which starts on standby), answers rqlite with `307` to the new one, and closes its streams. Works,
+  given what rqlite does (below), but it is a protocol of our own to keep correct, and the `Gap` and
+  instance-lineage machinery stays.
+
+| RabbitMQ
+| Moves the problem to the broker, whose own redeploy needs a quorum-queue cluster — on Fargate a
+  second rqlite to operate — or Amazon MQ's three brokers.
+
+| NATS JetStream
+| Solves the relay's redeploy (the relay becomes a stateless bridge, consumers resume by themselves),
+  but NATS is then the stateful service: one node is down while it restarts, and no downtime needs a
+  three-node R3 cluster, since Raft needs a majority (two of three) to keep serving.
+
+| Kinesis
+| Managed, but its push (enhanced fan-out) admits few consumers per stream and shared reads are
+  limited per shard: it does not fit one consumer per location. (Limits from memory, not re-checked.)
+
+| API Gateway or a Lambda instead of the relay
+| No process of our own at all, but rqlite cannot sign AWS requests, so the endpoint has to be a
+  private API (an interface VPC endpoint, about USD 7.20 a month per AZ) or a public URL with a
+  secret in it. Keeping a relay inside the VPC keeps rqlite's endpoint and its security group as
+  they are, for about USD 7–9 a month.
+
+| Redpanda Connect, Hookdeck, Svix
+| A configured bridge instead of our relay (still a process), or a SaaS that takes the data out of
+  AWS and needs a public endpoint per subscriber.
+|===
+
+== What rqlite does
+
+Read from rqlite 10.6.1's documentation and, where the documentation is silent, its source
+(`cdc/service.go`, `cdc/sink.go`, `cdc/config.go`); the design depends on these:
+
+* One POST in flight: only the leader sends, from one loop that does not move on until the batch is
+  sent or dropped. Within one leader, batches go out in Raft index order.
+* Success is HTTP 200 or 202 only (`sink.go`); anything else is retried. 307 and 308 are followed
+  with the POST kept; 301–303 are refused.
+* With our configuration (`transmit_retry_policy: 1`, exponential, `transmit_max_retries: 10`,
+  `transmit_max_backoff` 60 s; minimum backoff unset, so 1 s) a batch is tried 11 times over about
+  362 s and then *dropped*, the high watermark moving past it — not in the documentation.
+* A batch holds up to 10 index groups, sent after at most 200 ms (`DefaultMaxBatchSz`,
+  `DefaultMaxBatchDelay`). Each POST times out after `transmit_timeout`, 5 s by default.
+* A leader change can resend batches the old leader had sent, and can deliver out of order; the
+  documentation asks handlers to be idempotent and to tolerate it.
+* rqlite caches no DNS itself. Whether it reuses connections is not settled by its code.
+* The CDC configuration is read once at startup, per node; there is no SIGHUP or HTTP route to
+  change it. Changing the table filter means restarting rqlite, which the user accepted: the new
+  cluster takes no writes until the previous one is down.
+
+== The design
+
+----
+                                 ┌─ tables ∋ video_playbacks ─► captal-<env>-mcp.fifo     ─► backoffice
+rqlite ─POST─► relay ─► SNS ─────┼─ tables ∋ errors ──────────► captal-<env>-<slug>.fifo  ─► each location's API
+   (one in flight)  (stateless)  └─ …                            (one queue per subscriber)
+                    one FIFO topic, every table, in Raft order
+----
+
+=== The relay
+
+For each change set in rqlite's post:
+
+* publish it to the topic `captal-<env>-cdc.fifo` with a fixed `MessageGroupId`, so the topic keeps
+  their order, and the Raft index as `MessageDeduplicationId`;
+* with message attributes: `tables` (`String.Array`, every table the change set touches — one can
+  touch several) for the subscriptions' filters, and the trace context (`traceparent`,
+  `tracestate`), so a change's trace still reaches every subscriber;
+* answer rqlite 200 only once SNS has accepted every change set of the post; if it did not, answer
+  503 and rqlite retries the post.
+
+Order holds even with two relays running: rqlite has one post in flight and waits for its 200, and the
+relay answers only after publishing. SNS drops duplicates within 5 minutes; rqlite can retry for about
+6, and a leader change can resend, so a subscriber still drops what it has already applied, by index.
+
+The relay keeps nothing: no buffer, no `Gap`, no instance id, no gRPC. It deploys overlapped — a
+container health check on `/health`, `deployment_minimum_healthy_percent = 100` and
+`deployment_maximum_percent = 200`, and a `stopTimeout` long enough to finish a post in flight. One
+task is enough: if it dies, rqlite retries for about six minutes while ECS starts another.
+
+=== Why both SNS and SQS
+
+[cols="1,2,2"]
+|===
+| | Does | Lacks
+
+| SQS alone
+| A durable queue: keeps messages until someone processes and deletes them
+| Each message is consumed by one reader. Fanning out to the backoffice and every location means the
+  relay sending to every queue: knowing them, keeping the list current as locations come and go, and
+  retrying when three of five sends succeeded — reimplementing SNS.
+
+| SNS alone
+| Fan-out: publish once, delivered to every subscription
+| Keeps nothing per subscriber: an HTTP subscriber that is away is retried for a while and then
+  dropped, and every location would need a public HTTPS endpoint. A FIFO topic delivers only to SQS
+  queues (to verify), so ordered delivery needs SQS anyway.
+
+| SNS then SQS
+| SNS fans out once; each subscriber has its own queue, which keeps what is pending for up to 14 days
+  and lets it go at its own pace, restart and resume
+|
+|===
+
+=== One queue per subscriber, not per table
+
+A queue is one reader's cursor: subscribers sharing a queue would split its messages between them. So
+every subscriber has its own queue, and the table is the subscription's filter on `tables`. One topic
+for every table, not one per table: a queue subscribed to several topics would lose the order between
+tables, and a change set touching two tables would have to be split. Publishing a new table adds it to
+rqlite's filter and to the filter of whoever reads it; no queue is added.
+
+Today each location runs one task, so one queue per location is enough. A location running two tasks
+would have them compete for its queue, which `RecoveryFeed` cannot accept — its waiting pages may be
+connected to either task. That would need a queue per task, with an ephemeral name, and something to
+remove those of tasks that die without deleting theirs.
+
+=== The subscribers
+
+[cols="1,1,1,1,3"]
+|===
+| Subscriber | Reads | Operation | Fields | Does
+
+| Every location's API (`RecoveryFeed`)
+| `errors`
+| `INSERT`
+| `after.fingerprint`
+| Wakes every waiting page, which checks again whether its wait shortened. Reads every location's
+  errors: one repeating elsewhere shortens the wait too.
+
+| Backoffice (`VideoFileCollector`)
+| `video_playbacks`
+| `INSERT` of an open row; `UPDATE` setting `ended_at`; `DELETE`
+| `after.id`, `before`/`after.ended_at`
+| Starts or cancels the playback's `PlaybackExpiry` timer; any change asks for a collection pass
+  (deleting replaced files no playback holds).
+|===
+
+Both rebuild what they derive from the database when they start: `RecoveryFeed` keeps nothing, each
+page computing its wait from `errors`; `PlaybackExpiry` resyncs "a timer for every playback the
+database has open and for none other" (`PlaybackExpiry.scala:41`), each sleeping until
+`Playback.expiresAt`, a deadline read from the database, never from the feed. That is what makes the
+startup below safe.
+
+=== Each subscriber subscribes itself
+
+The subscriber declares what it reads, next to the code that reads it, as `ChangeFeedFollower` does
+today with `since`. On startup it ensures, idempotently and under a stable name — `captal-<env>-<slug>.fifo`
+for a location, `captal-<env>-mcp.fifo` for the backoffice:
+
+. the queue, with a dead-letter queue for messages it cannot process;
+. the queue policy letting the topic send to it;
+. the subscription, with its filter on `tables`.
+
+Then it purges the queue, rebuilds from the database, and consumes: long polling of up to 20 s,
+batches of up to 10, `DeleteMessageBatch` after processing, duplicates dropped by index. What arrives
+between the purge and the rebuild is both in the queue and in the database, and the index drops it.
+The purge also covers a paused location, whose queue fills while nobody reads it, and replaces the
+`Gap`: a new queue starts empty, and the rebuild is what a subscriber did on `Gap` anyway.
+
+A subscriber that no longer exists cannot delete its queue, so `destroy_location` removes the
+location's queue and subscription.
+
+The task role needs, scoped by name: on its own queue, create, set attributes, purge, receive and
+delete; on the topic, `sns:Subscribe` only with `sns:Protocol = sqs` and `sns:Endpoint` = its own
+queue's ARN. The relay's role needs `sns:Publish` on the topic.
+
+=== Push and pull, plainly
+
+The subscribers read SQS by long polling: a request the server holds open until a message arrives or
+20 s pass, returning up to 10, after which the subscriber asks again and deletes what it processed.
+It is a pull. Delivery is as immediate as the gRPC stream's — the request is already waiting when the
+message arrives — and in both cases the subscriber opens the connection; what differs is that it asks
+again after each batch, and each request is billed.
+
+=== Cost
+
+Monthly, us-east-1, prices from the AWS price list published 2026-11-12. Assumed about 3 changes per
+guest, each published as one 1 KB message delivered to every subscriber unfiltered, and each
+subscriber long polling every 20 s — upper bounds.
+
+[cols="1,2,2"]
+|===
+| | Today: 2 locations, ~36,000 changes | Later: 20 locations, ~1.8 M changes
+
+| Relay, 0.25 vCPU and 512 MB on Fargate
+| USD 9.01 on x86 (vCPU USD 0.04048/h, memory USD 0.004445/GB-h); USD 7.21 on ARM
+| Same
+
+| SNS FIFO (USD 0.30 per million publishes, 0.017 per GB, 0.01 per million subscriber messages,
+  0.001 per GB to subscribers)
+| ~USD 0.01
+| ~USD 1
+
+| SQS FIFO (USD 0.50 per million requests, first million free)
+| USD 0, within the free million
+| A few USD with filters by table, up to ~USD 24 unfiltered (~48 M requests)
+
+| Total
+| ~USD 9 (~7.20 on ARM)
+| ~USD 10 to 34
+|===
+
+Two points the pricing pages do not settle were counted as billed: whether each SNS delivery to SQS
+also counts as an SQS request, and whether a long poll that returns empty is billed. Publishing one
+message per post instead of one per change set (rqlite sends up to 10 per post) and filtering by
+table both lower the total.
+
+[[migration]]
+== Migration
+
+. *Verify in the documentation* before writing code: that an SNS FIFO topic delivers only to SQS
+  queues; that subscription filter policies work on `String.Array` attributes for FIFO topics; SNS
+  FIFO throughput limits; that LocalStack supports SNS FIFO with filters.
+. *Infrastructure* (OpenTofu): the topic `captal-<env>-cdc.fifo`, `sns:Publish` for the relay's role,
+  the subscription permissions for the backoffice's and the locations' roles.
+. *The relay publishes to SNS and still serves gRPC.* Each change set to the topic with its attributes;
+  200 to rqlite only once SNS accepted; the gRPC fan-out as today, so current subscribers notice
+  nothing.
+. *Subscribers move to SQS one at a time*, each subscribing itself as above.
+  * The backoffice: an SQS consumer producing the same `Event.Changed(index, json, context)` as today,
+    so `VideoFileCollector` changes only its source.
+  * Every location: `RecoveryFeed` reads its queue. Existing locations subscribe themselves when
+    `ci.run` moves them onto the new image; `destroy_location` removes the queue and the subscription.
+. *gRPC is retired*: the relay stops serving it; the `cdc.protocol` module (`ChangeFeedFollower`,
+  `cdc.proto`), the buffer, the `Gap`, `CDC_BUFFER`, the gRPC port and its security group rule go.
+. *The relay deploys overlapped*: the container health check, 100/200, the `stopTimeout`. ARM is
+  optional and needs the image built for arm64.
+. *Documentation*: rewrite `cdc.adoc`, update `infrastructure.adoc`, record in `decisions.adoc` why
+  SNS and SQS and what was set aside (the table above), and remove the relay entry from
+  `pending.adoc`.
+
+== What it changes elsewhere
+
+* xref:admin-core-plan.adoc[The admin core plan]: the progress of a deploy run can reach its page the
+  same way — publish `mcp_deploy_runs` through CDC to the backoffice's queue — once this is done;
+  option A there stops being blocked on the relay.
+* The out-of-order delivery a leader change can cause, which the relay today drops silently when an
+  index arrives below the last it published, becomes each subscriber's to absorb: it drops what it
+  already applied by index, and applies the rest whatever their order.

@@ -293,7 +293,10 @@ time in this project — and the user asked for push. The options, as put:
 | One query a second per open page, up to a second late
 |===
 
-A was recommended, and stays blocked on the relay's availability, which the user raised as unsolved:
+A was recommended, and was blocked on the relay's availability. That is now planned separately —
+the relay publishes to SNS and every subscriber reads its own SQS queue
+(xref:relay-sns-sqs-plan.adoc[the relay plan]) — and with it, A means publishing `mcp_deploy_runs`
+to the backoffice's queue. What follows is the analysis that led there:
 
 The relay is one Fargate task deployed stop-then-start (`deployment_minimum_healthy_percent = 0`,
 `modules/cdc/main.tf:134`), because each relay keeps its change sets in its own memory. Two at once
@@ -345,7 +348,8 @@ three brokers).
   `current_run` columns, the lock, the queue and `OperationRunner`, the elicitations, structured step
   failures and `explain`.
 . The dispatcher reads the paused state from the database; remove its S3 endpoint and permission.
-. Decide the relay's availability, then how the run page is told of progress.
+. Once the relay moves to SNS and SQS (xref:relay-sns-sqs-plan.adoc[the relay plan]), tell the run
+  page of progress through it.
 . Video lifecycle with advertisers; survey and question authoring; recovery policy; terms of service
   versions; i18n keys.
 

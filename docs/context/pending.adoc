@@ -100,9 +100,9 @@ The change data capture relay is one task deployed stop-then-start (`modules/cdc
 because each relay keeps its change sets in memory and two at once would split rqlite's posts. Each
 relay deploy leaves one to two minutes with no live feed; rqlite retries its posts and subscribers get
 a `Gap` from the new instance, so nothing is lost unnoticed, but nothing arrives live either. The
-options weighed — fan-in in the follower, an explicit handoff through Cloud Map, SNS and SQS — and the
-ones rejected are in xref:admin-core-plan.adoc[the admin core plan], where pushing a deploy run's
-progress to its page waits on this.
+agreed fix — the relay publishes to SNS, every subscriber reads its own SQS queue, and the relay,
+stateless, deploys overlapped — is xref:relay-sns-sqs-plan.adoc[the relay plan], with the options set
+aside.
 
 == The administrative side has no model in core
 

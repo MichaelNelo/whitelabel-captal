@@ -37,9 +37,12 @@ Read it before changing anything. Most of what is here was expensive to learn.
   and the invariants an editor must not break.
 
 | xref:admin-core-plan.adoc[Plan: the administrative side in core]
-| You are moving the backoffice's rules into `core`, touching a location's deploy, pause, resume or
-  destroy, or deciding how the relay stays available. An agreed plan, not started, with the one
-  question still open.
+| You are moving the backoffice's rules into `core`, or touching a location's deploy, pause, resume
+  or destroy. An agreed plan, not started.
+
+| xref:relay-sns-sqs-plan.adoc[Plan: the relay hands its fan-out to SNS and SQS]
+| You are touching the change data capture relay, its subscribers or rqlite's CDC configuration. An
+  agreed plan, not started, with what rqlite's CDC actually does.
 |===
 
 Architecture — what exists and how it is wired — is one level up, indexed in
