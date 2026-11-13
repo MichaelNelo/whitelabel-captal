@@ -6,7 +6,15 @@ import com.raquo.laminar.api.L.*
 import org.scalajs.dom
 import whitelabel.captal.client.Promises.*
 import whitelabel.captal.client.i18n.I18nClient
-import whitelabel.captal.client.{AppState, ErrorHandler, Router, Runtime, StatusApi, WelcomeApi}
+import whitelabel.captal.client.{
+  AppState,
+  ErrorHandler,
+  Recovery,
+  Router,
+  Runtime,
+  StatusApi,
+  WelcomeApi
+}
 import whitelabel.captal.core.i18n.I18n
 import whitelabel.captal.messages.ApiError
 
@@ -51,8 +59,18 @@ object ErrorView:
       footer = div(
         button(
           cls := "welcome-button",
-          // Retrying cannot change an access point that is not the location's.
-          hidden <-- AppState.error.map(_.exists(_.isInstanceOf[ApiError.UnknownAccessPoint])),
+          // Retrying cannot change an access point that is not the location's, nor bring the
+          // redirect's parameters to a page opened without them.
+          hidden <--
+            AppState
+              .error
+              .map(
+                _.exists {
+                  case _: ApiError.UnknownAccessPoint | _: ApiError.InvalidClient =>
+                    true
+                  case _ =>
+                    false
+                }),
           child.text <-- I18nClient.i18n.map(_.error.retry),
           onClick --> { _ =>
             retry()
@@ -61,13 +79,15 @@ object ErrorView:
     )
   end render
 
-  /** An access point that is not the location's has its own message; every other error maps to
-    * `error.generic`.
+  /** An access point that is not the location's, and a page reached without the network's redirect,
+    * have their own messages; every other error maps to `error.generic`.
     */
   private def messageFor(error: Option[ApiError], i18n: I18n): String =
     error match
       case Some(_: ApiError.UnknownAccessPoint) =>
         i18n.error.unknownAccessPoint
+      case Some(_: ApiError.InvalidClient) =>
+        i18n.error.invalidClient
       case _ =>
         i18n.error.generic
 
@@ -97,8 +117,12 @@ object ErrorView:
         .getStatus(headers)
         .map:
           case Right(status) =>
-            I18nClient.setLocale(status.locale)
-            Router.syncWithPhase(status.phase)
+            status.recovery match
+              case Some(errorId) =>
+                Recovery.serverError(errorId)
+              case None =>
+                I18nClient.setLocale(status.locale)
+                Router.syncWithPhase(status.phase)
           case Left(err) =>
             ErrorHandler.escalate(err)
 

@@ -61,10 +61,15 @@ object App:
         .getStatus(headers)
         .map:
           case Right(status) =>
-            i18n.I18nClient.setLocale(status.locale)
-            AppState.setSecondsRemaining(status.secondsRemaining)
-            AppState.setPhase(status.phase)
-            Router.syncWithPhase(status.phase)
+            status.recovery match
+              // A server error recorded as the session was made: the guest leaves through it.
+              case Some(errorId) =>
+                Recovery.serverError(errorId)
+              case None =>
+                i18n.I18nClient.setLocale(status.locale)
+                AppState.setSecondsRemaining(status.secondsRemaining)
+                AppState.setPhase(status.phase)
+                Router.syncWithPhase(status.phase)
           case Left(err) =>
             ErrorHandler.escalate(err)
 end App
