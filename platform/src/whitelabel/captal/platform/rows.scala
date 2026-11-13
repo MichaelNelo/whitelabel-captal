@@ -248,15 +248,25 @@ final case class LocationRow(
     isActive: Int,
     createdAt: String,
     updatedAt: String,
-    unifiApMac: Option[String],
-    unifiHost: Option[String] = None,
-    unifiPort: Option[Int] = None,
-    unifiSiteId: Option[String] = None,
-    unifiApiToken: Option[String] = None,
     unifiDurationMinutes: Option[Int] = None,
     unifiRedirectUrl: Option[String] = None,
     unifiIsEnabled: Int = 1,
     fingerprintIsRequired: Int = 1)
+
+/** One of a location's access points, with the UniFi controller that authorizes the guests who join
+  * through it. `mac` is lowercase with colons, as [[whitelabel.captal.core.device.Mac.show]] writes
+  * it.
+  */
+final case class AccessPointRow(
+    id: String,
+    locationId: String,
+    mac: String,
+    unifiHost: String,
+    unifiPort: Option[Int],
+    unifiSiteId: String,
+    unifiApiToken: String,
+    createdAt: String,
+    updatedAt: String)
 
 /** What a location changed of the recovery defaults; `None` takes the default. See
   * [[LocationRecovery]].

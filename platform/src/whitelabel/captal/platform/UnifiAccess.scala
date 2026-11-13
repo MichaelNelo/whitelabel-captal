@@ -1,6 +1,7 @@
 package whitelabel.captal.platform
 
-/** UniFi Controller access derived from a [[LocationRow]] for the Integration v1 API.
+/** UniFi Controller access for the Integration v1 API: an [[AccessPointRow]]'s controller, with its
+  * location's access duration.
   *
   * `siteId` is the UUID returned by `GET /proxy/network/integration/v1/sites` on the controller;
   * the legacy site name ("default") does NOT work. `host` is the UCG address, `port` defaults to
@@ -17,19 +18,12 @@ object UnifiAccess:
   private val DefaultPort = 443
   private val DefaultDurationMinutes = 1440
 
-  /** Build from a LocationRow when `host`, `apiToken` and `siteId` are all present; `None`
-    * otherwise.
-    */
-  def fromRow(row: LocationRow): Option[UnifiAccess] =
-    for
-      host   <- row.unifiHost
-      token  <- row.unifiApiToken
-      siteId <- row.unifiSiteId
-    yield UnifiAccess(
-      host = host,
-      apiToken = token,
-      port = row.unifiPort.getOrElse(DefaultPort),
-      siteId = siteId,
-      defaultDurationMinutes = row.unifiDurationMinutes.getOrElse(DefaultDurationMinutes)
-    )
+  /** The access through `ap`, granting `durationMinutes` — the location's, 1440 when unset. */
+  def of(ap: AccessPointRow, durationMinutes: Option[Int]): UnifiAccess = UnifiAccess(
+    host = ap.unifiHost,
+    apiToken = ap.unifiApiToken,
+    port = ap.unifiPort.getOrElse(DefaultPort),
+    siteId = ap.unifiSiteId,
+    defaultDurationMinutes = durationMinutes.getOrElse(DefaultDurationMinutes)
+  )
 end UnifiAccess

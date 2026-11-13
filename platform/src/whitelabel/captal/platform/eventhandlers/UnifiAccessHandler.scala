@@ -2,6 +2,7 @@ package whitelabel.captal.platform.eventhandlers
 
 import whitelabel.captal.core.access.Event as AccessEvent
 import whitelabel.captal.core.application.{Event, EventHandler}
+import whitelabel.captal.core.device.Mac
 import whitelabel.captal.platform.session.{
   JobQueue,
   ScheduledAt,
@@ -25,6 +26,10 @@ import zio.*
   * adapter. It must stay outside the transactional chain (composed via `.andThen`, so it runs after
   * the commit). Both branches log and skip on failure.
   *
+  * @param unifiFor
+  *   The controller of the access point a session came through, with the location's access
+  *   duration, read on every event: a venue's APs need not share a controller, and a change to one
+  *   in the backoffice takes effect without a restart. None, and both branches are skipped.
   * @param unifiEnabled
   *   Whether the location has UniFi calls enabled, evaluated on every event so that turning it off
   *   in the backoffice takes effect without a restart. False skips both branches.
@@ -32,7 +37,7 @@ import zio.*
 object UnifiAccessHandler:
 
   def apply(
-      unifi: Option[UnifiAccess],
+      unifiFor: Option[Mac] => Task[Option[UnifiAccess]],
       unifiEnabled: Task[Boolean],
       ctx: SessionContext,
       sessionService: SessionService,
@@ -56,24 +61,37 @@ object UnifiAccessHandler:
           case _ =>
             ZIO.unit
 
-      /** Shared guard: with no UniFi config (dev, tests, locations without a controller), or with
-        * UniFi disabled for the location, it logs and moves on.
+      /** Shared guard: with UniFi disabled for the location, or with no configuration for the AP
+        * the session came through (dev, tests, an AP removed since the guest arrived), it logs and
+        * moves on.
         */
       private def withConfig(action: String)(body: UnifiAccess => Task[Unit]): Task[Unit] =
-        unifi match
-          case None =>
-            ZIO.logWarning(s"UniFi $action: no config for current location — skipping")
-          case Some(unifiCfg) =>
-            unifiEnabled
-              .catchAll: error =>
-                ZIO.logError(
-                  s"UniFi $action: could not read whether it is enabled — skipping: ${error
-                      .getMessage}") *> ZIO.succeed(false)
-              .flatMap:
-                case false =>
-                  ZIO.logInfo(s"UniFi $action: disabled for current location — skipping")
-                case true =>
-                  body(unifiCfg)
+        unifiEnabled
+          .catchAll: error =>
+            ZIO.logError(
+              s"UniFi $action: could not read whether it is enabled — skipping: ${error
+                  .getMessage}") *> ZIO.succeed(false)
+          .flatMap:
+            case false =>
+              ZIO.logInfo(s"UniFi $action: disabled for current location — skipping")
+            case true =>
+              ctx
+                .getOrFail
+                .flatMap: session =>
+                  val ap = session.apMac.fold("none")(_.show)
+                  unifiFor(session.apMac)
+                    .catchAll: error =>
+                      ZIO.logError(
+                        s"UniFi $action: could not read the configuration of AP $ap — skipping: ${error
+                            .getMessage}") *> ZIO.none
+                    .flatMap:
+                      case None =>
+                        ZIO.logWarning(
+                          s"UniFi $action: AP $ap has no configuration for the current location — skipping (session=${session
+                              .sessionId
+                              .asString})")
+                      case Some(unifiCfg) =>
+                        body(unifiCfg)
 
       private def authorize(unifiCfg: UnifiAccess, occurredAt: java.time.Instant): Task[Unit] =
         for
