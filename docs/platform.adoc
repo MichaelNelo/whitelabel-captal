@@ -134,7 +134,7 @@ defaulting, naming the column and the V22 rename in the message.
 `SessionRow`, `SurveyRow`, `QuestionRow`, `QuestionOptionRow`, `QuestionRuleRow`, `AnswerRow`,
 `UserSurveyProgressRow`, `NextIdentificationSurveyRow`, `LocalizedTextRow`, `AdvertiserRow`,
 `AdvertiserVideoRow`, `VideoViewRow`, `DeviceRow`, `DeviceUserRow`, `TermsRow`,
-`TermsTranslationRow`, `LocationRow`, `LocationRecoveryRow`, `EventLogRow`.
+`TermsTranslationRow`, `LocationRow`, `AccessPointRow`, `LocationRecoveryRow`, `EventLogRow`.
 
 `Terms` (`platform/Terms.scala`) is how the portal and the backoffice read the terms of service:
 `current` (the highest version), `translations`, `locales` (those of the version in force, the ones
@@ -254,11 +254,14 @@ rather than dropping them silently.
 `services/` holds the three database-backed services that are not repositories — they answer
 questions the domain does not model as aggregate reads.
 
-`LocationService` (`services/LocationService.scala`) resolves a slug to a `LocationRow`. One query,
-`findBySlugQuery`, over `locations`. `LocationService.resolveSlug` narrows that to the id and fails
-with `LocationNotFound` when the configured `LOCATION_SLUG` matches no row — a configuration error,
-not a request error. The `LocationRow` it returns is also where the per-location UniFi credentials
-come from.
+`LocationService` (`services/LocationService.scala`) resolves a slug to a `LocationRow` with
+`findBySlug`. `LocationService.resolveSlug` narrows that to the id and fails with
+`LocationNotFound` when the configured `LOCATION_SLUG` matches no row — a configuration error, not a
+request error. The rest it answers by location id, read when asked rather than at startup, so a
+change through the backoffice needs no restart: `unifiEnabled` and `fingerprintRequired`, the
+location's two switches; `hasAccessPoint(id, mac)`, whether the location has an access point with
+that MAC; and `unifiFor(id, mac)`, that access point's `UnifiAccess` with the location's access
+duration, or `None` when it has no such AP.
 
 `LocaleService` (`services/LocaleService.scala`, implemented by `LocaleServiceQuill`) reads
 `localized_texts`:
@@ -456,6 +459,11 @@ It mirrors the guest-access lifecycle onto the controller, symmetrically:
 * `AccessExpired` → revoke. No session write: `SessionExpirationHandler` already reset the row inside
   the transaction.
 
+It is built with two reads it makes on every event: `unifiEnabled: Task[Boolean]`, the location's
+switch, and `unifiFor: Option[Mac] => Task[Option[UnifiAccess]]`, the controller of the access point
+a session came through. Both branches read the switch first, then resolve the controller from the
+session's `apMac`; with the switch off, or no controller for that AP, they log and skip.
+
 Both branches log and continue on failure. A failed authorize leaves the session in its pre-authorized
 phase so the finish endpoint can be retried; a failed revoke is already absorbed, because the reset is
 committed either way.
@@ -579,14 +587,15 @@ and the write-verification rule that follows from it, are in xref:database.adoc[
 
 == UniFi integration
 
-Two files in this module talk to the venue's UniFi controller: `UnifiAccess.scala`, which derives
-`host`, `apiToken`, `port` (default 443), `siteId` and `defaultDurationMinutes` (default 1440) from a
-`LocationRow` and yields `None` unless host, token and site id are all present; and
+Two files in this module talk to the venue's UniFi controller: `UnifiAccess.scala`, whose
+`UnifiAccess.of(ap, durationMinutes)` takes `host`, `apiToken`, `port` (default 443) and `siteId`
+from an `AccessPointRow` and `defaultDurationMinutes` (default 1440) from its location; and
 `UnifiClient.scala`, the zio-http client for the Integration v1 endpoints that authorize and revoke a
 guest client. `eventhandlers/UnifiAccessHandler.scala` is the event adapter described above. Because
-the credentials live on the `locations` row, each deployed task picks up its own venue's controller
-with no extra configuration. The protocol, the request shapes, the TLS handling and the failure modes
-are in xref:unifi.adoc[UniFi integration].
+the controllers live on the `access_points` rows and a session records the AP it came through, each
+deployed task reaches the right controller for each guest with no extra configuration, and a venue's
+access points need not share one. The protocol, the request shapes, the TLS handling and the failure
+modes are in xref:unifi.adoc[UniFi integration].
 
 == See also
 

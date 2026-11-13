@@ -462,7 +462,8 @@ Every view is an object under `client/src/whitelabel/captal/client/views/` expos
 | `ErrorView`
 | `/error`
 | The error page for what a retry answers: a lost connection, a refusal, a failed video load.
-  Renders `i18n.error.{title, generic, retry}`, loads a locale by best effort when boot failed
+  Renders `i18n.error.{title, generic, retry}` — `error.unknownAccessPoint` in place of `generic`,
+  and no retry button, for `UnknownAccessPoint` — loads a locale by best effort when boot failed
   before one was known, and retries by clearing the error and re-running the boot status check.
 |===
 
@@ -650,9 +651,15 @@ The distinction is a rule, not a convention:
   `.question-card`, and drive that card's `card-error` / `card-valid` modifier. The submit button
   stays disabled while one is present.
 
-`ErrorView` renders `i18n.error.generic` for every `ApiError` subtype today. Retry clears the error,
+`ErrorView` renders `i18n.error.generic` for every `ApiError` subtype but one. Retry clears the error,
 turns the nav loader on and re-runs the boot status check, so a second failure simply lands back on
 the error page with the new error.
+
+The one is `UnknownAccessPoint`: `/api/status` refuses a redirect through an access point that is
+not one of the location's (see xref:unifi.adoc[UniFi integration]). It reaches the page through
+`escalate` like any other refusal, and `ErrorView` shows `i18n.error.unknownAccessPoint` for it and
+hides the retry button, since retrying cannot change the AP the guest came through. It is not a way
+out case: nothing on the guest's side fixes it, and no recovery is asked for.
 
 === The way out — `Recovery.scala` and `error.html`
 
@@ -967,9 +974,10 @@ then `#form` stays hidden rather than empty.
 
 `Config` mirrors `UnifiTools.ConfigureResponse` the same way `Ticket` mirrors its server type. On
 arrival the page reveals the form, fills `host`, `siteId`, `apMac`, `redirectUrl`, `port` and
-`durationMinutes`, and marks `apiToken` required *only* when `tokenSet` is false — a location that
-already has a token keeps it when the field is left blank, which is why the form never renders the
-stored token back.
+`durationMinutes` — the AP fields only when the tool was called with an `apMac`, since one form is
+one access point — and marks `apiToken` required *only* when `tokenSet` is false: an access point
+that already has a token keeps it when the field is left blank, which is why the form never renders
+the stored token back.
 
 Submission POSTs `application/x-www-form-urlencoded` to `config.postUrl` with the ticket plus the
 seven named fields. The ticket is what authorises the write: this request leaves the MCP protocol

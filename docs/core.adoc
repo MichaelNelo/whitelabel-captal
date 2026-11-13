@@ -687,7 +687,7 @@ through an error before giving an email has no user at all.
 
 `core/src/whitelabel/captal/core/i18n/` is the source of truth for the portal's translation keys.
 
-`I18n.scala` declares the bundle as nested case classes of `String` — `welcome` (with `steps`, `button`, `authorized`), `ready`, `loading`, `error`, `question`, `video` — 39 leaf keys today. Each nested type carries babel `Decoder`/`Encoder` instances; the circe pair for the whole tree is in xref:messages.adoc[Messages].
+`I18n.scala` declares the bundle as nested case classes of `String` — `welcome` (with `steps`, `button`, `authorized`, `terms`), `ready`, `loading`, `error`, `question`, `video` — 44 leaf keys today. `error.unknownAccessPoint` is the message for a guest who came through an access point that is not the location's, which nothing the guest does fixes; like every key, each location has to translate it. Each nested type carries babel `Decoder`/`Encoder` instances; the circe pair for the whole tree is in xref:messages.adoc[Messages].
 
 `I18n.descriptions` is an `I18n` value whose leaves hold a description of each key instead of a translation. It is total by construction: adding a field to `I18n` fails to compile until it is described there.
 

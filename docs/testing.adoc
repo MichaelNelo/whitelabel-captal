@@ -84,7 +84,10 @@ container.
   `UnifiAccessHandler` itself is the real production class; only its HTTP transport is swapped.
 * **There is no slug.** `ApiBase.none` is what `apiBaseLayer` provides, so every route in this
   suite mounts unprefixed at `/api/...`. The slug-prefixed form has no automated coverage; see
-  <<What is deliberately not covered>>.
+  <<What is deliberately not covered>>. The location is `CurrentLocation.empty` too, so
+  `/api/status` checks no access point, and `UnifiAccessHandler` is given one test controller for
+  every session's AP. A test that needs a served location builds a `/api/status` backend for one,
+  seeding its access points with `TestFixtures.seedAccessPoint`.
 
 `TestFixtures.scala` is the seeding and read-back layer the suites share: `seedEmailSurvey`,
 `seedProfilingSurvey`, `seedAllIdentificationSurveys`, `seedMultiQuestionProfilingSurvey`,
@@ -334,7 +337,7 @@ yes and declines any other. Their rows stay. `--keep` leaves them up, to look at
 left.
 * **Guests** are Playwright browser contexts (`Portal`), each a phone of its own — its own cookies
 and storage, mobile viewport and touch — sent to the portal the way the access point sends them,
-with a MAC, an access point and a fingerprint in the query string. Certificate errors are ignored: the
+with a MAC, the location's access point and a fingerprint in the query string. Certificate errors are ignored: the
 distribution's name is two levels under the one LocalStack's certificate covers. Starting only
 presses the welcome's button; a scenario says when the guest accepts the terms of service, a step
 of its own that fails when the dialog is not open. A phone the portal knows nothing about is always
@@ -363,8 +366,11 @@ distribution.
 `enable_unifi_fake`): a Python script on the public Python image, reached by the locations' tasks
 as `unifi.captal.local:8443` over HTTPS, as a controller is. It answers the two calls of the
 Integration v1 API the API makes — any MAC is a connected client — and records every action. Each
-location is pointed at it through the page `configure_unifi` opens, posting the form with the
-ticket as the page does, then `set_unifi_enabled`. `Venue` reads the record from
+location registers an access point of its own, `Venue.apFor(slug)` — a locally administered `02:`
+MAC from a digest of the slug, since an AP takes the guests of a single running location — with the
+stand-in as its controller, through the page `configure_unifi` opens, posting the form with the
+ticket as the page does, then `set_unifi_enabled`. The portal URL a guest opens names that AP, which
+is what admits the guest and what the API finds the controller by. `Venue` reads the record from
 `http://localhost:18080/calls`, which LocalStack publishes on the host, so a step checks what the
 network was asked for a guest's MAC: the action, its time limit, the API key.
 * **The infrastructure** is `Stack`: the AWS CLI against LocalStack, for what an operator does

@@ -160,7 +160,8 @@ through — see <<request-lifecycle>>. `expireAccessFlowLayer` is the one flow n
 rather than by `Flow(...)`, because `MarkVideoWatchedHandler.withSession` needs the session and so
 can only be constructed per request. The three recovery flows are built per request too, and also
 read the served location's wait policy for each command (`Flows.waitPolicy`, see
-xref:platform.adoc#location-recovery[Platform]), as `eventHandlerLayer` reads the UniFi switch: a
+xref:platform.adoc#location-recovery[Platform]), as `eventHandlerLayer` reads the UniFi switch and
+the controller of the session's access point (`Flows.unifiEnabled`, `Flows.unifiFor`): a
 change through `set_recovery_policy` applies to the next request with no redeploy. Without a
 location they use `WaitPolicy.Default`.
 
@@ -211,7 +212,8 @@ the slug is absent from the `locations` table:
 * `resolveLocationId` (used by `sessionServiceLayer` and `localeServiceLayer`) calls
   `LocationService.resolveSlug`, which fails with `LocationService.LocationNotFound(slug)` after
   logging `Configuration error: …`.
-* `currentLocationLayer` calls `LocationService.findBySlug(...).someOrFail(LocationNotFound(slug))`.
+* `currentLocationLayer` is `CurrentLocation.make(locationSlug)` (`session/CurrentLocation.scala`),
+  which calls `LocationService.findBySlug(...).someOrFail(LocationNotFound(slug))`.
 
 `LocationNotFound` is a `RuntimeException` whose message is
 `Location '<slug>' not found. Verify LOCATION_SLUG is correct and the location has been
@@ -221,12 +223,9 @@ exits non-zero. A location must exist in the database before its task starts.
 
 IMPORTANT: With no `LOCATION_SLUG` the server still boots. `ApiBase` adds no prefix, the session
 cookie falls back to `captal_session` at `Path=/`, `CurrentLocation` is `CurrentLocation.empty` (no
-UniFi, no AP MAC to validate against) and the session and locale services are built with
-`locationId = None`, so their queries are not scoped to a location. This is a development shape, not
-a deployment shape.
-
-`CurrentLocation.make` in `session/CurrentLocation.scala` builds the same snapshot and has no call
-site in `api/src`; the server uses the inline `currentLocationLayer` in `AppLayers`.
+location id, so `/api/status` checks no access point and the UniFi handler finds a controller for no
+session) and the session and locale services are built with `locationId = None`, so their queries
+are not scoped to a location. This is a development shape, not a deployment shape.
 
 === Route mounting
 
@@ -628,9 +627,12 @@ whose id is malformed or absent from the `users` table falls back to a plain `On
 
 === Current location
 
-`api/src/whitelabel/captal/api/session/CurrentLocation.scala` is the startup snapshot
-`(id, slug, apMac, unifi)` of the row `LOCATION_SLUG` names, so neither AP-MAC validation nor the
-UniFi call needs a per-request query. `CurrentLocation.empty` is what a slugless server gets.
+`api/src/whitelabel/captal/api/session/CurrentLocation.scala` is `(id, slug)` of the row
+`LOCATION_SLUG` names, resolved once at startup: which location this process serves, and nothing
+else about it. Its access points, their UniFi controllers and its switches are read from the
+database when they are needed — the access point check per request, the controller and the UniFi
+switch per event — so a change through the backoffice applies without a restart.
+`CurrentLocation.empty` is what a slugless server gets.
 
 === Captive-portal headers
 
@@ -663,8 +665,9 @@ All seven inputs are optional at the codec level; the rules are in the handler.
 |The other half.
 
 |`X-Ap-Mac`
-|Optional
-|Defaults to `""` in `CaptivePortalParams`; soft-validated, see below.
+|Mandatory for an API serving a location
+|Has to be one of the location's access points, in any spelling; see below. Read as a `Mac`, it is
+`CaptivePortalParams.apMac` and the session's `ap_mac`.
 
 |`X-Redirect-Url`
 |Optional
@@ -686,13 +689,18 @@ params to create from and the route answers `ApiError.SessionMissing`.
 
 Once the session cookie resolves an existing session, all of these headers are ignored: the route
 returns that session's stored phase, locale and redirect URL, and the `CaptivePortalParams` it was
-created with. Only `X-Ap-Mac` is still inspected, by `softValidateApMac`, which runs before session
-resolution on every call.
+created with. Only `X-Ap-Mac` is still inspected, by `requireAccessPoint`, which runs before session
+resolution on every call that carries the redirect's parameters — whenever `CaptivePortalParams`
+is built.
 
-AP-MAC validation is soft by design. When an incoming `X-Ap-Mac`, a snapshotted
-`CurrentLocation.apMac` and a slug are all present and the two MACs differ — both read as a `Mac`,
-so their spelling does not count — the route logs a warning naming both values and the client MAC,
-then proceeds. A mismatch never produces an error response.
+For an API serving a location, the redirect has to name one of that location's access points: the
+AP is what says which UniFi controller authorizes the guest, so a guest through any other could
+never be. `requireAccessPoint` asks `LocationService.hasAccessPoint` with the header read as a
+`Mac`, so its spelling does not count. An AP the location does not have, or a header that is
+missing or is not a MAC, fails with `ApiError.UnknownAccessPoint(apMac)` (400) — the MAC as
+`Mac.show` writes it, or the raw header — after a warning in the log. No session is created and
+nothing is recorded in `errors`: it is an expected refusal, with no way out to offer. An API serving
+no location checks nothing. See xref:unifi.adoc[UniFi integration].
 
 `GET /api/locales` offers only the locales the terms of service in force are written in, so a guest
 reads them in the language they picked; before any version exists it offers every locale with

@@ -333,10 +333,12 @@ surface as a page that will not open."
 
 Grouped three ways at once, each real: by business area (the table below, one group per source
 file); by what environment a tool needs (`LocationTools`, `I18nTools`, `AdvertiserTools`,
-`SurveyTools`, `UnifiTools`, `RecoveryTools`, `TokenTools` and `SkillTools` need only
+`SurveyTools`, `RecoveryTools`, `TokenTools` and `SkillTools` need only
 `QuillSqlite`; `AssetTools`,
-`VideoTools`, `PreviewTools`, `Readiness` and the deploy tools also need `AssetStore`, which is why `CaptalMcp`
-assembles them as two separate groups); and by visibility, covered above.
+`VideoTools`, `PreviewTools`, `Readiness`, `UnifiTools` and the deploy tools also need `AssetStore`
+— `UnifiTools` because whether a location is paused, which decides whether its access points are
+free to take, is read from S3 — which is why `CaptalMcp` assembles them as two separate groups);
+and by visibility, covered above.
 
 === Locations
 
@@ -346,8 +348,8 @@ assembles them as two separate groups); and by visibility, covered above.
 
 |`list_locations`
 |read-only
-|`unifiConfigured = false` on a row means the portal there cannot authorize a guest no matter how
-complete its content is.
+|`unifiConfigured = false` on a row means the location has no access point, so its portal turns
+every guest away at the first page no matter how complete its content is.
 
 |`create_location`
 |`content:write`
@@ -608,27 +610,47 @@ would never return.
 
 |`configure_unifi`
 |`content:write`, `.withUi(UnifiUi.AppUri)`, `.handleWithContext`
-|Opens the credentials form rather than taking the controller token as a tool argument — see
-<<The MCP Apps>>. Until a location is configured this way, its portal completes its entire guest
-flow and then leaves every guest stranded at `Ready` with no network access.
+|Opens the form that registers one of the location's access points with its controller's host,
+port, site id and API token, beside the location's access duration and redirect URL, rather than
+taking the token as a tool argument — see <<The MCP Apps>>. With `apMac`, the page opens with that
+AP's settings, to change them; an `apMac` the location does not have is refused. The token is
+required only for an AP with none stored. An AP another running location (active and not paused)
+already has is refused on submission. A guest is admitted only through one of the location's access
+points, so until one is registered its portal turns every guest away at the first page.
 
 |`get_unifi_config`
 |read-only
-|Reports *whether* host, site id and a token are all present, never the token's value. Port
-defaults to 443 and duration to 1440 minutes when unset, matching `UnifiAccess`'s own defaults — see
-xref:platform.adoc[Platform] and xref:unifi.adoc[UniFi integration]. Also reports `enabled`.
+|`configured` (at least one access point), `accessPoints` — each `apMac`, `host`, `port`, `siteId`
+and *whether* a token is stored, never its value — and the location's `redirectUrl`,
+`durationMinutes` and `enabled`. Port defaults to 443 and duration to 1440 minutes when unset,
+matching `UnifiAccess`'s own defaults — see xref:platform.adoc[Platform] and
+xref:unifi.adoc[UniFi integration].
 
 |`set_unifi_enabled`
 |`content:write`
-|Turns the location's calls to its controller off or back on (`unifi_is_enabled`), keeping the
+|Turns the location's calls to its controllers off or back on (`unifi_is_enabled`), keeping the
 stored settings. Off, the portal runs its whole flow and never authorizes or revokes a guest. The API
 reads the switch on every event, so it takes effect without a redeploy.
 
 |`update_unifi_settings`
 |`content:write`
-|Changes the settings that are not secret — host, port, site id, AP MAC, redirect URL, duration —
-without the form, each field given replacing the stored one. Never the token. The portal reads them
-when its task starts, so they apply after a redeploy. See xref:unifi.adoc[UniFi integration].
+|Changes the location's own settings — redirect URL and access duration — without the form, each
+field given replacing the stored one; an empty redirect URL removes it. The redirect URL is where
+the portal dispatcher sends the location's guests instead of its portal, not where a guest goes
+after authorizing. Read when they are needed, so they apply without a redeploy.
+
+|`update_access_point`
+|`content:write`
+|Changes one access point's settings that are not secret — its MAC (`newApMac`, for an AP that was
+replaced) and its controller's host, port and site id — without the form, each field given
+replacing the stored one. Never the token. A new MAC already in another running location is
+refused. Read on the next authorize or revoke, so it applies without a redeploy.
+
+|`remove_access_point`
+|`content:write`
+|Takes an access point off the location, with its controller's settings and token. A guest who comes
+through it afterwards is turned away; one already authorized keeps the access until it runs out, and
+the revoke is skipped. See xref:unifi.adoc[UniFi integration].
 |===
 
 === Recovery (`RecoveryTools`)
@@ -696,7 +718,9 @@ rather than one tool per skill. See <<Skills>>.
 
 === Readiness
 
-`get_location_readiness`, read-only. See <<Onboarding>> and <<Resources>>.
+`get_location_readiness`, read-only. See <<Onboarding>> and <<Resources>>. Its `unifiConfigured`
+is whether the location has at least one access point, and its steps ask for one whatever
+`unifiEnabled` says: without one every guest is turned away at the first page.
 
 === Preview (`PreviewTools`)
 
@@ -729,7 +753,9 @@ alone.
 |Idempotent — an already-deployed location gets its service rolled onto a fresh task definition
 rather than a second one created. The run waits for a task of the new revision to be running, then
 for the service's deployment of that revision to reach `COMPLETED`. Refused before any run while
-no version of the terms of service exists: the portal could start nobody.
+no version of the terms of service exists: the portal could start nobody. Refused too while the
+location shares an access point with another running location (active and not paused): a deploy
+ends a pause, and an AP takes the guests of one running location.
 
 |`pause_location`
 |`infra:deploy`
@@ -738,7 +764,9 @@ the API. Writes nothing to the database.
 
 |`resume_location`
 |`infra:deploy`
-|The reverse order of pause. Does not re-copy the bundle — run `deploy_location` for that.
+|The reverse order of pause. Does not re-copy the bundle — run `deploy_location` for that. Refused
+before any run, like a deploy, while the location shares an access point with another running
+location.
 
 |`destroy_location`
 |`infra:destroy`, `destructive = true`, `idempotent = true`
@@ -779,7 +807,8 @@ With no `slug` argument it lists existing location slugs (from `LocationTools.sl
 are none yet, tells the model to call `create_location` first. With a slug, it calls `Readiness.of`
 and renders a full status block — active state, per-locale translation coverage, whether the
 location has its own stylesheet or icon, video counts by status, advertiser-survey coverage, how
-many advertisers are registered deployment-wide, whether UniFi is configured, the version of the
+many advertisers are registered deployment-wide, whether UniFi is configured — the location has an
+access point — and whether its UniFi calls are on, the version of the
 terms of service in force and the location's locales those terms are not written in — followed by the
 numbered `nextSteps` list `Readiness.steps` derives from that same state, or "Nothing here blocks a
 deploy" when there is nothing left. The rendered text instructs the model explicitly: work through
@@ -1007,7 +1036,8 @@ Verification order is fixed and load-bearing — shape, then signature (`Message
 constant time), then expiry — because checking expiry first would answer whether a forged ticket's
 timestamp merely looked plausible. `UiRoutes.routes` resolves the ticket's token id, loads that
 token row, requires it is not revoked, verifies the signature against its hash, and only then
-upserts the location's UniFi columns (`Writes.expectOne`-guarded). Of the four rejection reasons —
+upserts the access point the form names, in `access_points`, and the location's access duration and
+redirect URL (each `Writes.expectOne`-guarded). Of the four rejection reasons —
 `Malformed`, `BadSignature`, `Expired`, `UnknownToken` — only `Expired` gets its own message
 ("Pedí otra con `configure_unifi`"); the other three collapse into one generic message on purpose,
 since "distinguishing 'forged' from 'revoked' would tell whoever is probing which half to work on."
@@ -1032,8 +1062,8 @@ role and IAM policy this server runs under.
 (`UploadApp`, `UnifiApp`) these pages mount.
 * xref:database.adoc[Database] and xref:platform.adoc[Platform] — the write-verification rule, the
 two migration histories, and the survey-tree codec this module shares with `api`.
-* xref:unifi.adoc[UniFi integration] — the controller protocol `configure_unifi` and
-`get_unifi_config` expose configuration for.
+* xref:unifi.adoc[UniFi integration] — the controller protocol `configure_unifi`,
+`get_unifi_config` and the access point tools expose configuration for.
 * xref:testing.adoc[Test strategy] — `mcp.test`'s tool-level specs, the deploy end-to-end spec, and
 the IAM soft-mode assertion run against this server's own policy.
 * xref:development.adoc[Local development] — `mill mcp.dev`.

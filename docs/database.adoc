@@ -66,7 +66,7 @@ code rather than by matching its text.
 == The schema
 
 Two independent schemas live in one database. The portal schema is created and owned by the API
-(`platform/resources/db/migration`, `V1` … `V23`); the backoffice's own tables are created and owned
+(`platform/resources/db/migration`, `V1` … `V34`); the backoffice's own tables are created and owned
 by the MCP server (`mcp/resources/db/migration-mcp`, `V1` and `V2`).
 
 === Portal tables
@@ -147,8 +147,12 @@ by the MCP server (`mcp/resources/db/migration-mcp`, `V1` and `V2`).
 | via its session
 
 | `locations`
-| A venue: `slug` (UNIQUE), `name`, `is_active`, and the UniFi block — `unifi_ap_mac`, `unifi_host`, `unifi_port`, `unifi_site_id`, `unifi_api_token`, `unifi_duration_minutes`, `unifi_redirect_url`, `unifi_is_enabled`.
+| A venue: `slug` (UNIQUE), `name`, `is_active`, `fingerprint_is_required`, and the UniFi settings that are the location's whichever access point a guest came through — `unifi_duration_minutes`, `unifi_redirect_url`, `unifi_is_enabled`. `unifi_ap_mac`, `unifi_host`, `unifi_port`, `unifi_site_id` and `unifi_api_token` are still columns, read by nothing in this release but the portal dispatcher's fallback on a database without `access_points`: V34 copied them there, they stay one release for a dispatcher or API still on the previous one, and a later migration drops them.
 | is the scope
+
+| `access_points`
+| One of a location's access points with the UniFi controller that authorizes the guests who join through it: `mac` (lowercase with colons, as `Mac.show` writes it), `unifi_host`, `unifi_port` (NULL = 443), `unifi_site_id`, `unifi_api_token`, timestamps. UNIQUE on `(location_id, mac)`, and indexed on `mac` for the portal dispatcher; the same MAC may be in several locations, and the backoffice keeps at most one of them running. Rows V34 copied from `locations` have the id `<location_id>/<mac>` and the location's `updated_at` as both stamps. See xref:unifi.adoc[UniFi integration].
+| `location_id`
 
 | `location_recovery`
 | What a location changed of the recovery defaults, one row per location that changed any: every setting of the wait for a way out of a client error (`maximum_seconds`, `ceiling_seconds`, `zero_below_seconds`, the four weights, the five factors, `recovery_window_seconds`, `recurrence_window_seconds`) and `playback_grace_seconds`. A NULL column, or no row, is the code's default. See xref:platform.adoc#location-recovery[Platform].
@@ -193,7 +197,7 @@ what lets a returning visitor skip the questions they have already answered. The
 `location_id` on it and none is implied by a join.
 
 Everything a venue configures or produces is scoped by location: `sessions`, `surveys`,
-`advertiser_videos`, `localized_texts` and `locations` carry `location_id` directly, and
+`advertiser_videos`, `localized_texts`, `access_points` and `locations` carry `location_id` directly, and
 `questions`, `question_options`, `question_rules`, `answers`, `user_survey_progress`, `video_files`,
 `video_playbacks`, `video_views` and `event_log` inherit it through their parent. `advertisers` and `devices` are global, like
 `users`.
@@ -251,7 +255,7 @@ side would let deactivating an answered question close a survey that still has u
 | API (`platform`)
 | `platform/resources/db/migration`
 | `flyway_schema_history` (Flyway's default, exposed as `Migrate.ApiHistoryTable`)
-| `V1__initial_schema.sql` … `V23__drop_provision_manifest.sql` — every table the portal reads
+| `V1__initial_schema.sql` … `V34__access_points.sql` — every table the portal reads
 
 | MCP server (`mcp`)
 | `mcp/resources/db/migration-mcp`
@@ -291,6 +295,10 @@ Two SQLite consequences worth knowing before writing one:
   hand** — `V22` is the worked example.
 * An index that references a column blocks `DROP COLUMN`. Drop the index first (`V21` does, with `IF
   EXISTS` so it stays replayable).
+
+And one of rqlite's: a statement runs on every node, so a migration that writes rows has to write
+the same values on each — no random id, no current time. `V34` derives each id from the row it
+copies and takes that row's own timestamp.
 
 === Concurrency is not Flyway's problem to solve here
 

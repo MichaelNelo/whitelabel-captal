@@ -222,9 +222,15 @@ scheduler — is xref:unifi.adoc[UniFi integration]'s; the guest-relevant facts:
 |===
 | Fact | Detail
 
+| Who can claim it
+| Only a guest the controller redirected through one of the location's access points: the AP is
+  what says which controller grants the access. A redirect through any other AP, or naming none, is
+  turned away on the first page with an error that offers no retry, and no session is created.
+
 | Default grant length
 | `unifi_duration_minutes` on the location, defaulting to **1440 minutes (24 hours)**, not a fixed
-  short window. It is per-location and operator-set, via `configure_unifi`.
+  short window. It is per-location, the same through every access point, and operator-set, via
+  `configure_unifi` or `update_unifi_settings`.
 
 | What ends it
 | One thing only — `accessExpiresAt`, this system's own deadline, enforced by its own scheduled

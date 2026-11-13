@@ -211,6 +211,8 @@ IMPORTANT: the client must count down from `secondsRemaining`, never from an abs
 | `NoSurveyAssigned` | — | `Error.NoSurveyAssigned`
 | `UserNotIdentified` | — | `Error.UserNotIdentified`
 | `InvalidEmailFormat` | `value: String` | `Error.InvalidEmailFormat` and `user.Error.InvalidEmailFormat`
+| `TermsNotAccepted` | — | `Error.TermsNotAccepted`
+| `NoTermsOfService` | — | `Error.NoTermsOfService`
 | `RequiredAnswerMissing` | `questionId` | `survey.Error.RequiredAnswerMissing`
 | `InvalidOptionSelected` | `questionId`, `optionId` | `survey.Error.InvalidOptionSelected`
 | `InvalidOptionsSelected` | `questionId`, `optionIds: List[String]` | `survey.Error.InvalidOptionsSelected`
@@ -237,6 +239,7 @@ IMPORTANT: the client must count down from `secondsRemaining`, never from an abs
 | `StaleVideoFile` | `videoId`, `videoUrl` | `video.Error.StaleFile`
 | `InvalidPlaybackId` | `value` | the playback routes, for an id that is not a UUID
 | `LocationNotFound` | `slug: String` | nothing constructs it today
+| `UnknownAccessPoint` | `apMac: String` | `SurveyRoutes.requireAccessPoint`, for a redirect into a served location through an access point that is not one of the location's, or naming none: the MAC as `Mac.show` writes it, or the raw `X-Ap-Mac`. An expected refusal, not recorded in `errors`; the client shows `error.unknownAccessPoint` with no retry
 | `UnknownError` | `errorId` | `recovery.Error.UnknownError`, and `RecoveryRoutes` for an id that is not a UUID
 | `RecoveryAlreadyUsed` | `errorId` | `recovery.Error.AlreadyRedeemed`
 | `RecoveryNotYet` | `availableAt: String` | `recovery.Error.NotYet`
@@ -245,7 +248,7 @@ IMPORTANT: the client must count down from `secondsRemaining`, never from an abs
 | `InternalError` | `message: String`, `errorId: Option[String]` | `ApiErrors.toApiError` for a defect, with the id it was recorded under; `ApiError.fromThrowable`, and the two routes that reject a session with no `currentVideoId`, without one
 |===
 
-Thirty-nine variants; every opaque id becomes a `String`, and every numeric bound that is not a `Float` becomes a `String`, so the enum carries no domain types.
+Forty-two variants; every opaque id becomes a `String`, and every numeric bound that is not a `Float` becomes a `String`, so the enum carries no domain types.
 
 === Translation
 

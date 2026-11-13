@@ -5,9 +5,10 @@
 The venue's UniFi controller hands a guest device to this system through its captive portal, and
 when the guest finishes the portal flow the system authorizes that device on the controller for a
 bounded time and revokes it when the time is up. This document covers the whole path: the query
-parameters the controller sends, the event that triggers the authorize call, the Integration v1 API
-contract, the per-location configuration, and the network route from a Fargate task to a controller
-on a customer LAN.
+parameters the controller sends, the access point check that admits a guest, the event that
+triggers the authorize call, the Integration v1 API contract, the configuration — each access
+point's controller and the location's own settings — and the network route from a Fargate task to a
+controller on a customer LAN.
 
 == Where it lives
 
@@ -22,21 +23,29 @@ The integration is not a module. Its moving parts are spread across four of them
   from the same two-step Integration v1 flow. Also the trust-all/proxy `Client` layer.
 
 | `platform/src/whitelabel/captal/platform/UnifiAccess.scala`
-| The per-location configuration value, derived from a `LocationRow`. `fromRow` answers `None`
-  unless host, API token and site id are all three present.
+| The controller access for one access point: `UnifiAccess.of(ap, durationMinutes)` takes an
+  `AccessPointRow`'s host, token, port and site id and its location's access duration.
+
+| `platform/src/whitelabel/captal/platform/services/LocationService.scala`
+| The reads by location id and AP MAC: `hasAccessPoint`, which `/api/status` checks a redirect
+  with, and `unifiFor`, which builds an AP's `UnifiAccess` when an event needs it.
 
 | `platform/src/whitelabel/captal/platform/eventhandlers/UnifiAccessHandler.scala`
-| The post-commit event adapter. Maps `AccessGranted` to authorize and `AccessExpired` to
-  revoke, and on a successful authorize writes `Phase.Authorized` plus `accessExpiresAt` and
-  enqueues the expiry job.
+| The post-commit event adapter. Resolves the controller of the session's access point on every
+  event, maps `AccessGranted` to authorize and `AccessExpired` to revoke, and on a successful
+  authorize writes `Phase.Authorized` plus `accessExpiresAt` and enqueues the expiry job.
+
+| `api/src/whitelabel/captal/api/routes/SurveyRoutes.scala`
+| `requireAccessPoint`: the check that turns away a redirect through an access point that is not
+  the location's.
 
 | `platform/src/whitelabel/captal/platform/session/JobScheduler.scala`
 | `JobQueue` and `JobRunner`: where the expiry deadline is parked and the fibers that fire it. See
   xref:platform.adoc[Platform].
 
 | `mcp/src/whitelabel/captal/mcp/tools/UnifiTools.scala`
-| The backoffice tools `configure_unifi`, `get_unifi_config`, `set_unifi_enabled` and
-  `update_unifi_settings`.
+| The backoffice tools `configure_unifi`, `get_unifi_config`, `set_unifi_enabled`,
+  `update_unifi_settings`, `update_access_point` and `remove_access_point`.
 
 | `mcp/src/whitelabel/captal/mcp/apps/UnifiUi.scala`
 | The server-rendered MCP App that collects the credentials, with
@@ -46,8 +55,9 @@ The integration is not a module. Its moving parts are spread across four of them
 | `api/test/src/whitelabel/captal/api/TestUnifiClient.scala`
 | The test double that stands in for the transport.
 
-| `platform/resources/db/migration/V16…V19`, `V24`
-| The `unifi_*` columns on `locations` and `sessions.access_expires_at`.
+| `platform/resources/db/migration/V16…V19`, `V24`, `V34`
+| The `unifi_*` columns on `locations`, `sessions.access_expires_at`, and the `access_points`
+  table.
 
 | `terraform/modules/{tailscale-proxy,global-accelerator,portal-dispatcher}`
 | The network path: the proxy out to the customer LAN, the static IPv4 the controller points at,
@@ -62,27 +72,32 @@ The integration is not a module. Its moving parts are spread across four of them
  2. Controller redirects the device to the external portal server, carrying the session's
     parameters as a query string.
  3. (Deployed only) the Global Accelerator IP → ALB → portal-dispatcher Lambda resolves the
-    location slug from the `ap` parameter and 302s to the portal, preserving the query string.
+    location slug from the `ap` parameter — the running location that has that access point — and
+    302s to the portal, preserving the query string.
  4. The SPA loads, reads the query parameters and forwards them as `X-*` headers on
-    `GET /api/status`, which creates the session row.
+    `GET /api/status`, which checks that `X-Ap-Mac` is one of the location's access points and
+    creates the session row, its `ap_mac` included.
+      └─ any other AP, or none → `ApiError.UnknownAccessPoint`; no session, and the error page
+               offers no retry.
  5. The guest completes the flow (email → profiling → video → advertiser survey).
  6. The last answer leaves the session in `Phase.Ready`; the client routes to `/ready`.
  7. `ReadyView` mounts and issues `POST /api/finish`, which runs `FinishCommand` and emits
     `UserEvent.UserFinishedProcess` and `AccessEvent.AccessGranted`. A guest who left through an
     error reaches `/ready` from `Phase.Recovered` instead, and `finish` emits `AccessGranted` alone.
- 8. The transaction commits. Post-commit, `UnifiAccessHandler` calls
-    `UnifiClient.authorizeGuest` with the session's `clientMac`.
+ 8. The transaction commits. Post-commit, `UnifiAccessHandler` reads the controller of the
+    session's access point and calls `UnifiClient.authorizeGuest` with the session's `clientMac`.
       ├─ 2xx → `SessionService.setAuthorized(sessionId, expiresAt)` (phase `Authorized`,
       │        `accessExpiresAt = occurredAt + defaultDurationMinutes`) and
       │        `JobQueue.schedule(ScheduledAt(expiresAt, ExpireAccess(sessionId)))`.
-      └─ failure, or no UniFi configuration → log and return; the session stays `Ready`.
+      └─ failure, or no controller for the session's AP → log and return; the session stays
+               `Ready`.
  9. `/api/finish` re-reads the session and answers `phase` + `secondsRemaining`.
 10. At the deadline the `JobRunner` worker runs `ExpireAccessCommand`, which emits
     `AccessEvent.AccessExpired` — the session's, with or without a user.
 11. In the same chain: `SessionExpirationHandler` resets the session row to `Welcome`
     (transactional), `EventLogHandler` writes an `access.expired` row, and post-commit
-    `UnifiAccessHandler` calls `UnifiClient.revokeGuestAccess` — which unauthorizes *and*
-    disconnects the client.
+    `UnifiAccessHandler` reads the controller of the session's access point again and calls
+    `UnifiClient.revokeGuestAccess` — which unauthorizes *and* disconnects the client.
 ----
 
 === The controller's query parameters
@@ -97,7 +112,7 @@ malformed sequence falls back to the raw string):
 | Query parameter | Header | Meaning
 
 | `id` | `X-Client-Mac` | MAC of the guest device. The MAC every authorize call is made for.
-| `ap` | `X-Ap-Mac` | MAC of the access point the device associated to.
+| `ap` | `X-Ap-Mac` | MAC of the access point the device associated to. Has to be one of the location's access points, and says which controller authorizes the guest.
 | `url` | `X-Redirect-Url` | The URL the guest originally asked for.
 | `ssid` | `X-Ssid` | The guest SSID's name.
 | `fingerprint` | `X-Fingerprint` | The device fingerprint the link shortener in front of the portal computes, stored on the session and the device.
@@ -108,13 +123,29 @@ the error page carries the parameters too. `GET /api/status` declares all five a
 (`api/src/whitelabel/captal/api/routes/SurveyRoutes.scala`) and builds a
 `CaptivePortalParams(clientMac, apMac, redirectUrl, ssid, fingerprint)` only when `X-Client-Mac`
 **and** a non-empty `X-Fingerprint` are both present. Creating a session without them fails with
-`ApiError.SessionMissing`; a request that already carries a session cookie ignores the parameters
-entirely. A MAC header that is not twelve hex digits counts as missing. The values land on
+`ApiError.SessionMissing`; a request that already carries a session cookie ignores the parameters,
+save for the access point check below. A MAC header that is not twelve hex digits counts as
+missing. The values land on
 `sessions.client_mac` and `ap_mac`, each its 48-bit big-endian integer (V31), `redirect_url` and
 `ssid` (V11), and `fingerprint` (V14 adds it as `click_id`, V30 renames it).
 
-`X-Ap-Mac` is soft-validated against the location's own `unifi_ap_mac`: a mismatch logs a warning
-and the request proceeds. Comparison normalises both sides to lowercase with colons.
+=== The access point check
+
+An API serving a location admits a redirect only through one of that location's access points,
+because the AP is what names the controller: a guest who came through any other could never be
+authorized. `SurveyRoutes.requireAccessPoint` runs on every `/api/status` that carries the
+redirect's parameters — the pair that builds `CaptivePortalParams` — before any session is resolved
+or created, and asks `LocationService.hasAccessPoint` whether the location has an access point with
+the `X-Ap-Mac` it was sent. The header is read as a `Mac`, so any spelling matches.
+
+An AP the location does not have, and a header that is missing or is not a MAC, are refused the
+same way: a warning in the log and `ApiError.UnknownAccessPoint(apMac)` (400), carrying the MAC as
+`Mac.show` writes it, or the raw header when it is not one. No session is created, and nothing is
+recorded in `errors`: it is an expected refusal, not a fault to offer a way out of. The client's
+`ErrorView` shows `error.unknownAccessPoint` for it and hides the retry button, since retrying
+cannot change the AP (see xref:client.adoc[Client]).
+
+An API serving no location (`LOCATION_SLUG` unset, as the API's tests run it) checks nothing.
 
 == Phase semantics
 
@@ -126,7 +157,8 @@ Two session phases carry the whole contract, and the boundary between them is th
 
 | `Ready`
 | The guest finished the survey flow and the system is waiting on UniFi. Normally a few
-  milliseconds; indefinite if the controller is unreachable or the location has no configuration.
+  milliseconds; indefinite if the controller is unreachable or the session's access point has no
+  configuration.
 
 | `Authorized`
 | The controller accepted the authorize action and `accessExpiresAt` is populated. The transition
@@ -158,17 +190,21 @@ guest's traffic counters.
   `WelcomeView`, which counts down from that number and schedules one `setTimeout` for the
   deadline. The device has internet.
 
-| Authorize fails, times out, or the location has no UniFi configuration
+| Authorize fails, times out, or the session's access point has no UniFi configuration
 | `/api/finish` answers `phase = ready` and `secondsRemaining = null`. The guest stays on `/ready`
   with the spinner; no network access is granted. A reload retries.
 
 | No `Ready` session
 | `/api/finish` is rejected before the flow runs: the route authorises only `Phase.Ready` and
   answers 400 with an `ApiError`.
+
+| Redirected through an access point that is not the location's
+| `/api/status` answers `UnknownAccessPoint` and no session is created. The guest sees the error
+  page with `error.unknownAccessPoint` and no retry button, before the first screen.
 |===
 
-A location that is fully translated, has videos and deploys cleanly but has no UniFi credentials
-therefore runs its entire portal flow and then strands every guest at `Ready`. This is what
+A location that is fully translated, has videos and deploys cleanly but has no access point
+therefore turns every guest away at the first page, whatever its UniFi switch says. This is what
 `get_unifi_config` and the `unifiConfigured` field of the readiness resource exist to surface — see
 xref:mcp.adoc[MCP backoffice].
 
@@ -209,7 +245,7 @@ isExpired = session.phase == Phase.Authorized && session.accessExpiresAt.exists(
 ----
 
 This covers the cases the in-memory scheduler cannot: a task that restarted and has not rehydrated
-yet, a scheduler that is not running, and a location with no UniFi configuration at all. Note that
+yet, a scheduler that is not running, and an access point with no UniFi configuration at all. Note that
 this branch resets *our* session row; it issues no revoke, because no authorization was ever
 recorded for it to revoke.
 
@@ -226,7 +262,7 @@ is not used.
 https://<host>:<port>/proxy/network/integration/v1
 ----
 
-`UnifiClient.baseUrl` builds this from the location's `host` and `port`, bracketing the host per
+`UnifiClient.baseUrl` builds this from the access point's `host` and `port`, bracketing the host per
 RFC 3986 when it contains a colon (an IPv6 or Tailscale ULA address). Every request carries a static
 API key — no login, no session cookie, no CSRF token:
 
@@ -254,7 +290,7 @@ X-API-KEY: <token>
 {"data": [{"id": "<uuid>", "internalReference": "default"}]}
 ----
 
-The `id` is what goes into the location's `unifi_site_id`. A `curl` to this endpoint needs `-k`,
+The `id` is what goes into the access point's `unifi_site_id`. A `curl` to this endpoint needs `-k`,
 because the controller's certificate is self-signed.
 
 === Authorize a guest
@@ -298,7 +334,7 @@ Content-Type: application/json
 }
 ----
 
-`timeLimitMinutes` is the location's `defaultDurationMinutes`. The schema also accepts
+`timeLimitMinutes` is `UnifiAccess.defaultDurationMinutes`, the location's access duration. The schema also accepts
 `dataUsageLimitMBytes`, `rxRateLimitKbps` and `txRateLimitKbps`; this client sends none of them, so
 the body it emits is the discriminator plus the time limit and nothing else.
 
@@ -326,78 +362,116 @@ status code.
 * External Hotspot API (the captive-portal redirect side) —
   https://help.ui.com/hc/en-us/articles/31228198640023
 
-== Per-location configuration
+== Configuration
 
-Configuration is rows in the database, one per location, written by the MCP backoffice. There is no
-configuration file: the `locations` table is the configuration surface.
+Configuration is rows in the database, written by the MCP backoffice. There is no configuration
+file. A location has any number of access points, each a row in `access_points` carrying the
+controller that authorizes the guests who join through it — a venue's APs need not share a
+controller — and its `locations` row carries the settings that are the location's, whichever AP a
+guest came through.
 
-=== Columns
+=== Access points
 
 [cols="2,2,1,1,1,4"]
 |===
-| Column (`locations`) | `LocationRow` field | Type | Optional | Default | What it controls
+| Column (`access_points`) | `AccessPointRow` field | Type | Optional | Default | What it controls
 
+| `location_id` | `locationId` | TEXT | required | — | The location the AP belongs to.
+| `mac` | `mac` | TEXT | required | — | The AP's MAC, lowercase with colons as `Mac.show` writes it.
+  What `/api/status` checks `X-Ap-Mac` against, what the portal dispatcher matches the `ap`
+  parameter on, and what a session's `ap_mac` finds its controller by. Unique within a location.
 | `unifi_host` | `unifiHost` | TEXT | required | — | Controller address on the customer LAN, without
   scheme or port. An IPv6/ULA literal is bracketed automatically.
 | `unifi_api_token` | `unifiApiToken` | TEXT | required | — | The `X-API-KEY` value.
 | `unifi_site_id` | `unifiSiteId` | TEXT | required | — | Site UUID in every request path. Must be
   the UUID from `GET /sites`, not a site name.
 | `unifi_port` | `unifiPort` | INTEGER | optional | `443` | Controller port.
-| `unifi_duration_minutes` | `unifiDurationMinutes` | INTEGER | optional | `1440` (24 h) | The
-  authorize call's `timeLimitMinutes` and the `accessExpiresAt` the session is stamped with.
-| `unifi_ap_mac` | `unifiApMac` | TEXT | optional | — | The AP the portal-dispatcher Lambda matches
-  on to resolve this location's slug; also the expected value in the `X-Ap-Mac` soft validation.
-| `unifi_redirect_url` | `unifiRedirectUrl` | TEXT | optional | dispatcher default
-  `https://<cloudfront-host>/<slug>/` | Overrides where the dispatcher sends the device, preserving
-  the controller's query parameters. For a location running its own portal SPA behind this system's
-  static IP.
-| `unifi_is_enabled` | `unifiIsEnabled` | INTEGER | optional | `1` | Whether the portal calls the
-  controller at all. `0` skips both authorize and revoke, whatever else is configured, and keeps the
-  other columns as they are.
 |===
 
-"Required" means required for the integration to do anything. `UnifiAccess.fromRow` is a
-for-comprehension over host, token and site id and yields `None` if any one of them is absent:
+`id` is a random UUID for a row the backoffice writes, and `created_at`/`updated_at` are its
+stamps. The same MAC may be registered in several locations, so that one can take a venue over from
+another; the backoffice keeps at most one of them running (see <<Which tool writes them>>).
+
+=== Location settings
+
+[cols="2,2,1,1,1,4"]
+|===
+| Column (`locations`) | `LocationRow` field | Type | Optional | Default | What it controls
+
+| `unifi_duration_minutes` | `unifiDurationMinutes` | INTEGER | optional | `1440` (24 h) | The
+  authorize call's `timeLimitMinutes` and the `accessExpiresAt` the session is stamped with, for
+  every access point of the location.
+| `unifi_redirect_url` | `unifiRedirectUrl` | TEXT | optional | dispatcher default
+  `https://<cloudfront-host>/<slug>/` | Overrides where the dispatcher sends the location's guests,
+  preserving the controller's query parameters. For a location running its own portal SPA behind
+  this system's static IP; not where a guest goes after authorizing.
+| `unifi_is_enabled` | `unifiIsEnabled` | INTEGER | optional | `1` | Whether the portal calls a
+  controller at all. `0` skips both authorize and revoke, whatever else is configured, and keeps the
+  access points as they are.
+|===
+
+=== How the portal reads them
+
+"Required" means an access point is never stored without it: those columns are `NOT NULL`, and the
+backoffice refuses a submission that leaves one out. An access point is therefore a whole
+configuration, and `UnifiAccess.of` builds from one with nothing left to check:
 
 [source,scala]
 ----
-def fromRow(row: LocationRow): Option[UnifiAccess] =
-  for
-    host   <- row.unifiHost
-    token  <- row.unifiApiToken
-    siteId <- row.unifiSiteId
-  yield UnifiAccess(host, token, row.unifiPort.getOrElse(443), siteId,
-                    row.unifiDurationMinutes.getOrElse(1440))
+def of(ap: AccessPointRow, durationMinutes: Option[Int]): UnifiAccess = UnifiAccess(
+  host = ap.unifiHost,
+  apiToken = ap.unifiApiToken,
+  port = ap.unifiPort.getOrElse(443),
+  siteId = ap.unifiSiteId,
+  defaultDurationMinutes = durationMinutes.getOrElse(1440))
 ----
 
-With `None` the handler logs `UniFi <action>: no config for current location — skipping` and
-returns, so the session stays `Ready`. `api/src/whitelabel/captal/api/session/CurrentLocation.scala`
-resolves this once at startup from the `LOCATION_SLUG` row and holds it in memory; there is no
-per-request lookup, so a configuration change takes effect on the next task start.
+None of this is read at startup: `CurrentLocation`, resolved once from `LOCATION_SLUG`, holds only
+the served location's id and slug. The handler resolves the controller on every `AccessGranted` and `AccessExpired`, through the resolver
+`Flows.unifiFor` builds — `LocationService.unifiFor(locationId, mac)` with the served location's id
+and the session's `ap_mac`, which reads that location's access point with that MAC and the
+location's `unifi_duration_minutes`. With no such AP, or a session without one, it answers `None`:
+the handler logs `UniFi <action>: AP <mac> has no configuration for the current location —
+skipping` and returns, so the session stays `Ready`. If the read fails, the handler logs the error
+and skips. A change to an access point or to the duration therefore reaches the next guest that
+finishes or expires, with no task restart.
 
-`unifi_is_enabled` is the exception: the handler reads it from the row on every event, before
-calling the controller (`LocationService.unifiEnabled`, wired in `Flows.unifiEnabled`). With `0` it
-logs `UniFi <action>: disabled for current location — skipping` and returns the same way, so the
-session stays `Ready`. Turning it off or back on takes effect on the next guest that finishes or
-expires, with no task restart. If the read itself fails, the handler logs the error and skips. An
-API run with no location (`LOCATION_SLUG` unset) has no switch, and the configuration alone
-decides.
+`unifi_is_enabled` is read the same way, and first: before resolving the controller the handler
+reads the switch from the row (`LocationService.unifiEnabled`, wired in `Flows.unifiEnabled`). With
+`0` it logs `UniFi <action>: disabled for current location — skipping` and returns the same way, so
+the session stays `Ready`. Turning it off or back on takes effect on the next guest that finishes
+or expires. If the read itself fails, the handler logs the error and skips. An API run with no
+location (`LOCATION_SLUG` unset) has no switch and no access points: its resolver answers `None` for
+every session, so it authorizes nobody.
 
 The migrations that shaped these columns: **V16** added `unifi_host`, `unifi_port`, `unifi_site`,
-`unifi_use_os`, `unifi_api_token` and `unifi_duration_minutes`. **V17** added
+`unifi_use_os`, `unifi_api_token` and `unifi_duration_minutes` to `locations`. **V17** added
 `sessions.access_expires_at` (TEXT, an ISO-8601 instant). **V18** moved to Integration v1 — renamed
 `unifi_site` to `unifi_site_id` for the shift from name to UUID, and dropped `unifi_use_os`, which
 the uniform `/proxy/network/integration/v1` path made irrelevant. **V19** renamed the standalone
-`ap_mac` (V11) to `unifi_ap_mac` and added `unifi_redirect_url`. See xref:database.adoc[Database].
+`ap_mac` (V11) to `unifi_ap_mac` and added `unifi_redirect_url`. **V24** added `unifi_is_enabled`.
+**V34** creates `access_points`, with an index on `mac` for the dispatcher, and copies into it each
+location that had a complete configuration and an AP MAC that reads as one, as its one access point:
+the MAC written as `Mac.show` would, the id `<location_id>/<mac>` and both stamps the location's
+`updated_at`, since rqlite runs a statement on every node and a value that differed between them
+would split the replicas. See xref:database.adoc[Database].
+
+The columns V34 copied from — `unifi_ap_mac`, `unifi_host`, `unifi_port`, `unifi_site_id` and
+`unifi_api_token` — stay on `locations` for one release: a dispatcher or an API still on the
+previous release reads them until it is replaced. This release reads none of them, save the
+dispatcher's fallback on a database V34 has not reached (below), and writing them changes nothing.
+A later migration drops them.
 
 === Which tool writes them
 
-`configure_unifi` (`UnifiTools.configure`, scope `content:write`) is the only writer of the
-credentials, and writes the rest of the settings with them. It takes a slug and nothing else: no
-token travels through the conversation. The tool returns a short-lived
-ticket, an absolute `postUrl`, and the location's current values with `tokenSet: Boolean` in place of
-the token, and points the host at the MCP App `ui://configure-unifi`. The operator types the
-credentials into that page and the browser posts them directly to `POST /ui/unifi`
+`configure_unifi` (`UnifiTools.configure`, scope `content:write`) registers an access point, and is
+the only writer of the tokens. It takes a slug and, optionally, `apMac`: no token travels through
+the conversation. The tool returns a short-lived ticket, an absolute `postUrl`, the location's
+access duration and redirect URL, and — when `apMac` names one of the location's access points, in
+any spelling — that AP's MAC, host, port and site id, with `tokenSet: Boolean` in place of its
+token; an `apMac` the location does not have is refused. Without `apMac` the page opens to register
+a new one. The tool points the host at the MCP App `ui://configure-unifi`. The operator types the
+settings into that page and the browser posts them directly to `POST /ui/unifi`
 (`mcp/src/whitelabel/captal/mcp/apps/UiRoutes.scala`), outside the MCP protocol.
 
 Behaviour of that write:
@@ -406,34 +480,64 @@ Behaviour of that write:
   hash, names one location, and expires in minutes — so revoking the token invalidates the pages it
   opened without touching anyone else's. `Access-Control-Allow-Origin: *` is safe on the route
   precisely because no cookie or ambient header grants anything there.
-* `host` and `siteId` are required on every submission. `apiToken` is required only when the
-  location has none stored.
-* A blank field means "leave it alone", not "unset". This is how the form avoids ever rendering a
-  stored token back.
+* One submission is one access point. Its MAC names it, read in any spelling and stored lowercase
+  with colons: a MAC the location already has updates that AP, any other registers a new one. The
+  MAC, `host` and `siteId` are required on every submission; `apiToken` only when that access
+  point has none stored.
+* A blank token means "keep the stored one", not "unset". This is how the form avoids ever
+  rendering a stored token back. The other fields are written as the form sends them, which is why
+  the page opens filled with what is stored.
 * `port` and `durationMinutes` must parse as positive integers or the page shows an error.
-* The response body names the host it configured and never the token.
+* The access duration and the redirect URL on the same form are the location's, for all its access
+  points, and are written with the AP.
+* An access point that another running location — active, and not paused — already has is
+  refused, naming that location and asking for it to be paused first: an AP takes the guests of
+  one running location, which is what the portal dispatcher counts on.
+* The response body names the AP and the host it configured and never the token.
 
-`get_unifi_config` (`UnifiTools.status`, read-only) reports the same fields,
-`configured = host.isDefined && siteId.isDefined && tokenSet`, and `enabled`. The token value is
+`get_unifi_config` (`UnifiTools.status`, read-only) reports `configured` — whether the location has
+at least one access point — and `accessPoints`, each with its `apMac`, `host`, `port`, `siteId` and
+`tokenSet`, beside the location's `redirectUrl`, `durationMinutes` and `enabled`. The token value is
 never returned by any tool.
 
 `set_unifi_enabled` (`UnifiTools.setEnabled`, scope `content:write`) is the only writer of
-`unifi_is_enabled`. It takes a slug and `enabled`, leaves every other column alone, and answers with
-the same report as `get_unifi_config`. The readiness resource reports the switch as `unifiEnabled`
-and stops listing missing credentials as a step while it is off.
+`unifi_is_enabled`. It takes a slug and `enabled`, leaves every other column and the access points
+alone, and answers with the same report as `get_unifi_config`. The readiness resource reports the
+switch as `unifiEnabled`, and asks for an access point whether it is on or off, since without one
+every guest is turned away at the first page.
 
-`update_unifi_settings` (`UnifiTools.updateSettings`, scope `content:write`) changes the settings that
-are not secret without the form: host, port, site id, AP MAC, redirect URL and access duration. Each
-field given replaces the stored one and every field left out stays; an empty AP MAC or redirect URL
-removes it. Each is checked as the portal will read it: host and site id cannot be blank, the port
-is 1 to 65535, the duration positive, the AP MAC has to parse as a MAC and is stored lowercase with
-colons, the redirect URL is http or https. It never touches the token or the switch, and answers
-with the same report as `get_unifi_config`. Like a form submission, it reaches a location's portal
-on its next task start, so after a redeploy with `deploy_location`.
+`update_unifi_settings` (`UnifiTools.updateSettings`, scope `content:write`) changes the location's
+own settings without the form: its redirect URL and access duration. Each field given replaces the
+stored one and every field left out stays; an empty redirect URL removes it, and giving neither is
+refused. The redirect URL has to be http or https and the duration positive. It never touches the
+access points or the switch, and answers with the same report as `get_unifi_config`. The duration
+is read on every authorize and the redirect URL by the dispatcher on every redirect, so a change
+applies with no redeploy.
+
+`update_access_point` (`UnifiTools.updateAccessPoint`, scope `content:write`) changes one access
+point's settings that are not secret without the form: `newApMac`, for an AP that was replaced, and
+its controller's `host`, `port` and `siteId`. The AP is named by `apMac`, in any spelling. Each
+field given replaces the stored one and every field left out stays; giving none is refused. Host and
+site id cannot be blank, the port is 1 to 65535, and a new MAC has to read as a MAC and is stored
+lowercase with colons. A new MAC the location already has, or one another running location has, is
+refused. It never touches the token, and answers with the same report as `get_unifi_config`. The
+next authorize or revoke reads it, with no redeploy.
+
+`remove_access_point` (`UnifiTools.removeAccessPoint`, scope `content:write`) takes an access point
+off a location, with its controller's settings and token, and answers with the same report as
+`get_unifi_config`. A guest who comes through it afterwards is turned away at `/api/status`. One
+already authorized through it keeps the access until it runs out, and the revoke at the deadline is
+skipped, since there is no controller left to ask; changing an AP's MAC does the same to the
+sessions that came through the old one.
+
+`deploy_location` and `resume_location` refuse, before they start a run, a location that shares an
+access point with another running location (`UiRoutes.refuseSharedAccessPoints`): both make the
+location take its access points' guests. Pausing the other location first is the way through.
 
 === The proxy URL
 
-One setting is not per-location: the HTTP proxy the API dials the controller through.
+One setting is neither an access point's nor a location's: the HTTP proxy the API dials every
+controller through.
 `api/resources/application.conf` reads it from the environment —
 
 [source]
@@ -524,10 +628,16 @@ in the controller's External Portal Server field. The listener is TCP/80 with
 (priority 100, created by `terraform/modules/alb/` when `enable_portal_dispatcher_rule` is set)
 forwards to a Lambda target group running `dispatcher.py`:
 
-. Read the `ap` query parameter and lowercase it; a missing one is a 400.
-. `SELECT slug, unifi_redirect_url FROM locations WHERE LOWER(unifi_ap_mac) = '<ap>' ORDER BY
-  created_at DESC` against rqlite over its HTTP API (`http://rqlite.<namespace>:4001`, `level=none`,
-  5-second timeout). An unreachable database is a 503; no matching row is a 404 naming the AP.
+. Read the `ap` query parameter and lowercase it; a missing one is a 400. Write it as
+  `access_points.mac` is written, twelve hex digits joined by colons, whatever separators it came
+  with; a value that is not a MAC is left as it is.
+. `SELECT l.slug, l.unifi_redirect_url FROM access_points a JOIN locations l ON l.id =
+  a.location_id WHERE a.mac = '<ap>' ORDER BY l.created_at DESC` against rqlite over its HTTP API
+  (`http://rqlite.<namespace>:4001`, `level=none`, 5-second timeout): every location that has that
+  access point, newest first. When rqlite answers it with an `error` — a database V34 has not
+  reached, with no `access_points` table — the Lambda logs it and asks the locations' own AP column
+  instead, `SELECT slug, unifi_redirect_url FROM locations WHERE LOWER(unifi_ap_mac) = '<ap>' ORDER
+  BY created_at DESC`. An unreachable database is a 503; no matching row is a 404 naming the AP.
 . Take the newest of those locations that is not paused. Several running ones sharing an AP are
   logged, and the newest takes the guests; with every one paused, the newest, whose page is the
   maintenance page.
@@ -538,7 +648,9 @@ forwards to a Lambda target group running `dispatcher.py`:
   goes after authorizing.
 
 So a location can take over an AP from another by pausing the old one: the AP's guests go to the
-location that is running.
+location that is running. The backoffice keeps it to one running location per AP — registering an AP
+another running location has is refused, and so is deploying or resuming a location that shares one
+— so the newest-wins rule above is for a state the backoffice does not leave.
 
 Which locations are paused is read from the assets bucket: `pause_location` keeps the page it
 replaces at `_paused/<slug>/site.html`, and `resume_location` and `deploy_location` remove it, so the
@@ -548,7 +660,7 @@ otherwise every answer leads to the same page. A listing that fails is logged an
 paused.
 
 So the AP MAC is what selects the portal: one static IP serves every location, and a new location
-needs only its `unifi_ap_mac` row filled in. The whole accelerator-plus-dispatcher pair is behind
+needs only its access points registered. The whole accelerator-plus-dispatcher pair is behind
 `enable_global_accelerator`, which environments that do not integrate with UniFi leave off. See
 xref:infrastructure.adoc[Infrastructure].
 
@@ -570,7 +682,8 @@ xref:infrastructure.adoc[Infrastructure].
   or `-` or no separator, either case — and stored as its 48-bit big-endian integer.
 * **API-key scope follows the admin who created it.** The token belongs to that administrator
   account; if the account is removed the token stops working. Rotation is manual — re-run
-  `configure_unifi` with the new value.
+  `configure_unifi` with the new value, once for each access point on that controller, since each
+  stores its own copy.
 * **The legacy `/api/s/<site>/cmd/stamgr` endpoint is deprecated and unused.** Nothing in this
   system calls it, and nothing calls the legacy `stat/sta` polling endpoint either: the expiry
   deadline is this system's own, computed from `defaultDurationMinutes`, and the controller is never
@@ -582,10 +695,14 @@ xref:infrastructure.adoc[Infrastructure].
   V31 carry none.
 * **Both events in one batch resolve to authorize.** The handler matches `AccessGranted` first, so
   a batch carrying both it and `AccessExpired` takes the authorize branch only.
-* **Three definitions of "configured" coexist.** `UnifiAccess.fromRow` and the readiness resource
-  require host, token and site id; `get_unifi_config` reports `host && siteId && tokenSet`;
-  `list_locations` reports only whether `unifi_host` is non-blank. A location can therefore show as
-  configured in a listing and still authorize nobody.
+* **The controller is resolved when the event runs, not when the guest arrived.** A guest
+  authorized through an access point that is removed, or given another MAC, before the access runs
+  out keeps it until the controller's own `timeLimitMinutes`: the revoke at the deadline finds no
+  controller for the session's `ap_mac` and is skipped with a warning.
+* **"Configured" is one thing everywhere: at least one access point.** `get_unifi_config`'s
+  `configured`, and `unifiConfigured` in `list_locations` and the readiness resource, all report
+  whether the location has an access point, and an access point is stored only whole. None of them
+  checks that its controller answers.
 
 == Testing
 
@@ -595,14 +712,21 @@ reaching the network, so the suites exercise the production `UnifiAccessHandler`
 transport swapped. It starts **inactive**, and while inactive every call fails — which is the
 "UniFi is not answering" path, asserted directly.
 
-`TestLayers` wires it in place of `UnifiClient.layer` and supplies a `CurrentLocation` carrying a
-fabricated `UnifiAccess` (`host = "unifi.test"`, `defaultDurationMinutes = 0`) so the handler walks
-the real code path and every authorization is due the instant it is granted.
+`TestLayers` wires it in place of `UnifiClient.layer` and builds `UnifiAccessHandler` with a
+resolver that answers one fabricated `UnifiAccess` (`host = "unifi.test"`,
+`defaultDurationMinutes = 0`) for every session's AP, so the handler walks the real code path and
+every authorization is due the instant it is granted. The tests' API serves no location
+(`CurrentLocation.empty`), so its `/api/status` checks no access point.
 `suites/AuthorizedSuite.scala` covers the four outcomes that matter: `/api/status` reporting
 `Authorized` with `secondsRemaining`, the `/api/status` reset when the expiry is already past,
 `/api/finish` leaving the session in `Ready` when the authorize call fails, and the full scheduler
 path — authorize, then a `JobRunner`-driven expiry that resets the session, records
-`access.expired` and issues the revoke, all without the client asking for anything.
+`access.expired` and issues the revoke, all without the client asking for anything. It also covers
+the access points, against an API serving a location with `TestFixtures.seedAccessPoint`: a
+redirect is admitted through one of the location's APs in any spelling, and refused with
+`UnknownAccessPoint` and no session through another or none; and `Flows.unifiFor` resolves each AP
+to its own controller with the location's duration, and to none for an unknown AP, a session
+without one, or an API serving no location.
 `suites/RecoverySuite.scala` runs the same path for a session authorized through a way out before
 it had a user.
 `UnifiClient.noop` is the no-op implementation for any wiring that must never reach a controller.
