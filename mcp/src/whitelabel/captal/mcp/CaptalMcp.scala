@@ -176,14 +176,14 @@ object CaptalMcp:
     val withPrompts = Prompts.all(promptEnv).foldLeft(withResources)(_.prompt(_))
     val withData = (
       LocationTools.all ++ I18nTools.all ++ AdvertiserTools.all ++ SurveyTools.all ++
-        UnifiTools.all(uiOrigin) ++ RecoveryTools.all ++ TermsTools.all ++ TokenTools.all ++
-        SkillTools.all
+        RecoveryTools.all ++ TermsTools.all ++ TokenTools.all ++ SkillTools.all
     ).map(restrictToApps).foldLeft[McpServer[QuillSqlite & Tracing]](withPrompts)(_.tool(_))
     // `deploy_location` is here rather than above because it copies the shared bundle under the new
-    // slug, which is S3 and therefore `AssetStore`.
+    // slug, which is S3 and therefore `AssetStore`; the UniFi tools, because an access point in a
+    // running location is refused to another, and whether one is paused is read from S3.
     val withAssets = (
       AssetTools.all ++ VideoTools.all ++ PreviewTools.all ++ Readiness.all ++
-        DeployTools.all(infra, uiOrigin)
+        UnifiTools.all(uiOrigin) ++ DeployTools.all(infra, uiOrigin)
     ).map(restrictToApps)
       .foldLeft[McpServer[QuillSqlite & AssetStore & Tracing]](withData)(_.tool(_))
     // One source for everything: `McpServer` holds a single `resourceSrc`, so the upload page and

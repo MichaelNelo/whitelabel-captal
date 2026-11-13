@@ -2,7 +2,7 @@ package whitelabel.captal.mcp
 
 import whitelabel.captal.mcp.resources.Readiness
 import whitelabel.captal.mcp.tools.Prompts
-import whitelabel.captal.platform.{LocationRow, UnifiAccess}
+import whitelabel.captal.platform.{AccessPointRow, UnifiAccess}
 import zio.test.*
 
 /** The step list of the readiness record, which is pure, so it is tested directly.
@@ -152,43 +152,36 @@ object OnboardingSpec extends ZIOSpecDefault:
           Readiness.steps(onePromo).forall(!_.contains("no survey")),
           Readiness.steps(oneAdShort).exists(_.contains("no survey")))
       ,
-      // `UnifiAccess.fromRow` needs host, siteId and apiToken together, and the step has to say so.
-      test("the UniFi step names all three fields"):
+      // A guest is admitted only through one of the location's access points, and the step says
+      // how to register one.
+      test("the UniFi step asks for an access point"):
         val steps = Readiness.steps(readiness(unifi = false))
-        assertTrue(
-          steps.exists(s =>
-            s.contains("host") && s.contains("siteId") && s.contains("apiToken") &&
-              s.contains("get_unifi_config")))
+        assertTrue(steps.exists(s => s.contains("access point") && s.contains("configure_unifi")))
       ,
-      test("a location with UniFi turned off is not asked for its credentials"):
+      // The switch decides whether a controller is asked, not whether a guest gets past the first
+      // page: that takes an access point either way.
+      test("a location with UniFi turned off is still asked for an access point"):
         val steps = Readiness.steps(readiness(unifi = false, unifiEnabled = false))
-        assertTrue(steps.forall(!_.contains("UniFi")))
+        assertTrue(steps.exists(_.contains("access point")))
       ,
-      // `fromRow` is what decides whether a guest is ever authorized: the handler skips on `None`
-      // and leaves the session at Ready, with nothing said anywhere.
-      test("UniFi needs all three fields, which is what readiness has to report on"):
-        def row(
-            host: Option[String] = Some("10.0.0.1"),
-            token: Option[String] = Some("tok"),
-            site: Option[String] = Some("site-uuid")) = LocationRow(
-          id = "l-1",
-          slug = "spec",
-          name = "Spec",
-          isActive = 1,
+      test("an access point's controller takes the location's duration, and defaults its own port"):
+        val point = AccessPointRow(
+          id = "ap-1",
+          locationId = "l-1",
+          mac = "1c:6a:1b:ee:5c:be",
+          unifiHost = "10.0.0.1",
+          unifiPort = None,
+          unifiSiteId = "site-uuid",
+          unifiApiToken = "tok",
           createdAt = "",
-          updatedAt = "",
-          unifiApMac = None,
-          unifiHost = host,
-          unifiApiToken = token,
-          unifiSiteId = site)
-        assertTrue(
-          UnifiAccess.fromRow(row()).isDefined,
-          // A host and nothing else.
-          UnifiAccess.fromRow(row(token = None, site = None)).isEmpty,
-          UnifiAccess.fromRow(row(site = None)).isEmpty,
-          UnifiAccess.fromRow(row(token = None)).isEmpty,
-          UnifiAccess.fromRow(row(host = None)).isEmpty
+          updatedAt = ""
         )
+        val defaults = UnifiAccess.of(point, None)
+        val set = UnifiAccess.of(point.copy(unifiPort = Some(8443)), Some(30))
+        assertTrue(
+          defaults == UnifiAccess("10.0.0.1", "tok", 443, "site-uuid", 1440),
+          set.port == 8443,
+          set.defaultDurationMinutes == 30)
     )
 
   extension [A](self: A)

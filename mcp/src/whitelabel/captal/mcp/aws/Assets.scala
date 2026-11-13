@@ -184,6 +184,12 @@ final case class AssetStore(
     end for
   end copyBundle
 
+  /** Whether the location is paused: [[pausePage]] keeps its page at [[AssetStore.savedPageKey]],
+    * and [[resumePage]] and [[copyBundle]] take it away, so the object is there exactly while it
+    * is. What the portal dispatcher reads too.
+    */
+  def isPaused(slug: String): ZIO[Any, String, Boolean] = exists(AssetStore.savedPageKey(slug))
+
   /** Puts the maintenance page where the portal's own page was, and keeps the original under
     * [[AssetStore.savedPageKey]].
     *

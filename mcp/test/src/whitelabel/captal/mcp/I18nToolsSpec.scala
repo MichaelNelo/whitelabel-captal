@@ -39,8 +39,7 @@ object I18nToolsSpec extends ZIOSpecDefault:
                 name = "MCP test",
                 isActive = 1,
                 createdAt = now,
-                updatedAt = now,
-                unifiApMac = None))))
+                updatedAt = now))))
       yield locationId
 
   private def rowsFor(locationId: String): ZIO[QuillSqlite, Throwable, List[LocalizedTextRow]] = ZIO

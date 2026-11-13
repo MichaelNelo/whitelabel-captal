@@ -126,14 +126,25 @@ object UnifiUi:
             p(id   := "lede", "Abrí esta página desde configure_unifi."),
             form(
               id := "form",
-              // `host` and `siteId` are the two `UnifiAccess.fromRow` cannot build without. The
-              // token is the third, and the script marks it required only when none is stored.
+              // The AP is what the rest belongs to: host, port, site id and token are its
+              // controller's, and a MAC the location does not have yet registers a new one.
+              field(
+                "apMac",
+                "MAC del AP",
+                "El AP que configurás: los invitados que entran por él se autorizan contra este controlador. Una MAC nueva registra otro AP.")(
+                required := "required"),
+              // `host` and `siteId` are required with it. The token is too, and the script marks
+              // it required only when the AP has none stored.
               field("host", "Host", "Dirección del UCG, sin esquema ni puerto.")(
                 required := "required"),
               div(
                 cls := "pair",
                 field("port", "Puerto", "Vacío usa 443."),
-                field("durationMinutes", "Duración (minutos)", "Vacío usa 1440.")),
+                field(
+                  "durationMinutes",
+                  "Duración (minutos)",
+                  "De la location, para todos sus APs. Vacío usa 1440.")
+              ),
               field(
                 "siteId",
                 "Site id",
@@ -144,11 +155,10 @@ object UnifiUi:
                 "API token",
                 "Va directo al servidor y no pasa por la conversación. Nunca se muestra de vuelta.",
                 inputType = "password"),
-              field("apMac", "MAC del AP", "Con qué AP el dispatcher resuelve esta location."),
               field(
                 "redirectUrl",
                 "URL de redirección",
-                "A dónde se manda al invitado tras autorizar. Vacío usa la que trae UniFi."),
+                "De la location: a dónde manda el dispatcher a sus invitados en vez del portal. Vacío, van al portal."),
               button(id := "save", `type` := "submit", "Guardar"),
               div(id    := "status", cls  := "status")
             )

@@ -1,7 +1,7 @@
 ---
 name: add-location
-description: Use this skill to onboard a location end-to-end — create it, give it translations, advertisers and videos, brand it, configure UniFi, set how its guests recover from errors, and check what is still missing. Composes the smaller skills into one flow. Triggers on "agregar location", "add new location", "onboard location", "nuevo cliente", "new client", "create location", "configurar unifi", "configure unifi", "desactivar unifi", "disable unifi", "espera de error", "error wait", "recovery policy", "readiness", "qué falta".
-version: 2.4.0
+description: Use this skill to onboard a location end-to-end — create it, give it translations, advertisers and videos, brand it, register its access points with their UniFi controllers, set how its guests recover from errors, and check what is still missing. Composes the smaller skills into one flow. Triggers on "agregar location", "add new location", "onboard location", "nuevo cliente", "new client", "create location", "configurar unifi", "configure unifi", "access point", "punto de acceso", "agregar AP", "add AP", "desactivar unifi", "disable unifi", "espera de error", "error wait", "recovery policy", "readiness", "qué falta".
+version: 2.5.0
 ---
 
 # Onboard a location end-to-end
@@ -68,32 +68,52 @@ that set is simply never read. Then `set_location_styles` (whole file, not a pat
 handlers). Both invalidate the CDN so the change is visible immediately. Read
 `read_skill('style-reference')`.
 
-## 6. UniFi
+## 6. UniFi: register the access points
 
-Until this is done the portal runs the whole flow and then strands every guest at Ready with no
-network access. `get_unifi_config` reports what is stored, without the token.
+A location has one or more access points, each with the UniFi controller that grants access to the
+guests who join through it. **A guest is admitted only through one of the location's access
+points**: without one registered, the portal turns every guest away with an error on the first
+page. `get_unifi_config` lists them, without the tokens.
 
-`configure_unifi` takes only the slug and **opens a form**. It deliberately does not accept the API
-token as an argument: every tool call is recorded by the host and replayed into the model's context
-on later turns, and a token that authorises guest access on someone else's network must not go
-there. The operator types it into the page and the browser posts it straight to the server.
+`configure_unifi` takes the slug and **opens a form** that registers one access point. It
+deliberately does not accept the API token as an argument: every tool call is recorded by the host
+and replayed into the model's context on later turns, and a token that authorises guest access on
+someone else's network must not go there. The operator types it into the page and the browser posts
+it straight to the server. Call it once per access point. To change one already registered, pass its
+`apMac` too and the page opens with its settings.
 
 What the form stores:
 
 | Field | Required | Notes |
 |---|---|---|
-| `host` | yes | The UCG on the LAN, reachable through the Tailscale proxy on cloud deploys |
+| `apMac` | yes | The access point; a MAC the location does not have yet registers a new one. Any spelling |
+| `host` | yes | Its controller: the UCG on the LAN, reachable through the Tailscale proxy on cloud deploys |
 | `siteId` | yes | Site **UUID**, not the `default` name |
-| `apiToken` | first time only | Left blank on a later edit, the stored one is kept |
+| `apiToken` | when the AP has none | Left blank on a later edit, the stored one is kept |
 | `port` | no | Defaults to 443 |
-| `apMac` | no, but see below | |
-| `redirectUrl` | no | When set, the dispatcher sends the device here instead of the portal |
-| `durationMinutes` | no | Defaults to 1440 |
+| `redirectUrl` | no | The location's, not the AP's: when set, the dispatcher sends its guests here instead of the portal |
+| `durationMinutes` | no | The location's, for all its APs. Defaults to 1440 |
 
-**`apMac` is what routes traffic to this location.** The portal dispatcher Lambda runs
-`SELECT slug, unifi_redirect_url FROM locations WHERE LOWER(unifi_ap_mac) = ?` against rqlite; with
-no unique AP MAC stored, a device redirected by the UCG gets a 404 instead of the portal. Find it in
-the controller under Devices → the AP → Details → MAC Address.
+**The AP MAC is also what routes traffic to this location.** The portal dispatcher Lambda runs
+`SELECT l.slug, l.unifi_redirect_url FROM access_points a JOIN locations l ON l.id = a.location_id WHERE a.mac = ?`
+against rqlite, with the MAC lowercase and colon-separated; with no access point registered, a
+device redirected by the UCG gets a 404 instead of the portal. Find each MAC in the controller under
+Devices → the AP → Details → MAC Address.
+
+**An access point takes the guests of one running location.** Registering an AP that another
+running location (active and not paused) already has is refused: pause that location first with
+`pause_location`. For the same reason `deploy_location` and `resume_location` refuse a location that
+shares an AP with another running one.
+
+Without the form:
+
+- `update_access_point(slug, apMac, newApMac?, host?, port?, siteId?)` changes an AP's settings that
+  are not secret — `newApMac` for an AP that was physically replaced. Never the token.
+- `remove_access_point(slug, apMac)` takes one off. Guests coming through it are turned away from
+  then on.
+- `update_unifi_settings(slug, redirectUrl?, durationMinutes?)` changes the location's own settings.
+
+All of these, and the form, apply to the next guest with no redeploy.
 
 Getting the credentials: the API key comes from **Settings → Control Plane → Integrations → Create
 API Key** and is shown once. The site UUID:
@@ -106,11 +126,12 @@ Copy `data[].id`, not `internalReference` — the legacy `default` name does not
 Integration v1 endpoints. All UCG hardware uses port 443 and the same base path; standalone
 (non-UCG) controllers are not supported.
 
-**A location that grants network access some other way** does not need any of this: call
-`set_unifi_enabled` with `enabled: false` and the portal never calls a controller there, so
-readiness stops asking for credentials. Guests finish the flow and stay at Ready. It can be turned
-off or back on at any time, also after deploying; the stored settings are kept and the change
-reaches the next guest without a redeploy.
+**A location that grants network access some other way** turns its UniFi calls off: call
+`set_unifi_enabled` with `enabled: false` and the portal never calls a controller there. Guests
+finish the flow and stay at Ready. It still needs its access points registered, because they are
+what admits a guest, and readiness keeps asking for one until there is. It can be turned off or back
+on at any time, also after deploying; the stored settings are kept and the change reaches the next
+guest without a redeploy.
 
 ## 7. Error recovery (optional)
 
@@ -142,7 +163,7 @@ anything here.
 ## 9. Verify with a test URL
 
 The portal expects to be reached through a UniFi redirect carrying identifying params. Build one
-with the location's AP MAC:
+with the MAC of one of the location's access points — `get_unifi_config` lists them:
 
 ```
 https://<domain>/<slug>/?id=<CLIENT_MAC>&ap=<AP_MAC>&ssid=<SSID>&url=<ORIGINAL_URL>&fingerprint=<FINGERPRINT>
@@ -160,13 +181,15 @@ headers on the first `/api/status` call.
 |---|---|---|---|
 | `id` | `X-Client-Mac` | yes | The device's MAC; identifies the guest across visits |
 | `fingerprint` | `X-Fingerprint` | yes | The device fingerprint the link shortener computes; with the MAC, it tells the device apart |
-| `ap` | `X-Ap-Mac` | no | Soft-validated against the location's stored AP MAC; a mismatch only warns |
+| `ap` | `X-Ap-Mac` | yes | One of the location's access points, in any spelling; says which controller authorizes the guest |
 | `ssid` | `X-Ssid` | no | Logged |
 | `url` | `X-Redirect-Url` | no | Logged. The SPA does not follow it — the guest finishes on the portal |
 
 Missing `id` or `fingerprint` on a session that does not exist yet gives `ApiError.SessionMissing` and
-the error page. Once the session cookie is set they are ignored. Real traffic also carries `t`, which
-the SPA ignores.
+the error page. An `ap` that is not one of the location's, or none, gives `ApiError.UnknownAccessPoint`
+and an error page with no retry button, and no session is created; it is checked on every load that
+carries these params, cookie or not. Otherwise, once the session cookie is set they are ignored.
+Real traffic also carries `t`, which the SPA ignores.
 
 Then: open in a fresh incognito window, walk Welcome → identification → video → video survey →
 Ready, and confirm a `captal_session_<slug>` cookie exists with `Path=/<slug>`. A second window with

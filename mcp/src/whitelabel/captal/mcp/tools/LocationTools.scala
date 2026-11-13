@@ -7,7 +7,7 @@ import io.getquill.*
 import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
 import whitelabel.captal.mcp.{QuillArrow, Writes}
-import whitelabel.captal.platform.LocationRow
+import whitelabel.captal.platform.{AccessPointRow, LocationRow}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
 import zio.*
@@ -42,7 +42,7 @@ object LocationTools:
       @description("A retired location keeps its content but serves nothing.")
       active: Boolean,
       @description(
-        "False means no UniFi host is set, so the portal cannot authorize guests there however complete its content is. Configured outside this server.")
+        "False means the location has no access point, so every guest is turned away with an error however complete its content is. Registered with configure_unifi.")
       unifiConfigured: Boolean,
       @description(
         "False means a guest whose redirect carries no fingerprint is given a fixed one and let through, rather than turned away. Set with set_fingerprint_required.")
@@ -89,14 +89,15 @@ object LocationTools:
   private inline def bySlugQuery = quote: (slugParam: String) =>
     query[LocationRow].filter(_.slug == slugParam).take(1)
 
-  /** Check if UniFi host is configured (distinguishes configured from bare location). */
-  private def unifiConfigured(row: LocationRow): Boolean = row.unifiHost.exists(_.trim.nonEmpty)
-
-  private def view(row: LocationRow): LocationView = LocationView(
+  /** @param configured
+    *   whether the location has an access point, which is stored only with its controller's
+    *   settings complete.
+    */
+  private def view(row: LocationRow, configured: Boolean): LocationView = LocationView(
     row.slug,
     row.name,
     row.isActive == 1,
-    unifiConfigured(row),
+    configured,
     row.fingerprintIsRequired == 1)
 
   private def validateSlug(raw: String): ZIO[Any, String, String] =
@@ -122,14 +123,19 @@ object LocationTools:
 
   val list: McpToolHandlerR[QuillSqlite] = McpTool("list_locations")
     .description(
-      "Every location, with the slug the other tools take. Inactive locations are hidden unless asked for. `unifiConfigured` false means the portal cannot authorize guests there yet.")
+      "Every location, with the slug the other tools take. Inactive locations are hidden unless asked for. `unifiConfigured` false means it has no access point yet, so every guest is turned away.")
     .readOnly
     .handle: (in: ListRequest) =>
       ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
-        for rows <- run(query[LocationRow]).orDie
+        for
+          rows       <- run(query[LocationRow]).orDie
+          configured <- run(query[AccessPointRow].map(_.locationId)).orDie.map(_.toSet)
         yield ListResponse(
-          rows.filter(r => in.includeInactive || r.isActive == 1).sortBy(_.slug).map(view))
+          rows
+            .filter(r => in.includeInactive || r.isActive == 1)
+            .sortBy(_.slug)
+            .map(r => view(r, configured.contains(r.id))))
 
   /** Scoped under `content:write` because that is the only write scope this server has. A location
     * is structural rather than content, and when Part 3 adds infrastructure tools it should move to
@@ -170,8 +176,7 @@ object LocationTools:
                     name = name,
                     isActive = 1,
                     createdAt = now,
-                    updatedAt = now,
-                    unifiApMac = None)))).orDie
+                    updatedAt = now)))).orDie
           _ <- Writes.expectOne(affected, s"Creating location '$slug'")
         yield CreateResponse(id, slug, name, active = true)
         end for
@@ -201,8 +206,9 @@ object LocationTools:
                 .update(
                   _.fingerprintIsRequired -> lift(flag),
                   _.updatedAt             -> lift(java.time.Instant.now.toString))).orDie
-          _ <- Writes.expectOne(affected, s"Setting whether '$slug' requires a fingerprint")
-        yield view(row.copy(fingerprintIsRequired = flag))
+          _      <- Writes.expectOne(affected, s"Setting whether '$slug' requires a fingerprint")
+          points <- run(query[AccessPointRow].filter(_.locationId == lift(row.id))).orDie
+        yield view(row.copy(fingerprintIsRequired = flag), points.nonEmpty)
         end for
 
   /** The slugs, for the prompt's catalogue and for completing the `{slug}` template argument. */

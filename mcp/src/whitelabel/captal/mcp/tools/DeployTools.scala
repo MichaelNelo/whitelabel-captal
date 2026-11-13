@@ -3,7 +3,7 @@ package whitelabel.captal.mcp.tools
 import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
 import whitelabel.captal.mcp.access.{Auth, Tokens}
-import whitelabel.captal.mcp.apps.{RunRoutes, RunTicket, RunUi}
+import whitelabel.captal.mcp.apps.{RunRoutes, RunTicket, RunUi, UiRoutes}
 import whitelabel.captal.mcp.aws.{AssetStore, BundleCopy, InfraStore, Runs}
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
 import whitelabel.captal.platform.{LocationRow, Terms}
@@ -133,6 +133,8 @@ object DeployTools:
       for
         location <- requireLocation(in.slug)
         _        <- requireTerms
+        // A deploy also ends a pause, so the location takes its access points' guests from here.
+        _        <- UiRoutes.refuseSharedAccessPoints(location.slug)
         caller   <- callerOf(ctx)
         launched <-
           Runs.launch(in.slug, "deploy", DeploySteps.all, caller)(run =>
@@ -376,6 +378,7 @@ object DeployTools:
     .handleWithContext: (in: PauseRequest, ctx: McpToolContext) =>
       for
         _        <- requireLocation(in.slug)
+        _        <- UiRoutes.refuseSharedAccessPoints(in.slug)
         caller   <- callerOf(ctx)
         launched <-
           Runs.launch(in.slug, "resume", ResumeSteps.all, caller)(run =>

@@ -1,7 +1,7 @@
 ---
 name: troubleshoot-deployment
-description: Symptom to cause to fix for a portal that is misbehaving — blank page, 403s, 500s, unhealthy targets, stale content, missing questions or videos, guests stuck at Ready with no internet, guests waiting on the error page, replaced video files still stored. Triggers on "no funciona", "broken", "error", "503", "502", "500", "404", "403", "unhealthy", "stuck", "drain", "no carga", "troubleshoot", "diagnose", "debug", "sin internet", "no autoriza", "algo salió mal", "espera", "cuenta regresiva".
-version: 2.2.0
+description: Symptom to cause to fix for a portal that is misbehaving — blank page, 403s, 500s, unhealthy targets, stale content, missing questions or videos, guests stuck at Ready with no internet, guests turned away on the first page, guests waiting on the error page, replaced video files still stored. Triggers on "no funciona", "broken", "error", "503", "502", "500", "404", "403", "unhealthy", "stuck", "drain", "no carga", "troubleshoot", "diagnose", "debug", "sin internet", "no autoriza", "algo salió mal", "espera", "cuenta regresiva".
+version: 2.3.0
 ---
 
 # Troubleshoot a portal
@@ -124,17 +124,27 @@ The flow completed and the authorization never happened. `get_unifi_config` for 
 * `enabled` false means UniFi calls are turned off for this location on purpose, and nothing will
   authorize a guest there. If that is wrong, `set_unifi_enabled` with `enabled: true`; it takes
   effect on the next guest, no redeploy.
-* `configured` is false unless host, site id and token are all stored. Fix with `configure_unifi`,
-  which opens a form — it takes no token as an argument on purpose. `unifiConfigured` in
-  `list_locations` and `get_location_readiness` reports the same thing.
+* `accessPoints` lists each access point with its controller's host, port and site id, and
+  whether a token is stored. A guest is authorized by the controller of the AP they came through,
+  so check the one in their portal URL (`ap=`): a wrong host or site id is fixed with
+  `update_access_point`, a wrong or rotated token with `configure_unifi` passing that `apMac`,
+  which opens a form — it takes no token as an argument on purpose. All of it applies to the next
+  guest, no redeploy.
+* A guest whose AP was removed with `remove_access_point`, or given a new MAC, after they arrived
+  has no controller to authorize them; they need to come in again through a registered AP.
 
 ## K. The UCG redirect gives 404 "No location registered for AP"
 
-The portal dispatcher Lambda resolves the slug by AP MAC:
-`SELECT slug, unifi_redirect_url FROM locations WHERE LOWER(unifi_ap_mac) = ?`. A location with no
-`apMac` stored, or one that does not match the AP the guest hit, has no row to find. Set it through
-`configure_unifi`; `get_unifi_config` shows what is stored. Two locations sharing an AP MAC is the
-other way to get this wrong.
+The portal dispatcher Lambda resolves the slug by the AP's MAC, lowercase and colon-separated:
+`SELECT l.slug, l.unifi_redirect_url FROM access_points a JOIN locations l ON l.id = a.location_id WHERE a.mac = ?`.
+No location has the AP the guest hit registered. `get_unifi_config` lists a location's access
+points; register the missing one with `configure_unifi`, or fix a mistyped MAC with
+`update_access_point` and `newApMac`.
+
+When several locations have the AP, the newest one that is not paused takes its guests. The
+backoffice keeps one running location per AP — registering an AP another running location has is
+refused, and so are `deploy_location` and `resume_location` for a location that shares one — so to
+move an AP to another location, pause the old one first.
 
 ## L. The portal renders key names or `[some.key]` to guests
 
@@ -175,6 +185,18 @@ current one and no playback holds it. A playback whose page closed without sayin
 the WiFi) holds it until its file's length plus `playbackGraceSeconds` from `get_recovery_policy`,
 ten minutes by default; then it is closed and the file goes. A shorter grace through
 `set_recovery_policy` applies to playbacks that start after it.
+
+## P. Guests get an error on the first page, with no retry button
+
+The portal turned them away because the access point in their URL (`ap=`) is not one of the
+location's, or the URL names none: the API answers `UnknownAccessPoint` and creates no session. A
+guest is admitted only through one of the location's access points, whatever `set_unifi_enabled`
+says, because the AP is what says which controller grants access. Nothing the guest does fixes it.
+
+`get_unifi_config` for the slug lists its access points. Compare them with the `ap` the guest's
+URL carries; the spelling does not matter. With none at all, `get_location_readiness` says so too.
+Register the missing AP with `configure_unifi`, or correct a mistyped one with
+`update_access_point` and `newApMac`. It applies at once: the guest reloads and gets in.
 
 ## When all else fails
 

@@ -11,6 +11,7 @@ import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.{
+  AccessPointRow,
   AdvertiserRow,
   AdvertiserVideoRow,
   LocalizedTextRow,
@@ -19,7 +20,6 @@ import whitelabel.captal.platform.{
   SurveyCategory as StoredCategory,
   SurveyRow,
   Terms,
-  UnifiAccess,
   VideoStatus
 }
 import zio.*
@@ -66,7 +66,7 @@ object Readiness:
       @description("A retired location serves nothing, whatever else is complete.")
       active: Boolean,
       @description(
-        "True only when all three of host, siteId and apiToken are stored — which is what UnifiAccess needs to build. Any one missing and the portal completes the whole flow and then authorizes nobody: the handler logs and skips, and the guest is left at Ready. Call get_unifi_config for which field is missing, configure_unifi to set it.")
+        "True when the location has at least one access point, each registered with its controller's host, site id and token. Without one every guest is turned away with an error as they arrive: the AP a guest comes through is what says which controller grants them access. Call get_unifi_config to list them, configure_unifi to register one.")
       unifiConfigured: Boolean,
       @description(
         "False means the portal never calls the UniFi controller here, so unifiConfigured does not matter: guests finish the flow and stay at Ready. Turned off or on with set_unifi_enabled.")
@@ -173,12 +173,14 @@ object Readiness:
         Option.when(!r.hasIcon)(
           "No brand icon of its own. Call set_location_icon if it should be branded.")
       ).flatten
+    // Whatever the switch says: a guest is admitted only through one of the location's access
+    // points, so without one nobody gets past the first page.
     val unifi =
-      if r.unifiConfigured || !r.unifiEnabled then
+      if r.unifiConfigured then
         Nil
       else
         List(
-          "UniFi is not fully configured — host, siteId and apiToken are all three required — so the portal completes the flow and then authorizes nobody, leaving every guest at Ready. Call get_unifi_config to see which field is missing and configure_unifi to set it.")
+          "The location has no access point, so every guest is turned away with an error as they arrive. Call configure_unifi to register one with its controller's host, site id and token.")
     // First, because it blocks everything after it. Without the email survey a guest never gets
     // identified, so no video is ever drawn and no advertiser question is ever asked — a location
     // can be complete in every other respect and still show nobody anything.
@@ -222,6 +224,7 @@ object Readiness:
           .succeed(locations.headOption)
           .someOrFail(s"No location with slug '$slug'. Call list_locations to see what exists.")
         texts       <- run(textsForLocation(lift(row.id))).orDie
+        points      <- run(query[AccessPointRow].filter(_.locationId == lift(row.id))).orDie
         videos      <- run(query[AdvertiserVideoRow]).orDie
         surveys     <- run(query[SurveyRow]).orDie
         advertisers <- run(query[AdvertiserRow]).orDie
@@ -249,12 +252,9 @@ object Readiness:
           slug = row.slug,
           name = row.name,
           active = row.isActive == 1,
-          // All three, not just the host. `UnifiAccess.fromRow` is a for-comprehension over
-          // `unifiHost`, `unifiApiToken` and `unifiSiteId`, and answers `None` if any is absent —
-          // at which point the handler logs and leaves the session at Ready. Reporting on the host
-          // alone made this field say "configured" about a location that authorizes nobody, which
-          // is the exact failure the whole tool exists to surface.
-          unifiConfigured = UnifiAccess.fromRow(row).isDefined,
+          // An access point is stored only with all of host, site id and token, so having one is
+          // being configured.
+          unifiConfigured = points.nonEmpty,
           unifiEnabled = row.unifiIsEnabled == 1,
           locales = byLocale,
           requiredKeys = requiredKeys.size,
