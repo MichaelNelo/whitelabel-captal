@@ -59,7 +59,7 @@ object I18n:
     given Decoder[Loading] = deriveDecoder[Loading]
     given Encoder[Loading] = deriveEncoder[Loading]
 
-  final case class Error(title: String, retry: String, generic: String)
+  final case class Error(title: String, retry: String, generic: String, unknownAccessPoint: String)
   object Error:
     given Decoder[Error] = deriveDecoder[Error]
     given Encoder[Error] = deriveEncoder[Error]
@@ -141,7 +141,10 @@ object I18n:
     error = Error(
       title = "Error screen heading.",
       retry = "Label of the retry button.",
-      generic = "Fallback error message body."),
+      generic = "Fallback error message body.",
+      unknownAccessPoint =
+        "Error message body when the guest's network access point is not one of this location's, so the portal cannot connect them. Nothing the guest does fixes it: say so, and that the venue's staff can."
+    ),
     question = Question(
       submit = "Submit button on the last question.",
       next = "Next button on intermediate questions.",
