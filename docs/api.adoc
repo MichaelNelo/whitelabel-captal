@@ -683,9 +683,28 @@ non-empty.
 |Defaults to `"unknown"`.
 |===
 
-`CaptivePortalParams` is built only when `X-Client-Mac` and a non-empty `X-Fingerprint` are both
-present. If either is missing and the request has no resolvable session, `OnMissing.Create` has no
-params to create from and the route answers `ApiError.SessionMissing`.
+The headers split by who sends them, and so by what a missing one means:
+
+* `X-Client-Mac` and `X-Ap-Mac` come from UniFi's redirect, always. Without them the page was not
+  reached through the network, and there is no device to grant access to: a refusal, not an error.
+* `X-Fingerprint` comes from the link shortener in front of the portal. A location that requires one
+  and gets none has that configuration failing, not the guest, who can still be let in.
+
+`CaptivePortalParams` is built whenever `X-Client-Mac` reads as a MAC, with the fingerprint the
+redirect carried or, where it carried none, `SurveyRoutes.NoFingerprint`. With no readable client
+MAC and no resolvable session, the route answers `ApiError.InvalidClient(missing)` (400), naming the
+UniFi headers that are missing or unreadable: no session is created, nothing is recorded in
+`errors`, and the page shows `error.invalidClient` with no retry.
+
+A fingerprint that was required and did not come still creates the session, with the stand-in. Then,
+for a session created by that request, `recordMissingFingerprint` records a server error against it
+("the redirect into /<slug> carried no fingerprint, which it requires: the link shortener in front of
+it may be misconfigured"), logs it, and the route answers a *success* with the error's id in
+`StatusResponse.recovery`. A success, because the session cookie travels only with one and the way
+out needs the session; the page leaves through `Recovery.serverError(id)` at once, and the guest gets
+access through `Recovered` and `finish` without the flow. Back with its cookie, the session is the
+one already made, and nothing more is recorded. The terms of service are not asked for on that way
+out: the guest left before the welcome, as any way out does.
 
 Once the session cookie resolves an existing session, all of these headers are ignored: the route
 returns that session's stored phase, locale and redirect URL, and the `CaptivePortalParams` it was
@@ -696,11 +715,12 @@ is built.
 For an API serving a location, the redirect has to name one of that location's access points: the
 AP is what says which UniFi controller authorizes the guest, so a guest through any other could
 never be. `requireAccessPoint` asks `LocationService.hasAccessPoint` with the header read as a
-`Mac`, so its spelling does not count. An AP the location does not have, or a header that is
-missing or is not a MAC, fails with `ApiError.UnknownAccessPoint(apMac)` (400) — the MAC as
-`Mac.show` writes it, or the raw header — after a warning in the log. No session is created and
-nothing is recorded in `errors`: it is an expected refusal, with no way out to offer. An API serving
-no location checks nothing. See xref:unifi.adoc[UniFi integration].
+`Mac`, so its spelling does not count. An AP the location does not have fails with
+`ApiError.UnknownAccessPoint(apMac)` (400), the MAC as `Mac.show` writes it; a header that is
+missing or is not a MAC fails with `ApiError.InvalidClient(List("X-Ap-Mac"))`, since UniFi always
+sends it. Both after a warning in the log; no session is created and nothing is recorded in
+`errors`: expected refusals, with no way out to offer. An API serving no location checks nothing.
+See xref:unifi.adoc[UniFi integration].
 
 `GET /api/locales` offers only the locales the terms of service in force are written in, so a guest
 reads them in the language they picked; before any version exists it offers every locale with

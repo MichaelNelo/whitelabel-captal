@@ -462,8 +462,9 @@ Every view is an object under `client/src/whitelabel/captal/client/views/` expos
 | `ErrorView`
 | `/error`
 | The error page for what a retry answers: a lost connection, a refusal, a failed video load.
-  Renders `i18n.error.{title, generic, retry}` — `error.unknownAccessPoint` in place of `generic`,
-  and no retry button, for `UnknownAccessPoint` — loads a locale by best effort when boot failed
+  Renders `i18n.error.{title, generic, retry}` — `error.unknownAccessPoint` or `error.invalidClient`
+  in place of `generic`, and no retry button, for `UnknownAccessPoint` and `InvalidClient` — loads a
+  locale by best effort when boot failed
   before one was known, and retries by clearing the error and re-running the boot status check.
 |===
 
@@ -651,15 +652,23 @@ The distinction is a rule, not a convention:
   `.question-card`, and drive that card's `card-error` / `card-valid` modifier. The submit button
   stays disabled while one is present.
 
-`ErrorView` renders `i18n.error.generic` for every `ApiError` subtype but one. Retry clears the error,
-turns the nav loader on and re-runs the boot status check, so a second failure simply lands back on
-the error page with the new error.
+`ErrorView` renders `i18n.error.generic` for every `ApiError` subtype but two. Retry clears the
+error, turns the nav loader on and re-runs the boot status check, so a second failure simply lands
+back on the error page with the new error.
 
-The one is `UnknownAccessPoint`: `/api/status` refuses a redirect through an access point that is
-not one of the location's (see xref:unifi.adoc[UniFi integration]). It reaches the page through
-`escalate` like any other refusal, and `ErrorView` shows `i18n.error.unknownAccessPoint` for it and
-hides the retry button, since retrying cannot change the AP the guest came through. It is not a way
-out case: nothing on the guest's side fixes it, and no recovery is asked for.
+The two are the refusals of `/api/status` that nothing on the guest's side fixes, so it shows its
+own message for each and hides the retry button. Neither is a way out case, and no recovery is asked
+for:
+
+* `UnknownAccessPoint`, a redirect through an access point that is not one of the location's (see
+  xref:unifi.adoc[UniFi integration]): `i18n.error.unknownAccessPoint`.
+* `InvalidClient`, a page reached without the network's redirect, which always carries the device's
+  MAC and the access point's: `i18n.error.invalidClient`.
+
+A status check can also answer a success that carries `recovery`, the id of a server error recorded
+as the session was made — a redirect without the fingerprint its location requires. The boot check
+(`App.syncPhaseOnLoad`) and `ErrorView`'s retry then leave through `Recovery.serverError(id)`
+instead of syncing the phase.
 
 === The way out — `Recovery.scala` and `error.html`
 

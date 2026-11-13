@@ -148,7 +148,8 @@ final case class StatusResponse(
     phase: Phase,
     locale: String,
     redirectUrl: Option[String] = None,
-    secondsRemaining: Option[Int] = None)
+    secondsRemaining: Option[Int] = None,
+    recovery: Option[String] = None)
 ----
 
 [source,json]
@@ -164,6 +165,7 @@ final case class StatusResponse(
 | `locale` | the session's locale
 | `redirectUrl` | the captive-portal return URL, present only when the session stored a non-empty one
 | `secondsRemaining` | server-computed seconds of access left, present only while the session is `Authorized` with an `accessExpiresAt`
+| `recovery` | the id of a server error recorded while `/api/status` created this session — today, a redirect without the fingerprint its location requires. The page leaves through it at once (`Recovery.serverError`). A field of a success rather than an error, because the session cookie travels only with a success and the way out needs the session
 |===
 
 `accessExpiresAt` is **not** a field of this response. It is session state (`sessions.access_expires_at`, surfaced in `core.infrastructure.SessionData`), and the only thing the client receives is the difference:
@@ -239,7 +241,8 @@ IMPORTANT: the client must count down from `secondsRemaining`, never from an abs
 | `StaleVideoFile` | `videoId`, `videoUrl` | `video.Error.StaleFile`
 | `InvalidPlaybackId` | `value` | the playback routes, for an id that is not a UUID
 | `LocationNotFound` | `slug: String` | nothing constructs it today
-| `UnknownAccessPoint` | `apMac: String` | `SurveyRoutes.requireAccessPoint`, for a redirect into a served location through an access point that is not one of the location's, or naming none: the MAC as `Mac.show` writes it, or the raw `X-Ap-Mac`. An expected refusal, not recorded in `errors`; the client shows `error.unknownAccessPoint` with no retry
+| `UnknownAccessPoint` | `apMac: String` | `SurveyRoutes.requireAccessPoint`, for a redirect into a served location through an access point that is not one of the location's, the MAC as `Mac.show` writes it. An expected refusal, not recorded in `errors`; the client shows `error.unknownAccessPoint` with no retry
+| `InvalidClient` | `missing: List[String]` | `GET /api/status`, for a page reached without the network's redirect: no session and no readable `X-Client-Mac`, or a served location's redirect with no readable `X-Ap-Mac`. `missing` names those headers. An expected refusal, not recorded in `errors`; the client shows `error.invalidClient` with no retry
 | `UnknownError` | `errorId` | `recovery.Error.UnknownError`, and `RecoveryRoutes` for an id that is not a UUID
 | `RecoveryAlreadyUsed` | `errorId` | `recovery.Error.AlreadyRedeemed`
 | `RecoveryNotYet` | `availableAt: String` | `recovery.Error.NotYet`
