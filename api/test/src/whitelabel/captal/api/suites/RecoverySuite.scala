@@ -439,19 +439,13 @@ object RecoverySuite:
                   false))
       )
 
-  private def servedAt(id: String): CurrentLocation = CurrentLocation(
-    Some(id),
-    Some(id),
-    None,
-    None)
+  private def servedAt(id: String): CurrentLocation = CurrentLocation(Some(id), Some(id))
 
   /** A bare location, its id and slug the same. */
   private def insertLocation(quill: QuillSqlite, id: String): ZIO[Any, Throwable, Unit] =
     import quill.*
     val now = Now.toString
     quill
-      .run(
-        query[LocationRow].insertValue(
-          lift(LocationRow(id, id, id, isActive = 1, now, now, unifiApMac = None))))
+      .run(query[LocationRow].insertValue(lift(LocationRow(id, id, id, isActive = 1, now, now))))
       .unit
 end RecoverySuite

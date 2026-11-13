@@ -106,8 +106,11 @@ object DeviceSuite:
         test(
           "where the fingerprint is optional, a redirect without one gets the stand-in, and the MAC tells devices apart"):
           for
-            _        <- TestFixtures.seedLocation("no-shortener", fingerprintRequired = false)
-            _        <- TestFixtures.seedLocation("with-shortener")
+            _ <- TestFixtures.seedLocation("no-shortener", fingerprintRequired = false)
+            _ <- TestFixtures.seedLocation("with-shortener")
+            // The AP the test redirect names, so both admit it.
+            _        <- TestFixtures.seedAccessPoint("no-shortener", PortalAp)
+            _        <- TestFixtures.seedAccessPoint("with-shortener", PortalAp)
             optional <- statusBackendAt(servedAt("no-shortener"))
             required <- statusBackendAt(servedAt("with-shortener"))
             first    <- statusWithoutFingerprint(optional, "DD:DD:DD:DD:DD:01")
@@ -130,9 +133,5 @@ object DeviceSuite:
           )
       )
 
-  private def servedAt(id: String): CurrentLocation = CurrentLocation(
-    Some(id),
-    Some(id),
-    None,
-    None)
+  private def servedAt(id: String): CurrentLocation = CurrentLocation(Some(id), Some(id))
 end DeviceSuite

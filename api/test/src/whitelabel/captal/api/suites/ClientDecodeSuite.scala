@@ -71,6 +71,7 @@ object ClientDecodeSuite:
     ApiError.StaleVideoFile("v1", "https://cdn.test/a.mp4"),
     ApiError.InvalidPlaybackId("not-a-uuid"),
     ApiError.LocationNotFound("cafe-centro"),
+    ApiError.UnknownAccessPoint("1c:6a:1b:ee:5c:be"),
     ApiError.UnknownError("e1"),
     ApiError.RecoveryAlreadyUsed("e1"),
     ApiError.RecoveryNotYet("2026-10-30T12:05:00Z"),

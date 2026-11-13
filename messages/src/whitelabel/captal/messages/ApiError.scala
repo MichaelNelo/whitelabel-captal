@@ -59,6 +59,11 @@ enum ApiError:
   // Location errors
   case LocationNotFound(slug: String)
 
+  /** The redirect named an access point that is not one of the location's — or none — so no UniFi
+    * controller could grant the guest access. Expected: shown as an error, with no way out offered.
+    */
+  case UnknownAccessPoint(apMac: String)
+
   // Recovery errors
   case UnknownError(errorId: String)
   case RecoveryAlreadyUsed(errorId: String)

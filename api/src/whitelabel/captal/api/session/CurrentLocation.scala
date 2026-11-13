@@ -1,27 +1,21 @@
 package whitelabel.captal.api.session
 
-import whitelabel.captal.platform.UnifiAccess
 import whitelabel.captal.platform.services.LocationService
 import zio.*
 
-/** Snapshot of the location this API instance serves, loaded once at startup from the
-  * `LOCATION_SLUG` env var via a DB lookup. Empty when there is no slug (dev/standalone mode).
+/** The location this API instance serves, resolved once at startup from the `LOCATION_SLUG` env var
+  * via a DB lookup. Empty when there is no slug (dev/standalone mode).
   *
-  * Used to soft-validate inbound captive-portal headers (e.g. `X-Ap-Mac` against the provisioned
-  * `unifi.apMac`) without a per-request DB query.
+  * Only which location it is: everything else about it — its access points and their UniFi
+  * controllers, its switches — is read from the database when it is needed, so the backoffice
+  * changes it without a restart.
   */
-final case class CurrentLocation(
-    id: Option[String],
-    slug: Option[String],
-    apMac: Option[String],
-    unifi: Option[UnifiAccess])
+final case class CurrentLocation(id: Option[String], slug: Option[String])
 
 object CurrentLocation:
-  val empty: CurrentLocation = CurrentLocation(None, None, None, None)
+  val empty: CurrentLocation = CurrentLocation(None, None)
 
-  /** Build a layer for the given slug. Looks up the LocationRow once and snapshots
-    * `(id, slug, apMac, unifi)`. Fails if slug is set but row is missing.
-    */
+  /** Build a layer for the given slug. Fails if slug is set but row is missing. */
   def make(slug: Option[String]): ZLayer[LocationService, Throwable, CurrentLocation] = ZLayer
     .fromZIO:
       slug match
@@ -31,10 +25,5 @@ object CurrentLocation:
           ZIO
             .serviceWithZIO[LocationService](_.findBySlug(s))
             .someOrFail(LocationService.LocationNotFound(s))
-            .map: row =>
-              CurrentLocation(
-                Some(row.id),
-                Some(row.slug),
-                row.unifiApMac,
-                UnifiAccess.fromRow(row))
+            .map(row => CurrentLocation(Some(row.id), Some(row.slug)))
 end CurrentLocation

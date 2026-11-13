@@ -144,10 +144,13 @@ object TestHelpers:
           else
             None
 
+  /** The access point the test redirect names: one a location-bound API has to have registered. */
+  val PortalAp = "11:22:33:44:55:66"
+
   // Default captive portal headers for tests
   private val defaultPortalHeaders = Map(
     "X-Client-Mac"   -> "AA:BB:CC:DD:EE:FF",
-    "X-Ap-Mac"       -> "11:22:33:44:55:66",
+    "X-Ap-Mac"       -> PortalAp,
     "X-Redirect-Url" -> "http://google.com",
     "X-Ssid"         -> "TestNetwork",
     "X-Fingerprint"  -> "test-fingerprint"
@@ -220,6 +223,15 @@ object TestHelpers:
       }
       .send(backend)
       .map(extractSessionCookie)
+
+  /** `/api/status` from a redirect through the access point `ap`, or naming none. */
+  def statusThrough(backend: SttpBackend[Task, Any], ap: Option[String]) = ap
+    .fold(defaultPortalHeaders - "X-Ap-Mac")(mac => defaultPortalHeaders + ("X-Ap-Mac" -> mac))
+    .foldLeft(basicRequest.get(uri"http://test/api/status").response(asStringAlways)) {
+      case (req, (k, v)) =>
+        req.header(k, v)
+    }
+    .send(backend)
 
   /** A new session from a device the redirect describes differently: its own fingerprint and MAC.
     */

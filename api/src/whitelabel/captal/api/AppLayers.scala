@@ -26,7 +26,7 @@ import whitelabel.captal.platform.repositories.{
 import whitelabel.captal.platform.schema.{QuillSqlite, TracedSqlite}
 import whitelabel.captal.platform.services.{LocaleService, LocaleServiceQuill, LocationService}
 import whitelabel.captal.platform.session.{JobQueue, JobRunner, SessionContext, SessionService}
-import whitelabel.captal.platform.{BundleManifest, RqliteDataSource, UnifiAccess, UnifiClient}
+import whitelabel.captal.platform.{BundleManifest, RqliteDataSource, UnifiClient}
 import whitelabel.captal.telemetry.Telemetry
 import zio.*
 import zio.http.{Client, Server}
@@ -100,27 +100,11 @@ private[api] object AppLayers:
     .service[ServerSettings]
     .flatMap(env => UnifiClient.trustAllClientLayer(env.get.unifiProxyUrl))
 
-  /** Snapshot of the location this task serves, for soft-validating the AP MAC and the like. */
+  /** Which location this task serves. */
   private val currentLocationLayer
-      : ZLayer[ServerSettings & LocationService, Throwable, CurrentLocation] = ZLayer.fromZIO:
-    for
-      settings <- ZIO.service[ServerSettings]
-      locSvc   <- ZIO.service[LocationService]
-      cl       <-
-        settings.locationSlug match
-          case None =>
-            ZIO.succeed(CurrentLocation.empty)
-          case Some(s) =>
-            locSvc
-              .findBySlug(s)
-              .someOrFail(LocationService.LocationNotFound(s))
-              .map: row =>
-                CurrentLocation(
-                  Some(row.id),
-                  Some(row.slug),
-                  row.unifiApMac,
-                  UnifiAccess.fromRow(row))
-    yield cl
+      : ZLayer[ServerSettings & LocationService, Throwable, CurrentLocation] = ZLayer
+    .service[ServerSettings]
+    .flatMap(settings => CurrentLocation.make(settings.get.locationSlug))
 
   // ─── Composition ──────────────────────────────────────────────────────────────
 

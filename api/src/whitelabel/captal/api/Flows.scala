@@ -13,8 +13,9 @@ import whitelabel.captal.core.infrastructure.{
   UserRepository,
   VideoRepository
 }
+import whitelabel.captal.core.device.Mac
 import whitelabel.captal.core.recovery.WaitPolicy
-import whitelabel.captal.platform.{LocationRecovery, UnifiClient}
+import whitelabel.captal.platform.{LocationRecovery, UnifiAccess, UnifiClient}
 import whitelabel.captal.platform.eventhandlers.{
   AnswerPersistenceHandler,
   DbEventHandler,
@@ -76,7 +77,7 @@ private[api] object Flows:
         .andThen(tracedDb("Recovery")(RecoveryHandler()))
       val transactional = TransactionalEventHandler(dbHandler, quill)
       val unifiAccess = UnifiAccessHandler(
-        currentLocation.unifi,
+        unifiFor(quill, currentLocation),
         unifiEnabled(quill, currentLocation),
         ctx,
         sessionService,
@@ -87,6 +88,19 @@ private[api] object Flows:
       transactional
         .andThen(traced("Playback")(PlaybackHandler(quill)))
         .andThen(traced("UnifiAccess")(unifiAccess))
+
+  /** The UniFi controller of the served location's access point a session came through, read on
+    * every call. Without a location (dev, standalone), or a session without an AP, there is none.
+    */
+  private[api] def unifiFor(
+      quill: QuillSqlite,
+      location: CurrentLocation): Option[Mac] => Task[Option[UnifiAccess]] =
+    ap =>
+      (location.id, ap) match
+        case (Some(id), Some(mac)) =>
+          LocationService(quill).unifiFor(id, mac)
+        case _ =>
+          ZIO.none
 
   /** The served location's UniFi switch, read from its row on every call. Without a location (dev,
     * standalone) there is no switch, and the UniFi config alone decides.

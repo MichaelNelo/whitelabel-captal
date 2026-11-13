@@ -101,7 +101,7 @@ object TestLayers:
       val transactional = TransactionalEventHandler(dbHandler, quill)
       // The production handler, with its HTTP transport swapped for TestUnifiClient.
       val unifiAccess = UnifiAccessHandler(
-        currentLocation.unifi,
+        _ => ZIO.some(testUnifi),
         unifiSwitch.enabled,
         ctx,
         sessionService,
@@ -227,26 +227,23 @@ object TestLayers:
     */
   private val apiBaseLayer: ULayer[ApiBase] = ZLayer.succeed(ApiBase.none)
 
-  /** Tests have no location row, but they do need UniFi config so `UnifiAccessHandler` walks the
-    * real path. `TestUnifiClient` intercepts the transport, so these values never reach the
-    * network.
+  /** Tests have no location row nor access points, but they do need a UniFi controller so
+    * `UnifiAccessHandler` walks the real path: every session's AP resolves to this one.
+    * `TestUnifiClient` intercepts the transport, so these values never reach the network.
     *
     * `defaultDurationMinutes = 0` makes `expiresAt == occurredAt`: the expiration is already due at
     * the very instant access is granted, so the scheduler processes it as soon as it starts. The
     * test clock stays frozen and `/api/status` checks with `isBefore(now)`.
     */
-  private val currentLocationLayer: ULayer[CurrentLocation] = ZLayer.succeed(
-    CurrentLocation(
-      None,
-      None,
-      None,
-      Some(
-        UnifiAccess(
-          host = "unifi.test",
-          apiToken = "test-token",
-          port = 443,
-          siteId = "test-site",
-          defaultDurationMinutes = 0))))
+  private val testUnifi = UnifiAccess(
+    host = "unifi.test",
+    apiToken = "test-token",
+    port = 443,
+    siteId = "test-site",
+    defaultDurationMinutes = 0)
+
+  /** The tests' API serves no location, so `/api/status` checks no access point either. */
+  private val currentLocationLayer: ULayer[CurrentLocation] = ZLayer.succeed(CurrentLocation.empty)
 
   type TestEnv =
     SessionContext & SessionService & LocaleService & SurveyRoutes.AnswerEmailFlowType &

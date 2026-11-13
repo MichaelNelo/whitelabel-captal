@@ -146,16 +146,40 @@ final class SurveyRoutes(
     .outHeader(HeaderCodec.setCookie.optional)
     .outError[ApiError](Status.BadRequest)
 
-  /** Compare the incoming `X-Ap-Mac` against the location's `unifi_ap_mac`. Soft validation: logs a
-    * warning on mismatch and accepts the request anyway.
+  /** A redirect into this location has to name one of its access points: the AP is what says which
+    * UniFi controller grants the guest access, so a guest through one that is not the location's
+    * could never be authorized. An expected refusal — the page shows it as an error and offers no
+    * way out — checked on every request that carries the redirect's parameters, and only by an API
+    * serving a location.
     */
-  private def softValidateApMac(incomingApMac: Option[Mac], clientMac: Option[Mac]): UIO[Unit] =
-    (incomingApMac, currentLocation.apMac.flatMap(Mac.parse), currentLocation.slug) match
-      case (Some(incoming), Some(expected), Some(slug)) if incoming != expected =>
-        ZIO.logWarning(
-          s"AP MAC mismatch on /$slug: incoming X-Ap-Mac='${incoming
-              .show}' but the location's unifi_ap_mac='${expected.show}' (clientMac=${clientMac
-              .fold("?")(_.show)})")
+  private def requireAccessPoint(
+      quill: QuillSqlite,
+      portalParams: Option[CaptivePortalParams],
+      sentAp: Option[String]): IO[ApiError, Unit] =
+    (currentLocation.id, portalParams) match
+      case (Some(id), Some(params)) =>
+        val refused = ApiError.UnknownAccessPoint(params.apMac.fold(sentAp.getOrElse(""))(_.show))
+        params.apMac match
+          case Some(ap) =>
+            LocationService(quill)
+              .hasAccessPoint(id, ap)
+              .mapError(ApiError.fromThrowable)
+              .flatMap: registered =>
+                ZIO
+                  .when(!registered)(
+                    ZIO.logWarning(
+                      s"AP ${ap.show} is not one of /${currentLocation
+                          .slug
+                          .getOrElse(id)}'s access points: the redirect is refused") *>
+                      ZIO.fail(refused))
+                  .unit
+          case None =>
+            ZIO.logWarning(
+              s"A redirect into /${currentLocation
+                  .slug
+                  .getOrElse(id)} names no readable AP ('${sentAp.getOrElse(
+                  "")}'): it is refused") *> ZIO.fail(refused)
+        end match
       case _ =>
         ZIO.unit
 
@@ -275,7 +299,7 @@ final class SurveyRoutes(
               Some(CaptivePortalParams(m, ap, redirectUrl.getOrElse(""), ssid.getOrElse(""), fp))
             case _ =>
               None
-        _         <- softValidateApMac(ap, mac)
+        _         <- requireAccessPoint(quill, portalParams, apMac)
         onMissing <- resolveOnMissing(userCookieConfig.valueFrom(cookies), userAgent, portalParams)
         session   <- SessionEndpoint.resolveSession(cookieConfig.valueFrom(cookies), onMissing)
         _         <- SessionContext.set(session)

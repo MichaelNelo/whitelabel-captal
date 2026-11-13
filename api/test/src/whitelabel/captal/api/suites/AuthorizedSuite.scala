@@ -5,6 +5,7 @@ import whitelabel.captal.api.TestHelpers.*
 import whitelabel.captal.api.session.CurrentLocation
 import whitelabel.captal.api.{Flows, TestFixtures, TestUnifiClient, TestUnifiSwitch}
 import whitelabel.captal.core.application.Phase
+import whitelabel.captal.core.device.Mac
 import whitelabel.captal.core.user
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.services.LocationService
@@ -137,6 +138,52 @@ object AuthorizedSuite:
             offRow <- LocationService(quill).findBySlug("unifi-off")
           yield assertTrue(on, !off, offRow.exists(_.unifiIsEnabled == 0), backOn, !missing, noRow)
         ,
+        test("A redirect is admitted only through one of the location's access points"):
+          for
+            _       <- insertLocation("ap-site", None)
+            _       <- TestFixtures.seedAccessPoint("ap-site", "1C-6A-1B-EE-5C-BE")
+            backend <- statusBackendAt(servedAt("ap-site"))
+            // The same AP, spelled as UniFi spells it.
+            through  <- statusThrough(backend, Some("1c:6a:1b:ee:5c:be"))
+            stranger <- statusThrough(backend, Some("AA:AA:AA:AA:AA:AA"))
+            none     <- statusThrough(backend, None)
+            state    <- TestFixtures.queryDbState
+          yield assertTrue(
+            through.code.isSuccess,
+            extractSessionCookie(through).isDefined,
+            !stranger.code.isSuccess,
+            stranger.body.contains("UnknownAccessPoint"),
+            stranger.body.contains("aa:aa:aa:aa:aa:aa"),
+            extractSessionCookie(stranger).isEmpty,
+            !none.code.isSuccess,
+            none.body.contains("UnknownAccessPoint"),
+            // Only the guest who came through the location's AP got a session.
+            state.sessions.size == 1
+          )
+        ,
+        test("The controller is the one of the access point the session came through"):
+          for
+            _     <- insertLocation("ap-unifi", None)
+            _     <- TestFixtures.seedAccessPoint("ap-unifi", "1c:6a:1b:ee:5c:be", "unifi.one")
+            _     <- TestFixtures.seedAccessPoint("ap-unifi", "1c:6a:1b:ee:5c:bf", "unifi.two")
+            quill <- ZIO.service[QuillSqlite]
+            resolve = Flows.unifiFor(quill, servedAt("ap-unifi"))
+            one       <- resolve(Mac.parse("1C-6A-1B-EE-5C-BE"))
+            two       <- resolve(Mac.parse("1c:6a:1b:ee:5c:bf"))
+            stranger  <- resolve(Mac.parse("aa:aa:aa:aa:aa:aa"))
+            none      <- resolve(None)
+            elsewhere <-
+              Flows.unifiFor(quill, CurrentLocation.empty)(Mac.parse("1c:6a:1b:ee:5c:be"))
+          yield assertTrue(
+            one.map(_.host).contains("unifi.one"),
+            two.map(_.host).contains("unifi.two"),
+            // The location's duration, the default where it sets none.
+            one.map(_.defaultDurationMinutes).contains(1440),
+            stranger.isEmpty,
+            none.isEmpty,
+            elsewhere.isEmpty
+          )
+        ,
         test("Finish triggers UniFi authorization → /status returns Authorized + secondsRemaining"):
           for
             _       <- TestUnifiClient.enable
@@ -221,11 +268,7 @@ object AuthorizedSuite:
             )
       )
 
-  private def servedAt(id: String): CurrentLocation = CurrentLocation(
-    Some(id),
-    Some(id),
-    None,
-    None)
+  private def servedAt(id: String): CurrentLocation = CurrentLocation(Some(id), Some(id))
 
   /** A bare location row. `None` leaves `unifi_is_enabled` out of the insert, so the column's own
     * default applies.
