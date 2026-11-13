@@ -1,0 +1,354 @@
+= Plan: the administrative side in core
+:toc:
+:toclevels: 2
+
+A plan agreed in conversation on 2026-11-13 and not started. It moves the backoffice's business rules
+into `core`, models a location's lifecycle as a state machine run by a saga, and leaves one question
+open that blocks part of it: the availability of the change data capture relay. Pick it up from
+<<order-of-work>>.
+
+Status when written: access points (migration `V34__access_points.sql`, `access_points` table, the AP
+check at `/api/status`, `update_access_point` and `remove_access_point`) were committed on `main`
+and not yet released. Everything below comes after them.
+
+== Why
+
+`core` models the guest's side only. Its 16 commands (`Start`, `AnswerEmail`, `StartPlayback`,
+`Finish`, `ExpireAccess`, `RequestRecovery`, …) walk a guest through the flow; `survey`, `video` and
+`user` are modelled as the guest meets them — answering, validating an answer, which video is next —
+not as an operator authors them.
+
+The administrative side has no model. The backoffice's tools write rows with Quill directly — 46
+write sites across 10 files under `mcp/src/.../tools` and `apps` — and each handler holds its own
+rules: the slug's shape in `LocationTools.validateSlug`, the MAC and the one-running-location-per-AP
+rule in `UiRoutes.refuseRunningElsewhere`, the video states in `VideoTools`. The backoffice imports a
+handful of types from `core` (`Mac`, `VideoType`, `Playback`, the i18n schema) and nothing else.
+
+What that costs:
+
+* Those rules are only exercised against rqlite and LocalStack, which is why `mcp.test` is rarely run.
+  In `core` they would be pure tests.
+* A rule has more than one home. The AP rule is applied by three tools and assumed by the portal
+  dispatcher; an AP's validity is checked in the backoffice and again in the API.
+* Nothing records who changed what. The guest's side emits events that `EventLogHandler` writes to
+  `event_log`; the administrative side would get the same audit trail for free.
+
+== Principles
+
+Stated by the user, and binding:
+
+* `core` stays as pure as possible and talks to platform and infrastructure through events. A tool
+  never goes into `core`; only the logic it uses does. Whatever ends up as an impure change becomes an
+  event.
+* The shape is the existing one: a command carries the instant (`occurredAt`) and any new id; a
+  handler is a `Handler.Aux[F, Cmd, Result]` that reads through repository traits in
+  `core.infrastructure` and answers an `Op[Event, Error, A]`; `platform`'s handlers persist the
+  events (transactional) or call out (post-commit).
+* A tool becomes an adapter: parse the input, build the command, run the flow, shape the answer — or
+  the elicitation.
+
+== What moves and what stays
+
+Moves, in priority order:
+
+[cols="1,3,3"]
+|===
+| Area | Rules held in the tools today | Why `core`
+
+| Location and access point
+| Slug shape (kebab-case, 25 characters at most, reserved names `bundle`, `ui`, `releases`, `mcp`),
+  non-blank name, lifecycle, MAC normalization, controller validity (host and site required, port
+  1–65535, token required to register), one running location per AP, deploy needs terms of service
+| The AP rule is applied in three tools and assumed by the API and the dispatcher; the slug is the
+  identity every module shares. The 25 and the reserved names come from infrastructure (the ALB
+  target group name `captal-<slug>` caps at 32, the S3 and CloudFront prefixes): keep them in a
+  `Slug` value with that origin written down.
+
+| Readiness (`get_location_readiness`)
+| What a location needs before it serves guests
+| `Readiness.steps` is already a pure function with tests (`OnboardingSpec`); it moves as is. Gathering
+  its facts from the database and S3 stays in the backoffice.
+
+| Survey and question authoring (`SurveyTools`, ~1,250 lines)
+| Text in one locale at least, options for choice types, a rule's value of the right kind (whole
+  number, number, ISO date), points ≥ 0, `hierarchyLevel` only in the location survey, a reorder must
+  be the whole list without repeats
+| `core` already has `Question`, `QuestionRule` and the answer validation: a rule validated where it
+  is evaluated cannot be authored into something the portal cannot evaluate.
+
+| Video lifecycle (`VideoTools`)
+| pending → active (once the file is confirmed) → retired, replacing a file, `minWatchSeconds ≥ 1`,
+  `noRepeatSeconds ≥ 0`, priority ≥ 0, a title in one locale at least, a survey with a question
+| `ProvideNextVideo` picks videos assuming exactly these. Advertisers (name, priority) come with
+  videos, not on their own.
+
+| Recovery policy
+| Ranges, no set and reset of one setting in one call
+| `WaitPolicy` is already in `core/recovery`.
+
+| Terms of service versions
+| A version needs one text at least
+| Acceptance is already in `core` (`TermsAccepted`, `Device[S]`).
+
+| i18n keys
+| A key has to be in the schema; counting the missing ones
+| `I18nSchema` is already in `core`.
+|===
+
+Stays out: the AWS orchestration (ECS, ALB, S3, CloudFront invalidations) — `core` only decides
+whether an operation may happen and which steps it takes; operator tokens and OAuth (a token cannot
+grant more scopes than its issuer holds, hashing, page tickets), which is the backoffice's own
+security rather than the portal's business; file formats (the icon's SVG check, the CSS schema); the
+MCP protocol (schemas, MCP Apps, the UniFi form); UX safeguards such as typing the slug again for
+`destroy_location`; how translations are stored.
+
+== The model
+
+Sketch, to be refined when it is written:
+
+----
+core/
+  location/
+    Slug.scala          opaque Slug: kebab-case, ≤ 25, reserved names
+    Location.scala      LocationId, Location(id, slug, name, settings, state)
+                        Settings(durationMinutes, redirectUrl, unifiEnabled, fingerprintRequired)
+    AccessPoint.scala   AccessPoint(mac: Mac, controller: Controller)
+                        Controller(host: Host, port: Port, siteId: SiteId, token: Secret)
+    Lifecycle.scala     State: Created(lastRun) | Running(deployedBy) | Paused(lastRun) | Destroyed
+                        Operation: Deploy | Pause | Resume | Destroy
+                        Step, and each operation's steps in order
+                        StepFailure → explain(step, failure): LifecycleError
+    Readiness.scala     Facts → steps(facts)
+    Event.scala         LocationCreated, SettingsChanged,
+                        AccessPointRegistered, AccessPointUpdated, AccessPointRemoved,
+                        OperationStarted(run, op, steps), OperationCompleted(run),
+                        OperationFailed(run, step, error)
+    Error.scala         InvalidSlug, SlugTaken, InvalidMac, ControllerIncomplete(field),
+                        TokenRequired, AccessPointHeld(mac, by), NotAllowedFrom(state, op),
+                        NoTermsOfService, OperationInProgress(run, op),
+                        PreviousOperationUnfinished(run, op, pending)
+  application/commands/
+    CreateLocation, ChangeSettings, RegisterAccessPoint, UpdateAccessPoint, RemoveAccessPoint,
+    StartOperation(op), CompleteOperation(run, outcome)
+  infrastructure/
+    LocationRepository[F]       bySlug, slugTaken, accessPoints(id)
+    AccessPointRepository[F]    holders(mac): List[(Slug, State)]
+    RunRepository[F]            progress(run): Option[Progress]   (steps done, heartbeat, finished)
+----
+
+* The controller's token travels inside commands and events. `Secret` renders redacted, and
+  `EventLogHandler`, which builds each event's JSON by hand, leaves it out — as must any log line.
+* Administrative flows have no guest session: they need a flow constructor without
+  `SessionContext`.
+* `core` is also compiled to Scala.js (`core-js`) for the portal. The linker should drop what the
+  portal never references; measure the bundle when the first types land, as was done for the ZPure
+  experiment, and move the administrative model to a module of its own if it grows.
+
+== A location's lifecycle
+
+=== What a deploy is
+
+`deploy_location` stands a location up: it copies `bundle/` under `/<slug>/`, creates the log group,
+the target group and the ALB rule, registers a task definition (the release's image, read from
+`API_IMAGE`, and the environment: `LOCATION_SLUG`, the database, CDC, OTEL, the UniFi proxy), and
+creates or updates the service. It is needed once per location.
+
+Its other historical uses are gone or going: a newly published bundle reaches every location through
+`ci.run`'s `publishClient`, paused ones included (their new `index.html` goes to
+`_paused/<slug>/site.html`, `Release.scala:524-570`); a new image reaches every service through
+`rollLocations`, which keeps a paused one paused (`Release.scala:435`); and with access points the
+UniFi settings are read per event, so nothing location-specific is read at task start any more. So
+versions are the release's business, never the deploy's, and a deploy of a running location has
+nothing legitimate to do — re-running it today only replaces the task, minutes of draining for
+nothing. The log group and target group are created once and removed by a destroy; they are not
+reconciled.
+
+A reconciling planner (desired state against actual, a resource graph applied in dependency order
+going up and in reverse going down) was considered and dropped for this reason: the resources it
+would reconcile never change after creation.
+
+=== The state machine
+
+----
+Created ──deploy──► Running ──pause──► Paused
+                       ▲                  │
+                       └─────resume───────┘
+Running | Paused ──destroy──► Destroyed
+----
+
+`Running` points to the run that brought it up; `Created` and `Paused` point to the last run
+executed. `StartOperation` decides from that:
+
+* asked to deploy a location that is `Running`: nothing to do, no event;
+* the transition is not allowed from the current state (deploy only from `Created`, resume only from
+  `Paused`): `NotAllowedFrom`;
+* the run it points to has not finished and its heartbeat is fresh: `OperationInProgress`;
+* the run it points to was interrupted (stale heartbeat) or failed: `PreviousOperationUnfinished`
+  with the steps still pending — the tool turns it into an elicitation ("the pause stopped at «scale
+  to zero»; finish it first?");
+* the run it points to finished: check the operation's conditions (terms of service; no access point
+  of the location in another `Running` location) and emit `OperationStarted` with every step of the
+  operation, or only the pending ones when it finishes an unfinished run.
+
+Each operation has a fixed list of steps owned by `core`. Their order is a domain rule: a pause swaps
+the edge to the maintenance page and waits for it before the ALB answers "paused" and the service
+scales to zero, since an API that refuses behind a page that still offers the flow strands the
+guest; a resume goes the other way. That ordering was never exercised by a test; in `core` it would
+be, against a fake port.
+
+Failures: the port that runs a step reports a structured `StepFailure` (timed out, rejected, missing),
+never an AWS string, and `core`'s `explain(step, failure)` turns it into a `LifecycleError` the page
+can show (`ServiceNeverStarted(revision)`, `EdgeStillServing(invalidation)`, `TasksStillStopping`).
+Today those messages are strings built in `Deploy.scala` and `DeployTools`.
+
+Drift — a resource changed by hand in the AWS console — is out of the model; an explicit repair
+operation can be added if it is ever needed.
+
+=== Concurrency
+
+rqlite has no `SELECT … FOR UPDATE`. The lock is the location's run pointer, taken by a conditional
+write the leader serializes: `UPDATE locations SET current_run = :new WHERE id = :id AND current_run
+IS :seen`, one affected row to win, and a read afterwards to confirm who holds it — the `Migrate.Lock`
+idiom (xref:../database.adoc[Database], "the insert is a bid; a follow-up SELECT is the answer"). It
+is held while the run it points to is running with a fresh heartbeat, released by `CompleteOperation`,
+and an abandoned one is taken over through `PreviousOperationUnfinished`.
+
+The loser learns it when `platform` persists `OperationStarted` and the conditional write affects no
+row (`TransitionTaken`), or earlier when `core` already sees a live run (`OperationInProgress`). Both
+end in one answer from the tool: re-read the location and elicit "a pause of `prueba` is in progress
+(step 3 of 5, started by `operator-x` two minutes ago) — see its progress?". Yes returns the same view
+the starting tool returned, on the same run id; no returns a short message naming the run; a host
+that cannot ask gets the error with the run id and `get_deploy_status`, as `destroy_location` already
+does when `ctx.elicit` fails.
+
+=== The saga
+
+----
+StartOperation ──► OperationStarted(run, op, steps)
+                     ├─ transactional handler: persist the run, take the lock (current_run)
+                     └─ post-commit handler: enqueue RunOperation(run)        ← data only
+OperationRunner (a fiber) ◄── consumes the queue
+   runs the steps through the AWS port, records progress and heartbeat on the run
+   └─► runs the CompleteOperation flow ──► OperationCompleted | OperationFailed
+----
+
+A handler does not run a flow directly. The flow needs the handler chain to dispatch its events, so a
+handler in that chain needing the flow is a cycle in the ZIO layers; a post-commit handler runs inside
+the request, so waiting on AWS would hold the tool call for minutes; and data in a queue can be rebuilt
+from the database. This is the existing `JobQueue` / `JobRunner` pattern: `UnifiAccessHandler`
+enqueues `ScheduledAt(expiresAt, ExpireAccess(sessionId))` and `JobRunner` runs the `ExpireAccess`
+flow.
+
+Completion events are only persisted and logged; no handler starts an operation on them, so the saga
+cannot chain itself. A run interrupted by a backoffice restart is not resumed on startup: its heartbeat
+goes stale and the next request elicits whether to finish it. Rehydrating runs on startup, as
+`JobRunner` does with expirations, is the alternative if the operator should not have to.
+
+=== Database
+
+`locations` gains `state` and `current_run`. With the paused state there, the portal dispatcher can
+read it in the query that finds the location and stop reading S3 — removing the S3 gateway endpoint
+and the `s3:ListBucket` permission `modules/portal-dispatcher` was given for it. `_paused/<slug>/
+site.html` stays, only for the resume to restore the page. `mcp_deploy_runs` keeps each step's state;
+`core` reads it through `RunRepository` to compute pending steps.
+
+The legacy UniFi columns `V34` left on `locations` (`unifi_ap_mac`, `unifi_host`, `unifi_port`,
+`unifi_site_id`, `unifi_api_token`) are dropped once no dispatcher or API on the previous release
+reads them, together with the dispatcher's fallback query.
+
+== Open: progress to the page, and the relay's availability
+
+How the run page learns of each step is undecided, and depends on the relay. Today `RunRoutes` reads
+the run's row every second and sends the whole run as a server-sent event when it changed
+(`RunRoutes.scala:55`). Polling was kept there without the choice being put to the user — the fourth
+time in this project — and the user asked for push. The options, as put:
+
+[cols="1,2,2,2"]
+|===
+| | A. Push through CDC | B. In-memory push | C. Poll the row (today)
+
+| How
+| rqlite posts `mcp_deploy_runs` changes to the relay; every backoffice replica already follows it
+  (`VideoFileCollector`); a `RunFeed`, like the API's `RecoveryFeed`, publishes them to a `Hub`, and
+  the SSE route subscribes for its run
+| The runner publishes to a `Hub` in its own process
+| Read the row every second
+
+| Several replicas
+| Yes
+| No: an SSE connection on the other task (a backoffice deploy runs two) hears nothing, unless it
+  falls back to reading the row
+| Yes
+
+| Late or reconnecting page
+| The current row first, then live changes; a `Gap` re-reads the row
+| Same, within one process
+| Yes
+
+| Cost
+| Changing `rqlite_cdc_table_filter` changes rqlite's task definition and replaces every node — a
+  single deliberate operation with the S3 backup verified first, worth doing once with this plan's
+  migrations
+| None in infrastructure
+| One query a second per open page, up to a second late
+|===
+
+A was recommended, and stays blocked on the relay's availability, which the user raised as unsolved:
+
+The relay is one Fargate task deployed stop-then-start (`deployment_minimum_healthy_percent = 0`,
+`modules/cdc/main.tf:134`), because each relay keeps its change sets in its own memory. Two at once
+would split rqlite's posts: a subscriber that connected to the new one while rqlite still posted to
+the old misses those change sets with no `Gap`, since its instance never changed. DNS cannot
+coordinate the switch: `cdc.<namespace>` is a Cloud Map MULTIVALUE A record that lists both tasks
+during an overlap, ECS registers a task while it is still `ACTIVATING`, the VPC resolver caches for
+the 10-second TTL and the JVM for about 30 seconds, and an open connection — rqlite's keep-alive HTTP
+connection, a subscriber's stream — never resolves again. So each relay deploy leaves one to two
+minutes with no live feed: rqlite retries its posts (exponential, 10 retries, backoff up to 60 s,
+`docker/rqlite-entrypoint.sh`), subscribers reconnect every 2 seconds and get a `Gap` from the new
+instance, and nothing is lost unnoticed. ECS stops the old task only once the new counts as healthy,
+which without a container health check is 40 seconds after `RUNNING`, whether or not it listens.
+
+Options discussed, none chosen:
+
+* *Fan-in in the follower.* `ChangeFeedFollower` follows every address `cdc.<namespace>` resolves to,
+  re-resolving every few seconds, one stream per relay; a new relay is asked for its whole buffer
+  (its indexes say nothing about another's), and duplicates are dropped with a bounded set of seen
+  indexes rather than "above the last", since streams interleave. With a container health check and
+  a 100/200 deployment, overlap becomes safe and two relays could run permanently. Changes the
+  follower only.
+* *Explicit handoff.* The relay registers itself in Cloud Map instead of ECS doing it. On SIGTERM the
+  old one refuses rqlite's posts with 503 (rqlite retries), ends the streams and deregisters; the new
+  one registers only when no other is registered. Never two in DNS, and a gap of seconds since the new
+  one is already warm. Needs Cloud Map permissions for the relay, and a liveness check for an old one
+  that crashed without deregistering.
+* *SNS FIFO and SQS FIFO.* The relay publishes each change set to a topic, with the Raft index as
+  `MessageDeduplicationId`; each subscriber — the backoffice, every location — has its own durable
+  queue. The relay becomes stateless and can overlap or run twice. Costs a queue and a subscription
+  per location, created and removed by the deploy and destroy operations, and the gRPC contract goes
+  away. SQS is consumed by long polling: it is a pull, which has to be said plainly when choosing it.
+
+Rejected: an ALB in front of the relay (it moves no open stream — a deregistering target's connections
+end and the client reconnects anyway; its idle timeout ignores HTTP/2 PINGs, so quiet subscriptions
+are cut every 60 s to 4,000 s; gRPC needs an HTTPS listener; and it would round-robin rqlite's posts
+between two relays, splitting them); RabbitMQ (it moves the problem to the broker, whose own
+replacement needs a quorum-queue cluster that on Fargate is a second rqlite to operate, or Amazon MQ's
+three brokers).
+
+[[order-of-work]]
+== Order of work
+
+. Location and access point in `core`: `Slug`, `Controller`, `Secret`, the commands and events of
+  this plan's first slice, the repository traits; `platform`'s repositories and persistence handlers;
+  the location tools as adapters. Measure the portal's bundle.
+. Readiness into `core`.
+. The lifecycle: state machine, `StartOperation` and `CompleteOperation`, the `state` and
+  `current_run` columns, the lock, the queue and `OperationRunner`, the elicitations, structured step
+  failures and `explain`.
+. The dispatcher reads the paused state from the database; remove its S3 endpoint and permission.
+. Decide the relay's availability, then how the run page is told of progress.
+. Video lifecycle with advertisers; survey and question authoring; recovery policy; terms of service
+  versions; i18n keys.
+
+Also owed: `mcp/resources/skills/deploy-location/SKILL.md` still says a deploy is how a location takes
+a newly published bundle, and its section 2 publishes the bundle with `client.publishS3`, which
+`ci.run` does now.

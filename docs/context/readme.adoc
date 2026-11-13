@@ -35,6 +35,11 @@ Read it before changing anything. Most of what is here was expensive to learn.
 | xref:conventions.adoc[Conventions]
 | You are writing code or a comment in this repository. Style, query naming, the comment policy,
   and the invariants an editor must not break.
+
+| xref:admin-core-plan.adoc[Plan: the administrative side in core]
+| You are moving the backoffice's rules into `core`, touching a location's deploy, pause, resume or
+  destroy, or deciding how the relay stays available. An agreed plan, not started, with the one
+  question still open.
 |===
 
 Architecture — what exists and how it is wired — is one level up, indexed in

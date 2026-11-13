@@ -94,6 +94,22 @@ Not done, because the venue connections are not 1.6 Mbps and at their speeds the
 win. Revisit if the connections change. Measured against the hints in `preloadLinks`
 (`mill-build/src/millbuild/Bundle.scala`); see "Client and bundle" in `decisions.adoc`.
 
+== The relay has a gap of a minute or two on every deploy
+
+The change data capture relay is one task deployed stop-then-start (`modules/cdc/main.tf:134`),
+because each relay keeps its change sets in memory and two at once would split rqlite's posts. Each
+relay deploy leaves one to two minutes with no live feed; rqlite retries its posts and subscribers get
+a `Gap` from the new instance, so nothing is lost unnoticed, but nothing arrives live either. The
+options weighed — fan-in in the follower, an explicit handoff through Cloud Map, SNS and SQS — and the
+ones rejected are in xref:admin-core-plan.adoc[the admin core plan], where pushing a deploy run's
+progress to its page waits on this.
+
+== The administrative side has no model in core
+
+The backoffice's rules live in its tools, which write rows directly. The agreed plan to move them
+into `core`, with a location's lifecycle as a state machine run by a saga, is
+xref:admin-core-plan.adoc[the admin core plan].
+
 == The backoffice cannot talk to UniFi yet
 
 `mcp` resolves zio-http 3.11.3, which `zio-http-mcp` requires, while `platform`'s `UnifiClient` is
