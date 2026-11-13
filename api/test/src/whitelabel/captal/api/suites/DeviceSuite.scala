@@ -107,18 +107,15 @@ object DeviceSuite:
           "where the fingerprint is optional, a redirect without one gets the stand-in, and the MAC tells devices apart"):
           for
             _ <- TestFixtures.seedLocation("no-shortener", fingerprintRequired = false)
-            _ <- TestFixtures.seedLocation("with-shortener")
-            // The AP the test redirect names, so both admit it.
+            // The AP the test redirect names, so the location admits it.
             _        <- TestFixtures.seedAccessPoint("no-shortener", PortalAp)
-            _        <- TestFixtures.seedAccessPoint("with-shortener", PortalAp)
             optional <- statusBackendAt(servedAt("no-shortener"))
-            required <- statusBackendAt(servedAt("with-shortener"))
             first    <- statusWithoutFingerprint(optional, "DD:DD:DD:DD:DD:01")
             again    <- statusWithoutFingerprint(optional, "DD:DD:DD:DD:DD:01")
             other    <- statusWithoutFingerprint(optional, "DD:DD:DD:DD:DD:02")
-            refused  <- statusWithoutFingerprint(required, "DD:DD:DD:DD:DD:03")
             state    <- TestFixtures.queryDbState
             devices  <- TestFixtures.getDevices
+            errors   <- TestFixtures.getErrors
             deviceOf =
               (cookie: Option[String]) =>
                 cookie.flatMap(c =>
@@ -129,7 +126,35 @@ object DeviceSuite:
             deviceOf(first) != deviceOf(other),
             devices.size == 2,
             devices.forall(_.fingerprint == SurveyRoutes.NoFingerprint),
-            refused.isEmpty
+            // Optional is not missing: nothing went wrong, so nothing is recorded.
+            errors.isEmpty
+          )
+        ,
+        test(
+          "where the fingerprint is required, a redirect without one still gets its session, and a way out"):
+          for
+            _       <- TestFixtures.seedLocation("with-shortener")
+            _       <- TestFixtures.seedAccessPoint("with-shortener", PortalAp)
+            backend <- statusBackendAt(servedAt("with-shortener"))
+            first   <- statusWithoutFingerprintResponse(backend, "DD:DD:DD:DD:DD:03")
+            cookie = extractSessionCookie(first)
+            // Back with its cookie, the session is the one already made: no second way out.
+            again   <- statusWithoutFingerprintResponse(backend, "DD:DD:DD:DD:DD:03", cookie)
+            errors  <- TestFixtures.getErrors
+            devices <- TestFixtures.getDevices
+            recorded = errors.filter(_.origin == "server")
+          yield assertTrue(
+            // A success, so the session cookie reaches the browser: the way out needs it.
+            first.code.isSuccess,
+            cookie.isDefined,
+            recorded.size == 1,
+            recorded.forall(_.message.contains("fingerprint")),
+            recorded.forall(_.sessionId.map(_.asString) == cookie),
+            first.body.contains(recorded.head.id),
+            again.code.isSuccess,
+            !again.body.contains(recorded.head.id),
+            // The device made with the stand-in, found by its MAC.
+            devices.map(_.fingerprint) == List(SurveyRoutes.NoFingerprint)
           )
       )
 

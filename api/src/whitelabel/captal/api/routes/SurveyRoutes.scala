@@ -15,6 +15,7 @@ import whitelabel.captal.core.device.Mac
 import whitelabel.captal.core.infrastructure.SessionData
 import whitelabel.captal.core.user
 import whitelabel.captal.messages.{AnswerRequest, ApiError, StatusResponse, SurveyResponse}
+import whitelabel.captal.platform.Errors
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.services.LocationService
 import whitelabel.captal.platform.session.{CaptivePortalParams, SessionContext, SessionService}
@@ -148,9 +149,9 @@ final class SurveyRoutes(
 
   /** A redirect into this location has to name one of its access points: the AP is what says which
     * UniFi controller grants the guest access, so a guest through one that is not the location's
-    * could never be authorized. An expected refusal — the page shows it as an error and offers no
-    * way out — checked on every request that carries the redirect's parameters, and only by an API
-    * serving a location.
+    * could never be authorized. Expected refusals — the page shows them as errors and offers no way
+    * out: an AP the location does not have, or none at all, which UniFi always sends. Checked on
+    * every request that carries the redirect's parameters, and only by an API serving a location.
     */
   private def requireAccessPoint(
       quill: QuillSqlite,
@@ -158,7 +159,6 @@ final class SurveyRoutes(
       sentAp: Option[String]): IO[ApiError, Unit] =
     (currentLocation.id, portalParams) match
       case (Some(id), Some(params)) =>
-        val refused = ApiError.UnknownAccessPoint(params.apMac.fold(sentAp.getOrElse(""))(_.show))
         params.apMac match
           case Some(ap) =>
             LocationService(quill)
@@ -171,17 +171,42 @@ final class SurveyRoutes(
                       s"AP ${ap.show} is not one of /${currentLocation
                           .slug
                           .getOrElse(id)}'s access points: the redirect is refused") *>
-                      ZIO.fail(refused))
+                      ZIO.fail(ApiError.UnknownAccessPoint(ap.show)))
                   .unit
           case None =>
             ZIO.logWarning(
               s"A redirect into /${currentLocation
                   .slug
                   .getOrElse(id)} names no readable AP ('${sentAp.getOrElse(
-                  "")}'): it is refused") *> ZIO.fail(refused)
+                  "")}'): it is refused") *> ZIO.fail(ApiError.InvalidClient(List("X-Ap-Mac")))
         end match
       case _ =>
         ZIO.unit
+
+  /** The redirect's headers that UniFi always sends and this one lacks, or carries unreadable. */
+  private def missingOf(clientMac: Option[String], apMac: Option[String]): List[String] = List(
+    "X-Client-Mac" -> clientMac,
+    "X-Ap-Mac"     -> apMac).collect {
+    case (name, value) if value.flatMap(Mac.parse).isEmpty =>
+      name
+  }
+
+  /** Records that the redirect carried no fingerprint where one is required — the link shortener in
+    * front of the portal failing, not the guest — against the session just created, and answers the
+    * id the page leaves through. None when it could not be recorded: the guest then goes on through
+    * the flow, the session already made.
+    */
+  private def recordMissingFingerprint(
+      quill: QuillSqlite,
+      session: SessionData): UIO[Option[String]] =
+    val where = currentLocation.slug.fold("the portal")(slug => s"/$slug")
+    val message =
+      s"The redirect into $where carried no fingerprint, which it requires: the link shortener in front of it may be misconfigured."
+    for
+      _   <- ZIO.logWarning(message)
+      now <- Clock.instant
+      id  <- Errors.recordServer(quill, Some(session), message, "", now)
+    yield id.map(_.asString)
 
   /** Resolve the on-missing-session strategy: `CreateForUser` when the cross-location `captal_user`
     * cookie carries a valid, existing user id, plain `Create` otherwise.
@@ -289,21 +314,34 @@ final class SurveyRoutes(
       for
         quill <- ZIO.service[QuillSqlite]
         sent  <- fingerprintOf(quill, currentLocation, fingerprint).mapError(ApiError.fromThrowable)
-        // portalParams only when both a readable clientMac AND a fingerprint are present (both
-        // required by the captive-portal redirect contract, the fingerprint unless the location
-        // stands one in). If either is missing on a CREATE flow, session resolution falls through
-        // to ApiError.SessionMissing.
-        portalParams =
-          (mac, sent) match
-            case (Some(m), Some(fp)) =>
-              Some(CaptivePortalParams(m, ap, redirectUrl.getOrElse(""), ssid.getOrElse(""), fp))
-            case _ =>
-              None
+        // portalParams whenever the client's MAC is readable: UniFi always sends it, and it is the
+        // device access is granted to. The fingerprint comes from the link shortener in front of
+        // the portal instead; one that is required and missing is that configuration failing, not
+        // the guest, so the session is still made — with the stand-in — and the guest is handed a
+        // way out below. Without a MAC there is no device: an unknown session fails as
+        // InvalidClient.
+        portalParams = mac.map(m =>
+          CaptivePortalParams(
+            m,
+            ap,
+            redirectUrl.getOrElse(""),
+            ssid.getOrElse(""),
+            sent.getOrElse(NoFingerprint)))
         _         <- requireAccessPoint(quill, portalParams, apMac)
         onMissing <- resolveOnMissing(userCookieConfig.valueFrom(cookies), userAgent, portalParams)
-        session   <- SessionEndpoint.resolveSession(cookieConfig.valueFrom(cookies), onMissing)
-        _         <- SessionContext.set(session)
-        now       <- Clock.instant
+        session   <- SessionEndpoint
+          .resolveSession(cookieConfig.valueFrom(cookies), onMissing)
+          .catchSome:
+            case ApiError.SessionMissing if portalParams.isEmpty =>
+              ZIO.fail(ApiError.InvalidClient(missingOf(clientMac, apMac)))
+        _ <- SessionContext.set(session)
+        created = !cookieConfig.valueFrom(cookies).contains(session.sessionId.asString)
+        recovery <-
+          if created && sent.isEmpty then
+            recordMissingFingerprint(quill, session)
+          else
+            ZIO.none
+        now <- Clock.instant
         isExpired =
           session.phase == Phase.Authorized && session.accessExpiresAt.exists(_.isBefore(now))
         response <-
@@ -329,8 +367,9 @@ final class SurveyRoutes(
             welcomeFor(session, anonymous).map(phase => response.copy(phase = phase))
           else
             ZIO.succeed(response)
-        _ <- WireCheck.readable(gated)
-      yield (gated, Some(cookieConfig.asSetCookie(session.sessionId.asString)))
+        answer = gated.copy(recovery = recovery)
+        _ <- WireCheck.readable(answer)
+      yield (answer, Some(cookieConfig.asSetCookie(session.sessionId.asString)))
       end for
   )
 

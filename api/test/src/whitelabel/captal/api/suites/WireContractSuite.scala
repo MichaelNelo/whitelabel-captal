@@ -201,6 +201,7 @@ object WireContractSuite:
     ApiError.InvalidPlaybackId("not-a-uuid"),
     ApiError.LocationNotFound("cafe-centro"),
     ApiError.UnknownAccessPoint("1c:6a:1b:ee:5c:be"),
+    ApiError.InvalidClient(List("X-Client-Mac", "X-Ap-Mac")),
     ApiError.UnknownError("e1"),
     ApiError.RecoveryAlreadyUsed("e1"),
     ApiError.RecoveryNotYet("2026-10-30T12:05:00Z"),
@@ -224,7 +225,8 @@ object WireContractSuite:
       List(
         StatusResponse(Phase.Authorized, "en", Some("https://example.test/after"), Some(1800)),
         StatusResponse(Phase.Authorized, "es", None, Some(0)),
-        StatusResponse(Phase.Ready, "en", Some("https://example.test/after"), None)
+        StatusResponse(Phase.Ready, "en", Some("https://example.test/after"), None),
+        StatusResponse(Phase.WelcomeNeedsToS, "es", recovery = Some("e1"))
       )
 
   /** A bundle whose every field holds its own name, so a schema that pairs the wrong name with the
@@ -242,7 +244,12 @@ object WireContractSuite:
     ),
     ready = I18n.Ready("ready.title", "ready.subtitle", "ready.resetButton"),
     loading = I18n.Loading("loading.message"),
-    error = I18n.Error("error.title", "error.retry", "error.generic", "error.unknownAccessPoint"),
+    error = I18n.Error(
+      "error.title",
+      "error.retry",
+      "error.generic",
+      "error.unknownAccessPoint",
+      "error.invalidClient"),
     question = I18n.Question(
       submit = "question.submit",
       next = "question.next",

@@ -10,12 +10,17 @@ import whitelabel.captal.core.application.Phase
   *   server-computed seconds left of the granted access, present only while `phase == Authorized`.
   *   The client must count down from this and not from `accessExpiresAt`: behind a captive portal
   *   the device clock may be unsynced.
+  * @param recovery
+  *   the id of a server error recorded while creating this session, which the page leaves through
+  *   at once. Sent with a success, not as an error, because the session cookie travels only with a
+  *   success, and the way out needs the session.
   */
 final case class StatusResponse(
     phase: Phase,
     locale: String,
     redirectUrl: Option[String] = None,
-    secondsRemaining: Option[Int] = None)
+    secondsRemaining: Option[Int] = None,
+    recovery: Option[String] = None)
 
 object StatusResponse:
   /** Seconds left until `expiresAt`, floored at zero and capped at `Int.MaxValue`. `None` when

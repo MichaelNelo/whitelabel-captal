@@ -155,10 +155,32 @@ object AuthorizedSuite:
             stranger.body.contains("UnknownAccessPoint"),
             stranger.body.contains("aa:aa:aa:aa:aa:aa"),
             extractSessionCookie(stranger).isEmpty,
+            // No AP at all is not a misconfigured AP but a page UniFi did not send.
             !none.code.isSuccess,
-            none.body.contains("UnknownAccessPoint"),
+            none.body.contains("InvalidClient"),
+            none.body.contains("X-Ap-Mac"),
             // Only the guest who came through the location's AP got a session.
             state.sessions.size == 1
+          )
+        ,
+        test("A page reached without the network's redirect is an invalid client, with no session"):
+          for
+            backend <- testBackend
+            noMac   <- statusWithout(backend, "X-Client-Mac")
+            nothing <- statusWithout(backend, "X-Client-Mac", "X-Ap-Mac", "X-Fingerprint")
+            state   <- TestFixtures.queryDbState
+            errors  <- TestFixtures.getErrors
+          yield assertTrue(
+            !noMac.code.isSuccess,
+            noMac.body.contains("InvalidClient"),
+            noMac.body.contains("X-Client-Mac"),
+            !noMac.body.contains("X-Ap-Mac"),
+            nothing.body.contains("InvalidClient"),
+            nothing.body.contains("X-Ap-Mac"),
+            extractSessionCookie(noMac).isEmpty,
+            state.sessions.isEmpty,
+            // Expected: nothing to record, and no way out to offer.
+            errors.isEmpty
           )
         ,
         test("The controller is the one of the access point the session came through"):

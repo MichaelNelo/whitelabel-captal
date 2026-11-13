@@ -212,17 +212,33 @@ object TestHelpers:
             env.get[UserCookieConfig],
             env.get[UserLookup]).routes.provideEnvironment(env))
 
-  /** `/api/status` from a redirect that carries no fingerprint. Answers the session cookie, which a
-    * refused request does not set.
+  /** `/api/status` from a redirect that carries no fingerprint, from the device `mac`, with the
+    * session cookie when one is given.
+    */
+  def statusWithoutFingerprintResponse(
+      backend: SttpBackend[Task, Any],
+      mac: String,
+      sessionCookie: Option[String] = None) =
+    val request = (defaultPortalHeaders - "X-Fingerprint" + ("X-Client-Mac" -> mac)).foldLeft(
+      basicRequest.get(uri"http://test/api/status").response(asStringAlways)) {
+      case (req, (k, v)) =>
+        req.header(k, v)
+    }
+    sessionCookie.fold(request)(c => request.cookie("captal_session", c)).send(backend)
+
+  /** [[statusWithoutFingerprintResponse]]'s session cookie, which a refused request does not set.
     */
   def statusWithoutFingerprint(backend: SttpBackend[Task, Any], mac: String): Task[Option[String]] =
-    (defaultPortalHeaders - "X-Fingerprint" + ("X-Client-Mac" -> mac))
+    statusWithoutFingerprintResponse(backend, mac).map(extractSessionCookie)
+
+  /** `/api/status` from a redirect lacking the headers `names`, with no session cookie. */
+  def statusWithout(backend: SttpBackend[Task, Any], names: String*) =
+    (defaultPortalHeaders -- names)
       .foldLeft(basicRequest.get(uri"http://test/api/status").response(asStringAlways)) {
         case (req, (k, v)) =>
           req.header(k, v)
       }
       .send(backend)
-      .map(extractSessionCookie)
 
   /** `/api/status` from a redirect through the access point `ap`, or naming none. */
   def statusThrough(backend: SttpBackend[Task, Any], ap: Option[String]) = ap
