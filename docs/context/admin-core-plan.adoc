@@ -2,14 +2,16 @@
 :toc:
 :toclevels: 2
 
-A plan agreed in conversation on 2026-11-13 and not started. It moves the backoffice's business rules
-into `core`, models a location's lifecycle as a state machine run by a saga, and leaves one question
-open that blocks part of it: the availability of the change data capture relay. Pick it up from
-<<order-of-work>>.
+A plan agreed in conversation on 2026-11-13, revised on 2026-11-14, and not started. It moves the
+backoffice's business rules into `core`, models a location as an entity whose state is in its type and
+each operation on it as a run of its own, run by a saga, and then moves `/api/status`'s logic into a
+command on that model. One question stays open that blocks part of it: the availability of the change
+data capture relay. Pick it up from <<order-of-work>>.
 
 Status when written: access points (migration `V34__access_points.sql`, `access_points` table, the AP
-check at `/api/status`, `update_access_point` and `remove_access_point`) were committed on `main`
-and not yet released. Everything below comes after them.
+check at `/api/status`, `update_access_point` and `remove_access_point`) and the split of
+`/api/status`'s failures (`InvalidClient`, `UnknownAccessPoint`, the missing fingerprint a guest
+leaves through) were pushed to `main` and not yet released. Everything below comes after them.
 
 == Why
 
@@ -58,11 +60,10 @@ Moves, in priority order:
 | Location and access point
 | Slug shape (kebab-case, 25 characters at most, reserved names `bundle`, `ui`, `releases`, `mcp`),
   non-blank name, lifecycle, MAC normalization, controller validity (host and site required, port
-  1–65535, token required to register), one running location per AP, deploy needs terms of service
+  1–65535, token required to register), one deployed location per AP, deploy needs terms of service
 | The AP rule is applied in three tools and assumed by the API and the dispatcher; the slug is the
-  identity every module shares. The 25 and the reserved names come from infrastructure (the ALB
-  target group name `captal-<slug>` caps at 32, the S3 and CloudFront prefixes): keep them in a
-  `Slug` value with that origin written down.
+  identity every module shares. Only the slug's shape moves: the 25 and the reserved names come from
+  infrastructure, and stay with it (<<slug-and-aws-names>>).
 
 | Readiness (`get_location_readiness`)
 | What a location needs before it serves guests
@@ -109,33 +110,44 @@ Sketch, to be refined when it is written:
 ----
 core/
   location/
-    Slug.scala          opaque Slug: kebab-case, ≤ 25, reserved names
-    Location.scala      LocationId, Location(id, slug, name, settings, state)
+    Slug.scala          opaque Slug: lowercase kebab-case, not blank
+    Location.scala      LocationId, Location[S <: State](id, slug, name, settings, accessPoints, state)
                         Settings(durationMinutes, redirectUrl, unifiEnabled, fingerprintRequired)
+    State.scala         Created | Deployed(by: RunId) | Paused(by: RunId) | Destroyed(by: RunId)
     AccessPoint.scala   AccessPoint(mac: Mac, controller: Controller)
                         Controller(host: Host, port: Port, siteId: SiteId, token: Secret)
-    Lifecycle.scala     State: Created(lastRun) | Running(deployedBy) | Paused(lastRun) | Destroyed
-                        Operation: Deploy | Pause | Resume | Destroy
-                        Step, and each operation's steps in order
-                        StepFailure → explain(step, failure): LifecycleError
+    ops.scala           the transitions, one extension per state they leave (see the state machine)
     Readiness.scala     Facts → steps(facts)
     Event.scala         LocationCreated, SettingsChanged,
                         AccessPointRegistered, AccessPointUpdated, AccessPointRemoved,
-                        OperationStarted(run, op, steps), OperationCompleted(run),
-                        OperationFailed(run, step, error)
+                        LocationDeployed(run), LocationPaused(run), LocationResumed(run),
+                        LocationDestroyed(run)
     Error.scala         InvalidSlug, SlugTaken, InvalidMac, ControllerIncomplete(field),
                         TokenRequired, AccessPointHeld(mac, by), NotAllowedFrom(state, op),
                         NoTermsOfService, OperationInProgress(run, op),
                         PreviousOperationUnfinished(run, op, pending)
+  operation/
+    Run.scala           RunId, Operation: Deploy | Pause | Resume | Destroy
+                        Run[S <: RunState](id, location, operation, steps, state)
+                        RunState: Started(heartbeat) | Completed(at) | Failed(step, failure)
+                        Step, and each operation's steps in order
+                        StepFailure → explain(step, failure): LifecycleError
+    ops.scala           Run[Started].completed, Run[Started].failed
+    Event.scala         OperationStarted(run, op, steps), OperationCompleted(run),
+                        OperationFailed(run, step, error)
   application/commands/
     CreateLocation, ChangeSettings, RegisterAccessPoint, UpdateAccessPoint, RemoveAccessPoint,
     StartOperation(op), CompleteOperation(run, outcome)
   infrastructure/
-    LocationRepository[F]       bySlug, slugTaken, accessPoints(id)
+    LocationRepository[F]       bySlug, slugTaken
     AccessPointRepository[F]    holders(mac): List[(Slug, State)]
-    RunRepository[F]            progress(run): Option[Progress]   (steps done, heartbeat, finished)
+    RunRepository[F]            latest(location): Option[Run[RunState]]   (steps done, heartbeat)
 ----
 
+* A location is an entity as `Device[S]` is: its state is in its type, and each transition is an
+  extension on the states it leaves, so a transition from the wrong state does not compile. A handler
+  loads the location as `Location[State]`, matches its state, and answers `NotAllowedFrom` for one the
+  operation has no transition from. A run is an entity of its own, the same way.
 * The controller's token travels inside commands and events. `Secret` renders redacted, and
   `EventLogHandler`, which builds each event's JSON by hand, leaves it out — as must any log line.
 * Administrative flows have no guest session: they need a flow constructor without
@@ -158,7 +170,7 @@ Its other historical uses are gone or going: a newly published bundle reaches ev
 `_paused/<slug>/site.html`, `Release.scala:524-570`); a new image reaches every service through
 `rollLocations`, which keeps a paused one paused (`Release.scala:435`); and with access points the
 UniFi settings are read per event, so nothing location-specific is read at task start any more. So
-versions are the release's business, never the deploy's, and a deploy of a running location has
+versions are the release's business, never the deploy's, and a deploy of a deployed location has
 nothing legitimate to do — re-running it today only replaces the task, minutes of draining for
 nothing. The log group and target group are created once and removed by a destroy; they are not
 reconciled.
@@ -170,25 +182,57 @@ would reconcile never change after creation.
 === The state machine
 
 ----
-Created ──deploy──► Running ──pause──► Paused
-                       ▲                  │
-                       └─────resume───────┘
-Running | Paused ──destroy──► Destroyed
+Created ───deploy──► Deployed ──pause──► Paused
+                      ▲    ▲               │
+Destroyed ──deploy────┘    └────resume─────┘
+Deployed | Paused ──destroy──► Destroyed
 ----
 
-`Running` points to the run that brought it up; `Created` and `Paused` point to the last run
-executed. `StartOperation` decides from that:
+Each state names an action that succeeded, and points to the run that did it. A location changes
+state only when an operation completes: an operation in progress is its run's state, not the
+location's, since until it completes nothing has happened to the location; and a run that fails
+leaves the location where it was, which is what happened. There is no `Deploying` or `Pausing`.
 
-* asked to deploy a location that is `Running`: nothing to do, no event;
-* the transition is not allowed from the current state (deploy only from `Created`, resume only from
-  `Paused`): `NotAllowedFrom`;
-* the run it points to has not finished and its heartbeat is fresh: `OperationInProgress`;
-* the run it points to was interrupted (stale heartbeat) or failed: `PreviousOperationUnfinished`
-  with the steps still pending — the tool turns it into an elicitation ("the pause stopped at «scale
-  to zero»; finish it first?");
-* the run it points to finished: check the operation's conditions (terms of service; no access point
-  of the location in another `Running` location) and emit `OperationStarted` with every step of the
-  operation, or only the pending ones when it finishes an unfinished run.
+`Destroyed` is not an end. A destroy removes what the location has in AWS and touches nothing in the
+database — the row, its translations, surveys and videos stay, and `list_locations` still reports
+it — and a deploy stands it up again, from `Destroyed` as from `Created`. The two stay apart for the
+history: a destroy may have deleted the location's S3 objects, so its videos need uploading again.
+Deleting a location's row is not planned: sessions, users, answers and `event_log` point to it, and
+what becomes of them would have to be decided first.
+
+The transitions, one extension per state they leave:
+
+[source,scala]
+----
+extension (l: Location[State.Created | State.Destroyed])
+  def deployed(run: RunId, now: Instant): Op[Event, E, Location[State.Deployed]]
+extension (l: Location[State.Deployed])
+  def paused(run: RunId, now: Instant): Op[Event, E, Location[State.Paused]]
+extension (l: Location[State.Paused])
+  def resumed(run: RunId, now: Instant): Op[Event, E, Location[State.Deployed]]
+extension (l: Location[State.Deployed | State.Paused])
+  def destroyed(run: RunId, now: Instant): Op[Event, E, Location[State.Destroyed]]
+----
+
+`StartOperation` takes the location in the state the operation leaves — a deploy needs a
+`Location[Created | Destroyed]` — and reads its latest run:
+
+* asked to deploy a location that is `Deployed`: nothing to do, no event;
+* the location is in a state the operation does not leave (resume only from `Paused`):
+  `NotAllowedFrom`;
+* its latest run is `Started` with a fresh heartbeat: `OperationInProgress`;
+* its latest run is `Failed`, or `Started` with a stale heartbeat: `PreviousOperationUnfinished` with
+  the steps still pending — the tool turns it into an elicitation ("the pause stopped at «scale to
+  zero»; finish it first?");
+* otherwise: check the operation's conditions (terms of service; no access point of the location in
+  another `Deployed` location) and emit `OperationStarted` with a new `Run[Started]` and every step of
+  the operation, or only the pending ones when it finishes an unfinished run. The location does not
+  change.
+
+`CompleteOperation(run, outcome)` loads the run, which knows its operation, and the location, still
+in the state the operation leaves, since the lock lets no other operation in between. On success it
+applies the transition (`deployed`, `paused`, …) and completes the run; on failure only the run
+changes, to `Failed`.
 
 Each operation has a fixed list of steps owned by `core`. Their order is a domain rule: a pause swaps
 the edge to the maintenance page and waits for it before the ALB answers "paused" and the service
@@ -229,7 +273,8 @@ StartOperation ──► OperationStarted(run, op, steps)
                      └─ post-commit handler: enqueue RunOperation(run)        ← data only
 OperationRunner (a fiber) ◄── consumes the queue
    runs the steps through the AWS port, records progress and heartbeat on the run
-   └─► runs the CompleteOperation flow ──► OperationCompleted | OperationFailed
+   └─► runs the CompleteOperation flow ──► LocationDeployed (…Paused, …) + OperationCompleted
+                                          | OperationFailed
 ----
 
 A handler does not run a flow directly. The flow needs the handler chain to dispatch its events, so a
@@ -246,15 +291,28 @@ goes stale and the next request elicits whether to finish it. Rehydrating runs o
 
 === Database
 
-`locations` gains `state` and `current_run`. With the paused state there, the portal dispatcher can
-read it in the query that finds the location and stop reading S3 — removing the S3 gateway endpoint
-and the `s3:ListBucket` permission `modules/portal-dispatcher` was given for it. `_paused/<slug>/
-site.html` stays, only for the resume to restore the page. `mcp_deploy_runs` keeps each step's state;
-`core` reads it through `RunRepository` to compute pending steps.
+`locations` gains `state` (`created`, `deployed`, `paused`, `destroyed`) and `current_run`, the lock.
+With the paused state there, the portal dispatcher can read it in the query that finds the location
+and stop reading S3 — removing the S3 gateway endpoint and the `s3:ListBucket` permission
+`modules/portal-dispatcher` was given for it. `_paused/<slug>/site.html` stays, only for the resume
+to restore the page. `mcp_deploy_runs` is the run's row: its state, its heartbeat and each step's
+state; `core` reads it through `RunRepository` to compute pending steps.
 
 The legacy UniFi columns `V34` left on `locations` (`unifi_ap_mac`, `unifi_host`, `unifi_port`,
 `unifi_site_id`, `unifi_api_token`) are dropped once no dispatcher or API on the previous release
 reads them, together with the dispatcher's fallback query.
+
+[[slug-and-aws-names]]
+=== The slug and the names in AWS
+
+`Slug` holds the slug's shape alone: lowercase kebab-case, not blank. No length: the 25 characters
+`LocationTools.validateSlug` allows today come from `Deploy.targetGroupName`, `captal-<slug>`, which
+AWS caps at 32. That limit stays with the adapter that meets it: the target group is named
+`captal-<slug>` while that fits, and `captal-<short hash of the slug>` past it, with the slug in a
+tag, so no existing location's name changes. The ECS service (255) and the log group (512) take any
+slug. The reserved names — `bundle`, `ui`, `releases`, `mcp`, prefixes every location shares in the
+assets bucket and at the distribution — are refused by the backoffice's `create_location`, not by
+`core`.
 
 == Open: progress to the page, and the relay's availability
 
@@ -340,11 +398,21 @@ three brokers).
 [[order-of-work]]
 == Order of work
 
-. Location and access point in `core`: `Slug`, `Controller`, `Secret`, the commands and events of
-  this plan's first slice, the repository traits; `platform`'s repositories and persistence handlers;
-  the location tools as adapters. Measure the portal's bundle.
+. Location and access point in `core`: the `Location[S]` entity, `Slug`, `Controller`, `Secret`, the
+  commands and events of this plan's first slice, the repository traits; `platform`'s repositories
+  and persistence handlers; the location tools as adapters, `create_location` with the reserved
+  names and the target group's name past 32 characters. Measure the portal's bundle.
+. The arrival command, on the model of the first step: what `/api/status` does, moved out of
+  `SurveyRoutes.status`. A command that takes the redirect's parameters, the session the cookie
+  names if any, and the instant; reads through the repositories whether the location requires a
+  fingerprint and whether the access point is one of its; and answers the phase and, when a
+  required fingerprint was missing, the error the guest leaves through. `InvalidClient` and
+  `UnknownAccessPoint` become its errors. What is impure becomes events: the session it starts
+  (today `SessionService.create`, run by no command), the missing fingerprint (which `platform`
+  records as a server error, today `Errors.recordServer` called by the route), and the reset of an
+  expired session.
 . Readiness into `core`.
-. The lifecycle: state machine, `StartOperation` and `CompleteOperation`, the `state` and
+. The lifecycle: the `Run[S]` entity, `StartOperation` and `CompleteOperation`, the `state` and
   `current_run` columns, the lock, the queue and `OperationRunner`, the elicitations, structured step
   failures and `explain`.
 . The dispatcher reads the paused state from the database; remove its S3 endpoint and permission.
