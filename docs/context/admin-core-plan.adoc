@@ -111,9 +111,11 @@ Sketch, to be refined when it is written:
 core/
   location/
     Slug.scala          opaque Slug: lowercase kebab-case, not blank
-    Location.scala      LocationId, Location[S <: State](id, slug, name, settings, accessPoints, state)
+    Location.scala      LocationId, Location[S <: State](id, slug, name, settings, state)
                         Settings(durationMinutes, redirectUrl, unifiEnabled, fingerprintRequired)
-    State.scala         Created | Deployed(by: RunId) | Paused(by: RunId) | Destroyed(by: RunId)
+    State.scala         Created
+                        | Deployed(by: RunId, accessPoints: NonEmptyList[AccessPoint])
+                        | Paused(by: RunId) | Destroyed(by: RunId)
     AccessPoint.scala   AccessPoint(mac: Mac, controller: Controller)
                         Controller(host: Host, port: Port, siteId: SiteId, token: Secret)
     ops.scala           the transitions, one extension per state they leave (see the state machine)
@@ -123,7 +125,8 @@ core/
                         LocationDeployed(run), LocationPaused(run), LocationResumed(run),
                         LocationDestroyed(run)
     Error.scala         InvalidSlug, SlugTaken, InvalidMac, ControllerIncomplete(field),
-                        TokenRequired, AccessPointHeld(mac, by), NotAllowedFrom(state, op),
+                        TokenRequired, AccessPointHeld(mac, by), NoAccessPoint,
+                        LastAccessPoint(mac), NotAllowedFrom(state, op),
                         NoTermsOfService, OperationInProgress(run, op),
                         PreviousOperationUnfinished(run, op, pending)
   operation/
@@ -139,15 +142,21 @@ core/
     CreateLocation, ChangeSettings, RegisterAccessPoint, UpdateAccessPoint, RemoveAccessPoint,
     StartOperation(op), CompleteOperation(run, outcome)
   infrastructure/
-    LocationRepository[F]       bySlug, slugTaken
-    AccessPointRepository[F]    holders(mac): List[(Slug, State)]
-    RunRepository[F]            latest(location): Option[Run[RunState]]   (steps done, heartbeat)
+    LocationRepository[F]       findCreated(id), findDeployed(id), findPaused(id), findDestroyed(id),
+                                stateOf(id), slugTaken(slug)
+    AccessPointRepository[F]    of(location): List[AccessPoint], holders(mac): List[(Slug, State)]
+    RunRepository[F]            findStarted(location), findFailed(location)   (steps done, heartbeat)
 ----
 
 * A location is an entity as `Device[S]` is: its state is in its type, and each transition is an
-  extension on the states it leaves, so a transition from the wrong state does not compile. A handler
-  loads the location as `Location[State]`, matches its state, and answers `NotAllowedFrom` for one the
-  operation has no transition from. A run is an entity of its own, the same way.
+  extension on the states it leaves, so a transition from the wrong state does not compile. A run is
+  an entity of its own, the same way.
+* A handler asks the repository for the entity in the state its command needs — `findDeployed`,
+  `findStarted` — as `DeviceRepository.findAccepted` and `findNotAccepted` do: the query's `WHERE`
+  narrows the type, and `None` means it is not in that state. Not a `Location[State]` matched by type:
+  the type parameter is erased, so `case l: Location[State.Deployed]` tells nothing apart. The handler
+  then matches on the `Option`s, as `AcceptTermsHandler` does. `stateOf(id)` answers the state's name
+  alone, for `NotAllowedFrom` to say which state the operation was asked from.
 * The controller's token travels inside commands and events. `Secret` renders redacted, and
   `EventLogHandler`, which builds each event's JSON by hand, leaves it out — as must any log line.
 * Administrative flows have no guest session: they need a flow constructor without
@@ -200,22 +209,39 @@ history: a destroy may have deleted the location's S3 objects, so its videos nee
 Deleting a location's row is not planned: sessions, users, answers and `event_log` point to it, and
 what becomes of them would have to be decided first.
 
+`by` is a run's id, not the run: a location reaches a state only when the run completes, so the run
+it names is always a completed one, and there is no state of it to find out. Holding the run itself
+would load it with every location, on every `/api/status`.
+
+Only `Deployed` holds the access points, since it is where they are used: the arrival command checks
+the redirect's AP against them, and a deployed location with none would refuse every guest. The
+transitions into it take them as an argument, read by the handler (`AccessPointRepository.of`), as
+`acceptTerms` takes the terms in force; with none they fail with `NoAccessPoint`. `Paused` does not
+hold them: a resume reads them again and asks for one again, which covers access points changed while
+paused. Removing the last access point of a `Deployed` location is refused (`LastAccessPoint`); in
+any other state a location takes and loses them freely. Registering one needs no list: the one
+deployed location per AP rule asks `holders(mac)`, and the same MAC at the same location overwrites
+the row, whose id is `<location id>/<mac>`.
+
 The transitions, one extension per state they leave:
 
 [source,scala]
 ----
 extension (l: Location[State.Created | State.Destroyed])
-  def deployed(run: RunId, now: Instant): Op[Event, E, Location[State.Deployed]]
+  def deployed(run: RunId, accessPoints: List[AccessPoint], now: Instant)
+      : Op[Event, E, Location[State.Deployed]]
 extension (l: Location[State.Deployed])
   def paused(run: RunId, now: Instant): Op[Event, E, Location[State.Paused]]
 extension (l: Location[State.Paused])
-  def resumed(run: RunId, now: Instant): Op[Event, E, Location[State.Deployed]]
+  def resumed(run: RunId, accessPoints: List[AccessPoint], now: Instant)
+      : Op[Event, E, Location[State.Deployed]]
 extension (l: Location[State.Deployed | State.Paused])
   def destroyed(run: RunId, now: Instant): Op[Event, E, Location[State.Destroyed]]
 ----
 
 `StartOperation` takes the location in the state the operation leaves — a deploy needs a
-`Location[Created | Destroyed]` — and reads its latest run:
+`Location[Created | Destroyed]` — and asks for its run in progress or failed (`findStarted`,
+`findFailed`):
 
 * asked to deploy a location that is `Deployed`: nothing to do, no event;
 * the location is in a state the operation does not leave (resume only from `Paused`):
@@ -224,10 +250,10 @@ extension (l: Location[State.Deployed | State.Paused])
 * its latest run is `Failed`, or `Started` with a stale heartbeat: `PreviousOperationUnfinished` with
   the steps still pending — the tool turns it into an elicitation ("the pause stopped at «scale to
   zero»; finish it first?");
-* otherwise: check the operation's conditions (terms of service; no access point of the location in
-  another `Deployed` location) and emit `OperationStarted` with a new `Run[Started]` and every step of
-  the operation, or only the pending ones when it finishes an unfinished run. The location does not
-  change.
+* otherwise: check the operation's conditions (terms of service; for a deploy or a resume, one access
+  point at least, and none of them in another `Deployed` location) and emit `OperationStarted` with a
+  new `Run[Started]` and every step of the operation, or only the pending ones when it finishes an
+  unfinished run. The location does not change.
 
 `CompleteOperation(run, outcome)` loads the run, which knows its operation, and the location, still
 in the state the operation leaves, since the lock lets no other operation in between. On success it
@@ -404,8 +430,9 @@ three brokers).
   names and the target group's name past 32 characters. Measure the portal's bundle.
 . The arrival command, on the model of the first step: what `/api/status` does, moved out of
   `SurveyRoutes.status`. A command that takes the redirect's parameters, the session the cookie
-  names if any, and the instant; reads through the repositories whether the location requires a
-  fingerprint and whether the access point is one of its; and answers the phase and, when a
+  names if any, and the instant; works on the `Location[Deployed]` (`findDeployed`), whose settings
+  say whether a fingerprint is required and whose access points the redirect's AP has to be one of;
+  and answers the phase and, when a
   required fingerprint was missing, the error the guest leaves through. `InvalidClient` and
   `UnknownAccessPoint` become its errors. What is impure becomes events: the session it starts
   (today `SessionService.create`, run by no command), the missing fingerprint (which `platform`
