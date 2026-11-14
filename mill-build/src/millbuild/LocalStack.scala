@@ -206,8 +206,10 @@ val localLoadBalancerHost = "captal-local.elb.localhost.localstack.cloud"
   * ([[settledLocally]]), then for the server's own `ok` from its health check through the load
   * balancer, which answers `200 {}` for a target group with nobody in it. Ten minutes at most:
   * LocalStack takes minutes to stop the task a new definition replaces.
-  * Meanwhile the names of the services it reaches, `discovered`, are kept naming their running
-  * tasks alone ([[syncLocalDiscovery]]): the database's, which the backoffice migrates as it starts.
+  * Meanwhile the names of the services it and the locations reach, `discovered`, are kept naming
+  * their running tasks, every one and them alone ([[syncLocalDiscovery]]), and it waits for each to
+  * resolve too: the database's, which the backoffice migrates as it starts, and those a location
+  * the run deploys calls by name.
   *
   * LocalStack, unlike ECS, stops starting tasks for a service whose tasks keep exiting, and leaves
   * it running none. After a minute with no task running or starting, the service is told to start a
@@ -219,9 +221,11 @@ def awaitLocalBackoffice(
     service: String,
     discovered: Seq[String]): Unit =
   val health = s"http://$localLoadBalancerHost:$localStackPort/health"
+  // The services whose name the last look found not resolving to every task they run.
+  var unresolved = Seq.empty[String]
   def serving: Boolean =
-    discovered.foreach(syncLocalDiscovery(target, cluster, _))
-    settledLocally(target, cluster, service, replaced = Set.empty) &&
+    unresolved = discovered.filterNot(syncLocalDiscovery(target, cluster, _))
+    unresolved.isEmpty && settledLocally(target, cluster, service, replaced = Set.empty) &&
       scala
         .util
         .Try(os.proc("curl", "-s", "-m", "2", health).call(check = false).out.text().trim == "ok")
@@ -251,6 +255,9 @@ def awaitLocalBackoffice(
       nudged = true
     Thread.sleep(2000)
     served = serving
+  if !served && unresolved.nonEmpty then
+    sys.error(
+      s"[release] the names of ${unresolved.mkString(", ")} did not resolve to every task they run within ten minutes")
   if !served then
     sys.error(
       s"[release] the backoffice did not answer $health within ten minutes. Its log group, `/ecs/$service`, says why.")

@@ -90,13 +90,17 @@ object `package` extends BaseModule:
       variables = Nil,
       awaitLocations = false
     )
-    // The locations these features deploy reach the database, the relay and the UniFi stand-in.
+    // The locations these features deploy reach the database, the relay and the UniFi stand-in,
+    // and send their traces to Jaeger.
     awaitLocalBackoffice(
       target,
       outputs("ecs_cluster_name"),
       outputs("mcp_service_name"),
-      Seq("rqlite_service_name", "cdc_service_name", "unifi_fake_service_name").flatMap(
-        outputs.get))
+      Seq(
+        "rqlite_service_name",
+        "cdc_service_name",
+        "unifi_fake_service_name",
+        "jaeger_service_name").flatMap(outputs.get))
     def unifi(output: String) = outputs.getOrElse(
       output,
       sys.error(s"[e2e] no $output: the local configuration runs the UniFi stand-in only with `enable_unifi_fake`"))
