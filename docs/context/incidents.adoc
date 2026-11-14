@@ -787,6 +787,16 @@ then reverted in its entirety once actually wired into the published bundle.
   tasks that no longer run, for rqlite and the relay, while a local release waits for the backoffice;
   and `McpMigrate` waits up to five minutes for a database that does not answer instead of exiting,
   which LocalStack, unlike ECS, stops restarting after enough tries.
+* **LocalStack started a task without registering it in Cloud Map.** The UniFi stand-in ran its one
+  task while `unifi.captal.local` did not resolve: Cloud Map held no instance for it, so every
+  location's call to the controller failed with `Name or service not known`, and its guests stayed
+  on the ready page. On the next fresh LocalStack, two of rqlite's three nodes and Jaeger's only task
+  were still unregistered half an hour after starting, while ECS reported every service running.
+  Found 2026-11-13 by the end-to-end run. **Fix:** `syncLocalDiscovery` also registers a running
+  task its service's name leaves out, under the task's id and its container's address, as LocalStack
+  registers the ones it does not miss; and a local release waits until the names of rqlite, the
+  relay, the UniFi stand-in and Jaeger resolve to every task each runs. **Lesson:** a service ECS
+  reports running is not one a client can reach by name; wait for the name.
 * **LocalStack's load balancer kept sending requests to a task that was gone.** After the
   backoffice's service replaced a task, its target group still held the old one, and the load
   balancer sent every request to the first target it held: `500` from LocalStack, connection
