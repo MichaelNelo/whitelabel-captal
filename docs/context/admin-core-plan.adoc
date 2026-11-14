@@ -434,10 +434,15 @@ three brokers).
   say whether a fingerprint is required and whose access points the redirect's AP has to be one of;
   and answers the phase and, when a
   required fingerprint was missing, the error the guest leaves through. `InvalidClient` and
-  `UnknownAccessPoint` become its errors. What is impure becomes events: the session it starts
-  (today `SessionService.create`, run by no command), the missing fingerprint (which `platform`
-  records as a server error, today `Errors.recordServer` called by the route), and the reset of an
-  expired session.
+  `UnknownAccessPoint` become its errors. It also decides the welcome, which
+  `ResolveWelcomeCommand` decides today in a second command call from the same route: whether the
+  request came with neither cookie, and whether the session's device — found, or new and so not —
+  accepted the terms in force, `Welcome` or `WelcomeNeedsToS`. `ResolveWelcomeCommand`, used by
+  nothing else, goes. What is impure becomes events: the session it starts, with its phase (today
+  `SessionService.create`, run by no command), the welcome phase of an existing session when it
+  changes (today `SessionService.setPhase`, called by the route after the command), the missing
+  fingerprint (which `platform` records as a server error, today `Errors.recordServer` called by the
+  route), and the reset of an expired session.
 . Readiness into `core`.
 . The lifecycle: the `Run[S]` entity, `StartOperation` and `CompleteOperation`, the `state` and
   `current_run` columns, the lock, the queue and `OperationRunner`, the elicitations, structured step
