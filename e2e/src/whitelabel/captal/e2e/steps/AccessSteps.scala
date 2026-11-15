@@ -24,9 +24,12 @@ final class AccessSteps extends ScalaDsl with EN:
   private def quiet: Locations.Deployed =
     Locations.once("access-unifi-off"):
       val location = Locations.create("quiet")
-      Backoffice.tool[UnifiTools.SetEnabledRequest, UnifiTools.StatusResponse](
-        "set_unifi_enabled",
-        UnifiTools.SetEnabledRequest(location.slug, enabled = false))
+      Backoffice.tool[UnifiTools.UpdateAccessPointRequest, UnifiTools.StatusResponse](
+        "update_access_point",
+        UnifiTools.UpdateAccessPointRequest(
+          location.slug,
+          Venue.apFor(location.slug),
+          unifiEnabled = Some(false)))
       Locations.addAdvertiserVideo(location)
       Locations.deploy(location)
 

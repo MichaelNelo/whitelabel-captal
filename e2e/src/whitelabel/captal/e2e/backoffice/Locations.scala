@@ -204,9 +204,9 @@ object Locations:
       throw AssertionError(
         s"The UniFi page of $slug saved nothing: ${form.locator("#status").textContent()}")
     opened.linger()
-    Backoffice.tool[UnifiTools.SetEnabledRequest, UnifiTools.StatusResponse](
-      "set_unifi_enabled",
-      UnifiTools.SetEnabledRequest(slug, enabled = true))
+    Backoffice.tool[UnifiTools.UpdateAccessPointRequest, UnifiTools.StatusResponse](
+      "update_access_point",
+      UnifiTools.UpdateAccessPointRequest(slug, Venue.apFor(slug), unifiEnabled = Some(true)))
   end configureUnifi
 
   /** Changes how a location treats errors and abandoned playbacks, as an operator does. Its portal
