@@ -140,6 +140,11 @@ variable "cdc_feed_address" {
   type        = string
 }
 
+variable "redis_lock_addresses" {
+  description = "Every Redis instance the server takes a location's operation lock on, `host:port` comma separated"
+  type        = string
+}
+
 variable "location_dev_endpoints" {
   description = "Whether the locations this server deploys mount the API's dev endpoints, which inject failures on demand: the local configuration's end-to-end features only"
   type        = bool

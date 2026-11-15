@@ -175,6 +175,12 @@ variable "enable_unifi_fake" {
   default     = false
 }
 
+variable "redis_lock_instances" {
+  description = "How many independent Redis instances the operations' locks are taken on: a lock is held on a majority of them, so three survive one down. One is Redis's lock on a single instance."
+  type        = number
+  default     = 1
+}
+
 variable "cdc_desired_count" {
   description = "How many relay tasks: one in a deployed environment, since rqlite posts to one address and every subscriber has to follow that same relay. Zero for `local`, where `mill mcp.dev` runs it on the host."
   type        = number

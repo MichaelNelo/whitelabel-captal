@@ -220,6 +220,11 @@ output "jaeger_service_name" {
   value       = module.jaeger.service_name
 }
 
+output "redis_lock_service_names" {
+  description = "The lock's Redis instances' ECS services, comma separated"
+  value       = module.redis_lock.service_names
+}
+
 output "cdc_service_name" {
   description = "ECS service name of the relay, for `aws ecs update-service --force-new-deployment` after pushing a new image"
   value       = module.cdc.service_name

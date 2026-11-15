@@ -259,6 +259,23 @@ module "jaeger" {
   ui_security_group_ids          = var.enable_tailscale ? [module.tailscale_proxy[0].security_group_id] : []
 }
 
+# Redis, where the backoffice takes the lock that keeps a location to one operation at a time.
+module "redis_lock" {
+  source = "./modules/redis-lock"
+
+  project_name                     = var.project_name
+  environment                      = var.environment
+  aws_region                       = var.aws_region
+  cluster_id                       = module.ecs.cluster_id
+  vpc_id                           = local.vpc_id
+  subnet_ids                       = local.workload_subnet_ids
+  service_discovery_namespace_id   = aws_service_discovery_private_dns_namespace.main.id
+  service_discovery_namespace_name = local.service_discovery_namespace
+  execution_role_arn               = module.ecs.execution_role_arn
+  caller_security_group_ids        = [aws_security_group.ecs_tasks.id]
+  instances                        = var.redis_lock_instances
+}
+
 # A stand-in for a venue's UniFi controller, which the end-to-end features point their locations at.
 # Local only: see `enable_unifi_fake`.
 module "unifi_fake" {
@@ -490,6 +507,7 @@ module "mcp" {
 
   db_url                      = module.rqlite.http_url
   cdc_feed_address            = module.cdc.feed_address
+  redis_lock_addresses        = module.redis_lock.addresses
   otlp_endpoint               = local.otlp_endpoint
   location_dev_endpoints      = var.enable_location_faults
   assets_bucket_name          = module.cloudfront.assets_bucket_name
