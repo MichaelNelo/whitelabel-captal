@@ -38,8 +38,12 @@ Read it before changing anything. Most of what is here was expensive to learn.
 
 | xref:admin-core-plan.adoc[Plan: the administrative side in core]
 | You are moving the backoffice's rules into `core`, touching a location's deploy, pause, resume
-  or destroy, or moving `/api/status`'s logic into a command. An agreed plan, its first two steps
+  or destroy, or moving `/api/status`'s logic into a command. An agreed plan, its first three steps
   done.
+
+| xref:flow-adapters-plan.adoc[Plan: tools and endpoints from flows and queries]
+| You are writing a backoffice tool or an API route that runs one command or one query. An agreed
+  plan, not started: it waits for the admin core plan.
 
 | xref:relay-sns-sqs-plan.adoc[Plan: the relay hands its fan-out to SNS and SQS]
 | You are touching the change data capture relay, its subscribers or rqlite's CDC configuration. An
