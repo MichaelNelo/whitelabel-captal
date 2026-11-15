@@ -82,4 +82,8 @@ object LocationCommands:
                   .description}»")}, so the location stands half changed. Finish it before anything else."
       case LocationError.RunNotStarted(run) =>
         s"The run ${run.asString} is not going: it ended already, or never started."
+      case LocationError.NoSuchRun(run) =>
+        s"No run with id '$run'."
+      case LocationError.NoRuns(slug) =>
+        s"No deploy, pause, resume or destroy has run for '${slug.asString}'."
 end LocationCommands

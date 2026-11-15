@@ -117,11 +117,23 @@ object OperationTests extends TestSuite:
               case _ =>
                 Nil)
 
-  private def started(operation: Operation, steps: List[Step], finishing: Option[RunId] = None) =
-    Right(
-      List(
-        AppEvent.Operation(
-          Event.OperationStarted(NewRun, Id, Here, operation, steps, finishing, Operator, Now))))
+  private def started(
+      operation: Operation,
+      steps: List[Step],
+      finishing: Option[RunId] = None,
+      supersedes: Option[RunId] = None) = Right(
+    List(
+      AppEvent.Operation(
+        Event.OperationStarted(
+          NewRun,
+          Id,
+          Here,
+          operation,
+          steps,
+          finishing,
+          supersedes,
+          Operator,
+          Now))))
 
   val tests = Tests:
     test("StartOperation"):
@@ -211,7 +223,19 @@ object OperationTests extends TestSuite:
         val stale = run(Operation.Pause, RunState.Started(Now.minus(Duration.ofHours(1))), left)
         val finishing = starting(location = Some(at(Deployed)), latest = Some(stale)).handle(
           start(Operation.Pause, finishing = Some(stale.id)))
-        assert(outcome(finishing) == started(Operation.Pause, left, Some(stale.id)))
+        // And takes over its lock, which its dead runner never released.
+        assert(outcome(finishing) == started(Operation.Pause, left, Some(stale.id), Some(stale.id)))
+
+      test("a failed run left the lock free, so finishing it supersedes nothing"):
+        val failed = run(
+          Operation.Deploy,
+          RunState.Failed(Step.AwaitRevisionRunning, StepFailure.TimedOut("no task")),
+          List(Step.AwaitRevisionRunning, Step.AwaitRevisionSettled)
+        )
+        val finishing = starting(latest = Some(failed)).handle(
+          start(Operation.Deploy, finishing = Some(failed.id)))
+        assert(
+          outcome(finishing) == started(Operation.Deploy, failed.pending, Some(failed.id), None))
 
       test("destroys over a run left part way, which it removes along with the rest"):
         val stale = run(
@@ -224,7 +248,8 @@ object OperationTests extends TestSuite:
           outcome(destroying) ==
             started(
               Operation.Destroy(false),
-              List(Step.ScaleToZero, Step.AwaitDrained, Step.Teardown, Step.KeepAssets)))
+              List(Step.ScaleToZero, Step.AwaitDrained, Step.Teardown, Step.KeepAssets),
+              supersedes = Some(stale.id)))
 
     test("CompleteOperation"):
       val going = run(Operation.Pause, RunState.Started(Now), id = RunId("run-1"))

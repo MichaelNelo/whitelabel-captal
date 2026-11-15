@@ -1,16 +1,19 @@
 package whitelabel.captal.platform.eventhandlers
 
+import java.time.Instant
 import java.util.UUID
 
 import io.getquill.*
 import whitelabel.captal.core.application.Event
-import whitelabel.captal.core.location.Event as LocationEvent
+import whitelabel.captal.core.location.{Event as LocationEvent, LocationId}
+import whitelabel.captal.core.operation.RunId
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.{AccessPointRow, LocationRow}
+import whitelabel.captal.platform.{AccessPointRow, LocationRow, LocationStates}
 import zio.*
 
-/** Writes what the location's commands decided: the location, its settings, its access points.
+/** Writes what the location's commands decided: the location, its settings, its access points, and
+  * the state each operation that completed left it in.
   *
   * Inside the transaction the rqlite driver defers every write to the commit and reports none of
   * them affecting a row, so no count is checked here. What a count would catch is checked before:
@@ -84,9 +87,33 @@ object LocationPersistenceHandler:
                 .filter(row =>
                   row.locationId == lift(location.asString) && row.mac == lift(mac.show))
                 .delete).unit
+          case Event.Location(LocationEvent.LocationDeployed(id, by, at)) =>
+            record(quill, id, LocationStates.Deployed, by, at)
+          case Event.Location(LocationEvent.LocationPaused(id, by, at)) =>
+            record(quill, id, LocationStates.Paused, by, at)
+          case Event.Location(LocationEvent.LocationResumed(id, by, at)) =>
+            record(quill, id, LocationStates.Deployed, by, at)
+          case Event.Location(LocationEvent.LocationDestroyed(id, by, at)) =>
+            record(quill, id, LocationStates.Destroyed, by, at)
           case _ =>
             ZIO.unit
       end handle
+
+  /** Where the run `by` left the location, as `locations.state` writes it. */
+  private def record(
+      quill: QuillSqlite,
+      id: LocationId,
+      state: String,
+      by: RunId,
+      at: Instant): Task[Unit] =
+    import quill.*
+    run(
+      query[LocationRow]
+        .filter(_.id == lift(id.asString))
+        .update(
+          _.state     -> lift(state),
+          _.stateRun  -> lift(Option(by.asString)),
+          _.updatedAt -> lift(at.toString))).unit
 
   private def flag(on: Boolean): Int =
     if on then

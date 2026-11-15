@@ -114,6 +114,11 @@ object StartOperationHandler:
                                   operation,
                                   finishing.fold(Operation.steps(operation).toList)(_.pending),
                                   finishing.map(_.id),
+                                  // A started run whose runner died never released the lock.
+                                  latest.collect:
+                                    case run @ Run(_, _, _, _, _, _, RunState.Started(_)) =>
+                                      run.id
+                                  ,
                                   cmd.by,
                                   cmd.occurredAt
                                 )))

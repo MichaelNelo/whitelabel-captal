@@ -253,7 +253,26 @@ final case class LocationRow(
     unifiIsEnabled: Int = 1,
     fingerprintIsRequired: Int = 1,
     state: String = LocationStates.Created,
-    stateRun: Option[String] = None)
+    stateRun: Option[String] = None,
+    currentRun: Option[String] = None)
+
+/** One run of a deploy, pause, resume or destroy, in the backoffice's own table. `steps` is every
+  * step in order as JSON — name, state (pending, running, done, failed), an optional note — fixed
+  * when the run starts, so a reader can show what is still to come. A `running` run whose heartbeat
+  * went stale is one whose runner died.
+  */
+final case class RunRow(
+    id: String,
+    slug: String,
+    operation: String,
+    status: String,
+    steps: String,
+    result: Option[String],
+    error: Option[String],
+    startedBy: String,
+    startedAt: String,
+    heartbeatAt: String,
+    finishedAt: Option[String])
 
 /** One of a location's access points, with the UniFi controller that authorizes the guests who join
   * through it and what the portal does for them. `mac` is lowercase with colons, as

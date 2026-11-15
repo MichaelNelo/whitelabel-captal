@@ -62,4 +62,6 @@ package object schema:
   inline given SchemaMeta[LocationRecoveryRow] = schemaMeta[LocationRecoveryRow](
     "location_recovery")
   inline given SchemaMeta[EventLogRow] = schemaMeta[EventLogRow]("event_log")
+  // The backoffice's own table (`db/migration-mcp`), which its operations write through `platform`.
+  inline given SchemaMeta[RunRow] = schemaMeta[RunRow]("mcp_deploy_runs")
 end schema

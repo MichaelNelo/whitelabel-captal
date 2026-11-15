@@ -64,4 +64,10 @@ enum Error:
 
   /** Completing the run `run`, which is not going: completed already, or never started. */
   case RunNotStarted(run: RunId)
+
+  /** No run has the id `run`. */
+  case NoSuchRun(run: String)
+
+  /** Nothing has been run on the location yet. */
+  case NoRuns(slug: Slug)
 end Error
