@@ -15,10 +15,10 @@ trait LocationService:
     */
   def unifiEnabled(id: String, ap: Mac): Task[Boolean]
 
-  /** Whether the location's access point with this MAC requires the redirect's fingerprint, read
-    * now rather than at startup. True when it has no such AP.
+  /** Whether the location with this id requires the redirect's fingerprint, read now rather than at
+    * startup. True when no such location exists.
     */
-  def fingerprintRequired(id: String, ap: Mac): Task[Boolean]
+  def fingerprintRequired(id: String): Task[Boolean]
 
   /** Whether the location with this id has an access point with this MAC. */
   def hasAccessPoint(id: String, ap: Mac): Task[Boolean]
@@ -39,6 +39,9 @@ object LocationService:
   inline def findBySlugQuery = quote: (slugParam: String) =>
     query[LocationRow].filter(_.slug == slugParam).take(1)
 
+  inline def fingerprintRequiredQuery = quote: (idParam: String) =>
+    query[LocationRow].filter(_.id == idParam).map(_.fingerprintIsRequired).take(1)
+
   inline def accessPointQuery = quote: (idParam: String, macParam: String) =>
     query[AccessPointRow].filter(ap => ap.locationId == idParam && ap.mac == macParam).take(1)
 
@@ -55,8 +58,8 @@ object LocationService:
       def unifiEnabled(id: String, ap: Mac): Task[Boolean] = accessPoint(id, ap).map(
         !_.exists(_.unifiIsEnabled == 0))
 
-      def fingerprintRequired(id: String, ap: Mac): Task[Boolean] = accessPoint(id, ap).map(
-        !_.exists(_.fingerprintIsRequired == 0))
+      def fingerprintRequired(id: String): Task[Boolean] = run(fingerprintRequiredQuery(lift(id)))
+        .map(!_.headOption.contains(0))
 
       def hasAccessPoint(id: String, ap: Mac): Task[Boolean] = accessPoint(id, ap).map(_.nonEmpty)
 

@@ -177,6 +177,13 @@ object EventLogHandler:
             "slug"       -> Json.fromString(slug.asString),
             "name"       -> Json.fromString(name)),
           occurredAt)
+      case LocationEvent.FingerprintRequirementChanged(id, required, occurredAt) =>
+        (
+          "location.fingerprint_requirement_changed",
+          Json.obj(
+            "locationId" -> Json.fromString(id.asString),
+            "required"   -> Json.fromBoolean(required)),
+          occurredAt)
       case LocationEvent.AccessPointRegistered(location, point, occurredAt) =>
         (
           "location.access_point_registered",
@@ -201,14 +208,13 @@ object EventLogHandler:
           occurredAt)
 
   private def accessPointJson(point: AccessPoint): Json = Json.obj(
-    "mac"                 -> Json.fromString(point.mac.show),
-    "host"                -> Json.fromString(point.controller.host),
-    "port"                -> point.controller.port.asJson,
-    "siteId"              -> Json.fromString(point.controller.siteId),
-    "durationMinutes"     -> point.settings.durationMinutes.asJson,
-    "redirectUrl"         -> point.settings.redirectUrl.asJson,
-    "unifiEnabled"        -> Json.fromBoolean(point.settings.unifiEnabled),
-    "fingerprintRequired" -> Json.fromBoolean(point.settings.fingerprintRequired)
+    "mac"             -> Json.fromString(point.mac.show),
+    "host"            -> Json.fromString(point.controller.host),
+    "port"            -> point.controller.port.asJson,
+    "siteId"          -> Json.fromString(point.controller.siteId),
+    "durationMinutes" -> point.settings.durationMinutes.asJson,
+    "redirectUrl"     -> point.settings.redirectUrl.asJson,
+    "unifiEnabled"    -> Json.fromBoolean(point.settings.unifiEnabled)
   )
 
   private def extractUserEvent(event: UserEvent): Option[(String, Json, Instant)] =

@@ -67,7 +67,12 @@ object LocationRepositoryQuill:
           State.Destroyed(run)
         case other =>
           defect(s"'${row.slug}' is in no state the model knows: '$other'")
-    Location(LocationId(row.id), Slug.unsafe(row.slug), row.name, state)
+    Location(
+      LocationId(row.id),
+      Slug.unsafe(row.slug),
+      row.name,
+      fingerprintRequired = row.fingerprintIsRequired == 1,
+      state)
   end locationOf
 
   private def accessPointOf(row: AccessPointRow): AccessPoint = AccessPoint(
@@ -80,8 +85,7 @@ object LocationRepositoryQuill:
     Settings(
       durationMinutes = row.durationMinutes,
       redirectUrl = row.redirectUrl,
-      unifiEnabled = row.unifiIsEnabled == 1,
-      fingerprintRequired = row.fingerprintIsRequired == 1)
+      unifiEnabled = row.unifiIsEnabled == 1)
   )
 
   private def defect(what: String): Nothing = throw IllegalStateException(what)

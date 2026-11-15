@@ -35,6 +35,14 @@ object LocationPersistenceHandler:
                     isActive = 1,
                     createdAt = at,
                     updatedAt = at)))).unit
+          case Event.Location(
+                LocationEvent.FingerprintRequirementChanged(id, required, occurredAt)) =>
+            run(
+              query[LocationRow]
+                .filter(_.id == lift(id.asString))
+                .update(
+                  _.fingerprintIsRequired -> lift(flag(required)),
+                  _.updatedAt             -> lift(occurredAt.toString))).unit
           case Event.Location(LocationEvent.AccessPointRegistered(location, point, occurredAt)) =>
             val at = occurredAt.toString
             run(
@@ -52,8 +60,7 @@ object LocationPersistenceHandler:
                     updatedAt = at,
                     durationMinutes = point.settings.durationMinutes,
                     redirectUrl = point.settings.redirectUrl,
-                    unifiIsEnabled = flag(point.settings.unifiEnabled),
-                    fingerprintIsRequired = flag(point.settings.fingerprintRequired)
+                    unifiIsEnabled = flag(point.settings.unifiEnabled)
                   )))).unit
           case Event.Location(LocationEvent.AccessPointUpdated(location, mac, point, occurredAt)) =>
             run(
@@ -61,16 +68,15 @@ object LocationPersistenceHandler:
                 .filter(row =>
                   row.locationId == lift(location.asString) && row.mac == lift(mac.show))
                 .update(
-                  _.mac                   -> lift(point.mac.show),
-                  _.unifiHost             -> lift(point.controller.host),
-                  _.unifiPort             -> lift(point.controller.port),
-                  _.unifiSiteId           -> lift(point.controller.siteId),
-                  _.unifiApiToken         -> lift(point.controller.token.reveal),
-                  _.durationMinutes       -> lift(point.settings.durationMinutes),
-                  _.redirectUrl           -> lift(point.settings.redirectUrl),
-                  _.unifiIsEnabled        -> lift(flag(point.settings.unifiEnabled)),
-                  _.fingerprintIsRequired -> lift(flag(point.settings.fingerprintRequired)),
-                  _.updatedAt             -> lift(occurredAt.toString)
+                  _.mac             -> lift(point.mac.show),
+                  _.unifiHost       -> lift(point.controller.host),
+                  _.unifiPort       -> lift(point.controller.port),
+                  _.unifiSiteId     -> lift(point.controller.siteId),
+                  _.unifiApiToken   -> lift(point.controller.token.reveal),
+                  _.durationMinutes -> lift(point.settings.durationMinutes),
+                  _.redirectUrl     -> lift(point.settings.redirectUrl),
+                  _.unifiIsEnabled  -> lift(flag(point.settings.unifiEnabled)),
+                  _.updatedAt       -> lift(occurredAt.toString)
                 )).unit
           case Event.Location(LocationEvent.AccessPointRemoved(location, mac, _)) =>
             run(
