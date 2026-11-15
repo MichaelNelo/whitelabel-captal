@@ -256,8 +256,8 @@ final case class LocationRow(
     stateRun: Option[String] = None)
 
 /** One of a location's access points, with the UniFi controller that authorizes the guests who join
-  * through it. `mac` is lowercase with colons, as [[whitelabel.captal.core.device.Mac.show]] writes
-  * it.
+  * through it and what the portal does for them. `mac` is lowercase with colons, as
+  * [[whitelabel.captal.core.device.Mac.show]] writes it.
   */
 final case class AccessPointRow(
     id: String,
@@ -268,7 +268,11 @@ final case class AccessPointRow(
     unifiSiteId: String,
     unifiApiToken: String,
     createdAt: String,
-    updatedAt: String)
+    updatedAt: String,
+    durationMinutes: Option[Int] = None,
+    redirectUrl: Option[String] = None,
+    unifiIsEnabled: Int = 1,
+    fingerprintIsRequired: Int = 1)
 
 /** What a location changed of the recovery defaults; `None` takes the default. See
   * [[LocationRecovery]].

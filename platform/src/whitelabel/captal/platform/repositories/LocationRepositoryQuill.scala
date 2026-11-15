@@ -67,18 +67,7 @@ object LocationRepositoryQuill:
           State.Destroyed(run)
         case other =>
           defect(s"'${row.slug}' is in no state the model knows: '$other'")
-    Location(
-      LocationId(row.id),
-      Slug.unsafe(row.slug),
-      row.name,
-      Settings(
-        durationMinutes = row.unifiDurationMinutes,
-        redirectUrl = row.unifiRedirectUrl,
-        unifiEnabled = row.unifiIsEnabled == 1,
-        fingerprintRequired = row.fingerprintIsRequired == 1
-      ),
-      state
-    )
+    Location(LocationId(row.id), Slug.unsafe(row.slug), row.name, state)
   end locationOf
 
   private def accessPointOf(row: AccessPointRow): AccessPoint = AccessPoint(
@@ -87,7 +76,12 @@ object LocationRepositoryQuill:
       row.unifiHost,
       row.unifiPort,
       row.unifiSiteId,
-      Secret.parse(row.unifiApiToken).getOrElse(defect(s"Access point ${row.mac} has no token")))
+      Secret.parse(row.unifiApiToken).getOrElse(defect(s"Access point ${row.mac} has no token"))),
+    Settings(
+      durationMinutes = row.durationMinutes,
+      redirectUrl = row.redirectUrl,
+      unifiEnabled = row.unifiIsEnabled == 1,
+      fingerprintRequired = row.fingerprintIsRequired == 1)
   )
 
   private def defect(what: String): Nothing = throw IllegalStateException(what)
