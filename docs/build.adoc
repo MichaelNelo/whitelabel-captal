@@ -158,7 +158,7 @@ The repository is built by Mill. The build is a set of modules: one `package.mil
 
 `mill platform.migrate`:: Runs the API's migrations against the database named by `DB_URL`.
 
-`mill api.test.stopRqlite`, `mill mcp.test.stopRqlite`:: Stop the rqlite databases the matching suite starts. Their data goes with them.
+`mill api.test.stopRqlite`, `mill mcp.test.stopRqlite`:: Stop the rqlite databases the matching suite starts, and `mcp.test`'s Redis. Their data goes with them.
 
 === Local development
 

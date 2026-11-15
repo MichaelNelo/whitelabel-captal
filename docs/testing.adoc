@@ -212,6 +212,10 @@ of the rows it reads (advertisers, the identification surveys, operator tokens) 
 rather than per-location, so sharing lets `get_location_readiness` count what *other* suites wrote
 during the same run.
 
+`DeployE2ESpec` also takes its locations' operation locks, in its own Redis container,
+`redis-mcp-test` (port 6390), which `mcp.test` hands it as `REDIS_LOCK_ADDRESSES`: one instance, in
+memory, as `modules/redis-lock` runs it. `mcp.test.stopRqlite` stops it with the databases.
+
 Both schemas are migrated through the real `Migrate`/`McpMigrate` binaries as two ordered external
 processes against one URL — the API's schema first, since the backoffice's own tables assume the
 portal's already exist — rather than through a Flyway instance assembled inline in the test code.

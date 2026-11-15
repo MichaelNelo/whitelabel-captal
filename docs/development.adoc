@@ -87,7 +87,8 @@ same port — is reused; anything else, or nothing at all, is (re)started, after
 container left under that name. Its data goes with the container.
 
 Three of those exist across the whole build, never shared between purposes: `rqlite-test`,
-`rqlite-mcp-test` and `rqlite-mcp-e2e`, covered in xref:testing.adoc[Test strategy].
+`rqlite-mcp-test` and `rqlite-mcp-e2e`, covered in xref:testing.adoc[Test strategy]. `mcp.test`
+starts a Redis the same way, `redis-mcp-test`, for the locks its end-to-end spec takes.
 The database `api.dev` and `mcp.dev` run against is not one of them: it is the local
 configuration's rqlite service, the same one production runs, in LocalStack — see
 <<Running the stack locally>>.

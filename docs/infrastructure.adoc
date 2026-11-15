@@ -368,6 +368,18 @@ the backoffice and the relay get it as `OTEL_EXPORTER_OTLP_ENDPOINT`, and the ba
 every location it deploys. Storage is in memory. See xref:tracing.adoc[Tracing] for what is traced
 and how to reach the UI.
 
+=== Redis for the locks
+
+`modules/redis-lock` runs the Redis instances the backoffice takes a location's operation lock on
+(xref:mcp.adoc#Locks[the operations' lock]): `redis_lock_instances` of them, one by default, each its
+own Fargate service registered in Cloud Map as `redis-lock-<n>.<namespace>`, since Redlock asks for
+instances that fail apart rather than a replicated cluster. The backoffice gets every address as
+`REDIS_LOCK_ADDRESSES`. The security group admits 6379 from the ECS tasks group alone. The image is
+Redis from the public ECR gallery, run in memory only — no snapshot, no append-only file, nothing
+evicted: a lock is worth nothing past its 30 seconds, and a task takes longer than that to start
+again. A deployment stops the old task before it starts the new one, so two tasks never answer under
+one name.
+
 === CloudFront
 
 `modules/cloudfront` owns the assets bucket (`<project>-<env>-assets`, holding `bundle/`, every

@@ -600,6 +600,31 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
 ** When to revisit the S3/DynamoDB option specifically: if the lock is ever needed *before* the
    database exists, or when the database itself is unreachable — today, if the database can't be
    reached, migrating is moot anyway.
+* **A location's operations are serialised by a Redis lock taken as Redlock, with a TTL** (2026-11-15),
+  at the user's direction: "usa Redis y ZIO-Redis, implementa una versión simple de RedLock, como lo
+  describe Redis, y a partir de ahí vamos mejorando". Before it, the lock was `current_run` in rqlite,
+  taken by a conditional write, with a run's heartbeat on its row saying whether anyone was at it.
+  That could not tell a slow runner from a dead one: a dead run stayed `running` until someone asked,
+  and a live runner whose heartbeat went stale could be taken over and still apply its completion
+  afterwards. Now the tool takes `captal:location:<id>:operation` for the new run before the command,
+  which reads who holds it as data (`holder`); the runner extends it every 10 seconds of its 30 and
+  stops at the next step once it cannot; it goes after the commit that ends the run. `current_run`
+  stays, as the fencing token for the database: a run's completion moves the location only while
+  `current_run` still names it. The heartbeat is only what a run page shows. *What was weighed,
+  with the reasoning kept:*
+** *A lock that belongs to a connection, with no TTL* — what the user wanted, since a TTL also
+   frees a holder that is merely frozen or starved, not only one cut off. Postgres's advisory locks
+   behave so, but would bring a Postgres only for them. lockd is NFS's lock manager, not a service
+   an application asks for a lock. etcd's leases and ZooKeeper's ephemeral sequential nodes are the
+   accepted recipes, and neither has a maintained Scala or ZIO client; the Java ones would come
+   with their own runtimes into `platform`.
+** *The TTL itself*: accepted as the standard every one of those uses in the end — a session that
+   stops answering is ended by a timeout too. What it costs is written where it bites: a step
+   already going when the lock expires is not stopped, since AWS takes no fencing token.
+** *zio-redis 1.2.1, not 1.3.x*: `platform` compiles with Scala 3.8 and 1.3.x was built with 3.9.
+** *One instance by default* (`redis_lock_instances`): a restart, in memory only, frees every lock,
+   and each runner holding one fails at its next step. Three instances survive one down.
+** The migrations' lock (`Migrate.Lock`) is to move onto the same mechanism next.
 * **The real OpenTofu configuration is applied against LocalStack for `mcp.test`, replacing a
   219-line hand-built `awslocal` fixture.** The fixture agreed with the deployed topology only for
   as long as someone kept it agreeing, and had already drifted (`modules/alb` had grown rules the
