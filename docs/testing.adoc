@@ -231,8 +231,9 @@ read it next.
 
 Most of `mcp.test` needs only rqlite: `CaptalMcpSpec` (the bundled skills and resources, asserted
 as a host would see them — definition plus body, so a packaging mistake fails here rather than at
-runtime), `OnboardingSpec` (the pure, step-list half of `Readiness`; the half that actually reads a
-database and a bucket belongs to the end-to-end spec below), `AuthSpec` and `GrantSpec` (tokens and
+runtime), `OnboardingSpec` (how the readiness record reads: the onboarding prompt and each step's
+wording; which steps a location has left is `core`'s rule, tested in `core`'s `ReadinessTests`, and
+what is read belongs to the end-to-end spec below), `AuthSpec` and `GrantSpec` (tokens and
 scopes against the real `tokens` table), `AdvertiserToolsSpec`, `SurveyToolsSpec`,
 `LocationToolsSpec`, `VideoToolsSpec`, `I18nToolsSpec`, and the rest of the tool-level specs — each
 calling a handler directly against a real rqlite, with no LocalStack and no wire protocol in

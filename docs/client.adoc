@@ -883,7 +883,7 @@ It recurses transitively, drops the entry itself, and emits one
 `{{PRELOADS}}` slot. `client.bundle` calls it once for `main.js` and once for `maintenance.js`.
 
 *Server-rendered MCP-UI pages.* `AssetStore.scriptPreloads(entry)` in
-`mcp/src/whitelabel/captal/mcp/aws/Assets.scala` reads the *deployed* `ui/<entry>` object out of S3
+`platform/src/whitelabel/captal/platform/aws/Assets.scala` reads the *deployed* `ui/<entry>` object out of S3
 and applies the same regex, returning absolute CDN URLs. `mcp/src/whitelabel/captal/mcp/apps/UiHints.scala`
 renders them as `modulepreload` links with `crossorigin`, alongside a `preconnect` for the script
 origin. Both hints carry `crossorigin` because a module script is fetched in CORS mode, and a hint

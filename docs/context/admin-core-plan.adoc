@@ -725,6 +725,21 @@ once. `SessionService` lost `create`, `createForUser`, `resetForExpiration` and
   against a session and the guest can leave through it, as before the command.
 . Readiness into `core`, as the first query (<<decided-2026-11-15>>): `AssetStore` into `platform`,
   `LocationReadiness` and its implementation there, `Readiness.steps` as the pure rule it calls.
++
+*Done on 2026-11-15*: `core.application.queries` has `LocationReadinessQuery(slug)`, `ReadinessReport`
+and `ReadinessStep`, and `LocationReadinessQuery.nextSteps` is the rule, tested in `core`
+(`ReadinessTests`); `platform.queries.LocationReadiness(quill, assets)` reads the database and S3 into
+the report; the backoffice's `Readiness` runs it for the tool, the resource and the prompt, and words
+each step (`render`). What it became, against the sketch:
++
+* *The steps are data.* `Readiness.steps` named the backoffice's tools in every message, so the rule
+  answers `ReadinessStep`s and the backoffice words them; the order and the conditions are `core`'s.
+* *`AssetStore` and `Poll` are in `platform.aws`*, with the S3 and CloudFront SDKs in `platform`'s
+  dependencies. The CDN check of the MCP App pages' script, the one part that uses zio-http's client,
+  stayed in the backoffice (`ScriptDelivery`): `platform` compiles against zio-http 3.0.1 and the
+  backoffice runs 3.11.3. The SDK takes the API's assembly past 65,535 entries, so it drops the
+  launcher prefix as the backoffice's does; the image runs `java -jar`. About 13.5 MB of jars the API
+  never loads.
 . The lifecycle, as <<decided-2026-11-15>> runs it: `OperatorContext` and the backoffice's flows in
   layers; the `Run[S]` entity, `StartOperation` and `CompleteOperation`, the ports `OperationSteps`
   and `RunProgress`, `execute`; the `current_run` column (`state` came with the first step), the

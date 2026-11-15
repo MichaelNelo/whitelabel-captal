@@ -63,7 +63,7 @@ synchronously, with none of the three extensions actually registered.
 . Reads `Option[InfraStore]` from the environment. Absent means `ECS_CLUSTER` was never set, and
 the deploy, pause, resume and destroy tools are simply not registered — not disabled, not erroring,
 absent from the tool list a client sees.
-. Calls `AssetStore.verifyScriptDelivery` as a startup **warning**, not a failure: a freshly stood
+. Calls `ScriptDelivery.verify` as a startup **warning**, not a failure: a freshly stood
 up environment reaches this before `client.publish` has ever run, and the warning names what to run
 once it has.
 . `Tokens.seedAdmin(token, "admin")` — idempotent; logs whether the admin row was created, rotated
@@ -844,7 +844,8 @@ location has its own stylesheet or icon, video counts by status, advertiser-surv
 many advertisers are registered deployment-wide, whether UniFi is configured — the location has an
 access point — and whether any access point has its UniFi calls on, the version of the
 terms of service in force and the location's locales those terms are not written in — followed by the
-numbered `nextSteps` list `Readiness.steps` derives from that same state, or "Nothing here blocks a
+numbered `nextSteps` list `core`'s `LocationReadinessQuery.nextSteps` derives from that same state,
+worded by `Readiness.render`, or "Nothing here blocks a
 deploy" when there is nothing left. The rendered text instructs the model explicitly: work through
 the steps in order, ask the operator for anything only they can supply (question wording, an
 option's label, the file for a video — never invent copy), and re-run the prompt to re-read state
