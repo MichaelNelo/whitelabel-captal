@@ -33,12 +33,7 @@ import whitelabel.captal.messages.{
   VideoResponse,
   VideoWatchedResponse
 }
-import whitelabel.captal.api.session.{
-  CurrentLocation,
-  SessionCookieConfig,
-  UserCookieConfig,
-  UserLookup
-}
+import whitelabel.captal.api.session.{CurrentLocation, SessionCookieConfig, UserCookieConfig}
 import zio.*
 import zio.http.codec.CodecConfig
 

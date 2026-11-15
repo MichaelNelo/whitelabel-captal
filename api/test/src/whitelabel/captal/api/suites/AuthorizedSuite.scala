@@ -142,8 +142,8 @@ object AuthorizedSuite:
             noAp    <- enabled(None)
             noRow   <- Flows.unifiEnabled(quill, CurrentLocation.empty)(off)
             // The row itself, so an insert rqlite rejected cannot pass for a disabled AP.
-            offRow <- LocationService(quill).hasAccessPoint("unifi-site", off.get)
-          yield assertTrue(onAp, !offAp, offRow, unknown, noAp, noRow)
+            offRow <- LocationService(quill).unifiFor("unifi-site", off.get)
+          yield assertTrue(onAp, !offAp, offRow.isDefined, unknown, noAp, noRow)
         ,
         test("A redirect is admitted only through one of the location's access points"):
           for

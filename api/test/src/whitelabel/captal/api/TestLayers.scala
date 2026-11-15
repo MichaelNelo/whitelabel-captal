@@ -13,12 +13,7 @@ import whitelabel.captal.api.routes.{
   TermsRoutes,
   VideoRoutes
 }
-import whitelabel.captal.api.session.{
-  CurrentLocation,
-  SessionCookieConfig,
-  UserCookieConfig,
-  UserLookup
-}
+import whitelabel.captal.api.session.{CurrentLocation, SessionCookieConfig, UserCookieConfig}
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{
   Event,
@@ -253,12 +248,12 @@ object TestLayers:
       VideoRoutes.StartPlaybackFlowType & VideoRoutes.EndPlaybackFlowType &
       AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
       AdvertiserSurveyRoutes.AnswerAdvertiserFlowType & FinishRoutes.FinishFlowType & QuillSqlite &
-      SessionCookieConfig & ApiBase & CurrentLocation & UserCookieConfig & UserLookup &
-      SurveyRoutes & LocaleRoutes & VideoRoutes & AdvertiserSurveyRoutes & FinishRoutes &
-      RecoveryRoutes & RecoveryRoutes.RequestRecoveryFlowType &
-      RecoveryRoutes.CheckRecoveryFlowType & RecoveryRoutes.RedeemRecoveryFlowType & RecoveryFeed &
-      TestUnifiClient & TestUnifiSwitch & JobQueue & JobRunner.ExpireFlow & JobRunner &
-      TermsRoutes & TermsRoutes.StartFlowType & TermsRoutes.AcceptTermsFlowType
+      SessionCookieConfig & ApiBase & CurrentLocation & UserCookieConfig & SurveyRoutes &
+      LocaleRoutes & VideoRoutes & AdvertiserSurveyRoutes & FinishRoutes & RecoveryRoutes &
+      RecoveryRoutes.RequestRecoveryFlowType & RecoveryRoutes.CheckRecoveryFlowType &
+      RecoveryRoutes.RedeemRecoveryFlowType & RecoveryFeed & TestUnifiClient & TestUnifiSwitch &
+      JobQueue & JobRunner.ExpireFlow & JobRunner & TermsRoutes & TermsRoutes.StartFlowType &
+      TermsRoutes.AcceptTermsFlowType
 
   /** The bundle the suite's location serves, so a report can be found consistent with it or not. */
   val TestBundle: Manifest = Manifest(
@@ -295,7 +290,6 @@ object TestLayers:
     apiBaseLayer,
     currentLocationLayer,
     UserCookieConfig.layer,
-    UserLookup.layer,
     SurveyRoutes.layer,
     LocaleRoutes.layer,
     VideoRoutes.layer,

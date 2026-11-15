@@ -37,9 +37,6 @@ object SurveyRoutes:
     Nothing,
     SurveyRoutes] = ZLayer.fromFunction(SurveyRoutes(_, _, _, _))
 
-  /** [[whitelabel.captal.core.device.Signals.NoFingerprint]]. */
-  val NoFingerprint: String = whitelabel.captal.core.device.Signals.NoFingerprint
-
 end SurveyRoutes
 
 /** The identification survey, and the status route every visit starts with. `/api/status` carries
@@ -116,6 +113,15 @@ final class SurveyRoutes(
     .out[StatusResponse]
     .outHeader(HeaderCodec.setCookie.optional)
     .outError[ApiError](Status.BadRequest)
+
+  /** Publishes the session `id` names, when there is one, into `SessionContext`: a server error is
+    * recorded against the session in it, which is what lets the guest leave through the error.
+    */
+  private def publish(
+      id: Option[user.SessionId]): ZIO[SessionService & SessionContext, ApiError, Unit] = ZIO
+    .foreach(id)(sessionId => ZIO.serviceWithZIO[SessionService](_.findById(sessionId)))
+    .mapError(ApiError.fromThrowable)
+    .flatMap(found => ZIO.foreachDiscard(found.flatten)(SessionContext.set))
 
   /** The refusals entering cannot help, which the log has to say: they are an operator's to fix. */
   private def logRefusal(error: ApiError): UIO[Unit] =
@@ -204,6 +210,9 @@ final class SurveyRoutes(
             ZIO
               .fromOption(user.SessionId.fromString(value))
               .orElseFail(ApiError.SessionInvalid("Malformed session ID")))
+        // A failure from here on is recorded against the session the cookie names, so the guest
+        // has a way out through it.
+        _       <- publish(sessionId)
         flow    <- ZIO.service[EnterPortalFlowType]
         now     <- Clock.instant
         entered <- asApiError(
@@ -226,6 +235,8 @@ final class SurveyRoutes(
               newError = ErrorId.generate,
               occurredAt = now
             ))).tapError(logRefusal)
+        // And from here on, against the one entering started.
+        _ <- ZIO.unless(sessionId.contains(entered.sessionId))(publish(Some(entered.sessionId)))
         answer = StatusResponse(
           entered.phase,
           entered.locale,

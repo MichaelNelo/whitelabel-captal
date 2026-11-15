@@ -9,12 +9,7 @@ import whitelabel.captal.api.routes.{
   TermsRoutes,
   VideoRoutes
 }
-import whitelabel.captal.api.session.{
-  CurrentLocation,
-  SessionCookieConfig,
-  UserCookieConfig,
-  UserLookup
-}
+import whitelabel.captal.api.session.{CurrentLocation, SessionCookieConfig, UserCookieConfig}
 import whitelabel.captal.platform.repositories.{
   DeviceRepositoryQuill,
   RecoveryRepositoryQuill,
@@ -43,7 +38,7 @@ private[api] object AppLayers:
     */
   type FullEnv =
     SessionContext & SessionService & LocaleService & QuillSqlite & SessionCookieConfig & ApiBase &
-      CurrentLocation & UserCookieConfig & UserLookup & SurveyRoutes & LocaleRoutes & VideoRoutes &
+      CurrentLocation & UserCookieConfig & SurveyRoutes & LocaleRoutes & VideoRoutes &
       AdvertiserSurveyRoutes & FinishRoutes & SurveyRoutes.AnswerEmailFlowType &
       SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
       SurveyRoutes.NextSurveyFlowType & SurveyRoutes.EnterPortalFlowType &
@@ -127,7 +122,6 @@ private[api] object AppLayers:
       ApiBase.layer,
       currentLocationLayer,
       UserCookieConfig.layer,
-      UserLookup.layer,
       SurveyRoutes.layer,
       LocaleRoutes.layer,
       VideoRoutes.layer,

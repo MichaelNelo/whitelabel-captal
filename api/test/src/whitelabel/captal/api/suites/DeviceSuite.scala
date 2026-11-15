@@ -4,6 +4,7 @@ import whitelabel.captal.api.TestFixtures
 import whitelabel.captal.api.TestHelpers.*
 import whitelabel.captal.api.routes.SurveyRoutes
 import whitelabel.captal.api.session.CurrentLocation
+import whitelabel.captal.core.device.Signals
 import whitelabel.captal.core.user
 import whitelabel.captal.platform.schema.QuillSqlite
 import zio.ZIO
@@ -104,7 +105,7 @@ object DeviceSuite:
             deviceOf(first) == deviceOf(again),
             deviceOf(first) != deviceOf(other),
             devices.size == 2,
-            devices.forall(_.fingerprint == SurveyRoutes.NoFingerprint),
+            devices.forall(_.fingerprint == Signals.NoFingerprint),
             // Optional is not missing: nothing went wrong, so nothing is recorded.
             errors.isEmpty
           )
@@ -133,7 +134,7 @@ object DeviceSuite:
             again.code.isSuccess,
             !again.body.contains(recorded.head.id),
             // The device made with the stand-in, found by its MAC.
-            devices.map(_.fingerprint) == List(SurveyRoutes.NoFingerprint)
+            devices.map(_.fingerprint) == List(Signals.NoFingerprint)
           )
       )
 
