@@ -3,7 +3,8 @@
 :toclevels: 2
 
 A plan agreed in conversation on 2026-11-13, revised on 2026-11-14, with its first two steps done on
-2026-11-15 (see <<order-of-work>> for what they became). It moves the
+2026-11-15 (see <<order-of-work>> for what they became) and the rest refined the same day
+(<<decided-2026-11-15>>). It moves the
 backoffice's business rules into `core`, models a location as an entity whose state is in its type and
 each operation on it as a run of its own, run by a saga, and then moves `/api/status`'s logic into a
 command on that model. One question stays open that blocks part of it: the availability of the change
@@ -426,6 +427,159 @@ between two relays, splitting them); RabbitMQ (it moves the problem to the broke
 replacement needs a quorum-queue cluster that on Fargate is a second rqlite to operate, or Amazon MQ's
 three brokers).
 
+[[decided-2026-11-15]]
+== Decided on 2026-11-15: queries, the operator's context, running an operation
+
+Agreed with the user after the second step, for the steps left (3, 4, 5 and 7). It refines the
+sketches above where they differ.
+
+=== Every tool a command or a query
+
+As far as possible, each tool is one command or one query; the tool parses, runs it and shapes the
+answer. A query is what `core.application.queries.Query[F, Q]` already declares — `execute(query):
+F[Either[Error, Result]]`, a `Query.Aux` like `Handler.Aux` — with its input and output defined in
+`core` and kept anemic: plain data, not entities, no methods. It is implemented in `platform` as an
+object with an `apply` factory returning the `Query.Aux`, the way a command's flow is built, and run
+by the tool directly: no `Flow`, no events, no transaction. `AssetStore` moves from the backoffice to
+`platform`, so the queries that read S3 live there too. Where a query needs a rule — readiness's next
+steps — the rule is a pure function in `core` that the implementation calls to fill the output.
+
+[cols="2,1,3"]
+|===
+| Tool | Kind | Command or query
+
+| `list_locations`, `get_unifi_config`, `get_location_readiness`, `preview_location`
+| Query
+| `ListLocations`, `AccessPointsOf`, `LocationReadiness`, `PreviewLocation`
+
+| `configure_unifi`
+| Query
+| Opens the form; its ticket is signed, not stored. The form's save runs `RegisterAccessPoint` or
+  `UpdateAccessPoint`
+
+| `create_location`, `set_fingerprint_required`, `update_access_point`, `remove_access_point`
+| Command
+| The first step's
+
+| `deploy_location`, `pause_location`, `resume_location`, `destroy_location`
+| Command
+| `StartOperation(op)`; the runner then runs `CompleteOperation`
+
+| `get_deploy_status`
+| Query
+| `RunStatus`
+
+| `get_css_schema`, `get_i18n_schema`, `read_skill`
+| Query
+| Static: no repository
+
+| `get_location_styles`, `get_location_icon`, `get_i18n_status`, `get_recovery_policy`,
+  `get_terms_of_service`, `list_advertisers`, `list_videos`, `list_pending_uploads`, `list_surveys`,
+  `get_survey`
+| Query
+| `StylesOf`, `IconOf`, `TranslationCoverage`, `RecoveryPolicyOf`, `TermsInForce`,
+  `ListAdvertisers`, `VideosOf`, `PendingUploads`, `ListSurveys`, `SurveyOf`
+
+| `set_location_styles`, `set_location_icon`
+| Command
+| `ChangeStyles`, `ChangeIcon`: the handler after the commit writes S3 and invalidates; the CSS and
+  SVG checks stay in the tool (file formats stay out of `core`)
+
+| `set_translations`, `remove_translation`, `set_recovery_policy`, `create_terms_version`,
+  `set_terms_translation`, `remove_terms_translation`
+| Command
+| `SetTranslations`, `RemoveTranslation`, `ChangeRecoveryPolicy`, `PublishTermsVersion`,
+  `SetTermsTranslation`, `RemoveTermsTranslation`
+
+| `create_advertiser`, `update_advertiser`, `set_advertiser_active`
+| Command
+| `CreateAdvertiser`, `UpdateAdvertiser`, `RetireAdvertiser` / `ReinstateAdvertiser`
+
+| `create_promo_video`, `create_advertiser_video`, `confirm_video_upload` (and the upload page),
+  `replace_video_file`, `update_video`, `set_video_active`
+| Command
+| `RegisterVideo(kind)`, `ConfirmVideoFile(video, length)` (the length read from S3 before it, as an
+  argument), `StartFileReplacement`, `UpdateVideo`, `RetireVideo` / `ReinstateVideo`. A signed upload
+  URL is not state: the tools that hand one back add it to the command's answer
+
+| `resume_video_upload`
+| Query
+| `UploadUrl`
+
+| `create_survey`, `create_identification_survey`, `create_question`, `update_question`,
+  `set_question_active`, `reorder_questions` and their identification twins
+| Command
+| `CreateSurvey(category)`, `AddQuestion`, `UpdateQuestion`, `RetireQuestion` / `ReinstateQuestion`,
+  `ReorderQuestions`: a twin pair shares its command
+
+| `create_token`, `list_tokens`, `revoke_token`
+| —
+| Stay out of `core`, as <<What moves and what stays>> says: the backoffice's own security
+|===
+
+A `set_*_active` tool runs one of two commands, since an event names what happened. The dead
+`GetIdentificationSurvey` goes when the surveys move.
+
+=== The operator's context, and flows in layers
+
+The backoffice's flows are composed once, in layers, as the API's are — `LocationCommands.run`, which
+builds its chain per call for the actor, goes. What changes per call travels in an `OperatorContext`
+in `platform`, the way `SessionContext` carries a guest's session: a `FiberRef` holding the `actor`
+(the operator token's id, what `event_log.actor` records) and `ask`, the means to put a yes-or-no
+question to the operator. A tool publishes it around the flow it runs (`locally`); the runner
+publishes the run's `started_by` and no `ask`. `EventLogHandler.forOperator(operators)` reads the
+actor when it runs instead of taking it when it is built, and a flow run with no context fails
+(`OperatorContext.NotSet`), as `SessionContext.NotSet` does.
+
+`ask` is a function, not the MCP context, because the handlers live in `platform`, which knows no
+MCP.
+
+=== Elicitations
+
+A saga is no more than a handler that runs another flow. A handler can ask the operator through
+`OperatorContext.ask`, provided it runs after the commit — never inside the transaction, which would
+stay open while a person answers — and in a flow a tool runs, since only a tool call has an operator
+on the other end. Of the three elicitations there are:
+
+* *Delete the S3 objects on a destroy*: asked by the tool before the command — `AssetsOf`, the
+  question, then `StartOperation(Destroy(deleteAssets))` — and not by a handler after it, which would
+  ask with the lock taken and the run not yet queued, long enough for its heartbeat to go stale.
+  Only a yes deletes; a host that cannot ask keeps the objects.
+* *An operation left unfinished* (`PreviousOperationUnfinished`) and *one in progress*
+  (`OperationInProgress`, or `TransitionTaken` for a lost race): refusals, which emit no event and so
+  reach no handler. The tool asks — "the pause stopped at «scale to zero»; finish it first?", "see its
+  progress?" — and runs `StartOperation(op, finishing = run)` or the `RunStatus` query. Finishing runs
+  that operation, not the one first asked for, which is asked again once it completes: the saga does
+  not chain.
+
+=== Running an operation
+
+Two commands, since the domain's decisions are at the ends: `StartOperation` decides whether the
+operation may start and which steps it takes, `CompleteOperation` applies the transition on success
+or records the failure, explained (`explain(step, failure)`). The steps in between are I/O on AWS
+with nothing to decide — their order is a domain rule, `Operation.steps`, and no more — so they are
+not commands:
+
+----
+tool ─► StartOperation ─► OperationStarted ─► (after the commit) the run is queued
+runner ◄─ the run
+   execute(run, steps)   ← core: the pending steps in order through the port, stopping at the first failure
+      each step: OperationSteps.run (AWS) · RunProgress marks it on the run's row
+   ─► CompleteOperation(run, outcome) ─► LocationPaused (…) + OperationCompleted | OperationFailed
+----
+
+`OperationSteps[F]` and `RunProgress[F]` are ports in `core`; the backoffice implements the first
+with `InfraStore` and `AssetStore`, `platform` the second, writing each step's state and the
+heartbeat on `mcp_deploy_runs` directly, as `Runs.Progress` does today: neither is a fact of the
+domain. `execute` is small, but it puts the order under test against a fake port. The queue and the
+runner follow `JobQueue` and `JobRunner`: the handler only queues data, the runner runs the flow, so
+the layers have no cycle and a tool call never waits on AWS. A run interrupted by a restart is not
+re-queued on startup; it is finished through the elicitation above.
+
+Finishing an interrupted run runs again the step it died in, which AWS may have completed before the
+process died, so every step has to be safe to run twice. Pausing's page swap was not — run again, it
+saved the maintenance page over the location's own — and was made idempotent on 2026-11-15.
+
 [[order-of-work]]
 == Order of work
 
@@ -569,15 +723,19 @@ once. `SessionService` lost `create`, `createForUser`, `resetForExpiration` and
   `hasAccessPoint`. The route publishes into `SessionContext` the session the cookie names before
   the command runs, and the one it started after, so a server error at `/api/status` is recorded
   against a session and the guest can leave through it, as before the command.
-. Readiness into `core`.
-. The lifecycle: the `Run[S]` entity, `StartOperation` and `CompleteOperation`, the `current_run`
-  column (`state` came with the first step), the lock, the queue and `OperationRunner`, the
-  elicitations, structured step failures and `explain`.
+. Readiness into `core`, as the first query (<<decided-2026-11-15>>): `AssetStore` into `platform`,
+  `LocationReadiness` and its implementation there, `Readiness.steps` as the pure rule it calls.
+. The lifecycle, as <<decided-2026-11-15>> runs it: `OperatorContext` and the backoffice's flows in
+  layers; the `Run[S]` entity, `StartOperation` and `CompleteOperation`, the ports `OperationSteps`
+  and `RunProgress`, `execute`; the `current_run` column (`state` came with the first step), the
+  lock, the queue and `OperationRunner`; the three elicitations; structured step failures and
+  `explain`.
 . The dispatcher reads the paused state from the database; remove its S3 endpoint and permission.
 . Once the relay moves to SNS and SQS (xref:relay-sns-sqs-plan.adoc[the relay plan]), tell the run
   page of progress through it.
 . Video lifecycle with advertisers; survey and question authoring; recovery policy; terms of service
-  versions; i18n keys.
+  versions; i18n keys; styles and icon. Each tool a command or a query, as the table in
+  <<decided-2026-11-15>> has it.
 
 Also owed: `mcp/resources/skills/deploy-location/SKILL.md` still says a deploy is how a location takes
 a newly published bundle, and its section 2 publishes the bundle with `client.publishS3`, which
