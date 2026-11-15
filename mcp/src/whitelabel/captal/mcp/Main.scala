@@ -28,6 +28,7 @@ import whitelabel.captal.mcp.tools.{
 }
 import whitelabel.captal.platform.{OperatorContext, RqliteDataSource}
 import whitelabel.captal.platform.aws.AssetStore
+import whitelabel.captal.platform.locks.{DistributedLock, Redlock}
 import whitelabel.captal.platform.operations.OperationQueue
 import whitelabel.captal.platform.schema.{QuillSqlite, TracedSqlite}
 import whitelabel.captal.telemetry.Telemetry
@@ -213,7 +214,8 @@ object Main extends ZIOAppDefault:
     * without the deploy configuration, where those tools are not registered either.
     */
   private def startRunner(infra: Option[InfraStore]): ZIO[
-    Scope & QuillSqlite & AssetStore & OperatorContext & OperationQueue & OperationFlows.Complete,
+    Scope & QuillSqlite & AssetStore & OperatorContext & OperationQueue & OperationFlows.Complete &
+      DistributedLock,
     Nothing,
     Unit] =
     ZIO.foreachDiscard(infra): store =>
@@ -223,7 +225,14 @@ object Main extends ZIOAppDefault:
         assets    <- ZIO.service[AssetStore]
         operators <- ZIO.service[OperatorContext]
         complete  <- ZIO.service[OperationFlows.Complete]
-        _ <- OperationRunner.start(queue, quill, InfraSteps(store, assets), complete, operators)
+        locks     <- ZIO.service[DistributedLock]
+        _         <- OperationRunner.start(
+          queue,
+          quill,
+          InfraSteps(store, assets),
+          complete,
+          operators,
+          locks)
         _ <- ZIO.logInfo("Operation runner started")
       yield ()
 
@@ -253,6 +262,8 @@ object Main extends ZIOAppDefault:
     LocationFlows.removeAccessPoint,
     OperationQueue.layer,
     OperationFlows.startLayer,
-    OperationFlows.completeLayer
+    OperationFlows.completeLayer,
+    // The locations' locks, on the Redis instances at `REDIS_LOCK_ADDRESSES`, connected on first use.
+    Redlock.layer
   )
 end Main

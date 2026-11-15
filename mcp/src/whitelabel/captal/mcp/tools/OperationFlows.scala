@@ -15,7 +15,8 @@ import whitelabel.captal.platform.eventhandlers.{
   RunPersistenceHandler,
   TransactionalEventHandler
 }
-import whitelabel.captal.platform.operations.{OperationQueue, OperationQueueHandler}
+import whitelabel.captal.platform.locks.DistributedLock
+import whitelabel.captal.platform.operations.{OperationLock, OperationQueue, OperationQueueHandler}
 import whitelabel.captal.platform.repositories.{
   LocationRepositoryQuill,
   RunRepositoryQuill,
@@ -51,19 +52,23 @@ object OperationFlows:
         quill).andThen(OperationQueueHandler(quill, queue))
     )
 
-  def complete(quill: QuillSqlite, operators: OperatorContext): Complete = Flow(
-    CompleteOperationHandler[Task](RunRepositoryQuill(quill)),
-    TransactionalEventHandler(
-      LocationPersistenceHandler()
-        .andThen(RunPersistenceHandler())
-        .andThen(OperationLockHandler())
-        .andThen(EventLogHandler.forOperator(operators)),
-      quill)
-  )
+  /** After the commit, the location's lock is let go: the run's end is written first, so the next
+    * operation to take the lock finds it ended.
+    */
+  def complete(quill: QuillSqlite, operators: OperatorContext, locks: DistributedLock): Complete =
+    Flow(
+      CompleteOperationHandler[Task](RunRepositoryQuill(quill)),
+      TransactionalEventHandler(
+        LocationPersistenceHandler()
+          .andThen(RunPersistenceHandler())
+          .andThen(OperationLockHandler())
+          .andThen(EventLogHandler.forOperator(operators)),
+        quill).andThen(OperationLock.releasing(locks))
+    )
 
   val startLayer: ZLayer[QuillSqlite & OperatorContext & OperationQueue, Nothing, Start] = ZLayer
     .fromFunction(start)
 
-  val completeLayer: ZLayer[QuillSqlite & OperatorContext, Nothing, Complete] = ZLayer.fromFunction(
-    complete)
+  val completeLayer: ZLayer[QuillSqlite & OperatorContext & DistributedLock, Nothing, Complete] =
+    ZLayer.fromFunction(complete)
 end OperationFlows

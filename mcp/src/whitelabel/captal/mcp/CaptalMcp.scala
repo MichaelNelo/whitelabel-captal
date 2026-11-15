@@ -27,6 +27,7 @@ import whitelabel.captal.mcp.tools.{
 }
 import whitelabel.captal.platform.OperatorContext
 import whitelabel.captal.platform.aws.AssetStore
+import whitelabel.captal.platform.locks.DistributedLock
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.telemetry.Tracing
 import zio.{Chunk, IO, ZEnvironment, ZIO}
@@ -136,7 +137,8 @@ object CaptalMcp:
     * composed once in [[Main]] with the operator context they log under.
     */
   type Env =
-    QuillSqlite & AssetStore & Tracing & OperatorContext & LocationFlows.All & OperationFlows.Start
+    QuillSqlite & AssetStore & Tracing & OperatorContext & LocationFlows.All &
+      OperationFlows.Start & DistributedLock
 
   /** Auth is not optional: the SDK silently ignores every `requireScopes` declaration when no
     * `.auth(...)` is configured, leaving every tool open to anyone who can reach the port.

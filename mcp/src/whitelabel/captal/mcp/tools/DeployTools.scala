@@ -14,8 +14,10 @@ import whitelabel.captal.mcp.apps.{RunRoutes, RunTicket, RunUi}
 import whitelabel.captal.mcp.aws.InfraStore
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
 import whitelabel.captal.platform.aws.AssetStore
-import whitelabel.captal.platform.operations.{RunRecords, TransitionTaken}
+import whitelabel.captal.platform.locks.DistributedLock
+import whitelabel.captal.platform.operations.{OperationLock, RunRecords, TransitionTaken}
 import whitelabel.captal.platform.queries.{AssetsOf, RunStatus}
+import whitelabel.captal.platform.repositories.LocationRepositoryQuill
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.{Operator, OperatorContext}
 import zio.*
@@ -36,7 +38,7 @@ import ToolSchema.{readOnly, withUi}
   */
 object DeployTools:
   /** What the operation tools need from the runtime. */
-  type Env = QuillSqlite & AssetStore & OperatorContext & OperationFlows.Start
+  type Env = QuillSqlite & AssetStore & OperatorContext & OperationFlows.Start & DistributedLock
 
   final case class DeployRequest(
       @description(
@@ -128,54 +130,92 @@ object DeployTools:
       caller <- callerOf(ctx)
       now    <- Clock.instant
       view   <- start(
-        StartOperationCommand(place, operation, None, RunId(UUID.randomUUID.toString), caller, now),
+        StartOperationCommand(
+          place,
+          operation,
+          None,
+          RunId(UUID.randomUUID.toString),
+          None,
+          caller,
+          now),
         ctx,
         uiOrigin)
     yield view
 
-  /** Runs the command as the calling operator, who can be asked; the run it started, or the one the
-    * operator chose to follow or finish when `core` refused.
+  /** The location's lock, taken for the command's new run: who holds it instead, if anyone, and how
+    * to let it go when the command starts nothing. A slug no location has takes no lock; `core`
+    * refuses it.
+    */
+  private def locked(cmd: StartOperationCommand): ZIO[Env, String, (Option[RunId], UIO[Unit])] =
+    for
+      location <- ZIO
+        .serviceWithZIO[QuillSqlite](LocationRepositoryQuill(_).find(cmd.slug))
+        .orDie
+        .map(_.map(found => OperationLock.resource(found.id)))
+      locks  <- ZIO.service[DistributedLock]
+      taken  <- ZIO.foreach(location)(locks.acquire(_, cmd.newRun.asString, OperationLock.Ttl))
+      holder <-
+        taken match
+          case None | Some(Right(_)) =>
+            ZIO.none
+          case Some(Left(Some(other))) =>
+            ZIO.some(RunId(other))
+          case Some(Left(None)) =>
+            ZIO.fail(
+              s"Could not take the lock of '${cmd
+                  .slug
+                  .asString}': not enough of the lock's instances answered. Nothing was started; try again in a moment.")
+    yield (
+      holder,
+      ZIO.foreachDiscard(location.filter(_ => holder.isEmpty))(
+        locks.release(_, cmd.newRun.asString)))
+
+  /** Runs the command as the calling operator, who can be asked, with the location's lock taken for
+    * its run; the run it started, or the one the operator chose to follow or finish when `core`
+    * refused. A command that starts nothing lets the lock go before anything else.
     */
   private def start(
       cmd: StartOperationCommand,
       ctx: McpToolContext,
-      uiOrigin: String): ZIO[Env, String, RunView] = ZIO
-    .serviceWithZIO[OperatorContext](
-      _.locally(Operator(cmd.by, Some(Elicit.yesNo(ctx, _))))(
-        ZIO.serviceWithZIO[OperationFlows.Start](_.execute(cmd))))
-    .foldZIO(
-      {
-        case Flow.HandlerError(errors) =>
-          refused(
-            errors
-              .toList
-              .flatMap:
-                case AppError.Location(found) =>
-                  found.toList
-                case _ =>
-                  Nil
-            ,
-            cmd,
-            ctx,
-            uiOrigin)
-        case TransitionTaken(_, Some(holder)) =>
-          followOrNot(
-            holder,
-            cmd,
-            ctx,
-            uiOrigin,
-            s"Another operation on '${cmd.slug.asString}' started at the same moment")
-        case TransitionTaken(_, None) =>
-          ZIO.fail(
-            s"Another operation on '${cmd
-                .slug
-                .asString}' started at the same moment and has already ended. Call ${toolFor(
-                cmd.operation.name)} again.")
-        case other =>
-          ZIO.die(other)
-      },
-      _ => viewFor(cmd.newRun, cmd.by, uiOrigin, alreadyGoing = false)
-    )
+      uiOrigin: String): ZIO[Env, String, RunView] = locked(cmd).flatMap: (holder, release) =>
+    ZIO
+      .serviceWithZIO[OperatorContext](
+        _.locally(Operator(cmd.by, Some(Elicit.yesNo(ctx, _))))(
+          ZIO.serviceWithZIO[OperationFlows.Start](_.execute(cmd.copy(holder = holder)))))
+      .tapError(_ => release)
+      .foldZIO(
+        {
+          case Flow.HandlerError(errors) =>
+            refused(
+              errors
+                .toList
+                .flatMap:
+                  case AppError.Location(found) =>
+                    found.toList
+                  case _ =>
+                    Nil
+              ,
+              cmd,
+              ctx,
+              uiOrigin)
+          case TransitionTaken(_, Some(holder)) =>
+            followOrNot(
+              holder,
+              cmd,
+              ctx,
+              uiOrigin,
+              s"Another operation on '${cmd.slug.asString}' started at the same moment")
+          case TransitionTaken(_, None) =>
+            ZIO.fail(
+              s"Another operation on '${cmd
+                  .slug
+                  .asString}' started at the same moment and has already ended. Call ${toolFor(
+                  cmd.operation.name)} again.")
+          case other =>
+            ZIO.die(other)
+        },
+        _ => viewFor(cmd.newRun, cmd.by, uiOrigin, alreadyGoing = false)
+      )
 
   /** What a refusal leads to: a question, when it is one the operator can settle here, or the
     * refusal as the operator reads it.

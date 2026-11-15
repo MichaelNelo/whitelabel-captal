@@ -29,6 +29,7 @@ import whitelabel.captal.core.operation.Step as CoreStep
 import whitelabel.captal.mcp.access.{Auth, Tokens}
 import whitelabel.captal.mcp.apps.RunRoutes
 import whitelabel.captal.mcp.aws.{DeployTargets, InfraSteps, InfraStore}
+import whitelabel.captal.platform.locks.{DistributedLock, Redlock}
 import whitelabel.captal.platform.operations.OperationQueue
 import whitelabel.captal.mcp.resources.Readiness
 import whitelabel.captal.mcp.tools.{
@@ -354,8 +355,10 @@ object DeployE2ESpec extends ZIOSpecDefault:
       tracing    <- Telemetry.noop.build.map(_.get[Tracing])
       operators  <- Operators.make.build.map(_.get)
       extensions <- CaptalMcp.extensions
-      // The runs the operation tools start, taken by a runner as `Main` starts one.
+      // The runs the operation tools start, taken by a runner as `Main` starts one, under the locks
+      // at `REDIS_LOCK_ADDRESSES`.
       queue <- OperationQueue.layer.build.map(_.get)
+      locks <- Redlock.layer.build.map(_.get)
       start = OperationFlows.start(env.get[QuillSqlite], operators, queue)
       _ <-
         ZIO.foreachDiscard(infra)(store =>
@@ -363,8 +366,9 @@ object DeployE2ESpec extends ZIOSpecDefault:
             queue,
             env.get[QuillSqlite],
             InfraSteps(store, env.get[AssetStore]),
-            OperationFlows.complete(env.get[QuillSqlite], operators),
-            operators))
+            OperationFlows.complete(env.get[QuillSqlite], operators, locks),
+            operators,
+            locks))
       routes = CaptalMcp
         .server(
           Auth.mcpAuth(resource),
@@ -376,7 +380,11 @@ object DeployE2ESpec extends ZIOSpecDefault:
           extensions)
         .statelessRoutes
         .provideEnvironment(
-          env.add(tracing).add[Operators](operators).add[OperationFlows.Start](start) ++
+          env
+            .add(tracing)
+            .add[Operators](operators)
+            .add[OperationFlows.Start](start)
+            .add[DistributedLock](locks) ++
             LocationFlows.environment(env.get[QuillSqlite], operators))
       _ <- TestClient.addRoutes(routes)
       // The run page's stream, which lives beside the protocol rather than inside it.
