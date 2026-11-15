@@ -1,7 +1,7 @@
 package whitelabel.captal.core.application
 
 import cats.data.NonEmptyChain
-import whitelabel.captal.core.{recovery, survey, user, video}
+import whitelabel.captal.core.{location, recovery, survey, user, video}
 
 enum Error:
   case NoSurveyAssigned
@@ -17,3 +17,4 @@ enum Error:
   case User(errors: NonEmptyChain[user.Error])
   case Video(errors: NonEmptyChain[video.Error])
   case Recovery(errors: NonEmptyChain[recovery.Error])
+  case Location(errors: NonEmptyChain[location.Error])

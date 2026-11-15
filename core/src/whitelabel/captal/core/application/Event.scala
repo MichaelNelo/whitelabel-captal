@@ -1,6 +1,6 @@
 package whitelabel.captal.core.application
 
-import whitelabel.captal.core.{access, device, recovery, survey, user, video}
+import whitelabel.captal.core.{access, device, location, recovery, survey, user, video}
 
 enum Event:
   case Survey(event: survey.Event)
@@ -9,3 +9,4 @@ enum Event:
   case Device(event: device.Event)
   case Recovery(event: recovery.Event)
   case Access(event: access.Event)
+  case Location(event: location.Event)

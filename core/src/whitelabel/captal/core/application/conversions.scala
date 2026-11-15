@@ -1,9 +1,12 @@
 package whitelabel.captal.core.application
 
 import cats.data.NonEmptyChain
-import whitelabel.captal.core.{access, device, recovery, survey, user, video}
+import whitelabel.captal.core.{access, device, location, recovery, survey, user, video}
 
 object conversions:
+  given locationEventConversion: Conversion[location.Event, Event] = Event.Location(_)
+  given locationErrorConversion: Conversion[NonEmptyChain[location.Error], Error] =
+    Error.Location(_)
   given userEventConversion: Conversion[user.Event, Event] = Event.User(_)
   given surveyEventConversion: Conversion[survey.Event, Event] = Event.Survey(_)
   given videoEventConversion: Conversion[video.Event, Event] = Event.Video(_)
