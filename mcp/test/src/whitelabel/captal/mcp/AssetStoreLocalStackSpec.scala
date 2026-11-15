@@ -6,7 +6,7 @@ import software.amazon.awssdk.services.s3.model.{
   HeadObjectRequest,
   PutObjectRequest
 }
-import whitelabel.captal.mcp.aws.{Asset, AssetStore}
+import whitelabel.captal.platform.aws.{Asset, AssetStore}
 import zio.*
 import zio.test.*
 

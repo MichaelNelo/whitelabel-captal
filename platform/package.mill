@@ -19,7 +19,12 @@ object `package` extends BaseModule:
     // Must match the rqlite server: 9.x reports refused statements as zero rows, and only this driver decodes 10.6+ result codes.
     mvn"io.rqlite:rqlite-jdbc:10.5.2.1",
     mvn"ch.qos.logback:logback-classic:1.5.6",
-    mvn"io.circe::circe-yaml:0.16.0"
+    mvn"io.circe::circe-yaml:0.16.0",
+    // The asset store, which the backoffice's queries read. Synchronous clients only:
+    // `netty-nio-client` is excluded, as in the backoffice's own AWS dependencies.
+    mvn"software.amazon.awssdk:s3:2.29.51".exclude("software.amazon.awssdk" -> "netty-nio-client"),
+    mvn"software.amazon.awssdk:cloudfront:2.29.51".exclude(
+      "software.amazon.awssdk" -> "netty-nio-client")
   )
 
   def migrate() = Task.Command:

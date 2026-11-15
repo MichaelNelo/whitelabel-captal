@@ -4,7 +4,7 @@ import com.jamesward.ziohttp.mcp.*
 import com.jamesward.ziohttp.mcp.auth.McpAuth
 import whitelabel.captal.core.i18n.{I18n, I18nSchema}
 import whitelabel.captal.mcp.apps.UploadUiSource
-import whitelabel.captal.mcp.aws.{AssetStore, InfraStore}
+import whitelabel.captal.mcp.aws.InfraStore
 import whitelabel.captal.mcp.protocol.{Skill, Skills, SkillsExtension, ToolSchema}
 import whitelabel.captal.mcp.resources.{EntityResources, Readiness}
 import whitelabel.captal.mcp.tools.{
@@ -23,6 +23,7 @@ import whitelabel.captal.mcp.tools.{
   UnifiTools,
   VideoTools
 }
+import whitelabel.captal.platform.aws.AssetStore
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.telemetry.Tracing
 import zio.{Chunk, IO, ZEnvironment, ZIO}

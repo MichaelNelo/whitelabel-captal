@@ -54,6 +54,7 @@ import software.amazon.awssdk.services.elasticloadbalancingv2.model.{
   TargetHealthStateEnum,
   TargetTypeEnum
 }
+import whitelabel.captal.platform.aws.Poll
 import zio.*
 
 /** Everything a location's service needs that is not a location: the cluster they share, the

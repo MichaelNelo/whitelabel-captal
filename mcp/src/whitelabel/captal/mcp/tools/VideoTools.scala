@@ -5,9 +5,9 @@ import whitelabel.captal.core.video.VideoType
 import whitelabel.captal.core.{survey, video}
 import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.apps.UploadUi
-import whitelabel.captal.mcp.aws.AssetStore
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
 import whitelabel.captal.mcp.{QuillArrow, Writes}
+import whitelabel.captal.platform.aws.AssetStore
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given

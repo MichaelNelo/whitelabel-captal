@@ -3,9 +3,9 @@ package whitelabel.captal.mcp.tools
 import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
 import whitelabel.captal.mcp.access.Auth
-import whitelabel.captal.mcp.aws.{Asset, AssetStore}
 import whitelabel.captal.mcp.protocol.{CssSchema, McpSchema, ToolSchema}
 import whitelabel.captal.platform.LocationRow
+import whitelabel.captal.platform.aws.{Asset, AssetStore}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
 import zio.*

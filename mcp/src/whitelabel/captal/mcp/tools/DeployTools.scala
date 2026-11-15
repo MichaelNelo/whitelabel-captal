@@ -4,8 +4,9 @@ import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
 import whitelabel.captal.mcp.access.{Auth, Tokens}
 import whitelabel.captal.mcp.apps.{RunRoutes, RunTicket, RunUi, UiRoutes}
-import whitelabel.captal.mcp.aws.{AssetStore, BundleCopy, InfraStore, Runs}
+import whitelabel.captal.mcp.aws.{InfraStore, Runs}
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
+import whitelabel.captal.platform.aws.{AssetStore, BundleCopy}
 import whitelabel.captal.platform.{LocationRow, LocationStates, Terms}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given

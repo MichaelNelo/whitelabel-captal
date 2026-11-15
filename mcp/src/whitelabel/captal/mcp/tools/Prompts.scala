@@ -1,8 +1,8 @@
 package whitelabel.captal.mcp.tools
 
 import com.jamesward.ziohttp.mcp.*
-import whitelabel.captal.mcp.aws.AssetStore
 import whitelabel.captal.mcp.resources.Readiness
+import whitelabel.captal.platform.aws.AssetStore
 import whitelabel.captal.platform.schema.QuillSqlite
 import zio.*
 

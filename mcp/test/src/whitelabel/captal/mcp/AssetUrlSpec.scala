@@ -1,6 +1,6 @@
 package whitelabel.captal.mcp
 
-import whitelabel.captal.mcp.aws.AssetStore
+import whitelabel.captal.platform.aws.AssetStore
 import zio.test.*
 
 /** `publicUrl` and `keyOf` as inverses, against both addressing styles. Needs no S3. */

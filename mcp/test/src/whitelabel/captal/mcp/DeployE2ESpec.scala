@@ -27,7 +27,7 @@ import software.amazon.awssdk.services.s3.model.{
 import whitelabel.captal.core.i18n.{I18n, I18nSchema}
 import whitelabel.captal.mcp.access.{Auth, Tokens}
 import whitelabel.captal.mcp.apps.RunRoutes
-import whitelabel.captal.mcp.aws.{Asset, AssetStore, DeployTargets, InfraStore}
+import whitelabel.captal.mcp.aws.{DeployTargets, InfraStore}
 import whitelabel.captal.mcp.resources.Readiness
 import whitelabel.captal.mcp.tools.{
   AdvertiserTools,
@@ -45,6 +45,7 @@ import whitelabel.captal.mcp.tools.{
   VideoTools
 }
 import whitelabel.captal.core.{user, video}
+import whitelabel.captal.platform.aws.{Asset, AssetStore}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.telemetry.{Telemetry, Tracing}

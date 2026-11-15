@@ -5,7 +5,7 @@ import io.opentelemetry.api.common.{AttributeKey, Attributes}
 import io.opentelemetry.api.trace.SpanKind
 import whitelabel.captal.cdc.protocol.ChangeFeedFollower
 import whitelabel.captal.core.video
-import whitelabel.captal.mcp.aws.AssetStore
+import whitelabel.captal.platform.aws.AssetStore
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given

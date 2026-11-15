@@ -1,12 +1,13 @@
-package whitelabel.captal.mcp.aws
+package whitelabel.captal.platform.aws
 
 import zio.*
 
 /** Asking AWS the same question until the answer settles, with a pause between asks. Without the
   * pause a wait of minutes is thousands of describe calls, and the throttling error that brings
-  * back fails the operation that was only waiting.
+  * back fails the operation that was only waiting. Shared by the asset store and the backoffice's
+  * deploy store.
   */
-private[aws] object Poll:
+object Poll:
   val Every: Duration = 5.seconds
 
   /** Runs `check` now and then every [[Every]] until `done` holds, for at most `within`. `None`

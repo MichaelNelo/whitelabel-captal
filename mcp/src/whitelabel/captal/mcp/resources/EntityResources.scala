@@ -3,8 +3,8 @@ package whitelabel.captal.mcp.resources
 import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
 import whitelabel.captal.mcp.apps.{PreviewUi, RunUi, UnifiUi, UploadUi, UploadUiSource}
-import whitelabel.captal.mcp.aws.{Asset, AssetStore}
 import whitelabel.captal.mcp.tools.{AdvertiserTools, SurveyTools, VideoTools}
+import whitelabel.captal.platform.aws.{Asset, AssetStore}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given

@@ -4,8 +4,8 @@ import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
 import whitelabel.captal.core.i18n.{I18n, I18nSchema}
 import whitelabel.captal.mcp.apps.PreviewUi
-import whitelabel.captal.mcp.aws.{Asset, AssetStore}
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
+import whitelabel.captal.platform.aws.{Asset, AssetStore}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.services.LocaleServiceQuill

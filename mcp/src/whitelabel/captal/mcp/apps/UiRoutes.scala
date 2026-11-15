@@ -11,8 +11,8 @@ import whitelabel.captal.core.device.Mac
 import whitelabel.captal.core.location.{Error as LocationError, Secret, SettingsChange, Slug}
 import whitelabel.captal.mcp.QuillArrow
 import whitelabel.captal.mcp.access.Tokens
-import whitelabel.captal.mcp.aws.AssetStore
 import whitelabel.captal.mcp.tools.LocationCommands
+import whitelabel.captal.platform.aws.AssetStore
 import whitelabel.captal.platform.repositories.LocationRepositoryQuill
 import whitelabel.captal.platform.{AccessPointRow, LocationRow}
 import whitelabel.captal.platform.schema.QuillSqlite

@@ -15,6 +15,11 @@ object `package` extends BaseModule with Released:
 
   override def versionFiles: T[Seq[PathRef]] = Task(Seq(dockerfile()))
 
+  /** Empty: the launcher prefix is refused above 65 535 ZIP entries, which the asset store's AWS
+    * SDK in `platform` takes the assembly past, and the image runs `java -jar`.
+    */
+  def prependShellScript = ""
+
   /** Builds `captal-api:<tag>` from the assembly jar. Usage: `mill api.image` or `mill api.image --tag v1.2.3`
     */
   def image(tag: String = "latest", devEndpoints: Boolean = false) = Task.Command:

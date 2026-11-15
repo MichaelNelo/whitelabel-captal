@@ -1,4 +1,4 @@
-package whitelabel.captal.mcp.aws
+package whitelabel.captal.platform.aws
 
 import java.net.URI
 import java.time.Duration as JavaDuration
@@ -28,7 +28,6 @@ import software.amazon.awssdk.services.s3.model.{
 import software.amazon.awssdk.services.s3.presigner.S3Presigner
 import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest
 import zio.*
-import zio.http.{Client, Request, URL}
 
 /** One asset a location can override, and how it has to be stored. The SPA fetches these by fixed
   * relative name, so the content type is part of the contract. Stored as written: the distribution
@@ -262,7 +261,7 @@ final case class AssetStore(
     ZIO.foreachDiscard(keys)(deleteIfPresent).as(keys.size)
 
   /** Deletes a key, treating absence as success. */
-  private[mcp] def deleteIfPresent(key: String): ZIO[Any, String, Unit] = ZIO
+  private[captal] def deleteIfPresent(key: String): ZIO[Any, String, Unit] = ZIO
     .attemptBlocking:
       s3.deleteObject(DeleteObjectRequest.builder().bucket(bucket).key(key).build())
       ()
@@ -283,7 +282,7 @@ final case class AssetStore(
     .mapError(e => s"Could not read the ETag of $key: ${e.getMessage}")
 
   /** Every key under a prefix, following the `ListObjectsV2` continuation token to the end. */
-  private[mcp] def listPrefix(prefix: String): ZIO[Any, String, List[String]] =
+  private[captal] def listPrefix(prefix: String): ZIO[Any, String, List[String]] =
     def page(token: Option[String]): ZIO[Any, Throwable, (List[String], Option[String])] = ZIO
       .attemptBlocking:
         val request = ListObjectsV2Request.builder().bucket(bucket).prefix(prefix)
@@ -376,46 +375,6 @@ final case class AssetStore(
       localImport.findAllMatchIn(text).map(found => scriptUrl(found.group(1))).toSeq.distinct
     .orElseSucceed(Seq.empty)
 
-  /** Fetches `ui/upload.js` at startup and returns a warning when it would not load as a module.
-    *
-    * A module script is fetched in CORS mode, so the CDN has to answer
-    * `Access-Control-Allow-Origin` or the browser blocks it and the page renders inert, with
-    * nothing in the console, the tool call or this server's logs.
-    *
-    * A warning and not a failure: the first deploy of a new environment reaches this before
-    * `client.publish` has ever run. Nothing here configures CORS; see docs/mcp-iam.adoc.
-    */
-  def verifyScriptDelivery: ZIO[Client, Nothing, Option[String]] =
-    val target = scriptUrl("upload.js")
-    val probe =
-      for
-        url <- ZIO.fromEither(URL.decode(target)).mapError(e => new RuntimeException(e.getMessage))
-        // An `Origin` header is required: without one the response carries no CORS headers whether
-        // or not any are configured. Any value distinguishes a configured `*` from silence.
-        request = Request.get(url).addHeader("Origin", "https://probe.invalid")
-        response <- ZIO.serviceWithZIO[Client](_.batched(request))
-        // Drained rather than ignored, so the client does not hold the connection.
-        _ <- response.body.asString
-      yield (response.status.code, response.rawHeader("access-control-allow-origin"))
-    probe
-      // Bounded: this is in the startup path, so a CDN that hangs must not stop the server from
-      // serving.
-      .timeoutFail(new RuntimeException("timed out after 5s"))(5.seconds)
-      .fold(
-        e => Some(s"could not be reached ($target): ${e.getMessage}"),
-        (status, allowOrigin) =>
-          if status == 404 then
-            Some(s"is not published yet ($target). Run `mill client.publish`.")
-          else if status != 200 then
-            Some(s"answered HTTP $status ($target).")
-          else if allowOrigin.isEmpty then
-            Some(
-              s"is served but without Access-Control-Allow-Origin ($target), so a browser will block it as a module and the page will render inert. See docs/mcp-iam.adoc.")
-          else
-            None
-      )
-  end verifyScriptDelivery
-
   /** The origin those scripts come from, for `_meta.ui.csp.resourceDomains`, which maps to
     * `script-src`. Without it the module is blocked and the page renders inert.
     */
@@ -496,7 +455,7 @@ object AssetStore:
   /** A day, matching the bundle. An operator's edit invalidates CloudFront, so this bounds only the
     * browser's own cache.
     */
-  private[mcp] val CacheControl = "public, max-age=86400"
+  private[captal] val CacheControl = "public, max-age=86400"
 
   /** The page the edge serves for a location, and for every SPA route beneath it. */
   def indexKey(slug: String): String = s"$slug/index.html"
@@ -566,7 +525,7 @@ object AssetStore:
     * `bucket.localhost` resolves to nothing. Credentials are still required by the signer but never
     * checked.
     */
-  private[mcp] def s3ClientFor(endpoint: Option[String]): S3Client =
+  private[captal] def s3ClientFor(endpoint: Option[String]): S3Client =
     endpoint match
       case Some(url) =>
         S3Client.builder().endpointOverride(URI.create(url)).forcePathStyle(true).build()
@@ -576,14 +535,14 @@ object AssetStore:
   /** The same override, set explicitly rather than left to the SDK's own `AWS_ENDPOINT_URL`
     * handling, so every client here reads alike.
     */
-  private[mcp] def cdnClientFor(endpoint: Option[String]): CloudFrontClient =
+  private[captal] def cdnClientFor(endpoint: Option[String]): CloudFrontClient =
     endpoint match
       case Some(url) =>
         CloudFrontClient.builder().endpointOverride(URI.create(url)).build()
       case None =>
         CloudFrontClient.create()
 
-  private[mcp] def presignerFor(endpoint: Option[String]): S3Presigner =
+  private[captal] def presignerFor(endpoint: Option[String]): S3Presigner =
     endpoint match
       case Some(url) =>
         S3Presigner

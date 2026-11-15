@@ -2,8 +2,8 @@ package whitelabel.captal.mcp.apps
 
 import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
-import whitelabel.captal.mcp.aws.AssetStore
 import whitelabel.captal.mcp.protocol.ToolSchema
+import whitelabel.captal.platform.aws.AssetStore
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given

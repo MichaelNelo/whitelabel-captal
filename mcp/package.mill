@@ -31,9 +31,7 @@ object `package` extends BaseModule with Released:
     // Forced over the 3.0.9 the tree resolves; a mismatch fails at runtime, not at compile time.
     mvn"dev.zio::izumi-reflect:3.0.10",
     // Synchronous clients only: `netty-nio-client` is excluded from every AWS SDK dependency here.
-    mvn"software.amazon.awssdk:s3:2.29.51".exclude("software.amazon.awssdk" -> "netty-nio-client"),
-    mvn"software.amazon.awssdk:cloudfront:2.29.51".exclude(
-      "software.amazon.awssdk" -> "netty-nio-client"),
+    // S3 and CloudFront come with `platform`, which holds the asset store.
     mvn"software.amazon.awssdk:ecs:2.29.51".exclude("software.amazon.awssdk" -> "netty-nio-client"),
     mvn"software.amazon.awssdk:elasticloadbalancingv2:2.29.51".exclude(
       "software.amazon.awssdk" -> "netty-nio-client"),

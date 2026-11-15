@@ -3,8 +3,8 @@ package whitelabel.captal.mcp
 import io.opentelemetry.api.trace.SpanKind
 import whitelabel.captal.cdc.protocol.ChangeFeedFollower
 import whitelabel.captal.mcp.access.{Auth, OauthMetadata, Tokens}
-import whitelabel.captal.mcp.apps.{RunRoutes, UiRoutes}
-import whitelabel.captal.mcp.aws.{AssetStore, DeployTargets, InfraStore}
+import whitelabel.captal.mcp.apps.{RunRoutes, ScriptDelivery, UiRoutes}
+import whitelabel.captal.mcp.aws.{DeployTargets, InfraStore}
 import whitelabel.captal.mcp.protocol.{Skills, SkillsExtension}
 import whitelabel.captal.mcp.resources.Readiness
 import whitelabel.captal.mcp.tools.{
@@ -24,6 +24,7 @@ import whitelabel.captal.mcp.tools.{
   VideoTools
 }
 import whitelabel.captal.platform.RqliteDataSource
+import whitelabel.captal.platform.aws.AssetStore
 import whitelabel.captal.platform.schema.{QuillSqlite, TracedSqlite}
 import whitelabel.captal.telemetry.Telemetry
 import zio.*
@@ -143,9 +144,8 @@ object Main extends ZIOAppDefault:
           val infra = env.get[Option[InfraStore]]
           // A warning and not a failure: the published script belongs to `client.publish`, and a
           // new environment reaches here before that has ever run.
-          val checkScript = env
-            .get[AssetStore]
-            .verifyScriptDelivery
+          val checkScript = ScriptDelivery
+            .verify(env.get[AssetStore])
             // Its own client, scoped to the check; a failure to build one is news to report rather
             // than a reason not to serve.
             .provide(zio.http.Client.default)
