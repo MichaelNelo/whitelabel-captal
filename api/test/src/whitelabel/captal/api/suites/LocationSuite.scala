@@ -50,9 +50,13 @@ object LocationSuite:
     private val registering = Flow(RegisterAccessPointHandler[Task](repo, repo), events)
     private val updating = Flow(UpdateAccessPointHandler[Task](repo, repo), events)
     private val removing = Flow(RemoveAccessPointHandler[Task](repo, repo), events)
+    private val requiring = Flow(RequireFingerprintHandler[Task](repo), events)
 
     def create(slug: Slug) = creating.execute(
       CreateLocationCommand(LocationId(s"${slug.asString}-id"), slug, s"Name of $slug", Now))
+
+    def requireFingerprint(slug: Slug, required: Boolean) = requiring.execute(
+      RequireFingerprintCommand(slug, required, Now))
 
     def register(
         slug: Slug,
@@ -114,22 +118,22 @@ object LocationSuite:
             _ <- run.update(
               Plaza,
               Ap,
-              SettingsChange(durationMinutes = Some(Some(45)), fingerprintRequired = Some(false)))
+              SettingsChange(durationMinutes = Some(Some(45)), unifiEnabled = Some(false)))
+            _      <- run.requireFingerprint(Plaza, required = false)
             found  <- run.repo.find(Plaza)
             points <- run.repo.of(created.id)
           yield assertTrue(
             found.map(_.state).contains(State.Created),
+            found.exists(!_.fingerprintRequired),
             points.map(_.mac) == List(Ap),
             points.map(_.controller.host) == List("second.example"),
             points.map(_.controller.token.reveal) == List("token"),
             points.map(_.settings) ==
               List(
-                Settings
-                  .Default
-                  .copy(
-                    durationMinutes = Some(45),
-                    redirectUrl = Some("https://plaza.example"),
-                    fingerprintRequired = false))
+                Settings(
+                  durationMinutes = Some(45),
+                  redirectUrl = Some("https://plaza.example"),
+                  unifiEnabled = false))
           )
         ,
         test("every change is logged under the operator who made it, and no token is"):

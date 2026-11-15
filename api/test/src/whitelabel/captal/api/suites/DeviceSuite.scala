@@ -4,7 +4,6 @@ import whitelabel.captal.api.TestFixtures
 import whitelabel.captal.api.TestHelpers.*
 import whitelabel.captal.api.routes.SurveyRoutes
 import whitelabel.captal.api.session.CurrentLocation
-import whitelabel.captal.core.device.Mac
 import whitelabel.captal.core.user
 import whitelabel.captal.platform.schema.QuillSqlite
 import zio.ZIO
@@ -83,44 +82,33 @@ object DeviceSuite:
             state.answers.forall(a => state.users.exists(_.id == a.userId))
           )
         ,
-        test(
-          "the fingerprint switch is read from the row of the access point the redirect names, and defaults to required"):
+        test("the fingerprint switch is read from the location's row, and defaults to required"):
           for
-            _ <- TestFixtures.seedLocation("venue")
-            _ <- TestFixtures.seedAccessPoint("venue", "11:11:11:11:11:11")
-            _ <- TestFixtures.seedAccessPoint(
-              "venue",
-              "22:22:22:22:22:22",
-              fingerprintRequired = false)
-            quill <- ZIO.service[QuillSqlite]
-            at =
-              (ap: String, sent: Option[String]) =>
-                SurveyRoutes.fingerprintOf(quill, servedAt("venue"), Mac.parse(ap), sent)
-            required <- at("11:11:11:11:11:11", None)
-            optional <- at("22:22:22:22:22:22", None)
-            blank    <- at("22:22:22:22:22:22", Some(""))
-            sent     <- at("22:22:22:22:22:22", Some("fp-x"))
-            unknown  <- at("33:33:33:33:33:33", None)
-            noAp     <- SurveyRoutes.fingerprintOf(quill, servedAt("venue"), None, None)
-            noRow    <- SurveyRoutes.fingerprintOf(quill, CurrentLocation.empty, None, None)
+            _        <- TestFixtures.seedLocation("fp-required")
+            _        <- TestFixtures.seedLocation("fp-optional", fingerprintRequired = false)
+            quill    <- ZIO.service[QuillSqlite]
+            required <- SurveyRoutes.fingerprintOf(quill, servedAt("fp-required"), None)
+            optional <- SurveyRoutes.fingerprintOf(quill, servedAt("fp-optional"), None)
+            blank    <- SurveyRoutes.fingerprintOf(quill, servedAt("fp-optional"), Some(""))
+            sent     <- SurveyRoutes.fingerprintOf(quill, servedAt("fp-optional"), Some("fp-x"))
+            missing  <- SurveyRoutes.fingerprintOf(quill, servedAt("no-such-location"), None)
+            noRow    <- SurveyRoutes.fingerprintOf(quill, CurrentLocation.empty, None)
           yield assertTrue(
             required.isEmpty,
             optional.contains(SurveyRoutes.NoFingerprint),
             blank.contains(SurveyRoutes.NoFingerprint),
             // A fingerprint the redirect does carry is kept, wherever it is optional.
             sent.contains("fp-x"),
-            unknown.isEmpty,
-            noAp.isEmpty,
+            missing.isEmpty,
             noRow.isEmpty
           )
         ,
         test(
           "where the fingerprint is optional, a redirect without one gets the stand-in, and the MAC tells devices apart"):
           for
-            _ <- TestFixtures.seedLocation("no-shortener")
-            // The AP the test redirect names, so the location admits it, and it asks for no
-            // fingerprint.
-            _ <- TestFixtures.seedAccessPoint("no-shortener", PortalAp, fingerprintRequired = false)
+            _ <- TestFixtures.seedLocation("no-shortener", fingerprintRequired = false)
+            // The AP the test redirect names, so the location admits it.
+            _        <- TestFixtures.seedAccessPoint("no-shortener", PortalAp)
             optional <- statusBackendAt(servedAt("no-shortener"))
             first    <- statusWithoutFingerprint(optional, "DD:DD:DD:DD:DD:01")
             again    <- statusWithoutFingerprint(optional, "DD:DD:DD:DD:DD:01")
