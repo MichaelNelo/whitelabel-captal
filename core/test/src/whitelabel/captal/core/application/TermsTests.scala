@@ -35,8 +35,8 @@ object TermsTests extends TestSuite:
   /** A device that accepted the version in force, or one that has not. */
   private def devices(accepted: Boolean): DeviceRepository[Id] =
     new DeviceRepository[Id]:
-      def findAccepted() = Option.when(accepted)(
-        Device(DeviceId, State.Accepted(InForce.id, Now.minusSeconds(60))))
+      def findAccepted() =
+        Option.when(accepted)(Device(DeviceId, State.Accepted(InForce.id, Now.minusSeconds(60))))
       def findNotAccepted() = Option.when(!accepted)(Device(DeviceId, State.NotAccepted))
 
   private def terms(inForce: Option[TermsVersion]): TermsRepository[Id] =
@@ -45,10 +45,8 @@ object TermsTests extends TestSuite:
 
   val tests = Tests:
     test("a device that has not accepted them accepts the version in force"):
-      val (events, accepted) = Op
-        .run(Device(DeviceId, State.NotAccepted).acceptTerms[Error](InForce, Now))
-        .toOption
-        .get
+      val (events, accepted) =
+        Op.run(Device(DeviceId, State.NotAccepted).acceptTerms[Error](InForce, Now)).toOption.get
       assert(
         accepted.state == State.Accepted(InForce.id, Now),
         events == List(device.Event.TermsAccepted(DeviceId, InForce.id, Now)))
@@ -64,14 +62,16 @@ object TermsTests extends TestSuite:
       assert(
         phaseOf(accepted = true, anonymous = false).contains(Phase.Welcome),
         phaseOf(accepted = false, anonymous = false).contains(Phase.WelcomeNeedsToS),
-        phaseOf(accepted = true, anonymous = true).contains(Phase.WelcomeNeedsToS))
+        phaseOf(accepted = true, anonymous = true).contains(Phase.WelcomeNeedsToS)
+      )
 
     test("starting needs them accepted"):
       def started(accepted: Boolean) = Op.run(
         StartHandler.withSession(devices(accepted), session).handle(StartCommand(Now)))
       assert(
         started(true).toOption.map(_._2).contains(NextStep(Phase.IdentificationQuestion)),
-        started(false).left.toOption.exists(_.head == Error.TermsNotAccepted))
+        started(false).left.toOption.exists(_.head == Error.TermsNotAccepted)
+      )
 
     test("accepting records the version in force, once, and leaves the welcome"):
       def accept(current: Option[TermsVersion], accepted: Boolean) = Op.run(

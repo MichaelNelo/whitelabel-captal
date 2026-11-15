@@ -249,7 +249,8 @@ object HandlerTests extends TestSuite:
         assert(
           Policy.fromConfig(None) == Right(Policy.ByMacAndFingerprint),
           Policy.fromConfig(Some("ByMac")) == Right(Policy.ByMac),
-          Policy.fromConfig(Some("ByFoo")).isLeft)
+          Policy.fromConfig(Some("ByFoo")).isLeft
+        )
       test("each policy compares what it says, and only signals carrying it"):
         val ab = Mac.parse("aa:bb:cc:dd:ee:01")
         val cd = Mac.parse("aa:bb:cc:dd:ee:02")
