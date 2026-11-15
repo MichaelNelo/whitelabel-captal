@@ -22,15 +22,18 @@ object LocationTests extends TestSuite:
   private val OtherAp = Mac.parse("aa:aa:aa:aa:aa:aa").get
   private val Token = Secret.parse("token").get
 
-  private def point(mac: Mac, host: String = "unifi.example") = AccessPoint(
+  private def point(
+      mac: Mac,
+      host: String = "unifi.example",
+      settings: Settings = Settings.Default) = AccessPoint(
     mac,
-    Controller(host, Some(8443), "default", Token))
+    Controller(host, Some(8443), "default", Token),
+    settings)
 
   private def at[S <: State](state: S): Location[S] = Location(
     LocationId("plaza-id"),
     Here,
     "Plaza",
-    Settings.Default,
     state)
 
   private def deployed(points: AccessPoint*): Location[State] = at(
@@ -88,89 +91,92 @@ object LocationTests extends TestSuite:
         refused.left.map(_.toList) ==
           Left(List(Error.BlankHost, Error.BlankSiteId, Error.InvalidPort(70000))))
 
+    test("SettingsChange"):
+      test("changes what is given and keeps the rest"):
+        val change = SettingsChange(
+          durationMinutes = Some(Some(30)),
+          fingerprintRequired = Some(false))
+        assert(
+          change.applyTo(Settings.Default) ==
+            Right(Settings.Default.copy(durationMinutes = Some(30), fingerprintRequired = false)))
+      test("clears the redirect URL"):
+        val set = Settings.Default.copy(redirectUrl = Some("https://example.com"))
+        assert(
+          SettingsChange(redirectUrl = Some(None)).applyTo(set).map(_.redirectUrl) == Right(None))
+      test("refuses a duration under a minute and a URL that is not http"):
+        val change = SettingsChange(
+          durationMinutes = Some(Some(0)),
+          redirectUrl = Some(Some("ftp://example.com")))
+        assert(
+          change.applyTo(Settings.Default).left.map(_.toList) ==
+            Left(List(Error.InvalidDuration(0), Error.InvalidRedirectUrl("ftp://example.com"))))
+
     test("CreateLocation"):
       val cmd = CreateLocationCommand(LocationId("new-id"), Here, "  Plaza ", Now)
-      test("creates it with the default settings"):
+      test("creates it"):
         val result = outcome(CreateLocationHandler(locations(None)).handle(cmd))
         assert(
           result.map(_._1) ==
             Right(List(Event.LocationCreated(LocationId("new-id"), Here, "Plaza", Now))))
-        assert(result.map(_._2.settings) == Right(Settings.Default))
+        assert(result.map(_._2.state) == Right(State.Created))
       test("refuses a slug another location has"):
         val result = outcome(CreateLocationHandler(locations(Some(at(State.Created)))).handle(cmd))
         assert(result == Left(List(Error.SlugTaken(Here, "Plaza"))))
       test("refuses a blank name"):
         val result = outcome(CreateLocationHandler(locations(None)).handle(cmd.copy(name = " ")))
         assert(result == Left(List(Error.BlankName)))
-
-    test("ChangeSettings"):
-      val repo = locations(Some(at(State.Created)))
-      test("changes what is given and keeps the rest"):
-        val change = SettingsChange(
-          durationMinutes = Some(Some(30)),
-          fingerprintRequired = Some(false))
+      test("refuses a location that does not exist to the other commands"):
         val result = outcome(
-          ChangeSettingsHandler(repo).handle(ChangeSettingsCommand(Here, change, Now)))
-        val expected = Settings
-          .Default
-          .copy(durationMinutes = Some(30), fingerprintRequired = false)
-        assert(
-          result ==
-            Right((List(Event.SettingsChanged(LocationId("plaza-id"), expected, Now)), expected)))
-      test("clears the redirect URL"):
-        val result = outcome(
-          ChangeSettingsHandler(
-            locations(
-              Some(
-                at(State.Created).copy(settings = Settings
-                  .Default
-                  .copy(redirectUrl = Some("https://example.com")))))).handle(
-            ChangeSettingsCommand(Here, SettingsChange(redirectUrl = Some(None)), Now)))
-        assert(result.map(_._2.redirectUrl) == Right(None))
-      test("refuses a duration under a minute and a URL that is not http"):
-        val change = SettingsChange(
-          durationMinutes = Some(Some(0)),
-          redirectUrl = Some(Some("ftp://example.com")))
-        val result = outcome(
-          ChangeSettingsHandler(repo).handle(ChangeSettingsCommand(Here, change, Now)))
-        assert(
-          result ==
-            Left(List(Error.InvalidDuration(0), Error.InvalidRedirectUrl("ftp://example.com"))))
-      test("refuses a location that does not exist"):
-        val result = outcome(
-          ChangeSettingsHandler(locations(None)).handle(
-            ChangeSettingsCommand(Here, SettingsChange(unifiEnabled = Some(false)), Now)))
+          RemoveAccessPointHandler(locations(None), accessPoints()).handle(
+            RemoveAccessPointCommand(Here, Ap, Now)))
         assert(result == Left(List(Error.NotFound(Here))))
 
     test("RegisterAccessPoint"):
-      def register(token: Option[Secret] = Some(Token)) = RegisterAccessPointCommand(
+      def register(
+          token: Option[Secret] = Some(Token),
+          settings: SettingsChange = SettingsChange()) = RegisterAccessPointCommand(
         Here,
         Ap,
         "unifi.example",
         Some(8443),
         "default",
         token,
+        settings,
         Now)
-      test("registers a new one"):
+      test("registers a new one with the default settings and what is given"):
         val result = outcome(
           RegisterAccessPointHandler(locations(Some(at(State.Created))), accessPoints()).handle(
-            register()))
+            register(settings = SettingsChange(durationMinutes = Some(Some(90))))))
+        val expected = point(Ap, settings = Settings.Default.copy(durationMinutes = Some(90)))
         assert(
           result.map(_._1) ==
-            Right(List(Event.AccessPointRegistered(LocationId("plaza-id"), point(Ap), Now))))
-      test("changes the one it has, keeping its token when none is given"):
+            Right(List(Event.AccessPointRegistered(LocationId("plaza-id"), expected, Now))))
+      test("changes the one it has, keeping its token and its settings when none are given"):
+        val kept = Settings.Default.copy(redirectUrl = Some("https://example.com"))
         val result = outcome(
           RegisterAccessPointHandler(
             locations(Some(at(State.Created))),
-            accessPoints(points = List(point(Ap, host = "old.example")))).handle(register(None)))
+            accessPoints(points = List(point(Ap, host = "old.example", settings = kept)))).handle(
+            register(None)))
         assert(
           result.map(_._1) ==
-            Right(List(Event.AccessPointUpdated(LocationId("plaza-id"), Ap, point(Ap), Now))))
+            Right(
+              List(
+                Event.AccessPointUpdated(
+                  LocationId("plaza-id"),
+                  Ap,
+                  point(Ap, settings = kept),
+                  Now))))
       test("asks for a token for a new one"):
         val result = outcome(
           RegisterAccessPointHandler(locations(Some(at(State.Created))), accessPoints()).handle(
             register(None)))
         assert(result == Left(List(Error.TokenRequired(Ap))))
+      test("refuses settings the portal could not use"):
+        val result = outcome(
+          RegisterAccessPointHandler(locations(Some(at(State.Created))), accessPoints()).handle(
+            register(settings = SettingsChange(durationMinutes = Some(Some(0))))))
+        assert(result == Left(List(Error.InvalidDuration(0))))
       test("refuses one another deployed location takes guests through"):
         val result = outcome(
           RegisterAccessPointHandler(
@@ -186,9 +192,19 @@ object LocationTests extends TestSuite:
         assert(result.isRight)
 
     test("UpdateAccessPoint"):
-      def update(newMac: Option[Mac] = None, host: Option[String] = None) =
-        UpdateAccessPointCommand(Here, Ap, newMac, host, None, None, Now)
-      test("moves it to a new MAC, keeping its controller"):
+      def update(
+          newMac: Option[Mac] = None,
+          host: Option[String] = None,
+          settings: SettingsChange = SettingsChange()) = UpdateAccessPointCommand(
+        Here,
+        Ap,
+        newMac,
+        host,
+        None,
+        None,
+        settings,
+        Now)
+      test("moves it to a new MAC, keeping its controller and its settings"):
         val result = outcome(
           UpdateAccessPointHandler(
             locations(Some(at(State.Created))),
@@ -196,6 +212,13 @@ object LocationTests extends TestSuite:
         assert(
           result.map(_._1) ==
             Right(List(Event.AccessPointUpdated(LocationId("plaza-id"), Ap, point(OtherAp), Now))))
+      test("changes its settings"):
+        val result = outcome(
+          UpdateAccessPointHandler(
+            locations(Some(at(State.Created))),
+            accessPoints(points = List(point(Ap)))).handle(
+            update(settings = SettingsChange(unifiEnabled = Some(false)))))
+        assert(result.map(_._2.settings.unifiEnabled) == Right(false))
       test("refuses a MAC the location already has"):
         val result = outcome(
           UpdateAccessPointHandler(

@@ -6,7 +6,6 @@ import whitelabel.captal.core.device.Mac
 
 enum Event:
   case LocationCreated(id: LocationId, slug: Slug, name: String, occurredAt: Instant)
-  case SettingsChanged(id: LocationId, settings: Settings, occurredAt: Instant)
   case AccessPointRegistered(location: LocationId, accessPoint: AccessPoint, occurredAt: Instant)
 
   /** The access point that had the MAC `mac` is now `accessPoint`, whose MAC may differ. */

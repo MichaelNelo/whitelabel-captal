@@ -19,6 +19,7 @@ import whitelabel.captal.core.location.{
   LocationId,
   Secret,
   Settings,
+  SettingsChange,
   Slug,
   State
 }
@@ -63,7 +64,7 @@ final case class CreateLocationCommand(
     name: String,
     occurredAt: Instant)
 
-/** A new location, `Created`, with the default settings, under a slug no other location has. */
+/** A new location, `Created`, under a slug no other location has. */
 object CreateLocationHandler:
   def apply[F[_]: Monad](locations: LocationRepository[F])
       : Handler.Aux[F, CreateLocationCommand, Location[State.Created.type]] =
@@ -80,60 +81,13 @@ object CreateLocationHandler:
               _ <- Decided.unless(Option.when(name.isEmpty)(LocationError.BlankName))
             yield (
               LocationEvent.LocationCreated(cmd.id, cmd.slug, name, cmd.occurredAt),
-              Location(cmd.id, cmd.slug, name, Settings.Default, State.Created))
+              Location(cmd.id, cmd.slug, name, State.Created))
 end CreateLocationHandler
 
-/** A change to some of a location's settings; `None` leaves one as it is, and `Some(None)` clears
-  * the duration or the redirect URL.
-  */
-final case class SettingsChange(
-    durationMinutes: Option[Option[Int]] = None,
-    redirectUrl: Option[Option[String]] = None,
-    unifiEnabled: Option[Boolean] = None,
-    fingerprintRequired: Option[Boolean] = None)
-
-final case class ChangeSettingsCommand(slug: Slug, change: SettingsChange, occurredAt: Instant)
-
-/** The location's settings, changed as asked in whatever state it is: they are read when a guest
-  * needs them, so they apply with no deploy. Answers them as they now stand.
-  */
-object ChangeSettingsHandler:
-  def apply[F[_]: Monad](
-      locations: LocationRepository[F]): Handler.Aux[F, ChangeSettingsCommand, Settings] =
-    new Handler[F, ChangeSettingsCommand]:
-      type Result = Settings
-
-      def handle(cmd: ChangeSettingsCommand) =
-        Decided.located(locations, cmd.slug): found =>
-          val change = cmd.change
-          val redirectUrl = change.redirectUrl.map(_.map(_.trim))
-          val problems =
-            List(
-              change.durationMinutes.flatten.filter(_ < 1).map(LocationError.InvalidDuration(_)),
-              redirectUrl
-                .flatten
-                .filterNot(url => url.startsWith("https://") || url.startsWith("http://"))
-                .map(LocationError.InvalidRedirectUrl(_))
-            ).flatten
-          val settings = Settings(
-            durationMinutes = change.durationMinutes.getOrElse(found.settings.durationMinutes),
-            redirectUrl = redirectUrl.getOrElse(found.settings.redirectUrl),
-            unifiEnabled = change.unifiEnabled.getOrElse(found.settings.unifiEnabled),
-            fingerprintRequired = change
-              .fingerprintRequired
-              .getOrElse(found.settings.fingerprintRequired)
-          )
-          Monad[F].pure(
-            Decided(
-              NonEmptyChain
-                .fromSeq(problems)
-                .toLeft(
-                  (LocationEvent.SettingsChanged(found.id, settings, cmd.occurredAt), settings))))
-end ChangeSettingsHandler
-
-/** Registers the access point `mac` at the location, or changes the controller of the one it has:
-  * what the UniFi form saves. `token` may be left out for an access point that has one stored,
-  * which it keeps.
+/** Registers the access point `mac` at the location, or changes the one it has: its controller and,
+  * as `settings` asks, what the portal does for the guests who join through it — what the UniFi
+  * form saves. `token` may be left out for an access point that has one stored, which it keeps; a
+  * new one starts from [[Settings.Default]].
   */
 final case class RegisterAccessPointCommand(
     slug: Slug,
@@ -142,6 +96,7 @@ final case class RegisterAccessPointCommand(
     port: Option[Int],
     siteId: String,
     token: Option[Secret],
+    settings: SettingsChange,
     occurredAt: Instant)
 
 /** Refused while another deployed location takes its guests through the access point, whatever
@@ -167,10 +122,11 @@ object RegisterAccessPointHandler:
                   .orElse(existing.map(_.controller.token))
                   .toRight(NonEmptyChain.one(LocationError.TokenRequired(cmd.mac)))
                 controller <- Controller.of(cmd.host, cmd.port, cmd.siteId, token)
+                settings   <- cmd.settings.applyTo(existing.fold(Settings.Default)(_.settings))
                 _          <- Decided.unless(
                   holders.find(_ != found.slug).map(LocationError.AccessPointHeld(cmd.mac, _)))
               yield
-                val point = AccessPoint(cmd.mac, controller)
+                val point = AccessPoint(cmd.mac, controller, settings)
                 existing match
                   case Some(_) =>
                     (
@@ -180,8 +136,9 @@ object RegisterAccessPointHandler:
                     (LocationEvent.AccessPointRegistered(found.id, point, cmd.occurredAt), point)
 end RegisterAccessPointHandler
 
-/** Changes the access point `mac`'s MAC, for one that was replaced, or its controller's host, port
-  * or site; each `None` keeps what it has, and its token is kept.
+/** Changes the access point `mac`: its MAC, for one that was replaced, its controller's host, port
+  * or site, and its settings as `settings` asks. Each `None` keeps what it has, and its token is
+  * kept.
   */
 final case class UpdateAccessPointCommand(
     slug: Slug,
@@ -190,6 +147,7 @@ final case class UpdateAccessPointCommand(
     host: Option[String],
     port: Option[Int],
     siteId: Option[String],
+    settings: SettingsChange,
     occurredAt: Instant)
 
 /** A new MAC is refused when the location already has it, or another deployed location takes its
@@ -225,8 +183,9 @@ object UpdateAccessPointHandler:
                 cmd.siteId.getOrElse(point.controller.siteId),
                 point.controller.token
               )
+              settings <- cmd.settings.applyTo(point.settings)
             yield
-              val updated = AccessPoint(moved.getOrElse(cmd.mac), controller)
+              val updated = AccessPoint(moved.getOrElse(cmd.mac), controller, settings)
               (
                 LocationEvent.AccessPointUpdated(found.id, cmd.mac, updated, cmd.occurredAt),
                 updated)

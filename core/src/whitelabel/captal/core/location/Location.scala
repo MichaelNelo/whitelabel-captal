@@ -8,28 +8,8 @@ object LocationId:
   extension (id: LocationId)
     def asString: String = id
 
-/** What a location's portal does that is not content, the same in every state: how long a guest is
-  * let in for (`None`, the default), where they are sent afterwards, whether its UniFi calls are
-  * made at all, and whether a redirect has to carry the link shortener's fingerprint.
+/** A location, by where it stands ([[State]]). What its portal does for a guest — how long they are
+  * let in for, where they are sent — is its access points' to say, since each answers to its own
+  * controller ([[AccessPoint]]).
   */
-final case class Settings(
-    durationMinutes: Option[Int],
-    redirectUrl: Option[String],
-    unifiEnabled: Boolean,
-    fingerprintRequired: Boolean)
-
-object Settings:
-  /** A new location's: UniFi on, a fingerprint required, nothing else set. */
-  val Default: Settings = Settings(
-    durationMinutes = None,
-    redirectUrl = None,
-    unifiEnabled = true,
-    fingerprintRequired = true)
-
-/** A location, by where it stands ([[State]]). */
-final case class Location[S <: State](
-    id: LocationId,
-    slug: Slug,
-    name: String,
-    settings: Settings,
-    state: S)
+final case class Location[S <: State](id: LocationId, slug: Slug, name: String, state: S)
