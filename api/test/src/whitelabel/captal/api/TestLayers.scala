@@ -95,7 +95,7 @@ object TestLayers:
         .andThen(SessionPhaseHandler(ctx, nextAfterIdentification.phase, nextAfterVideo.phase))
         .andThen(SessionSurveyHandler(ctx))
         .andThen(SessionVideoHandler(ctx))
-        .andThen(SessionExpirationHandler(ctx))
+        .andThen(SessionExpirationHandler())
         .andThen(SurveyProgressHandler())
         .andThen(RecoveryHandler())
       val transactional = TransactionalEventHandler(dbHandler, quill)
@@ -248,7 +248,7 @@ object TestLayers:
   type TestEnv =
     SessionContext & SessionService & LocaleService & SurveyRoutes.AnswerEmailFlowType &
       SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
-      SurveyRoutes.NextSurveyFlowType & SurveyRoutes.ResolveWelcomeFlowType &
+      SurveyRoutes.NextSurveyFlowType & SurveyRoutes.EnterPortalFlowType &
       VideoRoutes.NextVideoFlowType & VideoRoutes.MarkVideoWatchedFlowType &
       VideoRoutes.StartPlaybackFlowType & VideoRoutes.EndPlaybackFlowType &
       AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
@@ -305,7 +305,9 @@ object TestLayers:
     TermsRoutes.layer,
     TermsRepositoryQuill.layer,
     DeviceRepositoryQuill.layer,
-    Flows.resolveWelcomeFlowLayer,
+    // Entering the portal, with its handlers as they are: the tests trace nothing.
+    ZLayer.fromFunction((quill: QuillSqlite, sessions: SessionService) =>
+      Flows.enterPortalFlow(quill, sessions, (_, handler) => handler)),
     Flows.startFlowLayer,
     Flows.acceptTermsFlowLayer,
     ZLayer.succeed[BundleManifest](

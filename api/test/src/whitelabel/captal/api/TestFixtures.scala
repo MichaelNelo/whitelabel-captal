@@ -380,8 +380,13 @@ object TestFixtures:
     import quill.*
     run(query[SessionRow].filter(_.id == lift(sessionId)).update(_.phase -> lift(phase))).unit
 
-  /** A location row whose id, slug and name are all `locationId`. */
-  def seedLocation(locationId: String, fingerprintRequired: Boolean = true)
+  /** A location row whose id, slug and name are all `locationId`, deployed unless said otherwise:
+    * the portal admits guests only into a deployed location, which has to have an access point too.
+    */
+  def seedLocation(
+      locationId: String,
+      fingerprintRequired: Boolean = true,
+      deployed: Boolean = true)
       : ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*
     val location = LocationRow(
@@ -395,7 +400,16 @@ object TestFixtures:
         if fingerprintRequired then
           1
         else
-          0)
+          0
+      ,
+      state =
+        if deployed then
+          LocationStates.Deployed
+        else
+          LocationStates.Created
+      ,
+      stateRun = Option.when(deployed)("run-test")
+    )
     run(query[LocationRow].insertValue(lift(location))).unit
 
   /** An access point of `locationId` with its controller and its settings, its MAC stored as the

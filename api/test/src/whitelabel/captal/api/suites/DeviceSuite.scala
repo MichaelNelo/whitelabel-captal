@@ -82,27 +82,6 @@ object DeviceSuite:
             state.answers.forall(a => state.users.exists(_.id == a.userId))
           )
         ,
-        test("the fingerprint switch is read from the location's row, and defaults to required"):
-          for
-            _        <- TestFixtures.seedLocation("fp-required")
-            _        <- TestFixtures.seedLocation("fp-optional", fingerprintRequired = false)
-            quill    <- ZIO.service[QuillSqlite]
-            required <- SurveyRoutes.fingerprintOf(quill, servedAt("fp-required"), None)
-            optional <- SurveyRoutes.fingerprintOf(quill, servedAt("fp-optional"), None)
-            blank    <- SurveyRoutes.fingerprintOf(quill, servedAt("fp-optional"), Some(""))
-            sent     <- SurveyRoutes.fingerprintOf(quill, servedAt("fp-optional"), Some("fp-x"))
-            missing  <- SurveyRoutes.fingerprintOf(quill, servedAt("no-such-location"), None)
-            noRow    <- SurveyRoutes.fingerprintOf(quill, CurrentLocation.empty, None)
-          yield assertTrue(
-            required.isEmpty,
-            optional.contains(SurveyRoutes.NoFingerprint),
-            blank.contains(SurveyRoutes.NoFingerprint),
-            // A fingerprint the redirect does carry is kept, wherever it is optional.
-            sent.contains("fp-x"),
-            missing.isEmpty,
-            noRow.isEmpty
-          )
-        ,
         test(
           "where the fingerprint is optional, a redirect without one gets the stand-in, and the MAC tells devices apart"):
           for

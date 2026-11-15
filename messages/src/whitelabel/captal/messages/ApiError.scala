@@ -2,7 +2,7 @@ package whitelabel.captal.messages
 
 import cats.data.NonEmptyChain
 import io.circe.{Decoder, Encoder}
-import whitelabel.captal.core.application.Error as AppError
+import whitelabel.captal.core.application.{Error as AppError, RedirectField}
 import whitelabel.captal.core.{recovery, survey, user, video}
 
 enum ApiError:
@@ -70,6 +70,12 @@ enum ApiError:
     */
   case InvalidClient(missing: List[String])
 
+  /** The location the portal serves is not deployed: still being stood up, or an operation on it
+    * did not finish. Expected: shown as an error, with a retry, which is what helps while it is
+    * being stood up.
+    */
+  case LocationNotDeployed(location: String)
+
   // Recovery errors
   case UnknownError(errorId: String)
   case RecoveryAlreadyUsed(errorId: String)
@@ -113,6 +119,23 @@ object ApiError:
         fromVideoError(errors.head)
       case AppError.Recovery(errors) =>
         fromRecoveryError(errors.head)
+      case AppError.InvalidClient(missing) =>
+        ApiError.InvalidClient(missing.map(headerOf))
+      case AppError.UnknownAccessPoint(apMac) =>
+        ApiError.UnknownAccessPoint(apMac.show)
+      case AppError.LocationNotDeployed(location) =>
+        ApiError.LocationNotDeployed(location.asString)
+      // The backoffice's: no guest-facing route runs a location command.
+      case AppError.Location(errors) =>
+        ApiError.InternalError(errors.head.toString)
+
+  /** The header each field of UniFi's redirect reaches the API as. */
+  private def headerOf(field: RedirectField): String =
+    field match
+      case RedirectField.ClientMac =>
+        "X-Client-Mac"
+      case RedirectField.AccessPoint =>
+        "X-Ap-Mac"
 
   private def fromRecoveryError(err: recovery.Error): ApiError =
     err match

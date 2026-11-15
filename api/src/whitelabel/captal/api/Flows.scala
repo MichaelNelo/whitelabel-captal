@@ -19,10 +19,12 @@ import whitelabel.captal.platform.{LocationRecovery, UnifiAccess, UnifiClient}
 import whitelabel.captal.platform.eventhandlers.{
   AnswerPersistenceHandler,
   DbEventHandler,
+  DevicePersistenceHandler,
   EventLogHandler,
   PlaybackHandler,
   RecoveryHandler,
   SessionExpirationHandler,
+  SessionPersistenceHandler,
   SessionPhaseHandler,
   SessionSurveyHandler,
   SessionVideoHandler,
@@ -32,6 +34,7 @@ import whitelabel.captal.platform.eventhandlers.{
   UnifiAccessHandler,
   UserPersistenceHandler
 }
+import whitelabel.captal.platform.repositories.{EntryRepositoriesQuill, LocationRepositoryQuill}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.services.LocationService
 import whitelabel.captal.platform.session.{JobQueue, SessionContext, SessionService}
@@ -72,7 +75,7 @@ private[api] object Flows:
             SessionPhaseHandler(ctx, nextAfterIdentification.phase, nextAfterVideo.phase)))
         .andThen(tracedDb("SessionSurvey")(SessionSurveyHandler(ctx)))
         .andThen(tracedDb("SessionVideo")(SessionVideoHandler(ctx)))
-        .andThen(tracedDb("SessionExpiration")(SessionExpirationHandler(ctx)))
+        .andThen(tracedDb("SessionExpiration")(SessionExpirationHandler()))
         .andThen(tracedDb("SurveyProgress")(SurveyProgressHandler()))
         .andThen(tracedDb("Recovery")(RecoveryHandler()))
       val transactional = TransactionalEventHandler(dbHandler, quill)
@@ -200,16 +203,37 @@ private[api] object Flows:
         eventHandler: EventHandler[Task, Event]) =>
       Flow(AnswerAdvertiserHandler(surveyRepo, userRepo, nextAfterAdvertiserSurvey), eventHandler)
 
-  /** Built per request, as the three below: the welcome turns on the session's device. */
-  val resolveWelcomeFlowLayer: ZLayer[
-    DeviceRepository[Task] & SessionContext & EventHandler[Task, Event],
+  /** Entering the portal. Built once rather than per session, since there may be none yet: it reads
+    * no session from the context and writes through a chain of its own, which names the session
+    * from its events. The device is written before the session, which points to it, and an expired
+    * session is reset before its welcome is resolved. `wrap` puts each handler in a span, or leaves
+    * it as it is.
+    */
+  def enterPortalFlow(
+      quill: QuillSqlite,
+      sessions: SessionService,
+      wrap: (String, DbEventHandler[Event]) => DbEventHandler[Event])
+      : Flow.Aux[Task, EnterPortalCommand, Entered] =
+    val entry = EntryRepositoriesQuill(quill, sessions, sessions.matching)
+    val events = TransactionalEventHandler(
+      wrap("DevicePersistence", DevicePersistenceHandler())
+        .andThen(wrap("SessionExpiration", SessionExpirationHandler()))
+        .andThen(wrap("SessionPersistence", SessionPersistenceHandler()))
+        .andThen(wrap("Recovery", RecoveryHandler()))
+        .andThen(wrap("EventLog", EventLogHandler.forEntry)),
+      quill
+    )
+    Flow(EnterPortalHandler[Task](LocationRepositoryQuill(quill), entry, entry, entry), events)
+
+  val enterPortalFlowLayer: ZLayer[
+    QuillSqlite & SessionService & Tracing,
     Nothing,
-    Flow.Aux[Task, ResolveWelcomeCommand, NextStep]] = ZLayer.fromFunction:
-    (
-        devices: DeviceRepository[Task],
-        ctx: SessionContext,
-        eventHandler: EventHandler[Task, Event]) =>
-      perSession(ctx, eventHandler)(ResolveWelcomeHandler.withSession(devices, _))
+    Flow.Aux[Task, EnterPortalCommand, Entered]] = ZLayer.fromFunction:
+    (quill: QuillSqlite, sessions: SessionService, tracing: Tracing) =>
+      enterPortalFlow(
+        quill,
+        sessions,
+        (name, handler) => TracedEventHandler.db(name, tracing)(handler))
 
   val startFlowLayer: ZLayer[
     DeviceRepository[Task] & SessionContext & EventHandler[Task, Event],

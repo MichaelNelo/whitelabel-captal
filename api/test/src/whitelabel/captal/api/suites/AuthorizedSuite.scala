@@ -170,6 +170,23 @@ object AuthorizedSuite:
             state.sessions.size == 1
           )
         ,
+        test("A location that is not deployed admits no guest, with a retry rather than a way out"):
+          for
+            _       <- TestFixtures.seedLocation("not-yet", deployed = false)
+            _       <- TestFixtures.seedAccessPoint("not-yet", PortalAp)
+            backend <- statusBackendAt(servedAt("not-yet"))
+            refused <- statusThrough(backend, Some(PortalAp))
+            state   <- TestFixtures.queryDbState
+            errors  <- TestFixtures.getErrors
+          yield assertTrue(
+            !refused.code.isSuccess,
+            refused.body.contains("LocationNotDeployed"),
+            extractSessionCookie(refused).isEmpty,
+            state.sessions.isEmpty,
+            // Expected: nothing to record, so no way out is offered.
+            errors.isEmpty
+          )
+        ,
         test("A page reached without the network's redirect is an invalid client, with no session"):
           for
             backend <- testBackend
@@ -309,9 +326,10 @@ object AuthorizedSuite:
       try
         val (column, value) = unifiIsEnabled.fold(("", ""))(v => (", unifi_is_enabled", s", $v"))
         val stmt = conn.createStatement()
+        // Deployed: the portal admits guests only into a deployed location.
         stmt.execute(
-          s"INSERT INTO locations (id, slug, name, is_active, created_at, updated_at$column) " +
-            s"VALUES ('$id', '$id', '$id', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'$value)")
+          s"INSERT INTO locations (id, slug, name, is_active, created_at, updated_at, state, state_run$column) " +
+            s"VALUES ('$id', '$id', '$id', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'deployed', 'run-test'$value)")
         stmt.close()
       finally
         conn.close()

@@ -209,8 +209,7 @@ object TestHelpers:
             env.get[SessionCookieConfig],
             env.get[ApiBase],
             location,
-            env.get[UserCookieConfig],
-            env.get[UserLookup]).routes.provideEnvironment(env))
+            env.get[UserCookieConfig]).routes.provideEnvironment(env))
 
   /** `/api/status` from a redirect that carries no fingerprint, from the device `mac`, with the
     * session cookie when one is given.

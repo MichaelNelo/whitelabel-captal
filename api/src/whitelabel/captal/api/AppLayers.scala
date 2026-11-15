@@ -46,7 +46,7 @@ private[api] object AppLayers:
       CurrentLocation & UserCookieConfig & UserLookup & SurveyRoutes & LocaleRoutes & VideoRoutes &
       AdvertiserSurveyRoutes & FinishRoutes & SurveyRoutes.AnswerEmailFlowType &
       SurveyRoutes.AnswerProfilingFlowType & SurveyRoutes.AnswerLocationFlowType &
-      SurveyRoutes.NextSurveyFlowType & SurveyRoutes.ResolveWelcomeFlowType &
+      SurveyRoutes.NextSurveyFlowType & SurveyRoutes.EnterPortalFlowType &
       VideoRoutes.NextVideoFlowType & VideoRoutes.MarkVideoWatchedFlowType &
       VideoRoutes.StartPlaybackFlowType & VideoRoutes.EndPlaybackFlowType &
       AdvertiserSurveyRoutes.NextAdvertiserSurveyFlowType &
@@ -155,7 +155,7 @@ private[api] object AppLayers:
       Flows.endPlaybackFlowLayer,
       Flows.nextAdvertiserSurveyFlowLayer,
       Flows.answerAdvertiserFlowLayer,
-      Flows.resolveWelcomeFlowLayer,
+      Flows.enterPortalFlowLayer,
       Flows.startFlowLayer,
       Flows.acceptTermsFlowLayer,
       Flows.finishFlowLayer,
