@@ -1084,7 +1084,9 @@ CloudFront invalidation is waited out. Because the edge serves `<slug>/index.htm
 and for every SPA route beneath it, replacing that one object is the whole of putting a location into
 maintenance. `maintenance.html` is deliberately *not* copied into a location's own prefix by
 `copyBundle`, which would otherwise leave every healthy location serving a maintenance page by
-name. `resume_location` restores the saved page. See xref:mcp.adoc[MCP backoffice] and
+name. `resume_location` restores the saved page. The page is set aside only when no saved page exists
+yet, so a second pause, or a pause interrupted after the swap and run again, never saves the
+maintenance page over the location's own. See xref:mcp.adoc[MCP backoffice] and
 xref:infrastructure.adoc[Infrastructure].
 
 Separately, a guest already inside the SPA finds out on their own: `ApiClient` recognises the paused

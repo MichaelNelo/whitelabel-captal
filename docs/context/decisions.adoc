@@ -779,8 +779,9 @@ rule are in `incidents.adoc`, section "The Mill build".
 * **Client releases are archived, and each location gets a copy** (`publishClient`). The bundle goes to
   `releases/client/<version>`, then to `bundle/`; rolling back is copying an earlier release back. Each
   location receives `bundle/` except `maintenance.html`, and except its own `brand-icon.svg` when that
-  differs from the bundle's. A paused location keeps its maintenance page as `_paused/<slug>/site.html`,
-  which resume restores. One CloudFront invalidation of `/*` follows.
+  differs from the bundle's. A paused location's own page waits at `_paused/<slug>/site.html`, where
+  the release writes the new one and which resume restores. One CloudFront invalidation of `/*`
+  follows.
 * **A release to LocalStack is not a release, so nothing is tagged.** `ci.run` against LocalStack
   skips the tags, and `mcp.dev` runs the same first four steps without waiting for locations to settle.
 * **`publishUiScripts` publishes chunks before entries, and never deletes old chunks.** An entry
