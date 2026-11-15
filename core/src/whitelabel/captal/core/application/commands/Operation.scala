@@ -34,19 +34,26 @@ import whitelabel.captal.core.operation.{
 /** Starts the operation `operation` on the location `slug` as the run `newRun`, started by the
   * operator token `by` — or, with `finishing`, finishes the unfinished run it names, taking only
   * the steps it left.
+  *
+  * @param holder
+  *   the run that holds the location's lock, which the caller tried to take for `newRun` before
+  *   running this: none when it took it. Taking it is I/O, so it happens outside, and its outcome
+  *   comes in as data, like the instant and the new id.
   */
 final case class StartOperationCommand(
     slug: Slug,
     operation: Operation,
     finishing: Option[RunId],
     newRun: RunId,
+    holder: Option[RunId],
     by: String,
     occurredAt: Instant)
 
 /** Decides whether the operation may start, and with which steps. In order:
   *
-  *   - a run of the location's going, its heartbeat fresh: [[LocationError.OperationInProgress]];
-  *   - one left part way, which this command does not finish:
+  *   - another run holds the location's lock: [[LocationError.OperationInProgress]];
+  *   - with the lock this run's, nobody is at the latest run, so one started and not completed was
+  *     left part way, as is one that failed. Unless this command finishes it:
   *     [[LocationError.PreviousOperationUnfinished]] — unless it is a destroy, which removes
   *     whatever is there, half changed or not;
   *   - the state the location is in, which the operation has to leave: a deploy of a deployed one
@@ -76,17 +83,17 @@ object StartOperationHandler:
             runs
               .latest(location.id)
               .flatMap: latest =>
-                val now = cmd.occurredAt
-                latest match
-                  case Some(run) if run.alive(now) =>
+                (cmd.holder, latest) match
+                  case (Some(holder), _) =>
+                    val going = latest.filter(_.id == holder)
                     Monad[F].pure(
                       refused(
                         LocationError.OperationInProgress(
-                          run.id,
-                          run.operation,
-                          run.pending.headOption)))
-                  case Some(run)
-                      if run.unfinished(now) && !cmd.finishing.contains(run.id) &&
+                          holder,
+                          going.fold(cmd.operation)(_.operation),
+                          going.flatMap(_.pending.headOption))))
+                  case (None, Some(run))
+                      if leftPartWay(run) && !cmd.finishing.contains(run.id) &&
                         !destroys(cmd.operation) =>
                     Monad[F].pure(
                       refused(
@@ -96,7 +103,7 @@ object StartOperationHandler:
                           run.pending)))
                   case _ =>
                     val finishing = latest.filter(run =>
-                      cmd.finishing.contains(run.id) && run.unfinished(now))
+                      cmd.finishing.contains(run.id) && leftPartWay(run))
                     val operation = finishing.fold(cmd.operation)(_.operation)
                     from(location, operation) match
                       case Some(error) =>
@@ -125,6 +132,14 @@ object StartOperationHandler:
                                 )))
                     end match
                 end match
+
+      /** Not completed: with the lock this command's, nobody is at a started run any more. */
+      private def leftPartWay(run: Run[RunState]): Boolean =
+        run.state match
+          case RunState.Started(_) | RunState.Failed(_, _) =>
+            true
+          case RunState.Completed(_) =>
+            false
 
       private def destroys(operation: Operation): Boolean =
         operation match

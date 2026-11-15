@@ -30,32 +30,12 @@ final case class Run[S <: RunState](
     startedBy: String,
     state: S)
 
+/** Whether a run is going is whether it holds its location's lock; its heartbeat says only, to
+  * whoever follows it, that it was reporting in a moment ago.
+  */
 object Run:
   /** How often a runner refreshes its run's heartbeat. */
   val HeartbeatEvery: Duration = Duration.ofSeconds(10)
 
-  /** A heartbeat older than this means the process doing the work is gone. */
+  /** A heartbeat older than this is shown as a run interrupted. */
   val StaleAfter: Duration = Duration.ofMinutes(1)
-
-  extension (run: Run[RunState])
-    /** Someone is at it: started, with a heartbeat fresh at `now`. */
-    def alive(now: Instant): Boolean =
-      run.state match
-        case RunState.Started(heartbeat) =>
-          !heartbeat.plus(StaleAfter).isBefore(now)
-        case _ =>
-          false
-
-    /** Left part way: failed, or started with nobody keeping it alive. What it did is in the
-      * infrastructure while the location still stands where it was.
-      */
-    def unfinished(now: Instant): Boolean =
-      run.state match
-        case RunState.Started(_) =>
-          !alive(now)
-        case RunState.Failed(_, _) =>
-          true
-        case RunState.Completed(_) =>
-          false
-  end extension
-end Run

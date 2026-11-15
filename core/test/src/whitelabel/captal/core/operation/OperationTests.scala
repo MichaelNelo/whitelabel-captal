@@ -93,11 +93,16 @@ object OperationTests extends TestSuite:
         case found @ Run(_, _, _, _, _, _, started: RunState.Started) if found.id == id =>
           found.copy(state = started)
 
-  private def start(operation: Operation, finishing: Option[RunId] = None) = StartOperationCommand(
+  /** By default the lock was taken for the new run: nobody else holds it. */
+  private def start(
+      operation: Operation,
+      finishing: Option[RunId] = None,
+      holder: Option[RunId] = None) = StartOperationCommand(
     Here,
     operation,
     finishing,
     NewRun,
+    holder,
     Operator,
     Now)
 
@@ -174,13 +179,13 @@ object OperationTests extends TestSuite:
           outcome(pausing.handle(start(Operation.Pause))) ==
             started(Operation.Pause, Operation.steps(Operation.Pause).toList))
 
-      test("refuses while a run is going"):
+      test("refuses while another run holds the lock, naming where it is"):
         val going = run(
           Operation.Pause,
           RunState.Started(Now.minusSeconds(5)),
           List(Step.ScaleToZero, Step.AwaitDrained))
         val refused = starting(location = Some(at(Deployed)), latest = Some(going)).handle(
-          start(Operation.Pause))
+          start(Operation.Pause, holder = Some(going.id)))
         assert(
           outcome(refused) ==
             Left(
@@ -190,12 +195,18 @@ object OperationTests extends TestSuite:
                   Operation.Pause,
                   Some(Step.ScaleToZero)))))
 
+      test("refuses while a run it has no record of holds the lock"):
+        val holder = RunId("run-elsewhere")
+        val refused = starting(location = Some(at(Deployed))).handle(
+          start(Operation.Pause, holder = Some(holder)))
+        assert(
+          outcome(refused) ==
+            Left(List(LocationError.OperationInProgress(holder, Operation.Pause, None))))
+
+      // The lock is this command's, so nobody is at that run, whatever its heartbeat says.
       test("refuses while a run is left part way, naming what it left"):
         val left = List(Step.ScaleToZero, Step.AwaitDrained)
-        val stale = run(
-          Operation.Pause,
-          RunState.Started(Now.minus(Run.StaleAfter).minus(Duration.ofSeconds(1))),
-          left)
+        val stale = run(Operation.Pause, RunState.Started(Now.minusSeconds(5)), left)
         val refused = starting(location = Some(at(Deployed)), latest = Some(stale)).handle(
           start(Operation.Pause))
         assert(
