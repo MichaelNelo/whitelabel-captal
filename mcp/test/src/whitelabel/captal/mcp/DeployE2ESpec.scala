@@ -727,8 +727,12 @@ object DeployE2ESpec extends ZIOSpecDefault:
         DeployTools.PauseRequest(Slug))
       paused <- client.awaitRun(pauseRun).map(resultOf(_)(_.paused))
       // What the edge now serves for this location, and what it does not.
-      pausedIndex        <- objectText(AssetStore.indexKey(Slug))
-      savedPage          <- objectText(AssetStore.savedPageKey(Slug))
+      pausedIndex <- objectText(AssetStore.indexKey(Slug))
+      savedPage   <- objectText(AssetStore.savedPageKey(Slug))
+      // The swap once more, as finishing an interrupted pause runs it: the page it kept stays the
+      // portal's, not the maintenance page now at the index.
+      _ <- ZIO.serviceWithZIO[AssetStore](_.pausePage(Slug)).mapError(new AssertionError(_))
+      savedAgain         <- objectText(AssetStore.savedPageKey(Slug))
       perSlugMaintenance <- ZIO
         .serviceWithZIO[AssetStore](_.exists(AssetStore.maintenanceKey(Slug)))
         .mapError(new AssertionError(_))
@@ -985,6 +989,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
         // anyone to request by name.
         pausedIndex.exists(_.contains("maintenance.js")),
         savedPage == liveBefore,
+        savedAgain == liveBefore,
         liveBefore.exists(_.contains("main.js")),
         !perSlugMaintenance,
 

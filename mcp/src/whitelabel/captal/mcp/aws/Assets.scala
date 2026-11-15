@@ -200,14 +200,20 @@ final case class AssetStore(
     * Both HTML files reference `./main.js`, `./maintenance.js` and `./styles.css` relatively, and
     * all three already sit under `<slug>/`, so the swapped page resolves its own assets with
     * nothing else moved.
+    *
+    * Idempotent: a saved page means the location's own page was kept already, and what sits at
+    * `<slug>/index.html` is then the maintenance one, so it is not saved again over the original. A
+    * second pause, or a pause interrupted after the swap and run again, leaves the same two objects
+    * the first one did.
     */
   def pausePage(slug: String): ZIO[Any, String, Unit] =
     val live = AssetStore.indexKey(slug)
     for
       // Saved first, or a failed maintenance copy leaves the location with no page at all and
       // nothing to restore it from.
+      saved   <- exists(AssetStore.savedPageKey(slug))
       present <- exists(live)
-      _       <- ZIO.when(present)(copyObject(live, AssetStore.savedPageKey(slug)))
+      _       <- ZIO.when(present && !saved)(copyObject(live, AssetStore.savedPageKey(slug)))
       _       <- copyObject(AssetStore.BundleMaintenanceKey, live)
     yield ()
 
