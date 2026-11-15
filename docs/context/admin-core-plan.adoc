@@ -775,6 +775,14 @@ handler, `RunProgressQuill`, and the queries `RunStatus` and `AssetsOf`; the bac
   been refused since the first step, and read a readiness text that no longer exists. It was
   brought to the new design but not run here.
 . The dispatcher reads the paused state from the database; remove its S3 endpoint and permission.
++
+*Done on 2026-11-15*: `dispatcher.py` reads `l.state` in the query that finds the access point's
+locations and takes the newest deployed, else the newest paused, else the newest; the S3 client,
+`ASSETS_BUCKET`, the `paused-pages` policy, the S3 gateway endpoint and the module's three variables
+for them went. Every ECS task has a public address, so none depended on the endpoint for S3; no
+bucket policy named it. Not deployed locally (`enable_global_accelerator` is off there), so it was
+checked against canned rqlite answers and `tofu validate`, and reaches production with the next
+`ci.run`, whose apply also removes the endpoint.
 . Once the relay moves to SNS and SQS (xref:relay-sns-sqs-plan.adoc[the relay plan]), tell the run
   page of progress through it.
 . Video lifecycle with advertisers; survey and question authoring; recovery policy; terms of service

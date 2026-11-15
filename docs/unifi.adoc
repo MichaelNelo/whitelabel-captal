@@ -669,19 +669,20 @@ forwards to a Lambda target group running `dispatcher.py`:
 . Read the `ap` query parameter and lowercase it; a missing one is a 400. Write it as
   `access_points.mac` is written, twelve hex digits joined by colons, whatever separators it came
   with; a value that is not a MAC is left as it is.
-. `SELECT l.slug, a.redirect_url FROM access_points a JOIN locations l ON l.id = a.location_id
-  WHERE a.mac = '<ap>' ORDER BY l.created_at DESC` against rqlite over its HTTP API
+. `SELECT l.slug, a.redirect_url, l.state FROM access_points a JOIN locations l ON l.id =
+  a.location_id WHERE a.mac = '<ap>' ORDER BY l.created_at DESC` against rqlite over its HTTP API
   (`http://rqlite.<namespace>:4001`, `level=none`, 5-second timeout): every location that has that
-  access point, newest first, with that access point's redirect URL. When rqlite answers it with an
+  access point, newest first, with that access point's redirect URL and the location's recorded
+  state. When rqlite answers it with an
   `error` — a database V36 has not reached, whose access points have no `redirect_url` — the Lambda
   logs it and asks for the location's own, `SELECT l.slug, l.unifi_redirect_url` over the same
   join. When that too is an `error` — a database V34 has not reached, with no `access_points`
   table — it asks the locations' own AP column instead, `SELECT slug, unifi_redirect_url FROM
   locations WHERE LOWER(unifi_ap_mac) = '<ap>' ORDER BY created_at DESC`. An unreachable database
   is a 503; no matching row is a 404 naming the AP.
-. Take the newest of those locations that is not paused. Several running ones sharing an AP are
-  logged, and the newest takes the guests; with every one paused, the newest, whose page is the
-  maintenance page.
+. Take the newest of those locations that is deployed. Several deployed ones sharing an AP are
+  logged, and the newest takes the guests; with none deployed, the newest paused, whose page is the
+  maintenance page; failing both, the newest.
 . 302 to its `<redirect_url><?|&><params>` when the override is set and the location is not
   paused, otherwise to `https://<CLOUDFRONT_HOST>/<slug>/?<params>`, with `Cache-Control:
   no-store`. Every query parameter the controller sent is forwarded verbatim. The override sends
@@ -693,12 +694,11 @@ location that is running. The backoffice keeps it to one deployed location per A
 AP another deployed location has is refused, and so is deploying or resuming a location that shares
 one — so the newest-wins rule above is for a state the backoffice does not leave.
 
-Which locations are paused is read from the assets bucket: `pause_location` keeps the page it
-replaces at `_paused/<slug>/site.html`, and `resume_location` and `deploy_location` remove it, so the
-object exists exactly while the location is paused. The Lambda lists `_paused/` once per request,
-and only when there is a choice to make — several locations, or an override to skip — since
-otherwise every answer leads to the same page. A listing that fails is logged and reads as none
-paused.
+Which locations are deployed and which paused is read in the same query, from the state each
+location is recorded in (`locations.state`), which a pause, a resume, a deploy and a destroy write
+once their run completes. The Lambda takes the newest deployed location; with none, the newest
+paused, whose page is the maintenance page; failing both, the newest. A database from before the
+access points' own settings has no state to read, and every location reads as not paused.
 
 So the AP MAC is what selects the portal: one static IP serves every location, and a new location
 needs only its access points registered. The whole accelerator-plus-dispatcher pair is behind

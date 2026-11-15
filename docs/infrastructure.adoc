@@ -446,18 +446,18 @@ accelerator. Its health check tolerates the ALB's own `301` HTTP→HTTPS redirec
 the accelerator's listener and an ALB rule (`/guest/s/*`, priority 100) feed: it looks up in
 rqlite the locations that have the AP among their access points (`access_points`, or each
 location's own `unifi_ap_mac` on a database without that table) and answers a `302` to the
-CloudFront URL of the newest matching location that is not paused, or to the access point's
+CloudFront URL of the newest matching location that is deployed — or, with none, paused — or to the access point's
 redirect URL when it has one (the location's `unifi_redirect_url` on a database whose access points
 have no settings yet). Its own security group opens port 4001 toward rqlite's and 443
 outbound to AWS APIs ("VPC interface endpoints for logs aren't provisioned here"); the reciprocal
 ingress on rqlite's own security group is declared at the *root* module rather than inside either
 module, specifically to avoid a dependency cycle between the two.
 
-Which locations are paused it reads from the assets bucket, listing `_paused/` — the only S3
-permission its role has. A Lambda attached to a VPC gets no public address, and with no NAT the
-module adds a gateway endpoint for S3 to the VPC's route tables: free, and from then on every task's
-S3 traffic in the VPC goes through it rather than the internet gateway. See
-xref:unifi.adoc#static-ipv4-and-the-portal-dispatcher[the portal dispatcher].
+Which locations are paused it reads in the same query, from each location's recorded state
+(`locations.state`), so its role has no S3 permission and the VPC no gateway endpoint for it: a
+Lambda attached to a VPC gets no public address, and with no NAT it reaches nothing outside the VPC
+but rqlite. Every ECS task here has a public address, so their S3 traffic goes through the internet
+gateway. See xref:unifi.adoc#static-ipv4-and-the-portal-dispatcher[the portal dispatcher].
 
 === Tailscale proxy
 
