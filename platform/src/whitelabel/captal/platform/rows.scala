@@ -296,11 +296,15 @@ final case class LocationRecoveryRow(
     playbackGraceSeconds: Option[Int] = None,
     updatedAt: String)
 
+/** An event as the log records it: a guest's, under their session, or an operator's, under the
+  * token that made the change (`actor`).
+  */
 final case class EventLogRow(
     id: String,
     eventType: String,
     eventData: String,
-    sessionId: String,
+    sessionId: Option[String],
     userId: Option[String],
     occurredAt: String,
-    createdAt: String)
+    createdAt: String,
+    actor: Option[String] = None)

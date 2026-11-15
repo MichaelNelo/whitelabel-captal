@@ -9,6 +9,7 @@ import io.getquill.*
 import whitelabel.captal.core.access.Event as AccessEvent
 import whitelabel.captal.core.application.Event
 import whitelabel.captal.core.device.Event as DeviceEvent
+import whitelabel.captal.core.location.{AccessPoint, Event as LocationEvent}
 import whitelabel.captal.core.recovery.Event as RecoveryEvent
 import whitelabel.captal.core.survey.Event as SurveyEvent
 import whitelabel.captal.core.survey.question.Event as QuestionEvent
@@ -22,31 +23,48 @@ import whitelabel.captal.platform.session.SessionContext
 import zio.*
 
 object EventLogHandler:
+  /** A guest's events, under their session. */
   def apply(ctx: SessionContext): DbEventHandler[Event] =
     new DbEventHandler[Event]:
-      def handle(events: List[Event], quill: QuillSqlite): Task[Unit] =
-        import quill.*
-        for
-          sessionData <- ctx.getOrFail
-          instant     <- Clock.instant
-          now  = instant.toString
-          rows = events.flatMap: event =>
-            toEventLogRow(
-              event,
-              sessionData.sessionId.asString,
-              sessionData.userId.map(_.asString),
-              now)
-          _ <-
-            if rows.nonEmpty then
-              ZIO.foreachDiscard(rows)(row => run(query[EventLogRow].insertValue(lift(row))).orDie)
-            else
-              ZIO.unit
-        yield ()
+      def handle(events: List[Event], quill: QuillSqlite): Task[Unit] = ctx
+        .getOrFail
+        .flatMap: sessionData =>
+          write(
+            events,
+            quill,
+            Some(sessionData.sessionId.asString),
+            sessionData.userId.map(_.asString),
+            None)
+
+  /** An operator's events, under the token that made the change, `actor`: no guest's session. */
+  def forOperator(actor: String): DbEventHandler[Event] =
+    new DbEventHandler[Event]:
+      def handle(events: List[Event], quill: QuillSqlite): Task[Unit] = write(
+        events,
+        quill,
+        None,
+        None,
+        Some(actor))
+
+  private def write(
+      events: List[Event],
+      quill: QuillSqlite,
+      sessionId: Option[String],
+      userId: Option[String],
+      actor: Option[String]): Task[Unit] =
+    import quill.*
+    for
+      instant <- Clock.instant
+      now  = instant.toString
+      rows = events.flatMap(toEventLogRow(_, sessionId, userId, actor, now))
+      _ <- ZIO.foreachDiscard(rows)(row => run(query[EventLogRow].insertValue(lift(row))).orDie)
+    yield ()
 
   private def toEventLogRow(
       event: Event,
-      sessionId: String,
+      sessionId: Option[String],
       userId: Option[String],
+      actor: Option[String],
       now: String): Option[EventLogRow] = extractEventInfo(event).map:
     (eventType, eventData, occurredAt) =>
       EventLogRow(
@@ -56,7 +74,8 @@ object EventLogHandler:
         sessionId = sessionId,
         userId = userId,
         occurredAt = occurredAt.toString,
-        createdAt = now
+        createdAt = now,
+        actor = actor
       )
 
   private def extractEventInfo(event: Event): Option[(String, Json, Instant)] =
@@ -142,6 +161,55 @@ object EventLogHandler:
               "termsId"    -> Json.fromString(termsId),
               "occurredAt" -> Json.fromString(occurredAt.toString)),
             occurredAt))
+      case Event.Location(e) =>
+        Some(extractLocationEvent(e))
+
+  /** A location's events, its access points' tokens left out: whether one is set is all the log
+    * says of them.
+    */
+  private def extractLocationEvent(event: LocationEvent): (String, Json, Instant) =
+    event match
+      case LocationEvent.LocationCreated(id, slug, name, occurredAt) =>
+        (
+          "location.created",
+          Json.obj(
+            "locationId" -> Json.fromString(id.asString),
+            "slug"       -> Json.fromString(slug.asString),
+            "name"       -> Json.fromString(name)),
+          occurredAt)
+      case LocationEvent.AccessPointRegistered(location, point, occurredAt) =>
+        (
+          "location.access_point_registered",
+          Json.obj(
+            "locationId"  -> Json.fromString(location.asString),
+            "accessPoint" -> accessPointJson(point)),
+          occurredAt)
+      case LocationEvent.AccessPointUpdated(location, mac, point, occurredAt) =>
+        (
+          "location.access_point_updated",
+          Json.obj(
+            "locationId"  -> Json.fromString(location.asString),
+            "mac"         -> Json.fromString(mac.show),
+            "accessPoint" -> accessPointJson(point)),
+          occurredAt)
+      case LocationEvent.AccessPointRemoved(location, mac, occurredAt) =>
+        (
+          "location.access_point_removed",
+          Json.obj(
+            "locationId" -> Json.fromString(location.asString),
+            "mac"        -> Json.fromString(mac.show)),
+          occurredAt)
+
+  private def accessPointJson(point: AccessPoint): Json = Json.obj(
+    "mac"                 -> Json.fromString(point.mac.show),
+    "host"                -> Json.fromString(point.controller.host),
+    "port"                -> point.controller.port.asJson,
+    "siteId"              -> Json.fromString(point.controller.siteId),
+    "durationMinutes"     -> point.settings.durationMinutes.asJson,
+    "redirectUrl"         -> point.settings.redirectUrl.asJson,
+    "unifiEnabled"        -> Json.fromBoolean(point.settings.unifiEnabled),
+    "fingerprintRequired" -> Json.fromBoolean(point.settings.fingerprintRequired)
+  )
 
   private def extractUserEvent(event: UserEvent): Option[(String, Json, Instant)] =
     event match
