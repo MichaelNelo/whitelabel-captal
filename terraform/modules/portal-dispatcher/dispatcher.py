@@ -4,7 +4,7 @@ Triggered by ALB target group on /guest/s/* (UCG-redirected captive portal hits)
 Looks up the locations that have an access point with that MAC in rqlite (`access_points`) and
 takes the newest that is not paused — or, when every one is, the newest, whose page is then the
 maintenance page. Then returns a 302 to:
-  - its custom `unifi_redirect_url` if set and it is not paused (with all UCG query params
+  - the access point's custom `redirect_url` if set and it is not paused (with all UCG query params
     appended),
   - or the default `https://<cloudfront_host>/<slug>/?<params>` otherwise.
 
@@ -12,7 +12,7 @@ UCG-generated URL example:
   /guest/s/default/?ap=94:2a:6f:d0:30:57&id=1c:71:25:63:e4:24
                    &t=1742398732&url=http%3A%2F%2Fexample.com&ssid=dph-guest
 
-We extract `ap`, lookup `(slug, unifi_redirect_url)` in rqlite, and 302 to:
+We extract `ap`, lookup `(slug, redirect_url)` in rqlite, and 302 to:
   - if redirect_url is non-empty: <redirect_url>?ap=...&id=...&t=...&url=...&ssid=...
   - otherwise:                    https://<cloudfront_host>/<slug>/?ap=...&id=...&t=...&...
 """
@@ -48,8 +48,16 @@ def handler(event, context):
     mac = _normalized(ap_mac)
     # Escape single quotes (defense in depth — mac is bounded to MAC format).
     escaped = mac.replace("'", "''")
-    # Newest first: where several running locations share an AP, the newest takes its guests.
+    # Newest first: where several running locations share an AP, the newest takes its guests. The
+    # redirect URL is the access point's own.
     query = (
+        "SELECT l.slug, a.redirect_url FROM access_points a "
+        "JOIN locations l ON l.id = a.location_id "
+        f"WHERE a.mac = '{escaped}' ORDER BY l.created_at DESC"
+    )
+    # Where the migration that gives each access point its own settings has not run yet: the
+    # location's redirect URL.
+    before_settings = (
         "SELECT l.slug, l.unifi_redirect_url FROM access_points a "
         "JOIN locations l ON l.id = a.location_id "
         f"WHERE a.mac = '{escaped}' ORDER BY l.created_at DESC"
@@ -62,6 +70,9 @@ def handler(event, context):
 
     try:
         result = _query(query)
+        if "error" in result:
+            print(f"access_points has no settings ({result['error']}), reading locations' own")
+            result = _query(before_settings)
         if "error" in result:
             print(f"access_points unreadable ({result['error']}), reading locations' own AP")
             result = _query(legacy)
