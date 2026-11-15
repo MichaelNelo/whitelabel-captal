@@ -48,6 +48,7 @@ import software.amazon.awssdk.services.elasticloadbalancingv2.model.{
   ModifyRuleRequest,
   PathPatternConditionConfig,
   ProtocolEnum,
+  Rule,
   RuleCondition,
   TargetGroupNotFoundException,
   TargetHealthStateEnum,
@@ -269,8 +270,42 @@ final case class InfraStore(
       .mapError(e => s"Could not create target group $name: ${e.getMessage}")
   end ensureTargetGroup
 
-  /** Upserted by path pattern, which is what identifies a location's rule; the priority is an
-    * arbitrary slot. Re-deploying a location must not add a second rule for the same path.
+  /** The location's rules, found by path pattern, which is what identifies them: the one that
+    * forwards to its target group and, while it is paused, the one above it that answers instead.
+    */
+  private def rulesOf(pattern: String): List[Rule] =
+    import scala.jdk.CollectionConverters.*
+    elb
+      .describeRules(DescribeRulesRequest.builder().listenerArn(targets.listenerArn).build())
+      .rules()
+      .asScala
+      .toList
+      .filter(_.conditions().asScala.exists(_.values().asScala.contains(pattern)))
+
+  private def forwards(rule: Rule): Boolean =
+    import scala.jdk.CollectionConverters.*
+    rule.actions().asScala.exists(_.`type`() == ActionTypeEnum.FORWARD)
+
+  // The SDK's setter is named `type`, a Scala keyword, so it has to be backticked.
+  private def forwardTo(targetGroupArn: String): Action = Action
+    .builder()
+    .`type`(ActionTypeEnum.FORWARD)
+    .targetGroupArn(targetGroupArn)
+    .build()
+
+  private def pathCondition(pattern: String): RuleCondition = RuleCondition
+    .builder()
+    .field("path-pattern")
+    .pathPatternConfig(PathPatternConditionConfig.builder().values(pattern).build())
+    .build()
+
+  /** Upserts the rule that forwards the location's path to its target group, and drops any rule
+    * above it that answers instead — a pause's. Upserted by path pattern, which is what identifies
+    * a location's rules; the priority is an arbitrary slot. Re-deploying a location must not add a
+    * second forward rule for the same path.
+    *
+    * A location paused before pausing kept the forward rule has a single rule, whose action the
+    * pause replaced: that rule forwards again.
     */
   def ensureRule(slug: String, targetGroupArn: String): ZIO[Any, String, String] =
     val pattern = targets.pathPattern(slug)
@@ -279,25 +314,18 @@ final case class InfraStore(
         val existing = elb
           .describeRules(DescribeRulesRequest.builder().listenerArn(targets.listenerArn).build())
           .rules()
-        // The SDK's setter is named `type`, a Scala keyword, so it has to be backticked.
-        val forward = Action
-          .builder()
-          .`type`(ActionTypeEnum.FORWARD)
-          .targetGroupArn(targetGroupArn)
-          .build()
-        val condition = RuleCondition
-          .builder()
-          .field("path-pattern")
-          .pathPatternConfig(PathPatternConditionConfig.builder().values(pattern).build())
-          .build()
+        val forward = forwardTo(targetGroupArn)
+        val condition = pathCondition(pattern)
         import scala.jdk.CollectionConverters.*
-        val mine = existing
-          .asScala
-          .find(_.conditions().asScala.exists(_.values().asScala.contains(pattern)))
-        mine match
+        val mine = rulesOf(pattern)
+        mine.find(forwards).orElse(mine.headOption) match
           case Some(rule) =>
             elb.modifyRule(
               ModifyRuleRequest.builder().ruleArn(rule.ruleArn()).actions(forward).build())
+            mine
+              .filterNot(_.ruleArn() == rule.ruleArn())
+              .foreach(other =>
+                elb.deleteRule(DeleteRuleRequest.builder().ruleArn(other.ruleArn()).build()))
             rule.ruleArn()
           case None =>
             // The default rule carries no numeric priority; the next free slot is one past the
@@ -538,11 +566,16 @@ final case class InfraStore(
           .serviceArn()
       .mapError(e => s"Could not scale $name to $count: ${e.getMessage}")
 
-  /** Points this location's listener rule at a fixed response instead of its target group, so a
-    * paused location answers rather than failing: a forward rule to an empty target group would
-    * return a bare 503 that the portal reads as broken.
+  /** Puts a rule above this location's forward rule that answers with a fixed response, so a paused
+    * location answers rather than failing: forwarding to an empty target group would return a bare
+    * 503 that the portal reads as broken.
     *
-    * JSON rather than HTML, since this rule only ever matches the API path.
+    * The forward rule stays, so the target group stays associated with the load balancer: ECS
+    * refuses a new deployment — a release moving the location onto a new image — to a service whose
+    * target group no rule forwards to. A location paused before pausing kept the forward rule has a
+    * single rule, answering: it forwards again, and the answering rule goes above it.
+    *
+    * JSON rather than HTML, since these rules only ever match the API path.
     * [[InfraStore.PausedBody]] is the contract the portal reads.
     */
   def pauseRule(slug: String): ZIO[Any, String, String] =
@@ -563,20 +596,69 @@ final case class InfraStore(
               .messageBody(InfraStore.PausedBody)
               .build())
           .build()
-        elb
-          .describeRules(DescribeRulesRequest.builder().listenerArn(targets.listenerArn).build())
-          .rules()
-          .asScala
-          .find(_.conditions().asScala.exists(_.values().asScala.contains(pattern))) match
-          case Some(rule) =>
-            elb.modifyRule(
-              ModifyRuleRequest.builder().ruleArn(rule.ruleArn()).actions(paused).build())
-            rule.ruleArn()
-          case None =>
+        val mine = rulesOf(pattern)
+        // The forward rule, or the single answering rule of a pause from before it was kept.
+        val below = mine
+          .find(forwards)
+          .orElse(mine.headOption)
+          .getOrElse(
             throw new IllegalStateException(
-              s"No listener rule matches '$pattern', so there is nothing to pause. Deploy the location first.")
+              s"No listener rule matches '$pattern', so there is nothing to pause. Deploy the location first."))
+        val answering =
+          mine.find(_.ruleArn() != below.ruleArn()) match
+            case Some(rule) =>
+              elb.modifyRule(
+                ModifyRuleRequest.builder().ruleArn(rule.ruleArn()).actions(paused).build())
+              rule.ruleArn()
+            case None =>
+              // Above means a lower number: the first free one below the forward rule's. Another
+              // location's rules match other paths, so where they sit does not matter.
+              val used =
+                elb
+                  .describeRules(
+                    DescribeRulesRequest.builder().listenerArn(targets.listenerArn).build())
+                  .rules()
+                  .asScala
+                  .flatMap(r => scala.util.Try(r.priority().toInt).toOption)
+                  .toSet
+              val priority = (below.priority().toInt - 1 to 1 by -1)
+                .find(!used.contains(_))
+                .getOrElse(
+                  throw new IllegalStateException(
+                    s"No free priority above the rule for '$pattern' to answer from."))
+              elb
+                .createRule(
+                  CreateRuleRequest
+                    .builder()
+                    .listenerArn(targets.listenerArn)
+                    .priority(priority)
+                    .conditions(pathCondition(pattern))
+                    .actions(paused)
+                    .build())
+                .rules()
+                .get(0)
+                .ruleArn()
+        // Only once a rule above answers, so the path never forwards to an empty target group.
+        if !forwards(below) then
+          elb.modifyRule(
+            ModifyRuleRequest
+              .builder()
+              .ruleArn(below.ruleArn())
+              .actions(forwardTo(targetGroupArnOf(slug)))
+              .build())
+        answering
       .mapError(e => s"Could not pause the rule for '$slug': ${e.getMessage}")
   end pauseRule
+
+  /** The location's target group, which a pause from before the forward rule was kept no longer
+    * names in any rule.
+    */
+  private def targetGroupArnOf(slug: String): String = elb
+    .describeTargetGroups(
+      DescribeTargetGroupsRequest.builder().names(targets.targetGroupName(slug)).build())
+    .targetGroups()
+    .get(0)
+    .targetGroupArn()
 
   /** How many tasks the service is actually running, or `None` when there is no live service.
     *

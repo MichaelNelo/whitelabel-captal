@@ -737,7 +737,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
       // The body itself, because this is the contract the portal reads to tell a pause
       // from an outage. Read off the rule rather than from the response that claimed to
       // have set it.
-      pausedBody <- ZIO.attemptBlocking:
+      pausedRules <- ZIO.attemptBlocking:
         store
           .elb
           .describeRules(
@@ -749,10 +749,21 @@ object DeployE2ESpec extends ZIOSpecDefault:
               .conditions()
               .stream()
               .anyMatch(condition => condition.values().contains(store.targets.pathPattern(Slug))))
-          .flatMap(rule => rule.actions().stream())
-          .map(action => Option(action.fixedResponseConfig()).map(_.messageBody()))
-          .findFirst()
-          .orElse(None)
+          .toList()
+      pausedBody = pausedRules
+        .stream()
+        .flatMap(rule => rule.actions().stream())
+        .filter(action => action.fixedResponseConfig() != null)
+        .map(action => Option(action.fixedResponseConfig().messageBody()))
+        .findFirst()
+        .orElse(None)
+      // And the forward rule is still there under it, so the target group stays associated
+      // with the load balancer: ECS refuses a release's new deployment to a service whose
+      // target group no rule forwards to.
+      pausedForwards = pausedRules
+        .stream()
+        .flatMap(rule => rule.actions().stream())
+        .anyMatch(action => action.targetGroupArn() == targetGroups.get(0).targetGroupArn())
       // Paused writes nothing: the location is still there and still active.
       pausedRows <- ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
@@ -960,7 +971,8 @@ object DeployE2ESpec extends ZIOSpecDefault:
           .flatMap(body => Json.decoder.decodeJson(body).toOption)
           .flatMap(_.asObject)
           .flatMap(_.get("status"))
-          .flatMap(_.asString) == Some("paused")
+          .flatMap(_.asString) == Some("paused"),
+        pausedForwards
       ) &&
       assertTrue(
         paused.answersWith == InfraStore.PausedBody,
