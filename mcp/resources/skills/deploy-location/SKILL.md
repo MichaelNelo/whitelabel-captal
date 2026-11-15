@@ -1,7 +1,7 @@
 ---
 name: deploy-location
 description: Use this skill for anything that changes whether a location's portal is serving — deploying it, giving it a newer bundle, closing it for a while, bringing it back, or removing it for good. It says which of deploy_location, pause_location, resume_location and destroy_location fits, what each one leaves behind, and how to follow the run each one starts with get_deploy_status. Triggers on "deploy location", "push location", "deploy", "publicar location", "provision location", "publish bundle", "subir el bundle", "go live", "pause location", "pausar", "mantenimiento", "maintenance page", "cerrar temporalmente", "resume location", "reanudar", "reactivar", "destroy location", "eliminar location", "borrar location", "dar de baja", "tear down".
-version: 5.2.0
+version: 5.3.0
 ---
 
 # A location's portal: deploying, pausing, removing
@@ -63,12 +63,15 @@ every API call, because no rule matches the path.
 `deploy_location` refuses, before it starts anything, while no version of the terms of service
 exists: a portal asks every guest to accept them before the flow begins, so without one it could
 start nobody. `get_terms_of_service` says whether there is one; `create_terms_version` publishes it.
+It refuses too while the location has no access point, since a deployed location with none turns
+every guest away, or has one that another deployed location takes its guests through: register one
+with `configure_unifi`, or pause the other location first. `resume_location` asks the same.
 
 `deploy_location(slug)` creates the five things that fixes, in an order that is not arbitrary:
 
 1. the CloudWatch log group, so the task's first lines have somewhere to land
-2. the target group, `captal-<slug>` — which is why a slug is capped at 25 characters: AWS caps
-   target group names at 32 and the prefix takes seven
+2. the target group, `captal-<slug>` — or, for a slug too long for the 32 characters AWS allows a
+   target group's name, `captal-` with the slug's first 16 characters and 8 of its hash
 3. the ALB listener rule, **before** the service — `createService` with a load balancer attached
    fails with `400 no associated load balancer` while the target group is not reachable through a
    listener
@@ -134,8 +137,10 @@ location's latest run. The `watch` field of the first answer belongs to the page
 How a run ends:
 
 - **`succeeded`**: the operation's own result is in `deployed`, `paused`, `resumed` or `destroyed`,
-  with its own `nextSteps`. Sections 3 to 5 say how to read each one.
-- **`failed`**: `error` says why, and the failed step is marked. Every step is idempotent, so once the
+  with its own `nextSteps`. Sections 3 to 5 say how to read each one. The location is recorded as
+  deployed, paused or destroyed from then on, which is what the access point rules read.
+- **`failed`**: `error` says why, and the failed step is marked. The location stays recorded as it
+  was. Every step is idempotent, so once the
   cause is dealt with, calling the same tool again redoes what was done in moments and carries on.
 - **`interrupted`**: the server doing the work stopped before it finished, typically a restart.
   Calling the same tool again finishes it.
@@ -147,7 +152,8 @@ individual AWS calls; section 5 says what a half-done change leaves behind.
 ## 4. Closing a portal for a while: `pause_location` and `resume_location`
 
 For downtime that ends: the venue is closed, being refitted, or its contract is on hold. A pause
-deletes nothing and writes nothing to the database.
+deletes nothing, and writes nothing to the database but the location's state, paused, once it
+succeeds.
 
 `pause_location(slug)` does four things, in this order:
 

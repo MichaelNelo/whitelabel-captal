@@ -1,7 +1,7 @@
 ---
 name: add-location
 description: Use this skill to onboard a location end-to-end — create it, give it translations, advertisers and videos, brand it, register its access points with their UniFi controllers, set how its guests recover from errors, and check what is still missing. Composes the smaller skills into one flow. Triggers on "agregar location", "add new location", "onboard location", "nuevo cliente", "new client", "create location", "configurar unifi", "configure unifi", "access point", "punto de acceso", "agregar AP", "add AP", "desactivar unifi", "disable unifi", "espera de error", "error wait", "recovery policy", "readiness", "qué falta".
-version: 2.5.0
+version: 2.6.0
 ---
 
 # Onboard a location end-to-end
@@ -21,9 +21,10 @@ schemas cannot carry.
 
 The slug is permanent. It becomes the URL prefix (`/<slug>/api/...`), the S3 key prefix for the
 location's assets, the suffix of its session cookie, and the AWS resource names at deploy time —
-a rename would orphan the assets and break every live session. Kebab-case, at most 25 characters
-(`captal-<slug>` is the ALB target group name and AWS caps those at 32), no leading, trailing or
-doubled hyphen. The display name is free text and changeable.
+a rename would orphan the assets and break every live session. Lowercase kebab-case — letters,
+digits and single hyphens between them, no leading, trailing or doubled hyphen — with no length
+limit, and not one of `bundle`, `ui`, `releases` or `mcp`, which every location already shares. The
+display name is free text and changeable.
 
 `list_locations` gives you the slugs for everything else, plus `unifiConfigured` per location.
 
@@ -91,29 +92,30 @@ What the form stores:
 | `siteId` | yes | Site **UUID**, not the `default` name |
 | `apiToken` | when the AP has none | Left blank on a later edit, the stored one is kept |
 | `port` | no | Defaults to 443 |
-| `redirectUrl` | no | The location's, not the AP's: when set, the dispatcher sends its guests here instead of the portal |
-| `durationMinutes` | no | The location's, for all its APs. Defaults to 1440 |
+| `redirectUrl` | no | This AP's: when set, the dispatcher sends the guests who join through it here instead of the portal. Blank clears it |
+| `durationMinutes` | no | This AP's, for the guests who join through it. Defaults to 1440. Blank clears it |
 
 **The AP MAC is also what routes traffic to this location.** The portal dispatcher Lambda runs
-`SELECT l.slug, l.unifi_redirect_url FROM access_points a JOIN locations l ON l.id = a.location_id WHERE a.mac = ?`
+`SELECT l.slug, a.redirect_url FROM access_points a JOIN locations l ON l.id = a.location_id WHERE a.mac = ?`
 against rqlite, with the MAC lowercase and colon-separated; with no access point registered, a
 device redirected by the UCG gets a 404 instead of the portal. Find each MAC in the controller under
 Devices → the AP → Details → MAC Address.
 
-**An access point takes the guests of one running location.** Registering an AP that another
-running location (active and not paused) already has is refused: pause that location first with
-`pause_location`. For the same reason `deploy_location` and `resume_location` refuse a location that
-shares an AP with another running one.
+**An access point takes the guests of one deployed location.** Registering an AP that another
+deployed location already has is refused: pause that location first with `pause_location`. For the
+same reason `deploy_location` and `resume_location` refuse a location that shares an AP with another
+deployed one, and one with no AP at all.
 
 Without the form:
 
-- `update_access_point(slug, apMac, newApMac?, host?, port?, siteId?)` changes an AP's settings that
-  are not secret — `newApMac` for an AP that was physically replaced. Never the token.
+- `update_access_point(slug, apMac, newApMac?, host?, port?, siteId?, durationMinutes?, redirectUrl?, unifiEnabled?)`
+  changes an AP without the form — `newApMac` for an AP that was physically replaced; an empty
+  `redirectUrl` removes it. Never the token.
 - `remove_access_point(slug, apMac)` takes one off. Guests coming through it are turned away from
-  then on.
-- `update_unifi_settings(slug, redirectUrl?, durationMinutes?)` changes the location's own settings.
+  then on. A deployed location's last AP is refused: add another, or pause it first.
 
-All of these, and the form, apply to the next guest with no redeploy.
+All of these, and the form, apply to the next guest with no redeploy, and each is recorded under the
+operator token that made it.
 
 Getting the credentials: the API key comes from **Settings → Control Plane → Integrations → Create
 API Key** and is shown once. The site UUID:
@@ -126,12 +128,13 @@ Copy `data[].id`, not `internalReference` — the legacy `default` name does not
 Integration v1 endpoints. All UCG hardware uses port 443 and the same base path; standalone
 (non-UCG) controllers are not supported.
 
-**A location that grants network access some other way** turns its UniFi calls off: call
-`set_unifi_enabled` with `enabled: false` and the portal never calls a controller there. Guests
-finish the flow and stay at Ready. It still needs its access points registered, because they are
-what admits a guest, and readiness keeps asking for one until there is. It can be turned off or back
-on at any time, also after deploying; the stored settings are kept and the change reaches the next
-guest without a redeploy.
+**An access point whose network grants access some other way** has its UniFi calls turned off:
+call `update_access_point` with `unifiEnabled: false` and the portal never calls its controller.
+Guests who join through it finish the flow and stay at Ready. The switch is each AP's, so a location
+that grants access some other way everywhere turns it off on every AP. It still needs its access
+points registered, because they are what admits a guest, and readiness keeps asking for one until
+there is. It can be turned off or back on at any time, also after deploying; the stored settings
+are kept and the change reaches the next guest without a redeploy.
 
 ## 7. Error recovery (optional)
 
