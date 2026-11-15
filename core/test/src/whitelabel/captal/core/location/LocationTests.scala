@@ -43,6 +43,7 @@ object LocationTests extends TestSuite:
   private def locations(found: Option[Location[State]]): LocationRepository[Id] =
     new LocationRepository[Id]:
       def find(slug: Slug) = found.filter(_.slug == slug)
+      def findDeployed(id: LocationId) = None
 
   private def accessPoints(
       points: List[AccessPoint] = Nil,

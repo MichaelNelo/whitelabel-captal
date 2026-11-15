@@ -344,6 +344,17 @@ enum Event:
       verdict: Verdict,
       occurredAt: Instant)
 
+  /** A redirect into the location `location` carried no fingerprint where it requires one: the link
+    * shortener in front of the portal failing, not the guest. Recorded as a server error against
+    * the session it started, which the guest leaves through at once.
+    */
+  case FingerprintMissing(
+      errorId: ErrorId,
+      sessionId: user.SessionId,
+      deviceId: user.DeviceId,
+      location: Option[String],
+      occurredAt: Instant)
+
   /** The session may leave through this error from `availableAt`. */
   case RecoveryOffered(
       errorId: ErrorId,

@@ -7,6 +7,9 @@ trait LocationRepository[F[_]]:
   /** The location with this slug, in whatever state it is. */
   def find(slug: Slug): F[Option[Location[State]]]
 
+  /** The location with this id, if it is deployed. */
+  def findDeployed(id: LocationId): F[Option[Location[State.Deployed]]]
+
 trait AccessPointRepository[F[_]]:
   /** The location's access points, whatever its state. */
   def of(location: LocationId): F[List[AccessPoint]]

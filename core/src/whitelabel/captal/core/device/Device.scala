@@ -10,6 +10,14 @@ import whitelabel.captal.core.user
   */
 final case class Signals(clientMac: Option[Mac], fingerprint: String)
 
+object Signals:
+  /** The fingerprint a guest is given where the location does not require one and the redirect
+    * carries none, and where it does and none came: the session is still made. One value for all of
+    * them, so under the default policy, which compares the MAC and the fingerprint, their devices
+    * are told apart by the MAC alone; under `ByFingerprint` they would all be one device.
+    */
+  val NoFingerprint = "no-fingerprint"
+
 /** Whether a known device is the one in front of us.
   *
   * Inline, so a repository can splice it into its query and have the database find the device:
@@ -77,3 +85,22 @@ enum Event:
 
   /** The device accepted the terms of service in force, the version `termsId`. */
   case TermsAccepted(deviceId: user.DeviceId, termsId: String, occurredAt: Instant)
+
+  /** A device seen for the first time: no known one matches its signals under the policy, or they
+    * lack what it compares.
+    */
+  case DeviceRegistered(
+      deviceId: user.DeviceId,
+      userAgent: String,
+      signals: Signals,
+      occurredAt: Instant)
+
+  /** A known device seen again. What the policy did not compare moves with it: a MAC randomized per
+    * network, a fingerprint the shortener computed anew.
+    */
+  case DeviceRecognized(
+      deviceId: user.DeviceId,
+      userAgent: String,
+      signals: Signals,
+      occurredAt: Instant)
+end Event
