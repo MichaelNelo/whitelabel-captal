@@ -102,15 +102,19 @@ private[api] object Flows:
         case _ =>
           ZIO.none
 
-  /** The served location's UniFi switch, read from its row on every call. Without a location (dev,
-    * standalone) there is no switch, and the UniFi config alone decides.
+  /** The UniFi switch of the served location's access point a session came through, read from its
+    * row on every call. Without a location (dev, standalone) or an AP there is no switch, and the
+    * UniFi config alone decides.
     */
-  private[api] def unifiEnabled(quill: QuillSqlite, location: CurrentLocation): Task[Boolean] =
-    location.id match
-      case Some(id) =>
-        LocationService(quill).unifiEnabled(id)
-      case None =>
-        ZIO.succeed(true)
+  private[api] def unifiEnabled(
+      quill: QuillSqlite,
+      location: CurrentLocation): Option[Mac] => Task[Boolean] =
+    ap =>
+      (location.id, ap) match
+        case (Some(id), Some(mac)) =>
+          LocationService(quill).unifiEnabled(id, mac)
+        case _ =>
+          ZIO.succeed(true)
 
   val answerEmailFlowLayer: ZLayer[
     SurveyRepository[Task] & UserRepository[Task] & EventHandler[Task, Event],

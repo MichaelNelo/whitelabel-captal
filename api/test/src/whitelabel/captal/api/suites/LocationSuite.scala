@@ -7,7 +7,15 @@ import whitelabel.captal.api.TestHelpers.*
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.application.{Error as AppError, Flow}
 import whitelabel.captal.core.device.Mac
-import whitelabel.captal.core.location.{Error as LocationError, LocationId, Secret, Slug, State}
+import whitelabel.captal.core.location.{
+  Error as LocationError,
+  LocationId,
+  Secret,
+  Settings,
+  SettingsChange,
+  Slug,
+  State
+}
 import whitelabel.captal.platform.LocationStates
 import whitelabel.captal.platform.eventhandlers.{
   LocationPersistenceHandler,
@@ -35,26 +43,31 @@ object LocationSuite:
     val repo = LocationRepositoryQuill(quill)
     private val events = TransactionalEventHandler(LocationPersistenceHandler(), quill)
     private val creating = Flow(CreateLocationHandler[Task](repo), events)
-    private val changing = Flow(ChangeSettingsHandler[Task](repo), events)
     private val registering = Flow(RegisterAccessPointHandler[Task](repo, repo), events)
+    private val updating = Flow(UpdateAccessPointHandler[Task](repo, repo), events)
     private val removing = Flow(RemoveAccessPointHandler[Task](repo, repo), events)
 
     def create(slug: Slug) = creating.execute(
       CreateLocationCommand(LocationId(s"${slug.asString}-id"), slug, s"Name of $slug", Now))
 
-    def change(slug: Slug, change: SettingsChange) = changing.execute(
-      ChangeSettingsCommand(slug, change, Now))
+    def register(
+        slug: Slug,
+        mac: Mac,
+        host: String,
+        token: Option[String] = Some("token"),
+        settings: SettingsChange = SettingsChange()) = registering.execute(
+      RegisterAccessPointCommand(
+        slug,
+        mac,
+        host,
+        Some(8443),
+        "default",
+        token.flatMap(Secret.parse),
+        settings,
+        Now))
 
-    def register(slug: Slug, mac: Mac, host: String, token: Option[String] = Some("token")) =
-      registering.execute(
-        RegisterAccessPointCommand(
-          slug,
-          mac,
-          host,
-          Some(8443),
-          "default",
-          token.flatMap(Secret.parse),
-          Now))
+    def update(slug: Slug, mac: Mac, settings: SettingsChange) = updating.execute(
+      UpdateAccessPointCommand(slug, mac, None, None, None, None, settings, Now))
 
     def remove(slug: Slug, mac: Mac) = removing.execute(RemoveAccessPointCommand(slug, mac, Now))
   end Commands
@@ -87,18 +100,32 @@ object LocationSuite:
           for
             run     <- commands
             created <- run.create(Plaza)
-            _       <- run.register(Plaza, Ap, "first.example")
+            _       <- run.register(
+              Plaza,
+              Ap,
+              "first.example",
+              settings = SettingsChange(redirectUrl = Some(Some("https://plaza.example"))))
             // The same MAC again, with no token: the controller changes and keeps its token.
-            _      <- run.register(Plaza, Ap, "second.example", token = None)
-            _      <- run.change(Plaza, SettingsChange(durationMinutes = Some(Some(45))))
+            _ <- run.register(Plaza, Ap, "second.example", token = None)
+            _ <- run.update(
+              Plaza,
+              Ap,
+              SettingsChange(durationMinutes = Some(Some(45)), fingerprintRequired = Some(false)))
             found  <- run.repo.find(Plaza)
             points <- run.repo.of(created.id)
           yield assertTrue(
             found.map(_.state).contains(State.Created),
-            found.flatMap(_.settings.durationMinutes).contains(45),
             points.map(_.mac) == List(Ap),
             points.map(_.controller.host) == List("second.example"),
-            points.map(_.controller.token.reveal) == List("token")
+            points.map(_.controller.token.reveal) == List("token"),
+            points.map(_.settings) ==
+              List(
+                Settings
+                  .Default
+                  .copy(
+                    durationMinutes = Some(45),
+                    redirectUrl = Some("https://plaza.example"),
+                    fingerprintRequired = false))
           )
         ,
         test("a slug another location has is refused, and nothing is written"):

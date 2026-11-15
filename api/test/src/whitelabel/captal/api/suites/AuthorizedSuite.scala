@@ -123,20 +123,27 @@ object AuthorizedSuite:
               sessionAfter.exists(_.accessExpiresAt.isEmpty)
             )
         ,
-        test("The UniFi switch is read from the location's row, and defaults to enabled"):
+        test(
+          "The UniFi switch is read from the row of the access point the session came through, and defaults to enabled"):
+          val on = Mac.parse("11:11:11:11:11:11")
+          val off = Mac.parse("22:22:22:22:22:22")
           for
-            _       <- insertLocation("unifi-on", None)
-            _       <- insertLocation("unifi-off", Some(0))
-            _       <- insertLocation("unifi-back-on", Some(1))
-            quill   <- ZIO.service[QuillSqlite]
-            on      <- Flows.unifiEnabled(quill, servedAt("unifi-on"))
-            off     <- Flows.unifiEnabled(quill, servedAt("unifi-off"))
-            backOn  <- Flows.unifiEnabled(quill, servedAt("unifi-back-on"))
-            missing <- Flows.unifiEnabled(quill, servedAt("no-such-location"))
-            noRow   <- Flows.unifiEnabled(quill, CurrentLocation.empty)
-            // The row itself, so an insert rqlite rejected cannot pass for a disabled location.
-            offRow <- LocationService(quill).findBySlug("unifi-off")
-          yield assertTrue(on, !off, offRow.exists(_.unifiIsEnabled == 0), backOn, !missing, noRow)
+            _ <- insertLocation("unifi-site", None)
+            _ <- TestFixtures.seedAccessPoint("unifi-site", "11:11:11:11:11:11")
+            _ <- TestFixtures.seedAccessPoint(
+              "unifi-site",
+              "22:22:22:22:22:22",
+              unifiEnabled = false)
+            quill <- ZIO.service[QuillSqlite]
+            enabled = Flows.unifiEnabled(quill, servedAt("unifi-site"))
+            onAp    <- enabled(on)
+            offAp   <- enabled(off)
+            unknown <- enabled(Mac.parse("33:33:33:33:33:33"))
+            noAp    <- enabled(None)
+            noRow   <- Flows.unifiEnabled(quill, CurrentLocation.empty)(off)
+            // The row itself, so an insert rqlite rejected cannot pass for a disabled AP.
+            offRow <- LocationService(quill).hasAccessPoint("unifi-site", off.get)
+          yield assertTrue(onAp, !offAp, offRow, unknown, noAp, noRow)
         ,
         test("A redirect is admitted only through one of the location's access points"):
           for

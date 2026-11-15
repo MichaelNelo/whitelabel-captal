@@ -164,7 +164,7 @@ object OnboardingSpec extends ZIOSpecDefault:
         val steps = Readiness.steps(readiness(unifi = false, unifiEnabled = false))
         assertTrue(steps.exists(_.contains("access point")))
       ,
-      test("an access point's controller takes the location's duration, and defaults its own port"):
+      test("an access point's controller takes its own duration, and defaults its port"):
         val point = AccessPointRow(
           id = "ap-1",
           locationId = "l-1",
@@ -176,8 +176,8 @@ object OnboardingSpec extends ZIOSpecDefault:
           createdAt = "",
           updatedAt = ""
         )
-        val defaults = UnifiAccess.of(point, None)
-        val set = UnifiAccess.of(point.copy(unifiPort = Some(8443)), Some(30))
+        val defaults = UnifiAccess.of(point)
+        val set = UnifiAccess.of(point.copy(unifiPort = Some(8443), durationMinutes = Some(30)))
         assertTrue(
           defaults == UnifiAccess("10.0.0.1", "tok", 443, "site-uuid", 1440),
           set.port == 8443,

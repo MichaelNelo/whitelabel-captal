@@ -102,7 +102,7 @@ object TestLayers:
       // The production handler, with its HTTP transport swapped for TestUnifiClient.
       val unifiAccess = UnifiAccessHandler(
         _ => ZIO.some(testUnifi),
-        unifiSwitch.enabled,
+        _ => unifiSwitch.enabled,
         ctx,
         sessionService,
         unifiClient,

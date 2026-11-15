@@ -52,21 +52,23 @@ object SurveyRoutes:
   val NoFingerprint = "no-fingerprint"
 
   /** The fingerprint a session is created with: the redirect's, or [[NoFingerprint]] where the
-    * served location does not require one. The switch is read from the location's row on every
-    * call, so changing it needs no restart. Without a location (dev, standalone) one is required.
+    * access point it came through does not require one. The switch is read from the access point's
+    * row on every call, so changing it needs no restart. Without a location (dev, standalone) or an
+    * AP, one is required.
     */
   private[api] def fingerprintOf(
       quill: QuillSqlite,
       location: CurrentLocation,
+      ap: Option[Mac],
       sent: Option[String]): Task[Option[String]] =
-    (sent.filter(_.nonEmpty), location.id) match
-      case (Some(fingerprint), _) =>
+    (sent.filter(_.nonEmpty), location.id, ap) match
+      case (Some(fingerprint), _, _) =>
         ZIO.some(fingerprint)
-      case (None, Some(id)) =>
+      case (None, Some(id), Some(mac)) =>
         LocationService(quill)
-          .fingerprintRequired(id)
+          .fingerprintRequired(id, mac)
           .map(required => Option.unless(required)(NoFingerprint))
-      case (None, None) =>
+      case _ =>
         ZIO.none
 
 end SurveyRoutes
@@ -313,7 +315,8 @@ final class SurveyRoutes(
       val ap = apMac.flatMap(Mac.parse)
       for
         quill <- ZIO.service[QuillSqlite]
-        sent  <- fingerprintOf(quill, currentLocation, fingerprint).mapError(ApiError.fromThrowable)
+        sent  <- fingerprintOf(quill, currentLocation, ap, fingerprint).mapError(
+          ApiError.fromThrowable)
         // portalParams whenever the client's MAC is readable: UniFi always sends it, and it is the
         // device access is granted to. The fingerprint comes from the link shortener in front of
         // the portal instead; one that is required and missing is that configuration failing, not
