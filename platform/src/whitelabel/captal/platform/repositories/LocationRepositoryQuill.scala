@@ -34,6 +34,12 @@ object LocationRepositoryQuill:
           .flatMap(ZIO.foreach(_)(row => of(LocationId(row.id)).map(locationOf(row, _))))
           .orDie
 
+      def byId(id: LocationId): Task[Option[Location[State]]] =
+        run(query[LocationRow].filter(_.id == lift(id.asString)))
+          .map(_.headOption)
+          .flatMap(ZIO.foreach(_)(row => of(id).map(locationOf(row, _))))
+          .orDie
+
       /** None too for a deployed row with no access point, which no command writes: it would admit
         * no guest anyway.
         */

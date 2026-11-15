@@ -61,4 +61,25 @@ object LocationCommands:
       case LocationError.LastAccessPoint(mac) =>
         s"El AP ${mac
             .show} es el único de una location desplegada: sin él, todo invitado sería rechazado. Agregá otro o pausala con pause_location primero."
+      case LocationError.AlreadyDeployed(slug) =>
+        s"'${slug
+            .asString}' is deployed already, so a deploy has nothing to do: a new image or bundle reaches every location through the release. Use pause_location and resume_location to take it out of service and back."
+      case LocationError.NotAllowedFrom(state, operation) =>
+        s"A ${operation
+            .name} does not apply to a location that is $state: deploy from created or destroyed, pause from deployed, resume from paused, destroy from deployed or paused."
+      case LocationError.NoTermsOfService =>
+        "No terms of service exist yet, and a portal cannot start a guest without them. Create the first version with create_terms_version, then try again."
+      case LocationError.NoAccessPoint =>
+        "The location has no access point, so every guest would be turned away. Register one with configure_unifi, then try again."
+      case LocationError.OperationInProgress(run, operation, step) =>
+        s"A ${operation.name} of this location is going (run ${run.asString}${step.fold("")(at =>
+            s", at «${at.description}»")}). get_deploy_status follows it."
+      case LocationError.PreviousOperationUnfinished(run, operation, pending) =>
+        s"The ${operation.name} run ${run.asString} was left part way${pending
+            .headOption
+            .fold("")(at =>
+              s", at «${at
+                  .description}»")}, so the location stands half changed. Finish it before anything else."
+      case LocationError.RunNotStarted(run) =>
+        s"The run ${run.asString} is not going: it ended already, or never started."
 end LocationCommands

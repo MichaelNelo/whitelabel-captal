@@ -74,6 +74,7 @@ object EnterPortalTests extends TestSuite:
       users: Set[user.Id] = Set.empty) = EnterPortalHandler[Id](
     new LocationRepository[Id]:
       def find(slug: Slug) = None
+      def byId(id: LocationId) = None
       def findDeployed(id: LocationId) = location.filter(_.id == id)
     ,
     new SessionRepository[Id]:

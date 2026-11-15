@@ -1,6 +1,7 @@
 package whitelabel.captal.core.location
 
 import whitelabel.captal.core.device.Mac
+import whitelabel.captal.core.operation.{Operation, RunId, Step}
 
 enum Error:
   /** Not lowercase kebab-case, or blank. */
@@ -36,4 +37,31 @@ enum Error:
     * turned away.
     */
   case LastAccessPoint(mac: Mac)
+
+  /** A deploy of a location already deployed, which has nothing to do: versions reach every
+    * location through the release, never through a deploy.
+    */
+  case AlreadyDeployed(slug: Slug)
+
+  /** The operation does not leave the state the location is in: a resume of one not paused. */
+  case NotAllowedFrom(state: String, operation: Operation)
+
+  /** A portal asks every guest to accept the terms of service before the flow begins, so one with
+    * no version to accept could not start anyone.
+    */
+  case NoTermsOfService
+
+  /** Deploying or resuming a location with no access point would turn every guest away. */
+  case NoAccessPoint
+
+  /** Its run `run` of `operation` is going, at `step`. */
+  case OperationInProgress(run: RunId, operation: Operation, step: Option[Step])
+
+  /** Its run `run` of `operation` was left part way, with `pending` still to take: finished first,
+    * or the location stands half changed in the infrastructure.
+    */
+  case PreviousOperationUnfinished(run: RunId, operation: Operation, pending: List[Step])
+
+  /** Completing the run `run`, which is not going: completed already, or never started. */
+  case RunNotStarted(run: RunId)
 end Error

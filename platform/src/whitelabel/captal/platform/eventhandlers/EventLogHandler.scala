@@ -9,7 +9,8 @@ import io.getquill.*
 import whitelabel.captal.core.access.Event as AccessEvent
 import whitelabel.captal.core.application.Event
 import whitelabel.captal.core.device.Event as DeviceEvent
-import whitelabel.captal.core.location.{AccessPoint, Event as LocationEvent}
+import whitelabel.captal.core.location.{AccessPoint, Event as LocationEvent, LocationId}
+import whitelabel.captal.core.operation.{Event as OperationEvent, RunId}
 import whitelabel.captal.core.recovery.Event as RecoveryEvent
 import whitelabel.captal.core.session.Event as SessionEvent
 import whitelabel.captal.core.survey.Event as SurveyEvent
@@ -232,6 +233,8 @@ object EventLogHandler:
             occurredAt))
       case Event.Location(e) =>
         Some(extractLocationEvent(e))
+      case Event.Operation(e) =>
+        Some(extractOperationEvent(e))
 
   /** A location's events, its access points' tokens left out: whether one is set is all the log
     * says of them.
@@ -275,6 +278,59 @@ object EventLogHandler:
             "locationId" -> Json.fromString(location.asString),
             "mac"        -> Json.fromString(mac.show)),
           occurredAt)
+      case LocationEvent.LocationDeployed(id, by, occurredAt) =>
+        ("location.deployed", transitionJson(id, by), occurredAt)
+      case LocationEvent.LocationPaused(id, by, occurredAt) =>
+        ("location.paused", transitionJson(id, by), occurredAt)
+      case LocationEvent.LocationResumed(id, by, occurredAt) =>
+        ("location.resumed", transitionJson(id, by), occurredAt)
+      case LocationEvent.LocationDestroyed(id, by, occurredAt) =>
+        ("location.destroyed", transitionJson(id, by), occurredAt)
+
+  private def transitionJson(id: LocationId, by: RunId): Json = Json.obj(
+    "locationId" -> Json.fromString(id.asString),
+    "run"        -> Json.fromString(by.asString))
+
+  /** An operation's start and end. Its steps are on the run's row as they happen, not here. */
+  private def extractOperationEvent(event: OperationEvent): (String, Json, Instant) =
+    event match
+      case OperationEvent.OperationStarted(
+            run,
+            location,
+            slug,
+            operation,
+            steps,
+            finishing,
+            _,
+            at) =>
+        (
+          "operation.started",
+          Json.obj(
+            "run"        -> Json.fromString(run.asString),
+            "locationId" -> Json.fromString(location.asString),
+            "slug"       -> Json.fromString(slug.asString),
+            "operation"  -> Json.fromString(operation.name),
+            "steps"      -> Json.fromValues(steps.map(step => Json.fromString(step.toString))),
+            "finishing"  -> finishing.fold(Json.Null)(id => Json.fromString(id.asString))
+          ),
+          at)
+      case OperationEvent.OperationCompleted(run, location, at) =>
+        (
+          "operation.completed",
+          Json.obj(
+            "run"        -> Json.fromString(run.asString),
+            "locationId" -> Json.fromString(location.asString)),
+          at)
+      case OperationEvent.OperationFailed(run, location, step, failure, at) =>
+        (
+          "operation.failed",
+          Json.obj(
+            "run"        -> Json.fromString(run.asString),
+            "locationId" -> Json.fromString(location.asString),
+            "step"       -> Json.fromString(step.toString),
+            "failure"    -> Json.fromString(failure.detail)
+          ),
+          at)
 
   private def accessPointJson(point: AccessPoint): Json = Json.obj(
     "mac"             -> Json.fromString(point.mac.show),

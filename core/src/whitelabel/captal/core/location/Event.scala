@@ -3,6 +3,7 @@ package whitelabel.captal.core.location
 import java.time.Instant
 
 import whitelabel.captal.core.device.Mac
+import whitelabel.captal.core.operation.RunId
 
 enum Event:
   case LocationCreated(id: LocationId, slug: Slug, name: String, occurredAt: Instant)
@@ -17,3 +18,9 @@ enum Event:
       occurredAt: Instant)
 
   case AccessPointRemoved(location: LocationId, mac: Mac, occurredAt: Instant)
+
+  /** The run `by` stood the location up, from created or destroyed. */
+  case LocationDeployed(id: LocationId, by: RunId, occurredAt: Instant)
+  case LocationPaused(id: LocationId, by: RunId, occurredAt: Instant)
+  case LocationResumed(id: LocationId, by: RunId, occurredAt: Instant)
+  case LocationDestroyed(id: LocationId, by: RunId, occurredAt: Instant)

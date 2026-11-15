@@ -7,6 +7,11 @@ trait LocationRepository[F[_]]:
   /** The location with this slug, in whatever state it is. */
   def find(slug: Slug): F[Option[Location[State]]]
 
+  /** The location with this id, in whatever state it is. Not `find`: the slug and the id erase to
+    * the same type, and two overloads would clash.
+    */
+  def byId(id: LocationId): F[Option[Location[State]]]
+
   /** The location with this id, if it is deployed. */
   def findDeployed(id: LocationId): F[Option[Location[State.Deployed]]]
 
