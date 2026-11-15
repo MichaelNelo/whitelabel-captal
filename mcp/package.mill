@@ -89,7 +89,8 @@ object `package` extends BaseModule with Released:
       localStackContainer,
       "rqlite-test",
       "rqlite-mcp-test",
-      "rqlite-mcp-e2e")
+      "rqlite-mcp-e2e",
+      "redis-mcp-test")
       .flatMap(name => docker("ps", "-aq", "-f", s"name=$name").linesIterator) ++
       // Task containers LocalStack starts for ECS services; named by cluster, so not matched above.
       docker("ps", "-aq", "-f", "name=ls-ecs-").linesIterator
@@ -174,7 +175,8 @@ object `package` extends BaseModule with Released:
         "rqlite_service_name",
         "cdc_service_name",
         "unifi_fake_service_name",
-        "jaeger_service_name").flatMap(outputs.get))
+        "jaeger_service_name").flatMap(outputs.get) ++
+        outputs.get("redis_lock_service_names").toSeq.flatMap(_.split(',')))
     val dbUrl = localDbUrl(configDir)
     val resourceUri = outputs("mcp_url")
     val adminToken = awsText(
@@ -298,6 +300,13 @@ object `package` extends BaseModule with Released:
     // The end-to-end spec's own container (see `migratedE2eUrl`).
     private val e2ePort = 4013
     private val e2eContainer = "rqlite-mcp-e2e"
+
+    // Where the end-to-end spec takes its locations' operation locks.
+    private val redisPort = 6390
+    private val redisContainer = "redis-mcp-test"
+
+    private def redisAddress: T[String] = Task.Input:
+      ensureRedis(redisContainer, redisPort, Task.env)
 
     /** The container's id and URL, as one `Task.Input`. The id is part of the stamp so that a recreated
       * container invalidates [[migratedRqliteUrl]]; the URL alone is the same for both.
@@ -445,11 +454,12 @@ object `package` extends BaseModule with Released:
           "UNIFI_PROXY_URL"            -> "http://tailscale-proxy.test:1055",
           // Forwarded into every location's task definition; nothing in the suite follows it.
           "CDC_FEED_ADDRESS"           -> "cdc.test:9090",
+          "REDIS_LOCK_ADDRESSES"       -> redisAddress(),
           "LOCALSTACK_ENDPOINT"        -> localStackStamp().split(" ")(1)
         ) ++ localStackInfra()
 
-    /** Stops the suite's two databases. Their data goes with them. */
+    /** Stops the suite's two databases and its Redis. Their data goes with them. */
     def stopRqlite() = Task.Command:
-      Seq(rqliteContainer, e2eContainer).foreach(Processes.stop)
+      Seq(rqliteContainer, e2eContainer, redisContainer).foreach(Processes.stop)
   end test
 end `package`
