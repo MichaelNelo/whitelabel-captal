@@ -29,6 +29,8 @@ object I18nSchemaTests extends TestSuite:
     "error.title",
     "error.retry",
     "error.generic",
+    "error.unknownAccessPoint",
+    "error.invalidClient",
     "question.submit",
     "question.next",
     "question.required",
@@ -121,7 +123,8 @@ object I18nSchemaTests extends TestSuite:
         assert(described("question.ratingOutOfRange").contains("{min}"))
         assert(described("question.ratingOutOfRange").contains("{max}"))
         assert(described("video.continueIn").contains("{seconds}"))
-        assert(described("welcome.authorized.remaining").contains("{seconds}"))
+        // A label under the countdown, which shows the time itself.
+        assert(!described("welcome.authorized.remaining").contains("{seconds}"))
 
     test("flatten"):
       test("round-trips through decode"):
