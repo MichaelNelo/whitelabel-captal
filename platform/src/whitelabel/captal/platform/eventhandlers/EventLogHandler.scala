@@ -17,7 +17,7 @@ import whitelabel.captal.core.survey.question.Event as QuestionEvent
 import whitelabel.captal.core.survey.question.codecs.given
 import whitelabel.captal.core.user.Event as UserEvent
 import whitelabel.captal.core.video.{Event as VideoEvent, VideoType}
-import whitelabel.captal.platform.{Errors, EventLogRow}
+import whitelabel.captal.platform.{Errors, EventLogRow, OperatorContext}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.session.SessionContext
@@ -58,15 +58,15 @@ object EventLogHandler:
           session.flatMap(_._2).map(_.asString),
           None)
 
-  /** An operator's events, under the token that made the change, `actor`: no guest's session. */
-  def forOperator(actor: String): DbEventHandler[Event] =
+  /** An operator's events, under the token that made the change, read from `operators` when they
+    * are written: no guest's session. Fails with [[OperatorContext.NotSet]] when nobody was
+    * published, rather than log a change under no one.
+    */
+  def forOperator(operators: OperatorContext): DbEventHandler[Event] =
     new DbEventHandler[Event]:
-      def handle(events: List[Event], quill: QuillSqlite): Task[Unit] = write(
-        events,
-        quill,
-        None,
-        None,
-        Some(actor))
+      def handle(events: List[Event], quill: QuillSqlite): Task[Unit] = operators
+        .getOrFail
+        .flatMap(operator => write(events, quill, None, None, Some(operator.actor)))
 
   private def write(
       events: List[Event],

@@ -1,48 +1,31 @@
 package whitelabel.captal.mcp.tools
 
 import cats.syntax.foldable.*
-import whitelabel.captal.core.application.commands.Handler
 import whitelabel.captal.core.application.{Error as AppError, Flow}
-import whitelabel.captal.core.infrastructure.{AccessPointRepository, LocationRepository}
 import whitelabel.captal.core.location.Error as LocationError
-import whitelabel.captal.platform.eventhandlers.{
-  EventLogHandler,
-  LocationPersistenceHandler,
-  TransactionalEventHandler
-}
-import whitelabel.captal.platform.repositories.LocationRepositoryQuill
-import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.platform.{Operator, OperatorContext}
 import zio.*
-import zio.interop.catz.*
 
-/** Where the location tools meet the location's commands: each runs one, as the operator token
-  * `actor`, through the chain that writes what it decided and logs it under that token, and turns a
-  * refusal into what the operator reads.
+/** Where the location tools meet the location's commands: each runs one of [[LocationFlows]], with
+  * `operator` published for the handlers, and turns a refusal into what the operator reads.
   */
 object LocationCommands:
-  type Repositories = LocationRepository[Task] & AccessPointRepository[Task]
-
-  def run[C, R](actor: String, command: C)(
-      handler: Repositories => Handler.Aux[Task, C, R]): ZIO[QuillSqlite, String, R] = ZIO
-    .serviceWithZIO[QuillSqlite]: quill =>
-      val events = TransactionalEventHandler(
-        LocationPersistenceHandler().andThen(EventLogHandler.forOperator(actor)),
-        quill)
-      Flow(handler(LocationRepositoryQuill(quill)), events)
-        .execute(command)
-        .catchAll:
-          case Flow.HandlerError(errors) =>
-            ZIO.fail(
-              errors
-                .toList
-                .flatMap:
-                  case AppError.Location(found) =>
-                    found.toList.map(describe)
-                  case other =>
-                    List(other.toString)
-                .mkString(" "))
-          case defect =>
-            ZIO.die(defect)
+  def run[C, R](operator: Operator, command: C)(
+      flow: Flow.Aux[Task, C, R]): ZIO[OperatorContext, String, R] = ZIO
+    .serviceWithZIO[OperatorContext](_.locally(operator)(flow.execute(command)))
+    .catchAll:
+      case Flow.HandlerError(errors) =>
+        ZIO.fail(
+          errors
+            .toList
+            .flatMap:
+              case AppError.Location(found) =>
+                found.toList.map(describe)
+              case other =>
+                List(other.toString)
+            .mkString(" "))
+      case defect =>
+        ZIO.die(defect)
 
   /** What the operator reads for each refusal. */
   def describe(error: LocationError): String =

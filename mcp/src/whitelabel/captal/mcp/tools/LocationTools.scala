@@ -6,19 +6,16 @@ import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
 import whitelabel.captal.core.application.commands.{
   CreateLocationCommand,
-  CreateLocationHandler,
-  RequireFingerprintCommand,
-  RequireFingerprintHandler
+  RequireFingerprintCommand
 }
 import whitelabel.captal.core.location.{LocationId, Slug}
 import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
 import whitelabel.captal.mcp.{QuillArrow, Writes}
-import whitelabel.captal.platform.{AccessPointRow, LocationRow}
+import whitelabel.captal.platform.{AccessPointRow, LocationRow, Operator, OperatorContext}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
 import zio.*
-import zio.interop.catz.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
@@ -138,7 +135,7 @@ object LocationTools:
     * a scope of its own — a translator holding `content:write` should not be able to stand up a
     * portal.
     */
-  val create: McpToolHandlerR[QuillSqlite] = McpTool("create_location")
+  val create: McpToolHandlerR[OperatorContext & LocationFlows.Create] = McpTool("create_location")
     .description(
       "Create a location: the portal instance the other tools hang content off. The slug is permanent — it becomes the URL prefix, the asset prefix in S3 and the AWS resource names, so it cannot be renamed later. Creates nothing else: the location starts with no translations, so add them with set_translations before deploying or the portal renders raw key names. UniFi credentials are configured separately.")
     .requireScopes(Auth.ContentWrite)
@@ -146,17 +143,20 @@ object LocationTools:
       for
         slug    <- slugOf(in.slug)
         caller  <- callerOf(ctx)
+        flow    <- ZIO.service[LocationFlows.Create]
         created <-
           LocationCommands.run(
-            caller,
+            Operator(caller, None),
             CreateLocationCommand(
               LocationId(UUID.randomUUID.toString),
               slug,
               in.name,
-              java.time.Instant.now))(CreateLocationHandler[Task](_))
+              java.time.Instant.now))(flow)
       yield CreateResponse(created.id.asString, created.slug.asString, created.name, active = true)
 
-  val setFingerprintRequired: McpToolHandlerR[QuillSqlite] = McpTool("set_fingerprint_required")
+  val setFingerprintRequired
+      : McpToolHandlerR[QuillSqlite & OperatorContext & LocationFlows.RequireFingerprint] = McpTool(
+    "set_fingerprint_required")
     .description(
       "Whether a location's portal requires the link shortener's fingerprint on the redirect. Off, a guest whose redirect carries none is given one fixed fingerprint instead of being turned away, so their devices are told apart by MAC alone. Takes effect on the next guest, with no redeploy.")
     .requireScopes(Auth.ContentWrite)
@@ -164,11 +164,11 @@ object LocationTools:
       for
         slug   <- ZIO.fromEither(Slug.parse(in.slug)).mapError(LocationCommands.describe)
         caller <- callerOf(ctx)
+        flow   <- ZIO.service[LocationFlows.RequireFingerprint]
         _      <-
           LocationCommands.run(
-            caller,
-            RequireFingerprintCommand(slug, in.required, java.time.Instant.now))(
-            RequireFingerprintHandler[Task](_))
+            Operator(caller, None),
+            RequireFingerprintCommand(slug, in.required, java.time.Instant.now))(flow)
         found <- ZIO.serviceWithZIO[QuillSqlite]: quill =>
           import quill.*
           for
@@ -186,5 +186,7 @@ object LocationTools:
       import quill.*
       run(query[LocationRow]).orDie.map(_.filter(_.isActive == 1).map(_.slug).sorted)
 
-  val all: List[McpToolHandlerR[QuillSqlite]] = List(list, create, setFingerprintRequired)
+  val all: List[McpToolHandlerR[
+    QuillSqlite & OperatorContext & LocationFlows.Create & LocationFlows.RequireFingerprint]] =
+    List(list, create, setFingerprintRequired)
 end LocationTools

@@ -12,6 +12,7 @@ import whitelabel.captal.mcp.tools.{
   AssetTools,
   DeployTools,
   I18nTools,
+  LocationFlows,
   LocationTools,
   PreviewTools,
   Prompts,
@@ -23,6 +24,7 @@ import whitelabel.captal.mcp.tools.{
   UnifiTools,
   VideoTools
 }
+import whitelabel.captal.platform.OperatorContext
 import whitelabel.captal.platform.aws.AssetStore
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.telemetry.Tracing
@@ -129,6 +131,11 @@ object CaptalMcp:
     )
     ServerInfoSource(_ => ZIO.succeed(info))
 
+  /** What the tools need from the runtime: the database, the asset store, the tracer, and the flows
+    * composed once in [[Main]] with the operator context they log under.
+    */
+  type Env = QuillSqlite & AssetStore & Tracing & OperatorContext & LocationFlows.All
+
   /** Auth is not optional: the SDK silently ignores every `requireScopes` declaration when no
     * `.auth(...)` is configured, leaving every tool open to anyone who can reach the port.
     */
@@ -154,7 +161,7 @@ object CaptalMcp:
       // effect and this assembly is pure.
       extensions: McpExtensions[Any],
       name: String = "captal-backoffice",
-      version: String = "0.1.0"): McpServer[QuillSqlite & AssetStore & Tracing] =
+      version: String = "0.1.0"): McpServer[Env] =
     /** Default-deny for the rendered pages: a tool is callable from an App only by being named
       * here, where the extension's own default is callable by both the model and any App.
       *
@@ -178,14 +185,13 @@ object CaptalMcp:
     val withData = (
       LocationTools.all ++ I18nTools.all ++ AdvertiserTools.all ++ SurveyTools.all ++
         RecoveryTools.all ++ TermsTools.all ++ TokenTools.all ++ SkillTools.all
-    ).map(restrictToApps).foldLeft[McpServer[QuillSqlite & Tracing]](withPrompts)(_.tool(_))
+    ).map(restrictToApps).foldLeft[McpServer[Env]](withPrompts)(_.tool(_))
     // `deploy_location` is here rather than above because it copies the shared bundle under the new
     // slug, which is S3 and therefore `AssetStore`.
     val withAssets = (
       AssetTools.all ++ VideoTools.all ++ PreviewTools.all ++ Readiness.all ++
         UnifiTools.all(uiOrigin) ++ DeployTools.all(infra, uiOrigin)
-    ).map(restrictToApps)
-      .foldLeft[McpServer[QuillSqlite & AssetStore & Tracing]](withData)(_.tool(_))
+    ).map(restrictToApps).foldLeft[McpServer[Env]](withData)(_.tool(_))
     // One source for everything: `McpServer` holds a single `resourceSrc`, so the upload page and
     // the entity tree cannot be registered separately.
     val withSource = withAssets.resourceSource(

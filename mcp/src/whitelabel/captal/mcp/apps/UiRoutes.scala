@@ -3,18 +3,15 @@ package whitelabel.captal.mcp.apps
 import java.time.Instant
 
 import io.getquill.*
-import whitelabel.captal.core.application.commands.{
-  RegisterAccessPointCommand,
-  RegisterAccessPointHandler
-}
+import whitelabel.captal.core.application.commands.RegisterAccessPointCommand
 import whitelabel.captal.core.device.Mac
 import whitelabel.captal.core.location.{Error as LocationError, Secret, SettingsChange, Slug}
 import whitelabel.captal.mcp.QuillArrow
 import whitelabel.captal.mcp.access.Tokens
-import whitelabel.captal.mcp.tools.LocationCommands
+import whitelabel.captal.mcp.tools.{LocationCommands, LocationFlows}
 import whitelabel.captal.platform.aws.AssetStore
 import whitelabel.captal.platform.repositories.LocationRepositoryQuill
-import whitelabel.captal.platform.{AccessPointRow, LocationRow}
+import whitelabel.captal.platform.{AccessPointRow, LocationRow, Operator, OperatorContext}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
 import zio.*
@@ -160,7 +157,10 @@ object UiRoutes:
     * which is how the page avoids ever rendering it back; a blank duration or redirect URL clears
     * it.
     */
-  private def save(slug: String, form: Form, actor: String): ZIO[QuillSqlite, String, String] =
+  private def save(
+      slug: String,
+      form: Form,
+      actor: String): ZIO[OperatorContext & LocationFlows.RegisterAccessPoint, String, String] =
     for
       place    <- ZIO.fromEither(Slug.parse(slug)).mapError(LocationCommands.describe)
       rawMac   <- ZIO.fromOption(field(form, "apMac")).orElseFail("Falta la MAC del AP.")
@@ -169,9 +169,11 @@ object UiRoutes:
       siteId   <- ZIO.fromOption(field(form, "siteId")).orElseFail("Falta el site id.")
       port     <- ZIO.fromEither(number(form, "port", "El puerto"))
       duration <- ZIO.fromEither(number(form, "durationMinutes", "La duración"))
+      flow     <- ZIO.service[LocationFlows.RegisterAccessPoint]
       _        <-
+        // The page's post, with no MCP call behind it to ask anything through.
         LocationCommands.run(
-          actor,
+          Operator(actor, None),
           RegisterAccessPointCommand(
             place,
             mac,
@@ -184,7 +186,7 @@ object UiRoutes:
               redirectUrl = Some(field(form, "redirectUrl"))),
             Instant.now
           )
-        )(repositories => RegisterAccessPointHandler[Task](repositories, repositories))
+        )(flow)
     // Says what changed without saying what it changed to: this body is shown on the page.
     yield s"Listo. El AP ${mac.show} de '$slug' queda configurado contra $host."
 
@@ -223,7 +225,9 @@ object UiRoutes:
             case _ =>
               ZIO.fail(UiTicket.Rejected.UnknownToken)
 
-  def routes: Routes[QuillSqlite & AssetStore, Response] = Routes(
+  def routes: Routes[
+    QuillSqlite & AssetStore & OperatorContext & LocationFlows.RegisterAccessPoint,
+    Response] = Routes(
     Method.POST / "ui" / "unifi" ->
       handler: (request: Request) =>
         request

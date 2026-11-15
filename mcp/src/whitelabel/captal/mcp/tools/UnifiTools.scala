@@ -5,17 +5,15 @@ import java.time.Instant
 import com.jamesward.ziohttp.mcp.*
 import whitelabel.captal.core.application.commands.{
   RemoveAccessPointCommand,
-  RemoveAccessPointHandler,
-  UpdateAccessPointCommand,
-  UpdateAccessPointHandler
+  UpdateAccessPointCommand
 }
 import whitelabel.captal.core.location.{SettingsChange, Slug}
 import whitelabel.captal.mcp.access.{Auth, Tokens}
 import whitelabel.captal.mcp.apps.{UiRoutes, UiTicket, UnifiUi}
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
+import whitelabel.captal.platform.{Operator, OperatorContext}
 import whitelabel.captal.platform.schema.QuillSqlite
 import zio.*
-import zio.interop.catz.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
@@ -185,7 +183,9 @@ object UnifiTools:
     .handle: (in: StatusRequest) =>
       UiRoutes.currentFor(in.slug.trim).map(statusOf)
 
-  def updateAccessPoint(): McpToolHandlerR[QuillSqlite] = McpTool("update_access_point")
+  def updateAccessPoint()
+      : McpToolHandlerR[QuillSqlite & OperatorContext & LocationFlows.UpdateAccessPoint] = McpTool(
+    "update_access_point")
     .description(
       "Change one of a location's access points without opening the form: its MAC, for an AP that was replaced; its controller's host, port and site id; and the access duration, redirect URL and UniFi switch of the guests who join through it. Each field given replaces the stored one; every field left out stays as it is. The token is set only through configure_unifi. A new MAC already in another deployed location is refused. Read when a guest arrives or is authorized, so it applies with no redeploy.")
     .requireScopes(Auth.ContentWrite)
@@ -201,9 +201,10 @@ object UnifiTools:
             ZIO.fail(
               "No hay nada que cambiar: indicá newApMac, host, port, siteId, durationMinutes, redirectUrl o unifiEnabled."))
         caller <- callerOf(ctx)
+        flow   <- ZIO.service[LocationFlows.UpdateAccessPoint]
         _      <-
           LocationCommands.run(
-            caller,
+            Operator(caller, None),
             UpdateAccessPointCommand(
               slug,
               mac,
@@ -219,11 +220,13 @@ object UnifiTools:
               ),
               Instant.now
             )
-          )(repositories => UpdateAccessPointHandler[Task](repositories, repositories))
+          )(flow)
         stored <- UiRoutes.currentFor(slug.asString)
       yield statusOf(stored)
 
-  def removeAccessPoint(): McpToolHandlerR[QuillSqlite] = McpTool("remove_access_point")
+  def removeAccessPoint()
+      : McpToolHandlerR[QuillSqlite & OperatorContext & LocationFlows.RemoveAccessPoint] = McpTool(
+    "remove_access_point")
     .description(
       "Take an access point off a location, with its controller's settings and token. A guest who comes through it afterwards is turned away with an error; one already admitted keeps their access until it runs out, and its revoke is skipped. A deployed location's last access point is refused: without it every guest would be turned away, so pause the location first.")
     .requireScopes(Auth.ContentWrite)
@@ -232,9 +235,11 @@ object UnifiTools:
         slug   <- ZIO.fromEither(Slug.parse(in.slug)).mapError(LocationCommands.describe)
         mac    <- ZIO.fromEither(UiRoutes.parsedMac(in.apMac))
         caller <- callerOf(ctx)
+        flow   <- ZIO.service[LocationFlows.RemoveAccessPoint]
         _      <-
-          LocationCommands.run(caller, RemoveAccessPointCommand(slug, mac, Instant.now))(
-            repositories => RemoveAccessPointHandler[Task](repositories, repositories))
+          LocationCommands.run(
+            Operator(caller, None),
+            RemoveAccessPointCommand(slug, mac, Instant.now))(flow)
         stored <- UiRoutes.currentFor(slug.asString)
       yield statusOf(stored)
 
@@ -259,7 +264,9 @@ object UnifiTools:
           point.enabled))
   )
 
-  def all(origin: String): List[McpToolHandlerR[QuillSqlite]] = List(
+  def all(origin: String): List[McpToolHandlerR[
+    QuillSqlite & OperatorContext & LocationFlows.UpdateAccessPoint &
+      LocationFlows.RemoveAccessPoint]] = List(
     configure(origin),
     status(),
     updateAccessPoint(),

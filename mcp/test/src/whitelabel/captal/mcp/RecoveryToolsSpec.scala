@@ -2,11 +2,10 @@ package whitelabel.captal.mcp
 
 import com.jamesward.ziohttp.mcp.{CallToolResult, ToolContent}
 import io.getquill.*
-import io.getquill.jdbczio.Quill
 import whitelabel.captal.mcp.tools.{LocationTools, RecoveryTools}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.{LocationRecoveryRow, LocationRow, RqliteDataSource}
+import whitelabel.captal.platform.{LocationRecoveryRow, LocationRow}
 import zio.*
 import zio.json.ast.Json
 import zio.test.*
@@ -144,7 +143,5 @@ object RecoveryToolsSpec extends ZIOSpecDefault:
         end for
       // The schema is laid down once by `mcp.test` before forking — see `migratedRqliteUrl` in
       // build.mill.
-    ).provideShared(
-      RqliteDataSource.layer >>> Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)) @@
-      TestAspect.sequential
+    ).provideLayerShared(ToolsEnvironment.withFlows) @@ TestAspect.sequential
 end RecoveryToolsSpec

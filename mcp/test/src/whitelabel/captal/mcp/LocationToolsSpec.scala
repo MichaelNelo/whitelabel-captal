@@ -2,20 +2,21 @@ package whitelabel.captal.mcp
 
 import com.jamesward.ziohttp.mcp.{CallToolResult, ToolContent}
 import io.getquill.*
-import io.getquill.jdbczio.Quill
-import whitelabel.captal.core.application.commands.{
-  RegisterAccessPointCommand,
-  RegisterAccessPointHandler
-}
+import whitelabel.captal.core.application.commands.RegisterAccessPointCommand
 import whitelabel.captal.core.device.Mac
 import whitelabel.captal.core.location.{Secret, SettingsChange, Slug}
 import whitelabel.captal.mcp.aws.DeployTargets
-import whitelabel.captal.mcp.tools.{I18nTools, LocationCommands, LocationTools, UnifiTools}
+import whitelabel.captal.mcp.tools.{
+  I18nTools,
+  LocationCommands,
+  LocationFlows,
+  LocationTools,
+  UnifiTools
+}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.{AccessPointRow, LocationRow, RqliteDataSource}
+import whitelabel.captal.platform.{AccessPointRow, LocationRow, Operator}
 import zio.*
-import zio.interop.catz.*
 import zio.test.*
 
 import QuillArrow.->
@@ -197,11 +198,12 @@ object LocationToolsSpec extends ZIOSpecDefault:
               "unifiEnabled" -> zio.json.ast.Json.Bool(enabled)),
             OperatorContext.Default)
         for
-          _ <- clear
-          _ <- create(slug, "UniFi")
-          _ <- LocationCommands
+          _    <- clear
+          _    <- create(slug, "UniFi")
+          flow <- ZIO.service[LocationFlows.RegisterAccessPoint]
+          _    <- LocationCommands
             .run(
-              "spec-operator",
+              Operator("spec-operator", None),
               RegisterAccessPointCommand(
                 Slug.unsafe(slug),
                 Mac.parse(ap).get,
@@ -211,7 +213,7 @@ object LocationToolsSpec extends ZIOSpecDefault:
                 Secret.parse("token"),
                 SettingsChange(),
                 java.time.Instant.now)
-            )(repositories => RegisterAccessPointHandler[Task](repositories, repositories))
+            )(flow)
             .mapError(IllegalStateException(_))
           initial <- UnifiTools.status().call(json("slug" -> str(slug)))
           off     <- set(slug, false)
@@ -234,7 +236,5 @@ object LocationToolsSpec extends ZIOSpecDefault:
         end for
       // The schema is laid down once by `mcp.test` before forking — see `migratedRqliteUrl` in
       // build.mill.
-    ).provideShared(
-      RqliteDataSource.layer >>> Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)) @@
-      TestAspect.sequential
+    ).provideLayerShared(ToolsEnvironment.withFlows) @@ TestAspect.sequential
 end LocationToolsSpec

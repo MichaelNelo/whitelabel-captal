@@ -12,6 +12,7 @@ import whitelabel.captal.mcp.tools.{
   AssetTools,
   DeployTools,
   I18nTools,
+  LocationFlows,
   LocationTools,
   PreviewTools,
   RecoveryTools,
@@ -23,7 +24,7 @@ import whitelabel.captal.mcp.tools.{
   VideoFileCollector,
   VideoTools
 }
-import whitelabel.captal.platform.RqliteDataSource
+import whitelabel.captal.platform.{OperatorContext, RqliteDataSource}
 import whitelabel.captal.platform.aws.AssetStore
 import whitelabel.captal.platform.schema.{QuillSqlite, TracedSqlite}
 import whitelabel.captal.telemetry.Telemetry
@@ -201,16 +202,31 @@ object Main extends ZIOAppDefault:
                   else
                     " (no ECS_CLUSTER, so the deploy, pause and destroy tools are not registered)"
                 }") *> ZIO.scoped(serve)
-        .provide(
-          Server.defaultWithPort(p),
-          RqliteDataSource.layer,
-          AssetStore.layer,
-          // Read at startup like the bucket and the distribution: a cluster name that turns out to
-          // be wrong should stop the server rather than surface on the first deploy.
-          DeployTargets.layer,
-          InfraStore.layer,
-          Telemetry.layer("captal-mcp"),
-          TracedSqlite.layer
-        )
+        .provideLayer(layers(p))
     yield ()
+
+  /** Everything the server runs on, built against a declared type, as the API's `appLayers` is: the
+    * flows' refined types meet in one intersection, which only a declared target splits back into
+    * the layers that make them.
+    */
+  private def layers(
+      port: Int): ZLayer[Any, Throwable, CaptalMcp.Env & Option[InfraStore] & Server] = ZLayer.make[
+    CaptalMcp.Env & Option[InfraStore] & Server](
+    Server.defaultWithPort(port),
+    RqliteDataSource.layer,
+    AssetStore.layer,
+    // Read at startup like the bucket and the distribution: a cluster name that turns out to be
+    // wrong should stop the server rather than surface on the first deploy.
+    DeployTargets.layer,
+    InfraStore.layer,
+    Telemetry.layer("captal-mcp"),
+    TracedSqlite.layer,
+    // The flows, composed once; each call publishes who it runs for.
+    OperatorContext.make,
+    LocationFlows.create,
+    LocationFlows.requireFingerprint,
+    LocationFlows.registerAccessPoint,
+    LocationFlows.updateAccessPoint,
+    LocationFlows.removeAccessPoint
+  )
 end Main

@@ -37,6 +37,7 @@ import whitelabel.captal.mcp.tools.{
   I18nTools,
   IdentificationCategory,
   LocalizedText,
+  LocationFlows,
   LocationTools,
   PlaybackExpiry,
   SurveyTools,
@@ -55,6 +56,7 @@ import whitelabel.captal.platform.{
   AdvertiserVideoRow,
   LocalizedTextRow,
   LocationRow,
+  OperatorContext as Operators,
   QuestionOptionRow,
   QuestionRow,
   QuestionRuleRow,
@@ -337,6 +339,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
       resource   <- Auth.resourceUri
       env        <- ZIO.environment[QuillSqlite & AssetStore]
       tracing    <- Telemetry.noop.build.map(_.get[Tracing])
+      operators  <- Operators.make.build.map(_.get)
       extensions <- CaptalMcp.extensions
       routes = CaptalMcp
         .server(
@@ -348,7 +351,9 @@ object DeployE2ESpec extends ZIOSpecDefault:
           infra,
           extensions)
         .statelessRoutes
-        .provideEnvironment(env.add(tracing))
+        .provideEnvironment(
+          env.add(tracing).add[Operators](operators) ++
+            LocationFlows.environment(env.get[QuillSqlite], operators))
       _ <- TestClient.addRoutes(routes)
       // The run page's stream, which lives beside the protocol rather than inside it.
       _        <- TestClient.addRoutes(RunRoutes.routes.provideEnvironment(env))

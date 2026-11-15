@@ -16,7 +16,7 @@ import whitelabel.captal.core.location.{
   Slug,
   State
 }
-import whitelabel.captal.platform.LocationStates
+import whitelabel.captal.platform.{LocationStates, Operator as Calling, OperatorContext}
 import whitelabel.captal.platform.eventhandlers.{
   EventLogHandler,
   LocationPersistenceHandler,
@@ -41,10 +41,17 @@ object LocationSuite:
   private val OtherAp = Mac.parse("aa:aa:aa:aa:aa:aa").get
   private val Operator = "operator-token-1"
 
+  /** Always the one operator, as a backoffice call publishes it. */
+  private val operators =
+    new OperatorContext:
+      def get = ZIO.some(Calling(Operator, None))
+      def getOrFail = ZIO.succeed(Calling(Operator, None))
+      def locally[R, E, A](operator: Calling)(zio: ZIO[R, E, A]): ZIO[R, E, A] = zio
+
   final private class Commands(quill: QuillSqlite):
     val repo = LocationRepositoryQuill(quill)
     private val events = TransactionalEventHandler(
-      LocationPersistenceHandler().andThen(EventLogHandler.forOperator(Operator)),
+      LocationPersistenceHandler().andThen(EventLogHandler.forOperator(operators)),
       quill)
     private val creating = Flow(CreateLocationHandler[Task](repo), events)
     private val registering = Flow(RegisterAccessPointHandler[Task](repo, repo), events)
