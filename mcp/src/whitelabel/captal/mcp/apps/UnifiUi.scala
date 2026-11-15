@@ -158,7 +158,8 @@ object UnifiUi:
               field(
                 "redirectUrl",
                 "URL de redirección",
-                "De este AP: a dónde manda el dispatcher a los invitados que entran por él en vez del portal. Vacío, van al portal."),
+                "De este AP: a dónde manda el dispatcher a los invitados que entran por él en vez del portal. Vacío, van al portal."
+              ),
               button(id := "save", `type` := "submit", "Guardar"),
               div(id    := "status", cls  := "status")
             )

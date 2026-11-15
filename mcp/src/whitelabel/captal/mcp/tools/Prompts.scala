@@ -56,9 +56,9 @@ object Prompts:
 
   private def catalogue(slugs: List[String]): String =
     if slugs.isEmpty then
-      """No locations exist yet. Call create_location first — the slug is permanent, kebab-case and
-        |at most 25 characters, because it becomes the URL prefix, the S3 prefix and the AWS resource
-        |names. Then re-run this prompt with that slug.""".stripMargin
+      """No locations exist yet. Call create_location first — the slug is permanent and lowercase
+        |kebab-case, because it becomes the URL prefix, the S3 prefix and the AWS resource names.
+        |Then re-run this prompt with that slug.""".stripMargin
     else
       s"""Which location? Re-run this prompt with one of: ${slugs.mkString(", ")}.
          |

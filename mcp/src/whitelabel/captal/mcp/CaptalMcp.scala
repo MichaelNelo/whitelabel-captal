@@ -179,8 +179,7 @@ object CaptalMcp:
         RecoveryTools.all ++ TermsTools.all ++ TokenTools.all ++ SkillTools.all
     ).map(restrictToApps).foldLeft[McpServer[QuillSqlite & Tracing]](withPrompts)(_.tool(_))
     // `deploy_location` is here rather than above because it copies the shared bundle under the new
-    // slug, which is S3 and therefore `AssetStore`; the UniFi tools, because an access point in a
-    // running location is refused to another, and whether one is paused is read from S3.
+    // slug, which is S3 and therefore `AssetStore`.
     val withAssets = (
       AssetTools.all ++ VideoTools.all ++ PreviewTools.all ++ Readiness.all ++
         UnifiTools.all(uiOrigin) ++ DeployTools.all(infra, uiOrigin)

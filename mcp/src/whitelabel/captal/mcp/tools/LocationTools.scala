@@ -58,7 +58,7 @@ object LocationTools:
 
   final case class CreateRequest(
       @description(
-        "Permanent identifier, kebab-case, 25 characters at most. It becomes the portal's URL prefix, the asset prefix in S3 and the AWS resource names, so it cannot be changed afterwards — a rename would orphan the assets and break every live session's cookie.")
+        "Permanent identifier, lowercase kebab-case, and not one of the reserved prefixes (bundle, ui, releases, mcp). It becomes the portal's URL prefix, the asset prefix in S3 and the AWS resource names, so it cannot be changed afterwards — a rename would orphan the assets and break every live session's cookie.")
       slug: String,
       @description("Display name. Free text, and changeable later, unlike the slug.")
       name: String)
