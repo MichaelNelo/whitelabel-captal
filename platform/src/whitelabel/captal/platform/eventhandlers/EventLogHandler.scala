@@ -11,6 +11,7 @@ import whitelabel.captal.core.application.Event
 import whitelabel.captal.core.device.Event as DeviceEvent
 import whitelabel.captal.core.location.{AccessPoint, Event as LocationEvent}
 import whitelabel.captal.core.recovery.Event as RecoveryEvent
+import whitelabel.captal.core.session.Event as SessionEvent
 import whitelabel.captal.core.survey.Event as SurveyEvent
 import whitelabel.captal.core.survey.question.Event as QuestionEvent
 import whitelabel.captal.core.survey.question.codecs.given
@@ -35,6 +36,27 @@ object EventLogHandler:
             Some(sessionData.sessionId.asString),
             sessionData.userId.map(_.asString),
             None)
+
+  /** Entering the portal's events, under the session they are about. One that entering started is
+    * in no context yet, so the session — and its user — is read from the events themselves.
+    */
+  val forEntry: DbEventHandler[Event] =
+    new DbEventHandler[Event]:
+      def handle(events: List[Event], quill: QuillSqlite): Task[Unit] =
+        val session = events.collectFirst {
+          case Event.Session(started: SessionEvent.SessionStarted) =>
+            (started.sessionId, started.userId)
+          case Event.Session(SessionEvent.WelcomeResolved(sessionId, _, _)) =>
+            (sessionId, None)
+          case Event.Access(AccessEvent.AccessExpired(sessionId, userId, _)) =>
+            (sessionId, userId)
+        }
+        write(
+          events,
+          quill,
+          session.map(_._1.asString),
+          session.flatMap(_._2).map(_.asString),
+          None)
 
   /** An operator's events, under the token that made the change, `actor`: no guest's session. */
   def forOperator(actor: String): DbEventHandler[Event] =
@@ -160,6 +182,53 @@ object EventLogHandler:
               "deviceId"   -> Json.fromString(deviceId.asString),
               "termsId"    -> Json.fromString(termsId),
               "occurredAt" -> Json.fromString(occurredAt.toString)),
+            occurredAt))
+      case Event.Device(DeviceEvent.DeviceRegistered(deviceId, _, signals, occurredAt)) =>
+        Some(
+          (
+            "device.registered",
+            Json.obj(
+              "deviceId"  -> Json.fromString(deviceId.asString),
+              "clientMac" -> signals.clientMac.map(_.show).asJson),
+            occurredAt))
+      case Event.Device(DeviceEvent.DeviceRecognized(deviceId, _, signals, occurredAt)) =>
+        Some(
+          (
+            "device.recognized",
+            Json.obj(
+              "deviceId"  -> Json.fromString(deviceId.asString),
+              "clientMac" -> signals.clientMac.map(_.show).asJson),
+            occurredAt))
+      case Event.Session(started: SessionEvent.SessionStarted) =>
+        Some(
+          (
+            "session.started",
+            Json.obj(
+              "sessionId"  -> Json.fromString(started.sessionId.asString),
+              "deviceId"   -> Json.fromString(started.deviceId.asString),
+              "userId"     -> started.userId.map(_.asString).asJson,
+              "locationId" -> started.locationId.asJson,
+              "phase"      -> Json.fromString(started.phase.toString),
+              "apMac"      -> started.apMac.map(_.show).asJson
+            ),
+            started.occurredAt))
+      case Event.Session(SessionEvent.WelcomeResolved(sessionId, phase, occurredAt)) =>
+        Some(
+          (
+            "session.welcome_resolved",
+            Json.obj(
+              "sessionId" -> Json.fromString(sessionId.asString),
+              "phase"     -> Json.fromString(phase.toString)),
+            occurredAt))
+      case Event.Recovery(
+            RecoveryEvent.FingerprintMissing(errorId, _, deviceId, location, occurredAt)) =>
+        Some(
+          (
+            "recovery.fingerprint_missing",
+            Json.obj(
+              "errorId"  -> Json.fromString(errorId.asString),
+              "deviceId" -> Json.fromString(deviceId.asString),
+              "location" -> location.asJson),
             occurredAt))
       case Event.Location(e) =>
         Some(extractLocationEvent(e))

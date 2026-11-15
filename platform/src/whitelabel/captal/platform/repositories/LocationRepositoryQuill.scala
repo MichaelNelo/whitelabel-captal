@@ -34,6 +34,30 @@ object LocationRepositoryQuill:
           .flatMap(ZIO.foreach(_)(row => of(LocationId(row.id)).map(locationOf(row, _))))
           .orDie
 
+      /** None too for a deployed row with no access point, which no command writes: it would admit
+        * no guest anyway.
+        */
+      def findDeployed(id: LocationId): Task[Option[Location[State.Deployed]]] = run(
+        query[LocationRow].filter(row =>
+          row.id == lift(id.asString) && row.state == lift(LocationStates.Deployed)))
+        .map(_.headOption)
+        .flatMap(ZIO.foreach(_)(row => of(id).map(row -> _)))
+        .orDie
+        .map(
+          _.collect {
+            case (row, points) if points.nonEmpty =>
+              locationOf(row, points) match
+                case Location(
+                      locationId,
+                      slug,
+                      name,
+                      fingerprintRequired,
+                      deployed: State.Deployed) =>
+                  Location(locationId, slug, name, fingerprintRequired, deployed)
+                case other =>
+                  defect(s"'${other.slug.asString}' read as deployed is ${other.state}")
+          })
+
       def of(location: LocationId): Task[List[AccessPoint]] =
         run(query[AccessPointRow].filter(_.locationId == lift(location.asString)))
           .map(_.map(accessPointOf))

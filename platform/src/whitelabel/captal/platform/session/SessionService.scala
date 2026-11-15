@@ -13,33 +13,15 @@ import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.{DeviceRow, SessionRow}
 import zio.*
 
-/** What the captive portal's redirect said, once read: the MAC is required, the access point's is
-  * only checked against the location's.
+/** Sessions as the routes past the welcome read and move them. A session is started by entering the
+  * portal ([[whitelabel.captal.core.application.commands.EnterPortalCommand]]), whose events write
+  * it.
   */
-final case class CaptivePortalParams(
-    clientMac: Mac,
-    apMac: Option[Mac],
-    redirectUrl: String,
-    ssid: String,
-    fingerprint: String)
-
 trait SessionService:
   def findById(sessionId: user.SessionId): Task[Option[SessionData]]
-  def create(
-      userAgent: String,
-      locale: String,
-      phase: Phase,
-      portalParams: CaptivePortalParams): Task[SessionData]
 
-  /** Same as [[create]] but pre-populates `userId` so a returning user (recognized via the
-    * cross-location `captal_user` cookie) can be linked to their existing answers from the start.
-    */
-  def createForUser(
-      userAgent: String,
-      locale: String,
-      phase: Phase,
-      portalParams: CaptivePortalParams,
-      userId: user.Id): Task[SessionData]
+  /** Which of a device's signals make two sessions the same device. */
+  def matching: Policy
 
   def setPhase(sessionId: user.SessionId, phase: Phase): Task[Unit]
   def setLocale(sessionId: user.SessionId, locale: String): Task[Unit]
@@ -48,13 +30,6 @@ trait SessionService:
 
   /** Mark the session as authorized (Phase.Authorized) until the given instant. */
   def setAuthorized(sessionId: user.SessionId, expiresAt: java.time.Instant): Task[Unit]
-
-  /** Reset a session whose access has expired: phase back to Welcome, clear the fields of the visit
-    * that ended (current survey/question/video/advertiser, access_expires_at). The session row is
-    * kept so the cookie continues to resolve, and so is its user: the phone's next visit is that
-    * guest's, asked only what they have not answered.
-    */
-  def resetForExpiration(sessionId: user.SessionId): Task[Unit]
 
   /** Sessions of this location that are `Authorized` with an `accessExpiresAt` set. Used at
     * startup, to re-seed the expiration scheduler.
@@ -146,193 +121,7 @@ object SessionService:
       def findById(sessionId: user.SessionId): Task[Option[SessionData]] =
         run(findByIdQuery(lift(sessionId))).map(_.headOption.map(toSessionData)).orDie
 
-      /** The device the redirect's signals are, found by the database with the configured policy; a
-        * new one when none matches, or when the signals lack what the policy compares.
-        */
-      private def resolveDevice(
-          portalParams: CaptivePortalParams,
-          userAgent: String,
-          now: String): Task[user.DeviceId] =
-        val seen = Signals(Some(portalParams.clientMac), portalParams.fingerprint)
-        val found: Task[Option[user.DeviceId]] =
-          if !devices.covers(seen) then
-            ZIO.none
-          else
-            devices match
-              case Policy.ByFingerprint =>
-                deviceMatching(Matching.ByFingerprint, seen)
-              case Policy.ByMac =>
-                deviceMatching(Matching.ByMac, seen)
-              case Policy.ByMacAndFingerprint =>
-                deviceMatching(Matching.ByMacAndFingerprint, seen)
-        found
-          .flatMap:
-            case Some(deviceId) =>
-              // The fields the policy did not compare move with the device: a MAC randomized per
-              // network, a fingerprint the shortener computed anew.
-              run(
-                query[DeviceRow]
-                  .filter(_.id == lift(deviceId))
-                  .update(
-                    _.userAgent   -> lift(userAgent),
-                    _.clientMac   -> lift(seen.clientMac),
-                    _.fingerprint -> lift(seen.fingerprint),
-                    _.updatedAt   -> lift(now))).as(deviceId)
-            case None =>
-              val row = DeviceRow(
-                id = user.DeviceId.generate,
-                userAgent = userAgent,
-                createdAt = now,
-                updatedAt = now,
-                clientMac = seen.clientMac,
-                fingerprint = seen.fingerprint)
-              run(query[DeviceRow].insertValue(lift(row))).as(row.id)
-          .orDie
-      end resolveDevice
-
-      private inline def deviceMatching(
-          inline m: Matching,
-          seen: Signals): Task[Option[user.DeviceId]] = run(
-        query[DeviceRow]
-          .filter(d =>
-            m.matches(
-              Signals(d.clientMac, d.fingerprint),
-              Signals(lift(seen.clientMac), lift(seen.fingerprint))))
-          .map(_.id)
-          .take(1)).map(_.headOption)
-
-      def create(
-          userAgent: String,
-          locale: String,
-          phase: Phase,
-          portalParams: CaptivePortalParams): Task[SessionData] =
-        for
-          instant <- Clock.instant
-          now       = instant.toString
-          sessionId = user.SessionId.generate
-          deviceId <- resolveDevice(portalParams, userAgent, now)
-          sessionRow = SessionRow(
-            id = sessionId,
-            userId = None,
-            deviceId = deviceId,
-            locale = locale,
-            phase = phase,
-            currentSurveyId = None,
-            currentQuestionId = None,
-            currentVideoId = None,
-            currentAdvertiserId = None,
-            locationId = locationId,
-            createdAt = now,
-            clientMac = Some(portalParams.clientMac),
-            apMac = portalParams.apMac,
-            redirectUrl = portalParams.redirectUrl,
-            ssid = portalParams.ssid,
-            fingerprint = portalParams.fingerprint
-          )
-          _ <-
-            run(
-              query[SessionRow].insert(
-                _.id                  -> lift(sessionRow.id),
-                _.userId              -> lift(sessionRow.userId),
-                _.deviceId            -> lift(sessionRow.deviceId),
-                _.locale              -> lift(sessionRow.locale),
-                _.phase               -> lift(sessionRow.phase),
-                _.currentSurveyId     -> lift(sessionRow.currentSurveyId),
-                _.currentQuestionId   -> lift(sessionRow.currentQuestionId),
-                _.currentVideoId      -> lift(sessionRow.currentVideoId),
-                _.currentAdvertiserId -> lift(sessionRow.currentAdvertiserId),
-                _.locationId          -> lift(sessionRow.locationId),
-                _.createdAt           -> lift(sessionRow.createdAt),
-                _.clientMac           -> lift(sessionRow.clientMac),
-                _.apMac               -> lift(sessionRow.apMac),
-                _.redirectUrl         -> lift(sessionRow.redirectUrl),
-                _.ssid                -> lift(sessionRow.ssid),
-                _.fingerprint         -> lift(sessionRow.fingerprint)
-              )).orDie
-        yield SessionData(
-          sessionId,
-          deviceId,
-          None,
-          locale,
-          phase,
-          None,
-          None,
-          None,
-          locationId = locationId,
-          clientMac = Some(portalParams.clientMac),
-          apMac = portalParams.apMac,
-          redirectUrl = portalParams.redirectUrl,
-          ssid = portalParams.ssid,
-          fingerprint = portalParams.fingerprint
-        )
-      end create
-
-      def createForUser(
-          userAgent: String,
-          locale: String,
-          phase: Phase,
-          portalParams: CaptivePortalParams,
-          userId: user.Id): Task[SessionData] =
-        for
-          instant <- Clock.instant
-          now       = instant.toString
-          sessionId = user.SessionId.generate
-          deviceId <- resolveDevice(portalParams, userAgent, now)
-          sessionRow = SessionRow(
-            id = sessionId,
-            userId = Some(userId),
-            deviceId = deviceId,
-            locale = locale,
-            phase = phase,
-            currentSurveyId = None,
-            currentQuestionId = None,
-            currentVideoId = None,
-            currentAdvertiserId = None,
-            locationId = locationId,
-            createdAt = now,
-            clientMac = Some(portalParams.clientMac),
-            apMac = portalParams.apMac,
-            redirectUrl = portalParams.redirectUrl,
-            ssid = portalParams.ssid,
-            fingerprint = portalParams.fingerprint
-          )
-          _ <-
-            run(
-              query[SessionRow].insert(
-                _.id                  -> lift(sessionRow.id),
-                _.userId              -> lift(sessionRow.userId),
-                _.deviceId            -> lift(sessionRow.deviceId),
-                _.locale              -> lift(sessionRow.locale),
-                _.phase               -> lift(sessionRow.phase),
-                _.currentSurveyId     -> lift(sessionRow.currentSurveyId),
-                _.currentQuestionId   -> lift(sessionRow.currentQuestionId),
-                _.currentVideoId      -> lift(sessionRow.currentVideoId),
-                _.currentAdvertiserId -> lift(sessionRow.currentAdvertiserId),
-                _.locationId          -> lift(sessionRow.locationId),
-                _.createdAt           -> lift(sessionRow.createdAt),
-                _.clientMac           -> lift(sessionRow.clientMac),
-                _.apMac               -> lift(sessionRow.apMac),
-                _.redirectUrl         -> lift(sessionRow.redirectUrl),
-                _.ssid                -> lift(sessionRow.ssid),
-                _.fingerprint         -> lift(sessionRow.fingerprint)
-              )).orDie
-        yield SessionData(
-          sessionId,
-          deviceId,
-          Some(userId),
-          locale,
-          phase,
-          None,
-          None,
-          None,
-          locationId = locationId,
-          clientMac = Some(portalParams.clientMac),
-          apMac = portalParams.apMac,
-          redirectUrl = portalParams.redirectUrl,
-          ssid = portalParams.ssid,
-          fingerprint = portalParams.fingerprint
-        )
-      end createForUser
+      def matching: Policy = devices
 
       def setCurrentQuestion(
           sessionId: user.SessionId,
@@ -356,9 +145,6 @@ object SessionService:
         run(setAuthorizedQuery(lift(sessionId), lift(expiresAt.toString), lift(Phase.Authorized)))
           .unit
           .orDie
-
-      def resetForExpiration(sessionId: user.SessionId): Task[Unit] =
-        run(resetForExpirationQuery(lift(sessionId), lift(Phase.Welcome))).unit.orDie
 
       def findPendingExpirations(): Task[List[(user.SessionId, java.time.Instant)]] =
         run(pendingExpirationsQuery(lift(locationId), lift(Phase.Authorized)))

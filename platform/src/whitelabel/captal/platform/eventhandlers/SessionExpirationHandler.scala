@@ -6,7 +6,7 @@ import whitelabel.captal.core.access.Event as AccessEvent
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.session.{SessionContext, SessionService}
+import whitelabel.captal.platform.session.SessionService
 import zio.*
 
 /** Resets the session when access expires.
@@ -21,27 +21,19 @@ import zio.*
   * next visit skips the questions already answered.
   */
 object SessionExpirationHandler:
-  def apply(ctx: SessionContext): DbEventHandler[Event] =
+  /** The session is the one the event names, not the context's: entering the portal has none set
+    * when it finds a session's access ran out.
+    */
+  def apply(): DbEventHandler[Event] =
     new DbEventHandler[Event]:
       def handle(events: List[Event], quill: QuillSqlite): Task[Unit] =
         import quill.*
-
-        val hasExpired = events.exists:
-          case Event.Access(_: AccessEvent.AccessExpired) =>
-            true
-          case _ =>
-            false
-
-        ZIO
-          .when(hasExpired):
-            for
-              sessionData <- ctx.getOrFail
-              _           <-
-                run(
-                  SessionService.resetForExpirationQuery(
-                    lift(sessionData.sessionId),
-                    lift(Phase.Welcome))).orDie
-            yield ()
-          .unit
+        ZIO.foreachDiscard(
+          events
+            .collect { case Event.Access(AccessEvent.AccessExpired(sessionId, _, _)) =>
+              sessionId
+            }
+            .distinct): sessionId =>
+          run(SessionService.resetForExpirationQuery(lift(sessionId), lift(Phase.Welcome))).orDie
       end handle
 end SessionExpirationHandler

@@ -9,8 +9,9 @@ import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.{ErrorRow, Errors, VideoFiles}
 import zio.*
 
-/** A client error as the page reported it, and where each way out stands. Server errors are
-  * recorded where the API catches them, outside any event.
+/** A client error as the page reported it, a redirect that lacked the fingerprint its location
+  * requires, and where each way out stands. Other server errors are recorded where the API catches
+  * them, outside any event.
   */
 object RecoveryHandler:
   def apply(): DbEventHandler[Event] =
@@ -41,6 +42,30 @@ object RecoveryHandler:
               redeemedAt = None
             )
             run(query[ErrorRow].insertValue(lift(row))).unit
+          case Event.Recovery(
+                RecoveryEvent.FingerprintMissing(
+                  errorId,
+                  sessionId,
+                  deviceId,
+                  location,
+                  occurredAt)) =>
+            val where = location.fold("the portal")(slug => s"/$slug")
+            val message =
+              s"The redirect into $where carried no fingerprint, which it requires: the link shortener in front of it may be misconfigured."
+            val row = ErrorRow(
+              id = errorId.asString,
+              sessionId = Some(sessionId),
+              deviceId = Some(deviceId),
+              origin = "server",
+              message = message,
+              detail = "",
+              fingerprint = None,
+              verdict = None,
+              createdAt = VideoFiles.stamp(occurredAt),
+              availableAt = None,
+              redeemedAt = None
+            )
+            ZIO.logWarning(message) *> run(query[ErrorRow].insertValue(lift(row))).unit
           case Event.Recovery(RecoveryEvent.RecoveryOffered(errorId, _, availableAt, _)) =>
             run(
               query[ErrorRow]
