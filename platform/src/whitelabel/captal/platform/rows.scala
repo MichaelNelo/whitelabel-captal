@@ -251,7 +251,9 @@ final case class LocationRow(
     unifiDurationMinutes: Option[Int] = None,
     unifiRedirectUrl: Option[String] = None,
     unifiIsEnabled: Int = 1,
-    fingerprintIsRequired: Int = 1)
+    fingerprintIsRequired: Int = 1,
+    state: String = LocationStates.Created,
+    stateRun: Option[String] = None)
 
 /** One of a location's access points, with the UniFi controller that authorizes the guests who join
   * through it. `mac` is lowercase with colons, as [[whitelabel.captal.core.device.Mac.show]] writes
