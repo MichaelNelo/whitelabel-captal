@@ -206,7 +206,7 @@ object AuthorizedSuite:
           yield assertTrue(
             one.map(_.host).contains("unifi.one"),
             two.map(_.host).contains("unifi.two"),
-            // The location's duration, the default where it sets none.
+            // The access point's duration, the default where it sets none.
             one.map(_.defaultDurationMinutes).contains(1440),
             stranger.isEmpty,
             none.isEmpty,

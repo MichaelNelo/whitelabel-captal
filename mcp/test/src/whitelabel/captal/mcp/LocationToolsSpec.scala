@@ -9,6 +9,7 @@ import whitelabel.captal.core.application.commands.{
 }
 import whitelabel.captal.core.device.Mac
 import whitelabel.captal.core.location.{Secret, SettingsChange, Slug}
+import whitelabel.captal.mcp.aws.DeployTargets
 import whitelabel.captal.mcp.tools.{I18nTools, LocationCommands, LocationTools, UnifiTools}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
@@ -129,28 +130,20 @@ object LocationToolsSpec extends ZIOSpecDefault:
           written.isEmpty
         )
       ,
-      test("a slug too long for the ALB target group name is refused, and the message says why"):
+      test("a slug has no length of its own, and its target group's name still fits AWS's 32"):
+        val long = s"$Prefix-" + "x" * 40
+        val short = s"$Prefix-fits"
         for
-          _ <- clear
-          // 26 characters: one past what 'captal-' leaves of the 32-character AWS limit.
-          result <- create(s"$Prefix-" + "x" * (26 - Prefix.length - 1), "Too long")
+          _      <- clear
+          result <- create(long, "Long")
           stored <- rows
         yield assertTrue(
-          result.isError.contains(true),
-          textOf(result).contains("25"),
-          textOf(result).contains("captal-"),
-          stored.isEmpty)
-      ,
-      test("a slug of exactly the maximum length is accepted"):
-        for
-          _ <- clear
-          slug = s"$Prefix-" + "x" * (25 - Prefix.length - 1)
-          result <- create(slug, "Exactly at the limit")
-          stored <- rows
-        yield assertTrue(
-          slug.length == 25,
           !result.isError.contains(true),
-          stored.map(_.slug) == List(slug))
+          stored.map(_.slug) == List(long),
+          DeployTargets.targetGroupName(long).length <= 32,
+          // One that fits keeps the name it always had.
+          DeployTargets.targetGroupName(short) == s"captal-$short"
+        )
       ,
       test("a blank name is refused"):
         for
