@@ -64,7 +64,7 @@ final case class CreateLocationCommand(
     name: String,
     occurredAt: Instant)
 
-/** A new location, `Created`, under a slug no other location has. */
+/** A new location, `Created`, under a slug no other location has, requiring a fingerprint. */
 object CreateLocationHandler:
   def apply[F[_]: Monad](locations: LocationRepository[F])
       : Handler.Aux[F, CreateLocationCommand, Location[State.Created.type]] =
@@ -81,8 +81,28 @@ object CreateLocationHandler:
               _ <- Decided.unless(Option.when(name.isEmpty)(LocationError.BlankName))
             yield (
               LocationEvent.LocationCreated(cmd.id, cmd.slug, name, cmd.occurredAt),
-              Location(cmd.id, cmd.slug, name, State.Created))
+              Location(cmd.id, cmd.slug, name, fingerprintRequired = true, State.Created))
 end CreateLocationHandler
+
+final case class RequireFingerprintCommand(slug: Slug, required: Boolean, occurredAt: Instant)
+
+/** Whether a redirect into the location's portal has to carry the link shortener's fingerprint, in
+  * whatever state the location is: it is read when a guest arrives, so it applies with no deploy.
+  */
+object RequireFingerprintHandler:
+  def apply[F[_]: Monad](
+      locations: LocationRepository[F]): Handler.Aux[F, RequireFingerprintCommand, Unit] =
+    new Handler[F, RequireFingerprintCommand]:
+      type Result = Unit
+
+      def handle(cmd: RequireFingerprintCommand) =
+        Decided.located(locations, cmd.slug): found =>
+          Monad[F].pure(
+            Decided(
+              Right((
+                LocationEvent.FingerprintRequirementChanged(found.id, cmd.required, cmd.occurredAt),
+                ()))))
+end RequireFingerprintHandler
 
 /** Registers the access point `mac` at the location, or changes the one it has: its controller and,
   * as `settings` asks, what the portal does for the guests who join through it — what the UniFi

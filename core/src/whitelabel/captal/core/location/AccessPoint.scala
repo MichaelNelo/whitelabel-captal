@@ -9,24 +9,18 @@ import whitelabel.captal.core.device.Mac
 final case class AccessPoint(mac: Mac, controller: Controller, settings: Settings)
 
 /** What the portal does for a guest who joins through an access point: how long they are let in for
-  * (`None`, the default), where the dispatcher sends them instead of the portal, whether the
-  * controller is asked to authorize them at all, and whether their redirect has to carry the link
-  * shortener's fingerprint. An access point's, since each answers to its own controller and its own
-  * site's portal link.
+  * (`None`, the default), where the dispatcher sends them instead of the portal, and whether the
+  * controller is asked to authorize them at all. An access point's, since each answers to its own
+  * controller.
   */
 final case class Settings(
     durationMinutes: Option[Int],
     redirectUrl: Option[String],
-    unifiEnabled: Boolean,
-    fingerprintRequired: Boolean)
+    unifiEnabled: Boolean)
 
 object Settings:
-  /** A new access point's: UniFi on, a fingerprint required, nothing else set. */
-  val Default: Settings = Settings(
-    durationMinutes = None,
-    redirectUrl = None,
-    unifiEnabled = true,
-    fingerprintRequired = true)
+  /** A new access point's: UniFi on, nothing else set. */
+  val Default: Settings = Settings(durationMinutes = None, redirectUrl = None, unifiEnabled = true)
 
 /** A change to some of an access point's settings; `None` leaves one as it is, and `Some(None)`
   * clears the duration or the redirect URL.
@@ -34,8 +28,7 @@ object Settings:
 final case class SettingsChange(
     durationMinutes: Option[Option[Int]] = None,
     redirectUrl: Option[Option[String]] = None,
-    unifiEnabled: Option[Boolean] = None,
-    fingerprintRequired: Option[Boolean] = None):
+    unifiEnabled: Option[Boolean] = None):
   /** `settings` changed as asked, or every reason it cannot be: a duration under a minute, a
     * redirect URL that is not http or https.
     */
@@ -55,8 +48,7 @@ final case class SettingsChange(
         Settings(
           durationMinutes = durationMinutes.getOrElse(settings.durationMinutes),
           redirectUrl = redirect.getOrElse(settings.redirectUrl),
-          unifiEnabled = unifiEnabled.getOrElse(settings.unifiEnabled),
-          fingerprintRequired = fingerprintRequired.getOrElse(settings.fingerprintRequired)
+          unifiEnabled = unifiEnabled.getOrElse(settings.unifiEnabled)
         ))
 end SettingsChange
 

@@ -34,6 +34,7 @@ object LocationTests extends TestSuite:
     LocationId("plaza-id"),
     Here,
     "Plaza",
+    fingerprintRequired = true,
     state)
 
   private def deployed(points: AccessPoint*): Location[State] = at(
@@ -93,12 +94,10 @@ object LocationTests extends TestSuite:
 
     test("SettingsChange"):
       test("changes what is given and keeps the rest"):
-        val change = SettingsChange(
-          durationMinutes = Some(Some(30)),
-          fingerprintRequired = Some(false))
+        val change = SettingsChange(durationMinutes = Some(Some(30)), unifiEnabled = Some(false))
         assert(
           change.applyTo(Settings.Default) ==
-            Right(Settings.Default.copy(durationMinutes = Some(30), fingerprintRequired = false)))
+            Right(Settings.Default.copy(durationMinutes = Some(30), unifiEnabled = false)))
       test("clears the redirect URL"):
         val set = Settings.Default.copy(redirectUrl = Some("https://example.com"))
         assert(
@@ -130,6 +129,14 @@ object LocationTests extends TestSuite:
           RemoveAccessPointHandler(locations(None), accessPoints()).handle(
             RemoveAccessPointCommand(Here, Ap, Now)))
         assert(result == Left(List(Error.NotFound(Here))))
+
+    test("RequireFingerprint changes the location's requirement, in whatever state it is"):
+      val result = outcome(
+        RequireFingerprintHandler(locations(Some(at(State.Paused(RunId("run-2")))))).handle(
+          RequireFingerprintCommand(Here, required = false, Now)))
+      assert(
+        result.map(_._1) ==
+          Right(List(Event.FingerprintRequirementChanged(LocationId("plaza-id"), false, Now))))
 
     test("RegisterAccessPoint"):
       def register(

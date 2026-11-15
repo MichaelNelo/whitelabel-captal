@@ -8,8 +8,17 @@ object LocationId:
   extension (id: LocationId)
     def asString: String = id
 
-/** A location, by where it stands ([[State]]). What its portal does for a guest — how long they are
-  * let in for, where they are sent — is its access points' to say, since each answers to its own
-  * controller ([[AccessPoint]]).
+/** A location, by where it stands ([[State]]).
+  *
+  * @param fingerprintRequired
+  *   whether a redirect into its portal has to carry the link shortener's fingerprint: the
+  *   location's link is the shortener's, whatever access point the guest joins through. What else
+  *   the portal does for a guest — how long they are let in for, where they are sent — is its
+  *   access points' to say, since each answers to its own controller ([[AccessPoint]]).
   */
-final case class Location[S <: State](id: LocationId, slug: Slug, name: String, state: S)
+final case class Location[S <: State](
+    id: LocationId,
+    slug: Slug,
+    name: String,
+    fingerprintRequired: Boolean,
+    state: S)
