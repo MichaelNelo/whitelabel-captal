@@ -2,7 +2,8 @@
 :toc:
 :toclevels: 2
 
-A plan agreed in conversation on 2026-11-13, revised on 2026-11-14, and not started. It moves the
+A plan agreed in conversation on 2026-11-13, revised on 2026-11-14, with its first step done on
+2026-11-15 (see <<order-of-work>> for what it became). It moves the
 backoffice's business rules into `core`, models a location as an entity whose state is in its type and
 each operation on it as a run of its own, run by a saga, and then moves `/api/status`'s logic into a
 command on that model. One question stays open that blocks part of it: the availability of the change
@@ -219,9 +220,11 @@ transitions into it take them as an argument, read by the handler (`AccessPointR
 `acceptTerms` takes the terms in force; with none they fail with `NoAccessPoint`. `Paused` does not
 hold them: a resume reads them again and asks for one again, which covers access points changed while
 paused. Removing the last access point of a `Deployed` location is refused (`LastAccessPoint`); in
-any other state a location takes and loses them freely. Registering one needs no list: the one
-deployed location per AP rule asks `holders(mac)`, and the same MAC at the same location overwrites
-the row, whose id is `<location id>/<mac>`.
+any other state a location takes and loses them freely. Registering one asks `holders(mac)` for the
+one deployed location per AP rule, and the location's own access points for whether it already has
+that MAC, which it then updates rather than adds: uniqueness per location and MAC is checked before
+writing, not left to the table's `UNIQUE`. A new row's id is a random UUID; only `V34`'s copy from
+`locations` wrote `<location id>/<mac>`.
 
 The transitions, one extension per state they leave:
 
@@ -318,6 +321,8 @@ goes stale and the next request elicits whether to finish it. Rehydrating runs o
 === Database
 
 `locations` gains `state` (`created`, `deployed`, `paused`, `destroyed`) and `current_run`, the lock.
+(`state` came with the first step, beside `state_run`, the run that left it so; `current_run` is
+still owed.)
 With the paused state there, the portal dispatcher can read it in the query that finds the location
 and stop reading S3 — removing the S3 gateway endpoint and the `s3:ListBucket` permission
 `modules/portal-dispatcher` was given for it. `_paused/<slug>/site.html` stays, only for the resume
@@ -428,6 +433,46 @@ three brokers).
   commands and events of this plan's first slice, the repository traits; `platform`'s repositories
   and persistence handlers; the location tools as adapters, `create_location` with the reserved
   names and the target group's name past 32 characters. Measure the portal's bundle.
++
+*Done on 2026-11-15*: `core/location/` (`Slug`, `Location`, `State`, `AccessPoint`, `Event`,
+`Error`), `operation/RunId`, `application/commands/Location.scala` and the two repository traits;
+`platform`'s `LocationRepositoryQuill`, `LocationPersistenceHandler` and `LocationStates`; the
+backoffice's `LocationCommands`, which runs a command as the calling operator token. What it became,
+against the sketch above:
++
+* *Settings per access point, but the fingerprint requirement.* The access duration, the redirect
+  URL and the UniFi switch are each access point's — `AccessPoint(mac, controller, settings)`, since
+  each answers to its own controller — and `RegisterAccessPoint` and `UpdateAccessPoint` change
+  them. `V36` copied each location's into its access points; the API, `UnifiAccessHandler` and the
+  portal dispatcher read them from there; `update_unifi_settings` and `set_unifi_enabled` were
+  removed, folded into the form and `update_access_point`. Whether a redirect has to carry the
+  fingerprint stayed the location's, `Location.fingerprintRequired`, because the location's link is
+  the shortener's whatever access point a guest joins through: `RequireFingerprint`
+  (`FingerprintRequirementChanged`) replaced `ChangeSettings` (`SettingsChanged`), and `Location`
+  holds no `Settings`.
+* *The audit trail*, owed since <<Why>>, done here for locations: `V37` rebuilt `event_log` with
+  `session_id` optional and a new `actor`, and `EventLogHandler.forOperator(actor)` logs every
+  location event under the operator token that made it, without the controller's token.
+* *The `state` column*, planned for the lifecycle step, came into this one with its backfill: `V35`
+  adds `state` and `state_run`, the backoffice's `V3` fills them from each location's last run that
+  succeeded (a deployed one with no access point recorded as created), and deploy, pause, resume and
+  destroy record the state once they succeed (`LocationStates.record`) until they are commands of
+  their own. So `AccessPointHeld`, `LastAccessPoint` and the refusal to deploy or resume a location
+  sharing an access point read the state from the database rather than S3; a deploy or a resume
+  with no access point is refused by the backoffice (`UiRoutes.refuseSharedAccessPoints`), not yet
+  by `core`.
+* *The repositories.* `LocationRepository.find(slug)` answers a `Location[State]` in whatever state,
+  which the commands match on; `AccessPointRepository` has `of(location)` and
+  `deployedHolders(mac): List[Slug]`. The finders by state wait for the operations.
+* *The slug and the target group.* `Slug` has no length; `create_location` refuses the reserved
+  names. The target group is `captal-<slug>` while that fits in 32 characters and
+  `captal-<the slug's first 16 characters>-<8 hex digits of its SHA-256>` past it, with no tag.
+* *Inside the transaction no row count is checked*: the rqlite driver reports none there, so the
+  commands read what a count would catch before deciding (`LocationPersistenceHandler`'s comment
+  says why).
+* *The portal's bundle did not change*: `client.fullLinkJS` linked to the same 312 files and
+  4,708,202 bytes before and after the model landed, since the portal references none of it. The
+  administrative model stays in `core`.
 . `EnterPortalCommand`, on the model of the first step: what `/api/status` does, moved out of
   `SurveyRoutes.status`. Named for every load of the page, not the first arrival alone: a reload, a
   return, the way back from the error page all run it. It takes the redirect's parameters, the
@@ -487,9 +532,9 @@ not exist yet: `SessionExpirationHandler` reads the session from the event inste
 `DeviceRepository` gains a lookup by signals, with whether that device accepted the terms in force.
 `EventLogHandler` records the new events, so every session started reaches `event_log`.
 . Readiness into `core`.
-. The lifecycle: the `Run[S]` entity, `StartOperation` and `CompleteOperation`, the `state` and
-  `current_run` columns, the lock, the queue and `OperationRunner`, the elicitations, structured step
-  failures and `explain`.
+. The lifecycle: the `Run[S]` entity, `StartOperation` and `CompleteOperation`, the `current_run`
+  column (`state` came with the first step), the lock, the queue and `OperationRunner`, the
+  elicitations, structured step failures and `explain`.
 . The dispatcher reads the paused state from the database; remove its S3 endpoint and permission.
 . Once the relay moves to SNS and SQS (xref:relay-sns-sqs-plan.adoc[the relay plan]), tell the run
   page of progress through it.

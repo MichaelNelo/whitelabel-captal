@@ -161,7 +161,8 @@ rather than by `Flow(...)`, because `MarkVideoWatchedHandler.withSession` needs 
 can only be constructed per request. The three recovery flows are built per request too, and also
 read the served location's wait policy for each command (`Flows.waitPolicy`, see
 xref:platform.adoc#location-recovery[Platform]), as `eventHandlerLayer` reads the UniFi switch and
-the controller of the session's access point (`Flows.unifiEnabled`, `Flows.unifiFor`): a
+the controller of the access point the session came through (`Flows.unifiEnabled`,
+`Flows.unifiFor`): a
 change through `set_recovery_policy` applies to the next request with no redeploy. Without a
 location they use `WaitPolicy.Default`.
 
@@ -629,8 +630,9 @@ whose id is malformed or absent from the `users` table falls back to a plain `On
 
 `api/src/whitelabel/captal/api/session/CurrentLocation.scala` is `(id, slug)` of the row
 `LOCATION_SLUG` names, resolved once at startup: which location this process serves, and nothing
-else about it. Its access points, their UniFi controllers and its switches are read from the
-database when they are needed — the access point check per request, the controller and the UniFi
+else about it. Its access points — each with its UniFi controller, access duration and UniFi
+switch — and its fingerprint requirement are read from the database when they are needed — the
+access point check and the fingerprint requirement per request, an access point's controller and
 switch per event — so a change through the backoffice applies without a restart.
 `CurrentLocation.empty` is what a slugless server gets.
 
@@ -868,10 +870,11 @@ The handler, in order:
   from `Ready` after the ready user's `UserEvent.UserFinishedProcess`, from `Recovered` with no user
   required; see xref:event-sourcing.adoc[Event sourcing].
 . The event handler chain runs. The transactional half commits; `UnifiAccessHandler` runs *after*
-  the commit and calls the location's controller with `AUTHORIZE_GUEST_ACCESS`. On success it sets
-  `Phase.Authorized` with `accessExpiresAt = occurredAt + defaultDurationMinutes` and schedules an
-  `ExpireAccess` job; on failure, or when the location has no UniFi configuration, it logs and
-  leaves the session where it was. See xref:unifi.adoc[UniFi integration].
+  the commit and calls the controller of the session's access point with `AUTHORIZE_GUEST_ACCESS`.
+  On success it sets `Phase.Authorized` with `accessExpiresAt = occurredAt + defaultDurationMinutes`,
+  that access point's duration, and schedules an `ExpireAccess` job; on failure, or when that access
+  point has no UniFi configuration or its UniFi calls off, it logs and leaves the session where it
+  was. See xref:unifi.adoc[UniFi integration].
 . The route re-reads the session with `SessionService.findById` and builds the response from that
   fresh snapshot.
 

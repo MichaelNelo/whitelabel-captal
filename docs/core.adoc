@@ -2,7 +2,7 @@
 :toc:
 :toclevels: 2
 
-`core` is the pure domain module: the `Op` effect, the phase machinery, the command handlers, the three aggregates (user, survey, video), the repository traits and the i18n key schema. It has no effect type, no database and no HTTP, and its sources are compiled twice — as `core` for the JVM and as `core-js` for Scala.js.
+`core` is the pure domain module: the `Op` effect, the phase machinery, the command handlers, the three aggregates (user, survey, video), the location the backoffice administers, the repository traits and the i18n key schema. It has no effect type, no database and no HTTP, and its sources are compiled twice — as `core` for the JVM and as `core-js` for Scala.js.
 
 == Module shape
 
@@ -189,6 +189,7 @@ enum Event:
   case Device(event: device.Event)
   case Recovery(event: recovery.Event)
   case Access(event: access.Event)
+  case Location(event: location.Event)
 ----
 
 `application/Error.scala` mirrors the aggregates that can refuse, plus three errors that belong to none:
@@ -205,6 +206,7 @@ enum Error:
   case User(errors: NonEmptyChain[user.Error])
   case Video(errors: NonEmptyChain[video.Error])
   case Recovery(errors: NonEmptyChain[recovery.Error])
+  case Location(errors: NonEmptyChain[location.Error])
 ----
 
 == Command handlers
@@ -322,6 +324,36 @@ All under `core/src/whitelabel/captal/core/application/commands/`. Every command
 | `Unit`
 | `RecoveryRepository` + a `WaitPolicy` + a `SessionData`
 | `RecoveryRedeemed`, after `RecoveryShortened` when the wait it opens on was shortened
+
+| `CreateLocationCommand(id, slug, name, occurredAt)`
+| `CreateLocationHandler`
+| `Location[State.Created.type]`
+| `LocationRepository`
+| `LocationCreated`, the location requiring a fingerprint
+
+| `RequireFingerprintCommand(slug, required, occurredAt)`
+| `RequireFingerprintHandler`
+| `Unit`
+| `LocationRepository`
+| `FingerprintRequirementChanged`, in whatever state the location is
+
+| `RegisterAccessPointCommand(slug, mac, host, port, siteId, token: Option[Secret], settings: SettingsChange, occurredAt)`
+| `RegisterAccessPointHandler`
+| `AccessPoint`
+| `LocationRepository`, `AccessPointRepository`
+| `AccessPointRegistered` for a MAC the location does not have; `AccessPointUpdated` for one it has
+
+| `UpdateAccessPointCommand(slug, mac, newMac, host, port, siteId, settings: SettingsChange, occurredAt)`
+| `UpdateAccessPointHandler`
+| `AccessPoint`
+| `LocationRepository`, `AccessPointRepository`
+| `AccessPointUpdated`
+
+| `RemoveAccessPointCommand(slug, mac, occurredAt)`
+| `RemoveAccessPointHandler`
+| `Unit`
+| `LocationRepository`, `AccessPointRepository`
+| `AccessPointRemoved`
 |===
 
 The `Result` of the three `Provide*` handlers is a union type, exposed as `Handler.Aux[F, C, Response]` with `type Response = NextVideo | NextStep` (and the survey equivalents). xref:messages.adoc[Messages] wraps each union in an enum for serialisation.
@@ -360,6 +392,8 @@ The other three `Answer*` handlers follow one shape: find the user in the state 
 `RequestRecoveryHandler` takes a `RecoveryCause`: `Server(errorId)`, the id an API error answered with, or `Client(report)`, what the page says it caught. A server error is honoured only when it was recorded with origin `server` against this same session; anything else is `UnknownError`, so an id seen on another guest's screen opens nothing. A client report is always recorded, with its verdict, even when no way out follows. In `Ready`, `Recovered` or `Authorized` both answer `Unrecoverable` with the error's id.
 
 `RedeemRecoveryHandler` refuses an error of another session or one never offered (`UnknownError`), one already taken (`AlreadyRedeemed`), and one taken before its `availableAt` (`NotYet`, carrying the instant). The clock is the command's, so the page's countdown is advisory: it is the server that decides. Its `RecoveryRedeemed` moves the session to `Recovered` and does nothing else: granting access is `finish`'s alone.
+
+The five location commands (`application/commands/Location.scala`) are the backoffice's, not the guest's: what an operator does to a location that is not an operation on its infrastructure. They take no `SessionContext`. Each reads the location by slug (`NotFound` without one, save `CreateLocation`, which refuses a slug another location has, `SlugTaken`, and a blank name) and answers its event or every reason it is refused, as `Error.Location`. `RegisterAccessPointHandler` registers the access point `mac` or changes the one the location has: the token may be left out for one that has a token stored, which it keeps (`TokenRequired` otherwise); `Controller.of` refuses a blank host or site id and a port outside 1–65535; and `settings` applies to the access point's own, or to `Settings.Default` for a new one. `UpdateAccessPointHandler` changes the MAC, the controller's host, port or site and the settings, each `None` keeping what it has, and always keeps the token; a new MAC the location already has is `AccessPointExists`. Both refuse an access point another deployed location takes its guests through (`AccessPointHeld`, from `AccessPointRepository.deployedHolders`), whatever state this location is in: one access point leads to one deployed location, which the portal dispatcher counts on. `RemoveAccessPointHandler` refuses an access point the location does not have (`NoSuchAccessPoint`) and the last one of a `Deployed` location (`LastAccessPoint`), which would turn every guest away. None of them changes the location's `State`: it changes only when an operation on its infrastructure succeeds, which the backoffice records itself (see xref:platform.adoc[Platform]).
 
 == Queries
 
@@ -651,6 +685,27 @@ through an error before giving an email has no user at all.
 | `Event` | `AccessGranted(sessionId, userId: Option, occurredAt)`: the controller is asked to authorize the session's device, again on each retry until it confirms. `AccessExpired(sessionId, userId: Option, occurredAt)`: the access reached its end
 |===
 
+=== location
+
+A location as the backoffice administers it: its slug, its name, whether its portal requires the fingerprint, where it stands, and its access points. It has no `ops`: the location commands decide on what their repositories read (see <<Handler notes>>).
+
+|===
+| Type | Contents
+
+| `Slug` | opaque over `String`: lowercase kebab-case — letters, digits, and single hyphens between them. `Slug.parse` trims and refuses anything else, blank included, with `InvalidSlug`. No length: how long a slug may be, and which slugs mean something every location shares, are the infrastructure's to say, so the adapters that meet those limits check them
+| `LocationId` | opaque over `String`
+| `Location[S <: State]` | `id`, `slug`, `name`, `fingerprintRequired`, `state: S`. `fingerprintRequired` is the location's whatever access point a guest joins through, since its link is the link shortener's; the rest of what the portal does for a guest is its access points'
+| `State` | where the location stands, each state an operation that succeeded: `Created`, never deployed; `Deployed(by: RunId, accessPoints: NonEmptyList[AccessPoint])`, taking guests through them; `Paused(by: RunId)`, its access points free for another location; `Destroyed(by: RunId)`, its infrastructure removed — not an end, since a deploy stands it up again. An operation in progress is its run's, not the location's
+| `RunId` | `operation/RunId.scala`, opaque over `String`: a run of a deploy, pause, resume or destroy, as the backoffice records it
+| `AccessPoint` | `mac: Mac`, `controller: Controller`, `settings: Settings`. A location has one per MAC
+| `Controller` | `host`, `port: Option`, `siteId`, `token: Secret`. `Controller.of` trims the host and the site, and refuses a blank host (`BlankHost`), a blank site (`BlankSiteId`) and a port outside 1–65535 (`InvalidPort`)
+| `Secret` | a value whose `toString` is `Secret(***)`, so it can travel inside commands and events, which logs print; `reveal` reads it, only to send it where it goes. `Secret.parse` trims and refuses blank
+| `Settings` | `durationMinutes: Option[Int]`, `redirectUrl: Option[String]`, `unifiEnabled` — what the portal does for a guest who joins through an access point. The access point's, since each answers to its own controller. `Settings.Default`, a new access point's: UniFi on, nothing else set
+| `SettingsChange` | a change to some settings: `None` leaves one as it is, `Some(None)` clears the duration or the redirect URL. `applyTo(settings)` answers the changed settings, or every reason it cannot: a duration under a minute (`InvalidDuration`), a redirect URL that is not http or https (`InvalidRedirectUrl`)
+| `Event` | `LocationCreated(id, slug, name, occurredAt)`, `FingerprintRequirementChanged(id, required, occurredAt)`, `AccessPointRegistered(location, accessPoint, occurredAt)`, `AccessPointUpdated(location, mac, accessPoint, occurredAt)` — the access point that had `mac`, whose MAC may now differ — and `AccessPointRemoved(location, mac, occurredAt)`
+| `Error` | `InvalidSlug`, `BlankName`, `SlugTaken(slug, by)`, `NotFound(slug)`, `InvalidRedirectUrl`, `InvalidDuration`, `BlankHost`, `BlankSiteId`, `InvalidPort`, `TokenRequired(mac)`, `NoSuchAccessPoint(mac)`, `AccessPointExists(mac)`, `AccessPointHeld(mac, by)` — the deployed location `by` takes its guests through it — and `LastAccessPoint(mac)`
+|===
+
 == Repository traits
 
 `core/src/whitelabel/captal/core/infrastructure/` declares what the domain needs from storage, all in `F[_]` and all returning `Option` rather than failing. The implementations are Quill-based and live in xref:platform.adoc[Platform] (`UserRepositoryQuill`, `SurveyRepositoryQuill`, `VideoRepositoryQuill`); they read the current session from the ambient `SessionContext`, which is why the finder methods take no session argument.
@@ -679,7 +734,12 @@ through an error before giving an email has no user at all.
 | `RecoveryRepository.devicesReporting(fp, excluding, since)` | `Int` — other devices that reported the same error since `since`
 | `RecoveryRepository.recoveriesSince(deviceId, since)` | `Int` — ways out this device took since `since`
 | `RecoveryRepository.activity(userId, deviceId)` | `Activity` — the user's watched videos on this device and their answers, by the category of the survey each belongs to
+| `LocationRepository.find(slug)` | `Location[State]`, in whatever state it is
+| `AccessPointRepository.of(location)` | `List[AccessPoint]` — the location's, whatever its state
+| `AccessPointRepository.deployedHolders(mac)` | `List[Slug]` — the deployed locations that take their guests through that access point
 |===
+
+The location's two are implemented together by `LocationRepositoryQuill`, which takes no `SessionContext`: the location commands run with no guest session.
 
 `infrastructure/Session.scala` holds `SessionData`, the session projection the handlers and `MarkVideoWatchedHandler.withSession` read: `sessionId`, `deviceId`, `userId: Option`, `locale`, `phase`, `currentQuestion: Option[FullyQualifiedQuestionId]`, `currentVideoId`, `currentAdvertiserId`, `locationId`, `clientMac`, `apMac`, `redirectUrl`, `ssid`, `fingerprint`, `accessExpiresAt: Option[Instant]`.
 
@@ -709,4 +769,4 @@ At runtime `platform.services.LocaleServiceQuill.getI18n(locale)` reads `localiz
 
 == Tests
 
-`core/test/` holds the module's own suites (utest + ScalaCheck): `application/HandlerTests.scala`, `recovery/RecoveryTests.scala`, `survey/ValidationSuccessTests.scala`, `survey/ValidationFailureTests.scala`, `i18n/I18nSchemaTests.scala`, and shared generators in `generators.scala`. See xref:testing.adoc[Test strategy].
+`core/test/` holds the module's own suites (utest + ScalaCheck): `application/HandlerTests.scala`, `location/LocationTests.scala` (the location commands against in-memory repositories), `recovery/RecoveryTests.scala`, `survey/ValidationSuccessTests.scala`, `survey/ValidationFailureTests.scala`, `i18n/I18nSchemaTests.scala`, and shared generators in `generators.scala`. See xref:testing.adoc[Test strategy].

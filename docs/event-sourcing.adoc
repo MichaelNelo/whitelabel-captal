@@ -179,6 +179,37 @@ A server error is not an event: the API records it where it catches the defect, 
 
 These carry a session id in their own payload because the commands that emit them are built from the session rather than from an aggregate. The two playback events are recorded in `video_playbacks` by `PlaybackHandler` after the commit, not in `event_log`: a start the handler refuses — the file was replaced in between — would otherwise be logged as having happened.
 
+=== Location events
+
+`core/src/whitelabel/captal/core/location/Event.scala`. Emitted by the backoffice's location commands, not by a guest: no session, and an operator token in its place (see <<event_log>>).
+
+[cols="2,3,2"]
+|===
+| Event | Payload | `event_log.event_type`
+
+| `LocationCreated`
+| `id`, `slug`, `name`, `occurredAt`
+| `location.created`
+
+| `FingerprintRequirementChanged`
+| `id`, `required`, `occurredAt`
+| `location.fingerprint_requirement_changed`
+
+| `AccessPointRegistered`
+| `location`, `accessPoint` (its MAC, controller and settings), `occurredAt`
+| `location.access_point_registered`
+
+| `AccessPointUpdated`
+| `location`, `mac` — the MAC it had — and `accessPoint`, as it is now, `occurredAt`
+| `location.access_point_updated`
+
+| `AccessPointRemoved`
+| `location`, `mac`, `occurredAt`
+| `location.access_point_removed`
+|===
+
+The access point's controller token travels in the event as a `Secret`, which prints redacted, and is left out of `event_data`: the log says nothing of it. `LocationPersistenceHandler` writes these to `locations` and `access_points`, in a chain of their own that the backoffice runs (see xref:platform.adoc[Platform]).
+
 == The handler chains
 
 Two traits, two lifetimes:
@@ -282,11 +313,11 @@ Two handlers, outside the transaction. `PlaybackHandler` records playbacks in `v
 | `UNAUTHORIZE_GUEST_ACCESS`, which also disconnects the client. No session write: `SessionExpirationHandler` already reset the row inside the transaction. An empty `clientMac` is logged and skipped, as is a failure.
 |===
 
-Both branches first read the location's UniFi switch, then the controller of the access point the session came through (`sessions.ap_mac`), on every event. With the switch off, or no configuration for that access point — an API serving no location, an AP removed since the guest arrived — both log and do nothing. See xref:unifi.adoc[UniFi integration].
+Both branches first read the UniFi switch, then the controller, of the access point the session came through (`sessions.ap_mac`), on every event. With the switch off, or no configuration for that access point — an API serving no location, an AP removed since the guest arrived — both log and do nothing. See xref:unifi.adoc[UniFi integration].
 
 == event_log
 
-Created by `platform/resources/db/migration/V8__add_event_log.sql`; every column is `TEXT`.
+Created by `platform/resources/db/migration/V8__add_event_log.sql` and rebuilt by `V37__event_log_actor.sql`, which made `session_id` optional and added `actor`; every column is `TEXT`.
 
 [cols="2,3"]
 |===
@@ -295,8 +326,9 @@ Created by `platform/resources/db/migration/V8__add_event_log.sql`; every column
 | `id` | random UUID per row
 | `event_type` | the dotted type from the catalogue above
 | `event_data` | the event as compact JSON, built by hand per event in `EventLogHandler`
-| `session_id` | the session the command ran in
-| `user_id` | the session's user id at the time of the write; `NULL` before one exists
+| `session_id` | the session the command ran in; `NULL` for an operator's change
+| `user_id` | the session's user id at the time of the write; `NULL` before one exists, and for an operator's change
+| `actor` | the id of the operator token that made a backoffice change (`EventLogHandler.forOperator`); `NULL` for a guest's event
 | `occurred_at` | the event's own `occurredAt`
 | `created_at` | when the row was written
 |===

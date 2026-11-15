@@ -66,8 +66,8 @@ code rather than by matching its text.
 == The schema
 
 Two independent schemas live in one database. The portal schema is created and owned by the API
-(`platform/resources/db/migration`, `V1` … `V34`); the backoffice's own tables are created and owned
-by the MCP server (`mcp/resources/db/migration-mcp`, `V1` and `V2`).
+(`platform/resources/db/migration`, `V1` … `V37`); the backoffice's own tables are created and owned
+by the MCP server (`mcp/resources/db/migration-mcp`, `V1` … `V3`).
 
 === Portal tables
 
@@ -147,11 +147,11 @@ by the MCP server (`mcp/resources/db/migration-mcp`, `V1` and `V2`).
 | via its session
 
 | `locations`
-| A venue: `slug` (UNIQUE), `name`, `is_active`, `fingerprint_is_required`, and the UniFi settings that are the location's whichever access point a guest came through — `unifi_duration_minutes`, `unifi_redirect_url`, `unifi_is_enabled`. `unifi_ap_mac`, `unifi_host`, `unifi_port`, `unifi_site_id` and `unifi_api_token` are still columns, read by nothing in this release but the portal dispatcher's fallback on a database without `access_points`: V34 copied them there, they stay one release for a dispatcher or API still on the previous one, and a later migration drops them.
+| A venue: `slug` (UNIQUE), `name`, `is_active`, `fingerprint_is_required` — the location's whichever access point a guest came through — and where it stands: `state` (`created`, `deployed`, `paused` or `destroyed`, each an operation that succeeded; `created` until a deploy) and `state_run`, the backoffice run that left it so, NULL for `created` (V35, filled for the locations that existed before by the backoffice's V3). The UniFi columns are still there and read by nothing in this release but the portal dispatcher's fallbacks: `unifi_duration_minutes`, `unifi_redirect_url` and `unifi_is_enabled`, which V36 copied to each access point, the dispatcher reading `unifi_redirect_url` on a database V36 has not reached; and `unifi_ap_mac`, `unifi_host`, `unifi_port`, `unifi_site_id` and `unifi_api_token`, which V34 copied to `access_points`, read on a database without that table. They stay for a dispatcher or API still on the previous release, and a later migration drops them.
 | is the scope
 
 | `access_points`
-| One of a location's access points with the UniFi controller that authorizes the guests who join through it: `mac` (lowercase with colons, as `Mac.show` writes it), `unifi_host`, `unifi_port` (NULL = 443), `unifi_site_id`, `unifi_api_token`, timestamps. UNIQUE on `(location_id, mac)`, and indexed on `mac` for the portal dispatcher; the same MAC may be in several locations, and the backoffice keeps at most one of them running. Rows V34 copied from `locations` have the id `<location_id>/<mac>` and the location's `updated_at` as both stamps. See xref:unifi.adoc[UniFi integration].
+| One of a location's access points with the UniFi controller that authorizes the guests who join through it: `mac` (lowercase with colons, as `Mac.show` writes it), `unifi_host`, `unifi_port` (NULL = 443), `unifi_site_id`, `unifi_api_token`, timestamps; and what the portal does for those guests (V36): `duration_minutes` (NULL = 1440), `redirect_url`, where the dispatcher sends them instead of the portal, and `unifi_is_enabled`. UNIQUE on `(location_id, mac)`, which the backoffice checks before it writes, and indexed on `mac` for the portal dispatcher; the same MAC may be in several locations, and the backoffice keeps at most one of them deployed. The backoffice gives a row it registers a random UUID; rows V34 copied from `locations` have the id `<location_id>/<mac>` and the location's `updated_at` as both stamps. See xref:unifi.adoc[UniFi integration].
 | `location_id`
 
 | `location_recovery`
@@ -159,8 +159,8 @@ by the MCP server (`mcp/resources/db/migration-mcp`, `V1` and `V2`).
 | `location_id`, its key
 
 | `event_log`
-| Append-only audit trail: `event_type`, `event_data` as JSON, session, user, `occurred_at`, `created_at`. Written by `EventLogHandler`; nothing reads it in the request path.
-| via its session
+| Append-only audit trail: `event_type`, `event_data` as JSON, session, user, `actor`, `occurred_at`, `created_at`. A guest's event has its session and no `actor`; an operator's change in the backoffice has no session and, as `actor`, the id of the operator token that made it (V37). Written by `EventLogHandler`; nothing reads it in the request path.
+| via its session; an operator's change by the `locationId` in its `event_data`
 
 | `errors`
 | Every error a guest could be offered a way out of: `origin` (`server` or `client`), session, device, `message`, `detail` (a server error's stack trace; a client error's bundle version, error name and frames as JSON), and for client errors the `fingerprint` that makes two reports the same error — NULL when the report has no frame of the bundle's own — and the `verdict` on this one (`plausible`, `recurrent`, or `fabricated:` and its reasons). `available_at` is when the session may leave through it, NULL until offered; `redeemed_at`, when it did. Its `id` is what the page leaves through and what staff look an unrecoverable error up by. Rows outlive the sessions they name.
@@ -255,12 +255,12 @@ side would let deactivating an answered question close a survey that still has u
 | API (`platform`)
 | `platform/resources/db/migration`
 | `flyway_schema_history` (Flyway's default, exposed as `Migrate.ApiHistoryTable`)
-| `V1__initial_schema.sql` … `V34__access_points.sql` — every table the portal reads
+| `V1__initial_schema.sql` … `V37__event_log_actor.sql` — every table the portal reads
 
 | MCP server (`mcp`)
 | `mcp/resources/db/migration-mcp`
 | `flyway_schema_history_mcp`
-| `V1__mcp_tokens.sql` — operator tokens; `V2__mcp_deploy_runs.sql` — the deploy tools' runs. Nothing in the portal reads either
+| `V1__mcp_tokens.sql` — operator tokens; `V2__mcp_deploy_runs.sql` — the deploy tools' runs. Nothing in the portal reads either. `V3__location_state_from_runs.sql` fills `locations.state` and `state_run` from each location's last run that succeeded — a location with no such run, or one it left deployed with no access point, stays `created` — and is the one backoffice migration that writes a portal table
 |===
 
 Both run through `Migrate.migrateTo(url, location, historyTable)` (see
@@ -290,9 +290,10 @@ rebuilds the table `V4` created in order to change a `CHECK` that cannot be alte
 
 Two SQLite consequences worth knowing before writing one:
 
-* A `CHECK` cannot be altered. Changing the legal values of a column means creating a new table,
-  `INSERT ... SELECT`-ing into it, dropping the old one, renaming, and **recreating every index by
-  hand** — `V22` is the worked example.
+* A `CHECK` cannot be altered, nor a `NOT NULL` dropped. Changing the legal values of a column means
+  creating a new table, `INSERT ... SELECT`-ing into it, dropping the old one, renaming, and
+  **recreating every index by hand** — `V22` is the worked example; `V37`, which makes
+  `event_log.session_id` optional, is another, on a table with no indexes.
 * An index that references a column blocks `DROP COLUMN`. Drop the index first (`V21` does, with `IF
   EXISTS` so it stays replayable).
 
@@ -339,6 +340,13 @@ when the count is anything but 1; `expectAtLeastOne` fails when nothing matched.
 
 **The invariant: every write checks its affected-row count.** A `run(...)` whose result is discarded
 is a write that may not have happened.
+
+The exception is a write inside a transaction. There the driver defers every write to the commit and
+reports none of them affecting a row, so the count says nothing: the event handlers that write
+inside `TransactionalEventHandler` — `LocationPersistenceHandler`, which writes what the
+backoffice's location commands decided, among them — check none. What a count would catch is
+checked before, by the command reading what it decides on (the slug free, the access point there),
+and a statement rqlite refuses fails the commit.
 
 The consequence is broader than the helper:
 

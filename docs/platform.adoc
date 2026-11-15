@@ -136,6 +136,12 @@ defaulting, naming the column and the V22 rename in the message.
 `AdvertiserVideoRow`, `VideoViewRow`, `DeviceRow`, `DeviceUserRow`, `TermsRow`,
 `TermsTranslationRow`, `LocationRow`, `AccessPointRow`, `LocationRecoveryRow`, `EventLogRow`.
 
+`LocationStates` (`platform/LocationStates.scala`) is how `locations.state` writes `core`'s location
+`State`: `created`, `deployed`, `paused`, `destroyed`, with `state_run` the run that left it so.
+`record(quill, slug, state, by)` records that the run `by` left the location in `state`, failing
+unless exactly one row changed: what the backoffice's deploy, pause, resume and destroy write once
+they succeed, outside any transaction.
+
 `Terms` (`platform/Terms.scala`) is how the portal and the backoffice read the terms of service:
 `current` (the highest version), `translations`, `locales` (those of the version in force, the ones
 a portal offers) and the two writes, `saveTranslation` and `accept`. `TermsRepositoryQuill` serves
@@ -232,6 +238,15 @@ is ambient, which is what lets the same repository serve a request and a schedul
   `category`. `fingerprintOf` is `Errors.fingerprint`, and `publishedBundle` is the
   `BundleManifest` layer. Takes no `SessionContext`: every question it answers names its session or
   device.
+
+| `LocationRepository[Task]`, `AccessPointRepository[Task]`
+| `repositories/LocationRepositoryQuill.scala`
+| `locations` and `access_points` for the backoffice's location commands: `find(slug)`, the location
+  with its state read from `state` and `state_run` (a deployed one with its access points), `of`,
+  the location's access points, and `deployedHolders(mac)`, the slugs of the locations whose `state`
+  is `deployed` that have that MAC. `apply(quill)` alone: no guest session. A row the model cannot
+  hold — a deployed location with no access point, an access point with no token, a state it does
+  not know — is a defect, since no command writes one.
 |===
 
 `Errors` is the `errors` table's vocabulary. `recordServer` inserts a defect the API caught and
@@ -258,10 +273,11 @@ questions the domain does not model as aggregate reads.
 `findBySlug`. `LocationService.resolveSlug` narrows that to the id and fails with
 `LocationNotFound` when the configured `LOCATION_SLUG` matches no row — a configuration error, not a
 request error. The rest it answers by location id, read when asked rather than at startup, so a
-change through the backoffice needs no restart: `unifiEnabled` and `fingerprintRequired`, the
-location's two switches; `hasAccessPoint(id, mac)`, whether the location has an access point with
-that MAC; and `unifiFor(id, mac)`, that access point's `UnifiAccess` with the location's access
-duration, or `None` when it has no such AP.
+change through the backoffice needs no restart: `fingerprintRequired(id)`, the location's switch,
+true when no such location exists; `hasAccessPoint(id, mac)`, whether the location has an access
+point with that MAC; `unifiEnabled(id, mac)`, that access point's UniFi switch, true when it has no
+such AP; and `unifiFor(id, mac)`, that access point's `UnifiAccess` with its own access duration, or
+`None` when it has no such AP.
 
 `LocaleService` (`services/LocaleService.scala`, implemented by `LocaleServiceQuill`) reads
 `localized_texts`:
@@ -434,7 +450,7 @@ every handler sees every event.
 |===
 | Handler | Writes
 
-| `EventLogHandler` | one `event_log` row per event: a stable `event_type` string (`user.created`, `user.survey_assigned`, `user.video_assigned`, …) and the event's fields as JSON in `event_data`, plus session id, user id and both timestamps
+| `EventLogHandler` | one `event_log` row per event: a stable `event_type` string (`user.created`, `user.survey_assigned`, `user.video_assigned`, …) and the event's fields as JSON in `event_data`, plus session id, user id and both timestamps. `EventLogHandler(ctx)` writes a guest's events under their session; `EventLogHandler.forOperator(actor)` writes the backoffice's under the operator token that made the change, as `actor`, with no session. A location's events are logged without its access points' tokens
 | `AnswerPersistenceHandler` | one `answers` row per answered question, with `answer_value` encoded through `surveySchemas.encode`
 | `UserPersistenceHandler` | the user `core` resolved: inserts the row on `UserCreated`, not on `UserRecognized`; on both sets `sessions.user_id` and writes the id back into `SessionContext`. On `DeviceLinked`, upserts the `device_users` pair, moving `last_seen_at` when it exists
 | `SessionPhaseHandler` | `sessions.phase`, chosen from which event shape is present: a redeemed recovery → `Recovered`; identification answer, recognized user or identification completed → the configured next phase; video survey assigned → `AdvertiserVideoSurvey`; video visualized → the configured post-video phase
@@ -444,6 +460,27 @@ every handler sees every event.
 | `SurveyProgressHandler` | upserts `user_survey_progress` (insert or bump `updated_at`), then runs `SurveyService.isSurveyCompleteQuery` and sets `completed_at` when every active question has an answer
 | `RecoveryHandler` | inserts a client error into `errors` on `ErrorRecorded`; sets `available_at` on `RecoveryOffered`, `available_at` and the verdict `recurrent` on `RecoveryShortened`, and `redeemed_at` on `RecoveryRedeemed`
 |===
+
+=== The backoffice's chain
+
+The location commands run in the backoffice (`LocationCommands`, see xref:mcp.adoc[MCP backoffice])
+through a chain of their own, with no guest session:
+
+[source,scala]
+----
+TransactionalEventHandler(
+  LocationPersistenceHandler().andThen(EventLogHandler.forOperator(actor)),
+  quill)
+----
+
+`LocationPersistenceHandler` writes what they decided: `LocationCreated` inserts the `locations` row
+(requiring a fingerprint, `created`); `FingerprintRequirementChanged` sets `fingerprint_is_required`;
+`AccessPointRegistered` inserts an `access_points` row with a random UUID, its controller and its
+settings; `AccessPointUpdated` updates the row with the location and the old MAC, the MAC included;
+`AccessPointRemoved` deletes it. It checks no row count: inside the transaction the driver defers
+every write to the commit and reports none of them affecting a row. What a count would catch is
+checked before — the commands read that the slug is free and that the access point is there before
+deciding — and a statement rqlite refuses fails the commit.
 
 === Post-commit handlers
 
@@ -459,10 +496,11 @@ It mirrors the guest-access lifecycle onto the controller, symmetrically:
 * `AccessExpired` → revoke. No session write: `SessionExpirationHandler` already reset the row inside
   the transaction.
 
-It is built with two reads it makes on every event: `unifiEnabled: Task[Boolean]`, the location's
-switch, and `unifiFor: Option[Mac] => Task[Option[UnifiAccess]]`, the controller of the access point
-a session came through. Both branches read the switch first, then resolve the controller from the
-session's `apMac`; with the switch off, or no controller for that AP, they log and skip.
+It is built with two reads it makes on every event, both by the access point a session came
+through: `unifiEnabled: Option[Mac] => Task[Boolean]`, its switch, and
+`unifiFor: Option[Mac] => Task[Option[UnifiAccess]]`, its controller. Both branches read the switch
+first, then resolve the controller from the session's `apMac`; with the switch off, or no
+controller for that AP, they log and skip.
 
 Both branches log and continue on failure. A failed authorize leaves the session in its pre-authorized
 phase so the finish endpoint can be retried; a failed revoke is already absorbed, because the reset is
@@ -588,8 +626,8 @@ and the write-verification rule that follows from it, are in xref:database.adoc[
 == UniFi integration
 
 Two files in this module talk to the venue's UniFi controller: `UnifiAccess.scala`, whose
-`UnifiAccess.of(ap, durationMinutes)` takes `host`, `apiToken`, `port` (default 443) and `siteId`
-from an `AccessPointRow` and `defaultDurationMinutes` (default 1440) from its location; and
+`UnifiAccess.of(ap)` takes `host`, `apiToken`, `port` (default 443), `siteId` and
+`defaultDurationMinutes` (default 1440) from an `AccessPointRow`; and
 `UnifiClient.scala`, the zio-http client for the Integration v1 endpoints that authorize and revoke a
 guest client. `eventhandlers/UnifiAccessHandler.scala` is the event adapter described above. Because
 the controllers live on the `access_points` rows and a session records the AP it came through, each

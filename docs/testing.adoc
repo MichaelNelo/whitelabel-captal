@@ -50,7 +50,7 @@ guests through a browser and the distribution. See <<end-to-end>>.
 [source,scala]
 ----
 suite("E2E")(
-  suite("Identification Survey Flow")( /* nineteen suites */ ) @@ TestAspect.before(clearAndSeedNoise.orDie),
+  suite("Identification Survey Flow")( /* twenty suites */ ) @@ TestAspect.before(clearAndSeedNoise.orDie),
   MigrationLockSuite.suite,   // migrates itself; must stay in this spec, not its own ZIOSpecDefault
   WireContractSuite.suite     // pure serialisation; needs none of the layers above
 ) @@ TestAspect.sequential
@@ -60,8 +60,8 @@ The inner suite — `LocaleSessionSuite`, `SessionManagementSuite`, `EmailSurvey
 `SurveyProgressionSuite`, `MultiQuestionSurveySuite`, `ValidationSuite`, `PhaseValidationSuite`,
 `ProtocolRejectionSuite`, `ClientDecodeSuite`, `SessionIsolationSuite`, `VideoSuite`,
 `AdvertiserVideoSurveySuite`, `FinishSuite`, `AuthorizedSuite`, `SoftDeleteSuite`,
-`UnreadableRuleSuite`, `DeviceSuite`, `RecoverySuite`, `TermsSuite` — runs `TestFixtures.clearAllData *> TestFixtures.seedNoiseData *>
-TestFixtures.seedTerms() *> TestUnifiClient.disable *> TestUnifiClient.reset` before each test. Every
+`UnreadableRuleSuite`, `DeviceSuite`, `RecoverySuite`, `TermsSuite`, `LocationSuite` — runs `TestFixtures.clearAllData *> TestFixtures.seedNoiseData *>
+TestFixtures.seedTerms() *> TestUnifiClient.disable *> TestUnifiClient.reset *> TestUnifiSwitch.set(true)` before each test. Every
 test so starts with version 1 of the terms of service in es, en and pt, and `TestHelpers.createSession`
 accepts it, which leaves the session at the identification questions where most suites begin;
 `createSessionAtWelcome` is the session still at the welcome, asked to accept them. `MigrationLockSuite` and
@@ -85,9 +85,10 @@ container.
 * **There is no slug.** `ApiBase.none` is what `apiBaseLayer` provides, so every route in this
   suite mounts unprefixed at `/api/...`. The slug-prefixed form has no automated coverage; see
   <<What is deliberately not covered>>. The location is `CurrentLocation.empty` too, so
-  `/api/status` checks no access point, and `UnifiAccessHandler` is given one test controller for
-  every session's AP. A test that needs a served location builds a `/api/status` backend for one,
-  seeding its access points with `TestFixtures.seedAccessPoint`.
+  `/api/status` checks no access point, and `UnifiAccessHandler` is given one test controller and
+  one switch, `TestUnifiSwitch`, for every session's AP. A test that needs a served location builds
+  a `/api/status` backend for one, seeding its access points with `TestFixtures.seedAccessPoint`,
+  each with its own switch.
 
 `TestFixtures.scala` is the seeding and read-back layer the suites share: `seedEmailSurvey`,
 `seedProfilingSurvey`, `seedAllIdentificationSurveys`, `seedMultiQuestionProfilingSurvey`,
@@ -99,6 +100,14 @@ bridge: `serveZioHttp` turns the production `Routes` into an sttp backend so eve
 plain `basicRequest`/`sttp` and knows nothing about `zio-http`, and does it through the server's own
 `HttpApp.codecConfig` — not a copy of it — so a suite reads exactly the wire format the deployed
 server produces.
+
+`LocationSuite` is not the guest's: it runs the backoffice's location commands against this
+database through the chain the backoffice runs them with (`LocationPersistenceHandler`, then
+`EventLogHandler.forOperator`), since `platform` has no test module of its own. What the commands
+write is what `LocationRepositoryQuill` reads back; every change is logged under the operator who
+made it, and no controller token is; and the rules that read the database — a slug another location
+has, an access point another deployed location takes guests through, a deployed location's last
+access point — refuse before anything is written.
 
 One Docker container, `rqlite-test` on port 4011, shared by the whole suite. It is checked fresh on
 every invocation (`Task.Input`, not a cached `Task`) specifically so an operator removing the
@@ -225,7 +234,9 @@ database and a bucket belongs to the end-to-end spec below), `AuthSpec` and `Gra
 scopes against the real `tokens` table), `AdvertiserToolsSpec`, `SurveyToolsSpec`,
 `LocationToolsSpec`, `VideoToolsSpec`, `I18nToolsSpec`, and the rest of the tool-level specs — each
 calling a handler directly against a real rqlite, with no LocalStack and no wire protocol in
-between.
+between. A tool that records who made a change — the location tools, the access point tools — is
+called with `OperatorContext`, the context the authenticated endpoint would build for an operator
+token, since without one it refuses.
 
 === AssetStoreLocalStackSpec
 
@@ -367,9 +378,10 @@ distribution.
 as `unifi.captal.local:8443` over HTTPS, as a controller is. It answers the two calls of the
 Integration v1 API the API makes — any MAC is a connected client — and records every action. Each
 location registers an access point of its own, `Venue.apFor(slug)` — a locally administered `02:`
-MAC from a digest of the slug, since an AP takes the guests of a single running location — with the
+MAC from a digest of the slug, since an AP takes the guests of a single deployed location — with the
 stand-in as its controller, through the page `configure_unifi` opens, posting the form with the
-ticket as the page does, then `set_unifi_enabled`. The portal URL a guest opens names that AP, which
+ticket as the page does, then turns its UniFi calls on with `update_access_point`; the location
+`access.feature` deploys with UniFi turned off turns them off the same way. The portal URL a guest opens names that AP, which
 is what admits the guest and what the API finds the controller by. `Venue` reads the record from
 `http://localhost:18080/calls`, which LocalStack publishes on the host, so a step checks what the
 network was asked for a guest's MAC: the action, its time limit, the API key.
