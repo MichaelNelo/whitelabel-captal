@@ -18,6 +18,7 @@ import whitelabel.captal.core.location.{
 }
 import whitelabel.captal.platform.LocationStates
 import whitelabel.captal.platform.eventhandlers.{
+  EventLogHandler,
   LocationPersistenceHandler,
   TransactionalEventHandler
 }
@@ -38,10 +39,13 @@ object LocationSuite:
   private val Brasa = Slug.unsafe("brasa")
   private val Ap = Mac.parse("1c:6a:1b:ee:5c:be").get
   private val OtherAp = Mac.parse("aa:aa:aa:aa:aa:aa").get
+  private val Operator = "operator-token-1"
 
   final private class Commands(quill: QuillSqlite):
     val repo = LocationRepositoryQuill(quill)
-    private val events = TransactionalEventHandler(LocationPersistenceHandler(), quill)
+    private val events = TransactionalEventHandler(
+      LocationPersistenceHandler().andThen(EventLogHandler.forOperator(Operator)),
+      quill)
     private val creating = Flow(CreateLocationHandler[Task](repo), events)
     private val registering = Flow(RegisterAccessPointHandler[Task](repo, repo), events)
     private val updating = Flow(UpdateAccessPointHandler[Task](repo, repo), events)
@@ -126,6 +130,26 @@ object LocationSuite:
                     durationMinutes = Some(45),
                     redirectUrl = Some("https://plaza.example"),
                     fingerprintRequired = false))
+          )
+        ,
+        test("every change is logged under the operator who made it, and no token is"):
+          for
+            run <- commands
+            _   <- run.create(Plaza)
+            _   <- run.register(Plaza, Ap, "plaza.example", token = Some("secret-token"))
+            _   <- run.remove(Plaza, Ap)
+            log <- whitelabel.captal.api.TestFixtures.queryEventLog
+            location = log.filter(_.eventType.startsWith("location."))
+          yield assertTrue(
+            location.map(_.eventType).toSet ==
+              Set(
+                "location.created",
+                "location.access_point_registered",
+                "location.access_point_removed"),
+            location.forall(_.actor.contains(Operator)),
+            location.forall(_.sessionId.isEmpty),
+            location.exists(_.eventData.contains("plaza.example")),
+            !location.exists(_.eventData.contains("secret-token"))
           )
         ,
         test("a slug another location has is refused, and nothing is written"):
