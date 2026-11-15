@@ -1,7 +1,7 @@
 ---
 name: deploy-location
 description: Use this skill for anything that changes whether a location's portal is serving — deploying it, giving it a newer bundle, closing it for a while, bringing it back, or removing it for good. It says which of deploy_location, pause_location, resume_location and destroy_location fits, what each one leaves behind, and how to follow the run each one starts with get_deploy_status. Triggers on "deploy location", "push location", "deploy", "publicar location", "provision location", "publish bundle", "subir el bundle", "go live", "pause location", "pausar", "mantenimiento", "maintenance page", "cerrar temporalmente", "resume location", "reanudar", "reactivar", "destroy location", "eliminar location", "borrar location", "dar de baja", "tear down".
-version: 5.3.0
+version: 6.0.0
 ---
 
 # A location's portal: deploying, pausing, removing
@@ -9,7 +9,8 @@ version: 5.3.0
 | The operator wants | Call |
 |---|---|
 | A content change to be live | nothing — section 1 |
-| A new location's portal up, or a newly published bundle on one | `deploy_location` — section 3 |
+| A newer bundle or image on the locations | nothing here: the release does it — section 2 |
+| A new location's portal up, or a destroyed one back | `deploy_location` — section 3 |
 | The portal closed for a while, nothing lost | `pause_location`, later `resume_location` — section 4 |
 | The location gone from AWS for good | `destroy_location` — section 5 |
 
@@ -17,7 +18,7 @@ All four answer at once with a run and keep working in the background, for minut
 a run" in section 3 before the first one: the answer you get back is the start, not the result.
 
 Three different things get called "deploy" here, and they have three different answers. Work out
-which one is meant before doing anything: one needs nothing at all, one is a Mill task, and one is
+which one is meant before doing anything: one needs nothing at all, one is the release, and one is
 `deploy_location`.
 
 There is no `captal` CLI and no file provisioning: a `captal …` command names a tool that does not
@@ -35,24 +36,14 @@ So the answer to "when does this go live" is "it already is". What is worth doin
 identification surveys is serving guests raw key names or stranding them on the first screen right
 now, not after some future deploy.
 
-## 2. The client bundle: a Mill task, not per location
+## 2. A newer bundle or image: the release, not a tool
 
-The SPA bundle is built and published from this repo, once for every location:
-
-```sh
-mill client.publishS3 --bucket <assets-bucket> --prefix bundle
-```
-
-Optional `--region` (default `us-east-1`). The task sets Content-Type and Cache-Control per file —
-a day for the hashed assets, `must-revalidate` with a 24h `s-maxage` for the two HTML files — which
-is the part a hand-rolled `aws s3 cp` gets wrong. It does **not** invalidate CloudFront, so do that
-yourself after a bundle publish:
-
-```sh
-aws cloudfront create-invalidation --distribution-id <id> --paths '/bundle/*'
-```
-
-Asset writes through the tools already invalidate their own key; this is only for the bundle.
+The portal's bundle and the API's image reach every location through the release, `ci.run`, which
+a developer runs from the repository: it moves every location's service onto the new image, a
+paused one included, and copies the new bundle to every location, a paused one's into the page its
+resume puts back. Nothing in this server does it, and `deploy_location` does not either — it refuses
+a location already deployed. If the operator wants the latest version on a location, the answer is
+the next release.
 
 ## 3. A new slug's portal: `deploy_location`
 
@@ -81,40 +72,30 @@ with `configure_unifi`, or pause the other location first. `resume_location` ask
    unless its gateway is reachable from AWS directly
 5. the ECS service, created the first time and updated after that
 
-It is idempotent. Run on a location that is already deployed it registers a fresh task definition
-and rolls the service onto it rather than creating a second one — so it is also how a redeploy is
-done, and re-running it after a failure part way through is safe.
+It is for a location that is created, or destroyed: a deploy stands one back up. One already
+deployed is refused, since there is nothing for a deploy to do there (section 2); one paused is
+brought back with `resume_location`.
 
 The run then waits for the new revision: first for one of its tasks to be running, then for the
-service to settle on it, which means its task passed the load balancer's health checks and, on a
-redeploy, the previous revision's task was stopped. A redeploy therefore takes several minutes even
-when nothing is wrong, because the previous task drains first. Each wait gives up after 15 minutes
-and fails the run, naming the log group that says why the container is not coming up; the resources
-exist and ECS keeps trying in the meantime. A deploy that succeeded is serving the new revision.
+service to settle on it, which means its task passed the load balancer's health checks. Each wait
+gives up after 15 minutes and fails the run, naming the log group that says why the container is not
+coming up; the resources exist and ECS keeps trying in the meantime. A deploy that succeeded is
+serving.
 
 ### The bundle copy, which it does first
 
 Before touching AWS, `deploy_location` copies the shared bundle under this location's own prefix —
 server-side, so `Content-Encoding` survives on the `.gz` files. Without that the portal page itself
-404s and only the API answers, which looks like a broken deploy and is not. It reports
-`bundleObjects`, how many it wrote.
+404s and only the API answers, which looks like a broken deploy and is not. The step's note says how
+many objects it wrote.
 
-**`bundleObjects: 0` is the one answer worth reading.** It means the shared bundle has never been
-published, so there was nothing to copy. The resources are all fine; the portal has no page. Publish
-it and deploy again:
+**A note saying no bundle objects is the one worth reading.** It means the shared bundle has never
+been published, so there was nothing to copy. The resources are all fine; the portal has no page
+until a release publishes it.
 
-```sh
-mill client.publishS3 --bucket <assets-bucket> --prefix bundle
-```
-
-The copy also runs on a redeploy, which is how a location picks up a newly published bundle — so
-after publishing, deploy each location that should take the new version.
-
-The location's brand icon is the one key it treats specially, and `iconPreserved` says what it did.
-`brand-icon.svg` ships *in* the bundle as a default and `set_location_icon` writes to the same key,
-so the copy compares ETags: an icon that is still the default gets refreshed, and one the operator
-set is left alone. Nothing to do about it either way — just do not read `iconPreserved: false` as a
-lost icon, it is the ordinary answer for a location with no branding of its own.
+The location's brand icon is the one key the copy treats specially: `brand-icon.svg` ships *in* the
+bundle as a default and `set_location_icon` writes to the same key, so the copy compares ETags — an
+icon that is still the default gets refreshed, and one the operator set is left alone.
 `custom-styles.css` is not in the bundle and is never touched.
 
 ### Following a run
@@ -136,18 +117,22 @@ location's latest run. The `watch` field of the first answer belongs to the page
 
 How a run ends:
 
-- **`succeeded`**: the operation's own result is in `deployed`, `paused`, `resumed` or `destroyed`,
-  with its own `nextSteps`. Sections 3 to 5 say how to read each one. The location is recorded as
+- **`succeeded`**: every step is done, each with a note of what it found where there is one — a
+  revision, an invalidation, a count, "still stopping when the wait ran out" — and `nextSteps` says
+  what is left. Sections 3 to 5 say which notes are worth reading. The location is recorded as
   deployed, paused or destroyed from then on, which is what the access point rules read.
 - **`failed`**: `error` says why, and the failed step is marked. The location stays recorded as it
-  was. Every step is idempotent, so once the
-  cause is dealt with, calling the same tool again redoes what was done in moments and carries on.
+  was, half changed in AWS.
 - **`interrupted`**: the server doing the work stopped before it finished, typically a restart.
-  Calling the same tool again finishes it.
+
+A failed or interrupted run is finished, not redone. Once the cause is dealt with, call the same tool
+again: it asks the operator whether to finish that run first, and yes runs only the steps it left —
+each of which can run twice with the same result. Any other operation asked of the location meets
+the same question, except a destroy, which removes whatever is there.
 
 Only one run per location goes at a time. Calling any of the four while one is running starts
-nothing and answers with the run already going; follow that one. Do not rebuild a change out of
-individual AWS calls; section 5 says what a half-done change leaves behind.
+nothing, and the tool asks the operator whether to follow that one instead. Do not rebuild a change
+out of individual AWS calls; section 5 says what a half-done change leaves behind.
 
 ## 4. Closing a portal for a while: `pause_location` and `resume_location`
 
@@ -165,26 +150,28 @@ succeeds.
 
 The order is the point. By the time the API answers `paused`, the edge already serves the
 maintenance page, so a guest already inside the portal reads that answer on their next call and goes
-to the maintenance page by themselves. `drained: false` means a container was still stopping at the
-timeout; the pause is complete regardless, because the rule stopped forwarding first.
+to the maintenance page by themselves. A note on the last step saying it was still stopping means a
+container had not stopped at the timeout; the pause is complete regardless, because the rule stopped
+forwarding first.
 
 While a location is paused the content tools keep working. Translations, surveys, videos, the
 stylesheet and the icon can all be edited, and guests see the result once it is back.
 
-`resume_location(slug)` is the reverse: one task again, wait for it to run, forward again, wait for a
-healthy target, and only then put the saved page back at the edge. What it can answer:
+`resume_location(slug)`, for a paused location, is the reverse: one task again, wait for it to run,
+forward again, wait for a healthy target, and only then put the saved page back at the edge. What it
+can answer:
 
 - **A failed run**, when no task is running after 15 minutes. The location stays paused, with the
   rule still answering `paused` and the edge still serving the maintenance page, because that is the
-  safe place for a container that will not start. Read the log group, then call it again.
-- **`healthy: false`**: the task runs but the load balancer had not finished checking it when the
-  wait ran out. Guests get a 503 until it does.
-- **`pageRestored: false`**: no saved page was found. Expected for a location that was never paused,
-  and harmless, since resuming one is safe.
+  safe place for a container that will not start. Read the log group, then call it again and finish
+  the run.
+- **A note on the health step saying it was not yet healthy**: the task runs but the load balancer
+  had not finished checking it when the wait ran out. Guests get a 503 until it does.
+- **A note on the page step saying no saved page was found**: the edge serves whatever was at the
+  location's page.
 
-Resume puts back the page that was live before the pause, not the current bundle. `deploy_location`
-is the other way out of a pause: it scales the service up, forwards again and copies the current
-bundle, so it is the one to use when a bundle was published while the location was paused.
+Resume puts back the page the pause kept, which a release published while the location was paused
+has already replaced with the new bundle's.
 
 ## 5. Removing a location for good: `destroy_location`
 
@@ -192,15 +179,18 @@ For a venue that is leaving. Not for downtime: a pause deletes nothing, and this
 be recovered.
 
 `destroy_location(slug, confirm)` needs the slug typed again in `confirm`. Anything else is refused
-before it does anything. It needs the `infra:destroy` scope, which `infra:deploy` does not carry.
+before it does anything. It needs the `infra:destroy` scope, which `infra:deploy` does not carry. It
+goes from any state — a location deployed, paused, or one whose deploy failed part way and left
+resources standing — and over a run left part way, which it removes along with the rest.
 
 Before tearing anything down it asks the operator whether to also delete the location's S3 objects:
 its bundle copy, stylesheet, icon and every uploaded video file, saying how many objects and how many
 of them are videos. The question comes in the call itself, before any run starts. **If no answer
 comes back, they are kept**, and that includes a client that cannot ask the question at all. Then
 the run scales the service to zero, waits for the drain, and deletes the service, the listener
-rules, the target group and the task definition revisions. `drained: false` means the teardown went
-ahead while a container was still stopping.
+rules, the target group and the task definition revisions; the teardown step's note says what it
+found. A note on the drain step saying it was still stopping means the teardown went ahead while a
+container was still stopping.
 
 What survives, every time:
 
@@ -210,17 +200,16 @@ What survives, every time:
 
 What follows from the S3 answer:
 
-- **Objects kept** (`assetsKept: true`): `deploy_location` stands the portal back up on top of them,
-  with nothing else to do.
+- **Objects kept** (the last step keeps them): `deploy_location` stands the portal back up on top
+  of them, with nothing else to do.
 - **Objects deleted**: `deploy_location` still brings the portal back, but the stylesheet and icon
   have to be set again, and **every video has to be uploaded again**. Their rows survive pointing at
   files that are gone, and `list_pending_uploads` will not find them, because they are still marked
   active. Retire them with `set_video_active` or create them again.
 
-It is idempotent: a teardown that follows a failed one reports what it found rather than failing, so
-an interrupted destroy is finished by calling it again. Never finish one by hand with individual AWS
-calls: a listener rule left pointing at a target group with no service answers 503 instead of
-falling through.
+A teardown that follows another reports what it found rather than failing, so an interrupted destroy
+is finished by calling it again. Never finish one by hand with individual AWS calls: a listener rule
+left pointing at a target group with no service answers 503 instead of falling through.
 
 ## Shared infrastructure is not here
 
