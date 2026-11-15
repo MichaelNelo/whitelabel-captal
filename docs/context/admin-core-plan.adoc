@@ -745,6 +745,35 @@ each step (`render`). What it became, against the sketch:
   and `RunProgress`, `execute`; the `current_run` column (`state` came with the first step), the
   lock, the queue and `OperationRunner`; the three elicitations; structured step failures and
   `explain`.
++
+*Done on 2026-11-15*: `core/operation/` (`Operation` with each one's `steps`, `Step`, `Run[S]`,
+`RunState`, `StepFailure`, `Outcome`, `Execution.run`, the events), `StartOperationHandler` and
+`CompleteOperationHandler`, the ports `RunRepository`, `OperationSteps` and `RunProgress`;
+`platform`'s `V38` (`current_run`), `RunRepositoryQuill`, `OperationLockHandler`,
+`RunPersistenceHandler`, the transitions in `LocationPersistenceHandler`, `OperationQueue` with its
+handler, `RunProgressQuill`, and the queries `RunStatus` and `AssetsOf`; the backoffice's
+`OperatorContext` and flows in layers (`LocationFlows`, `OperationFlows`), `InfraSteps`,
+`OperationRunner` and the four tools rewritten on them. What it became, against the sketch:
++
+* *`OperationStarted` says what lock it takes over* (`supersedes`): a started run whose runner died
+  never released it, so the conditional write compares against that run rather than against nothing.
+  A failed run released it on completion.
+* *A destroy goes from any state, and over an unfinished run.* A deploy that failed part way leaves
+  the location created, or still destroyed, with resources in AWS; a destroy is what removes them.
+  It also skips the "finish it first?" a run left part way asks of every other operation.
+* *A deploy of a deployed location is refused* (`AlreadyDeployed`), as <<What a deploy is>> argued:
+  versions are the release's.
+* *A step's result is a note on the step*, not an operation's typed response: `DeployResponse`,
+  `PauseResponse`, `ResumeResponse` and `DestroyResponse` went, and the run view says what is left
+  once it succeeded. `CompleteOperation` takes the run alone — no location read — since the lock
+  keeps it where the operation found it.
+* *`StepFailure` is `TimedOut` or `Rejected`, with the adapter's words*: `explain` into typed
+  lifecycle errors was not built, since nothing reads them but the operator.
+* *`Runs.launch` and `UiRoutes.refuseSharedAccessPoints` went*: the run is `core`'s and `platform`'s
+  now, and the access point checks are `StartOperation`'s.
+* *`DeployE2ESpec` was stale before this*: it deployed a location with no access point, which has
+  been refused since the first step, and read a readiness text that no longer exists. It was
+  brought to the new design but not run here.
 . The dispatcher reads the paused state from the database; remove its S3 endpoint and permission.
 . Once the relay moves to SNS and SQS (xref:relay-sns-sqs-plan.adoc[the relay plan]), tell the run
   page of progress through it.
@@ -752,6 +781,6 @@ each step (`render`). What it became, against the sketch:
   versions; i18n keys; styles and icon. Each tool a command or a query, as the table in
   <<decided-2026-11-15>> has it.
 
-Also owed: `mcp/resources/skills/deploy-location/SKILL.md` still says a deploy is how a location takes
-a newly published bundle, and its section 2 publishes the bundle with `client.publishS3`, which
-`ci.run` does now.
+The `deploy-location` skill was rewritten with the fourth step (6.0.0): a newer bundle or image is
+the release's, a deploy is for a location created or destroyed, a step's result is its note, and a
+run left part way is finished rather than redone.

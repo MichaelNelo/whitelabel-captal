@@ -773,55 +773,56 @@ alone.
 
 |`deploy_location`
 |`infra:deploy`
-|Idempotent — an already-deployed location gets its service rolled onto a fresh task definition
-rather than a second one created. The run waits for a task of the new revision to be running, then
-for the service's deployment of that revision to reach `COMPLETED`. Refused before any run while
-no version of the terms of service exists: the portal could start nobody. Refused too while the
-location has no access point, or shares one with another deployed location — the state recorded on
-each location (`UiRoutes.refuseSharedAccessPoints`): a deploy ends a pause, and an AP takes the
-guests of one deployed location.
+|For a location created or destroyed; one already deployed is refused (`AlreadyDeployed`), since new
+images and bundles reach every location through the release. The run waits for a task of the new
+revision to be running, then for the service's deployment of that revision to reach `COMPLETED`.
+Refused before any run while no version of the terms of service exists, while the location has no
+access point, or while one of them takes another deployed location's guests.
 
 |`pause_location`
 |`infra:deploy`
-|Swaps the edge to the maintenance page and waits out the CloudFront invalidation *before* touching
-the API.
+|For a deployed location. Swaps the edge to the maintenance page and waits out the CloudFront
+invalidation *before* touching the API.
 
 |`resume_location`
 |`infra:deploy`
-|The reverse order of pause. Does not re-copy the bundle — run `deploy_location` for that. Refused
-before any run, like a deploy, while the location has no access point or shares one with another
-deployed location.
+|For a paused location; the reverse order of pause. Refused before any run, like a deploy, without
+the terms of service or an access point, or through one another deployed location holds.
 
 |`destroy_location`
 |`infra:destroy`, `destructive = true`, `idempotent = true`
-|Requires the slug typed back as confirmation. Elicits whether to also delete the location's S3
-objects in the call, before the run starts (declining is the default for any client that cannot
-ask, or does not answer); keeps the log group and the database rows regardless.
+|From any state — a deploy that failed part way leaves resources a destroy has to remove. Requires
+the slug typed back as confirmation. Elicits whether to also delete the location's S3 objects in the
+call, before the command (declining is the default for any client that cannot ask, or does not
+answer): the answer is the command's argument, so nothing waits on a person with the location's lock
+taken. Keeps the log group and the database rows regardless.
 
 |`get_deploy_status`
 |none, read-only
-|A run by `runId`, or a location's latest by `slug`: every step and its state, and the operation's
-result once it succeeded.
+|A run by `runId`, or a location's latest by `slug` (the `RunStatus` query): every step, its state
+and what it found, and what is left once it ended.
 |===
 
 None of the four is a task. Each waits minutes on AWS, and a host caps how long it holds one call
 open — Claude's proxy closes the stream at about five minutes, keepalives or not — so each answers
-at once with a run and does the work on a daemon fiber. `Runs` records the run in `mcp_deploy_runs`:
-its steps, fixed when it starts and marked as the work reaches them, the result or the error, and a
-heartbeat the work rewrites every ten seconds. A `running` row whose heartbeat is more than a minute
-old is reported as `interrupted`: its process is gone, and calling the same tool again finishes it,
-since every step is idempotent. One run per location at a time; a call while one is going starts
-nothing and answers with that one.
+at once with a run. A tool runs `StartOperationCommand` (`core`), which decides whether the operation
+may start and with which steps; its handlers take the location's lock (`locations.current_run`) and
+write the run to `mcp_deploy_runs` under it, and after the commit the run is queued.
+`OperationRunner`, started by `Main`, takes it: it walks the run's steps in `core`'s order through
+`InfraSteps` (ECS, the load balancer, S3, CloudFront), marking each step and its note on the row as
+it goes and rewriting the heartbeat every ten seconds, then runs `CompleteOperationCommand`, whose
+handlers record where the location stands (`locations.state` and `state_run`), close the run and
+release the lock. A run that failed leaves the state as it was. That state is what `core`'s location
+commands read and what the location's portal reads before it admits a guest: only while it is
+`deployed`, so while a first deploy or a resume runs, and after one that failed part way, the portal
+turns every guest away (see xref:api.adoc[Guest API]).
 
-The last thing a run's work does, once everything else succeeded, is record where the location
-stands (`LocationStates.record`): `locations.state` becomes `deployed` after a deploy or a resume,
-`paused` after a pause and `destroyed` after a destroy, and `state_run` the run's id. A run that
-fails earlier leaves the state as it was, and one whose state cannot be recorded fails. That state is what `core`'s location commands read — a deployed location keeps its last access
-point, and an access point another deployed location has is refused — what a deploy or a resume
-checks access points against, and what the location's portal reads before it admits a guest: only
-while it is `deployed`. A first deploy or a resume records it last, so while one runs, and after one
-that failed half-way, the portal turns every guest away until a run succeeds (see
-xref:api.adoc[Guest API]).
+A `running` row whose heartbeat is more than a minute old is reported as `interrupted`: its process
+is gone. The next operation asked of that location is refused with `PreviousOperationUnfinished`, and
+the tool asks the operator whether to finish that run first; yes runs only the steps it left, each of
+which can run twice with the same result. An operation asked while another is going is refused with
+`OperationInProgress`, and the tool asks whether to follow that one instead. A destroy goes ahead over
+an unfinished run, which it removes along with the rest.
 
 Inside a run every wait polls AWS every five seconds and gives up after 15 minutes.
 

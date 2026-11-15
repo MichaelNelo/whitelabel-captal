@@ -592,10 +592,14 @@ location's own copy of the bundle's manifest, which the API checks client error 
 The tasks run with a public IP, which is what lets them read it from the edge. A location deployed
 before this variable existed has none until its next `deploy_location`.
 
-`deploy_location` runs five AWS-side steps in a fixed order — log group, target group, listener
-rule, task definition, service — because `CreateService` with a `loadBalancers` block fails with
-"no associated load balancer" when the target group is not yet reachable through a listener; the
-rule has to exist first. `pause_location` updates the edge (swaps in the maintenance page, waits out
+The order of each operation's steps is `core`'s (`Operation.steps`); the backoffice runs them
+against AWS one at a time (`InfraSteps`), each finding what it needs by the location's slug — the
+target group by its name, the task definition by its family's latest revision — so that finishing an
+interrupted run can start part way. `deploy_location` copies the bundle and invalidates the edge,
+then runs five AWS-side steps in a fixed order — log group, target group, listener rule, task
+definition, service — because `CreateService` with a `loadBalancers` block fails with "no associated
+load balancer" when the target group is not yet reachable through a listener; the rule has to exist
+first. `pause_location` updates the edge (swaps in the maintenance page, waits out
 the CloudFront invalidation) *before* touching the API (put a rule above the location's forward rule
 that answers with a fixed `503` JSON response, scale the service to zero) — so a guest is never told
 "paused" by a page that still looks live. The forward rule stays under it, so the target group stays
@@ -609,7 +613,8 @@ the family, and — only if an operator explicitly says yes to an elicitation �
 prefix (its bundle copy, stylesheet, icon and uploaded videos). It keeps the log group on purpose and
 touches nothing in the shared infrastructure, nor in the database but the location's recorded state:
 `deploy_location` is one call away from putting the portal back. Each of the four, once its run
-succeeds, records where the location stands in `locations.state` — deployed, paused or destroyed.
+succeeds, records where the location stands in `locations.state` — deployed, paused or destroyed —
+through `CompleteOperationCommand`.
 The full tool-level contract (requests, responses, scopes) is xref:mcp.adoc[MCP backoffice]'s to
 describe.
 

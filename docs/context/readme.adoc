@@ -38,7 +38,7 @@ Read it before changing anything. Most of what is here was expensive to learn.
 
 | xref:admin-core-plan.adoc[Plan: the administrative side in core]
 | You are moving the backoffice's rules into `core`, touching a location's deploy, pause, resume
-  or destroy, or moving `/api/status`'s logic into a command. An agreed plan, its first three steps
+  or destroy, or moving `/api/status`'s logic into a command. An agreed plan, its first four steps
   done.
 
 | xref:flow-adapters-plan.adoc[Plan: tools and endpoints from flows and queries]

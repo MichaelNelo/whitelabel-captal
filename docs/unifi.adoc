@@ -568,10 +568,9 @@ skipped, since there is no controller left to ask; changing an AP's MAC does the
 sessions that came through the old one.
 
 `deploy_location` and `resume_location` refuse, before they start a run, a location with no access
-point, and one that shares an access point with another deployed location
-(`UiRoutes.refuseSharedAccessPoints`, which reads the state recorded on each location): both make
-the location take its access points' guests. Registering one, or pausing the other location first,
-is the way through.
+point, and one that shares an access point with another deployed location (`StartOperationCommand`
+in `core`, against the state recorded on each location): both make the location take its access
+points' guests. Registering one, or pausing the other location first, is the way through.
 
 === The proxy URL
 
