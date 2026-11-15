@@ -3,11 +3,18 @@ package whitelabel.captal.mcp
 import com.jamesward.ziohttp.mcp.{CallToolResult, ToolContent}
 import io.getquill.*
 import io.getquill.jdbczio.Quill
-import whitelabel.captal.mcp.tools.{I18nTools, LocationTools, UnifiTools}
+import whitelabel.captal.core.application.commands.{
+  RegisterAccessPointCommand,
+  RegisterAccessPointHandler
+}
+import whitelabel.captal.core.device.Mac
+import whitelabel.captal.core.location.{Secret, SettingsChange, Slug}
+import whitelabel.captal.mcp.tools.{I18nTools, LocationCommands, LocationTools, UnifiTools}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.{LocationRow, RqliteDataSource}
+import whitelabel.captal.platform.{AccessPointRow, LocationRow, RqliteDataSource}
 import zio.*
+import zio.interop.catz.*
 import zio.test.*
 
 import QuillArrow.->
@@ -30,8 +37,9 @@ object LocationToolsSpec extends ZIOSpecDefault:
   private def clear: ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*
     rows.flatMap: owned =>
-      ZIO.foreachDiscard(owned.map(_.slug)): slug =>
-        quill.run(query[LocationRow].filter(_.slug == lift(slug)).delete)
+      ZIO.foreachDiscard(owned): location =>
+        quill.run(query[AccessPointRow].filter(_.locationId == lift(location.id)).delete) *>
+          quill.run(query[LocationRow].filter(_.slug == lift(location.slug)).delete)
 
   private def json(fields: (String, zio.json.ast.Json)*) = Some(
     zio.json.ast.Json.Obj(Chunk.fromIterable(fields)))
@@ -48,7 +56,7 @@ object LocationToolsSpec extends ZIOSpecDefault:
 
   private def create(slug: String, name: String) = LocationTools
     .create
-    .call(json("slug" -> str(slug), "name" -> str(name)))
+    .callWithContext(json("slug" -> str(slug), "name" -> str(name)), OperatorContext.Default)
 
   private def deactivate(slug: String): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[
     QuillSqlite]: quill =>
@@ -184,31 +192,51 @@ object LocationToolsSpec extends ZIOSpecDefault:
           textOf(listed).contains("\"unifiConfigured\":false")
         )
       ,
-      test("UniFi calls are turned off and back on per location, and get_unifi_config says so"):
+      test("UniFi calls are turned off and back on per access point, and get_unifi_config says so"):
         val slug = s"$Prefix-unifi"
+        val ap = "1c:6a:1b:ee:5c:be"
         def set(target: String, enabled: Boolean) = UnifiTools
-          .setEnabled()
-          .call(json("slug" -> str(target), "enabled" -> zio.json.ast.Json.Bool(enabled)))
+          .updateAccessPoint()
+          .callWithContext(
+            json(
+              "slug"         -> str(target),
+              "apMac"        -> str(ap),
+              "unifiEnabled" -> zio.json.ast.Json.Bool(enabled)),
+            OperatorContext.Default)
         for
-          _       <- clear
-          _       <- create(slug, "UniFi")
+          _ <- clear
+          _ <- create(slug, "UniFi")
+          _ <- LocationCommands
+            .run(
+              "spec-operator",
+              RegisterAccessPointCommand(
+                Slug.unsafe(slug),
+                Mac.parse(ap).get,
+                "unifi.example",
+                None,
+                "site",
+                Secret.parse("token"),
+                SettingsChange(),
+                java.time.Instant.now)
+            )(repositories => RegisterAccessPointHandler[Task](repositories, repositories))
+            .mapError(IllegalStateException(_))
           initial <- UnifiTools.status().call(json("slug" -> str(slug)))
           off     <- set(slug, false)
-          stored  <- rows
-          after   <- UnifiTools.status().call(json("slug" -> str(slug)))
+          stored  <- ZIO.serviceWithZIO[QuillSqlite]: quill =>
+            import quill.*
+            quill.run(query[AccessPointRow].filter(_.mac == lift(ap)))
           on      <- set(slug, true)
           missing <- set(s"$Prefix-nope", false)
         yield assertTrue(
-          // A new location calls its controller unless told otherwise.
-          textOf(initial).contains("\"enabled\":true"),
+          // A new access point calls its controller unless told otherwise.
+          textOf(initial).contains("\"unifiEnabled\":true"),
           !off.isError.contains(true),
-          textOf(off).contains("\"enabled\":false"),
+          textOf(off).contains("\"unifiEnabled\":false"),
           // The row, so a write rqlite rejected cannot pass for one that happened.
-          stored.find(_.slug == slug).exists(_.unifiIsEnabled == 0),
-          textOf(after).contains("\"enabled\":false"),
-          textOf(on).contains("\"enabled\":true"),
+          stored.exists(_.unifiIsEnabled == 0),
+          textOf(on).contains("\"unifiEnabled\":true"),
           missing.isError.contains(true),
-          textOf(missing).contains("No existe")
+          textOf(missing).contains("No location has the slug")
         )
         end for
       // The schema is laid down once by `mcp.test` before forking — see `migratedRqliteUrl` in

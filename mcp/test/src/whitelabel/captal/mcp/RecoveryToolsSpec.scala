@@ -55,7 +55,7 @@ object RecoveryToolsSpec extends ZIOSpecDefault:
 
   private def create(slug: String) = LocationTools
     .create
-    .call(json("slug" -> str(slug), "name" -> str(slug)))
+    .callWithContext(json("slug" -> str(slug), "name" -> str(slug)), OperatorContext.Default)
 
   private def get(slug: String) = RecoveryTools.status.call(json("slug" -> str(slug)))
 
