@@ -69,7 +69,7 @@ object Readiness:
         "True when the location has at least one access point, each registered with its controller's host, site id and token. Without one every guest is turned away with an error as they arrive: the AP a guest comes through is what says which controller grants them access. Call get_unifi_config to list them, configure_unifi to register one.")
       unifiConfigured: Boolean,
       @description(
-        "False means the portal never calls the UniFi controller here, so unifiConfigured does not matter: guests finish the flow and stay at Ready. Turned off or on with set_unifi_enabled.")
+        "Whether any of its access points has its UniFi calls on. False with access points means the portal never calls a controller here: guests finish the flow and stay at Ready. Turned off or on per access point with update_access_point.")
       unifiEnabled: Boolean,
       @description(
         "Locales with at least one translation, and how many required keys each still lacks. A locale absent here has none at all; an empty list means the portal would render raw key names to every guest.")
@@ -255,7 +255,7 @@ object Readiness:
           // An access point is stored only with all of host, site id and token, so having one is
           // being configured.
           unifiConfigured = points.nonEmpty,
-          unifiEnabled = row.unifiIsEnabled == 1,
+          unifiEnabled = points.exists(_.unifiIsEnabled == 1),
           locales = byLocale,
           requiredKeys = requiredKeys.size,
           hasStyles = styles,

@@ -1,18 +1,25 @@
 package whitelabel.captal.mcp.apps
 
 import java.time.Instant
-import java.util.UUID
 
 import io.getquill.*
+import whitelabel.captal.core.application.commands.{
+  RegisterAccessPointCommand,
+  RegisterAccessPointHandler
+}
 import whitelabel.captal.core.device.Mac
+import whitelabel.captal.core.location.{Error as LocationError, Secret, SettingsChange, Slug}
+import whitelabel.captal.mcp.QuillArrow
 import whitelabel.captal.mcp.access.Tokens
 import whitelabel.captal.mcp.aws.AssetStore
-import whitelabel.captal.mcp.{QuillArrow, Writes}
+import whitelabel.captal.mcp.tools.LocationCommands
+import whitelabel.captal.platform.repositories.LocationRepositoryQuill
 import whitelabel.captal.platform.{AccessPointRow, LocationRow}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
 import zio.*
 import zio.http.*
+import zio.interop.catz.*
 
 import QuillArrow.->
 
@@ -26,26 +33,24 @@ import QuillArrow.->
 object UiRoutes:
   val UnifiPath: String = "/ui/unifi"
 
-  /** One of a location's access points as reported, minus its token. */
+  /** One of a location's access points as reported, minus its token: its controller, and what the
+    * portal does for the guests who join through it.
+    */
   final case class AccessPoint(
       apMac: String,
       host: String,
       port: Option[Int],
       siteId: String,
-      tokenSet: Boolean)
+      tokenSet: Boolean,
+      durationMinutes: Option[Int],
+      redirectUrl: Option[String],
+      enabled: Boolean)
 
   /** What is stored for a location's UniFi, minus the tokens: the read `configure_unifi` reports
-    * and `get_unifi_config` answers with, kept in one place so the two cannot disagree. The access
-    * duration, the redirect URL and the switch are the location's; host, port, site id and token
-    * are each access point's, since a venue's APs need not share a controller.
+    * and `get_unifi_config` answers with, kept in one place so the two cannot disagree. All of it
+    * is each access point's, since a venue's APs need not share a controller.
     */
-  final case class UnifiSettings(
-      slug: String,
-      name: String,
-      redirectUrl: Option[String],
-      durationMinutes: Option[Int],
-      enabled: Boolean,
-      accessPoints: List[AccessPoint])
+  final case class UnifiSettings(slug: String, name: String, accessPoints: List[AccessPoint])
 
   private inline def bySlug = quote: (slugParam: String) =>
     query[LocationRow].filter(_.slug == slugParam)
@@ -85,13 +90,15 @@ object UiRoutes:
       case Some(raw) =>
         raw.toIntOption.filter(_ > 0).map(Some(_)).toRight(s"$label debe ser un número positivo.")
 
-  /** `raw` as `access_points.mac` stores it — lowercase, with colons — or why it is not a MAC. */
-  private[mcp] def macOf(raw: String): Either[String, String] = Mac
+  /** The MAC `raw` names, or why it is not one. */
+  private[mcp] def parsedMac(raw: String): Either[String, Mac] = Mac
     .parse(raw.trim)
-    .map(_.show)
     .toRight(
       s"'${raw
           .trim}' no es una MAC: seis pares de dígitos hexadecimales, separados por ':' o '-' o juntos.")
+
+  /** `raw` as `access_points.mac` stores it — lowercase, with colons — or why it is not a MAC. */
+  private[mcp] def macOf(raw: String): Either[String, String] = parsedMac(raw).map(_.show)
 
   private def locationFor(slug: String): ZIO[QuillSqlite, String, LocationRow] = ZIO.serviceWithZIO[
     QuillSqlite]: quill =>
@@ -108,9 +115,6 @@ object UiRoutes:
       yield UnifiSettings(
         slug = row.slug,
         name = row.name,
-        redirectUrl = row.unifiRedirectUrl,
-        durationMinutes = row.unifiDurationMinutes,
-        enabled = row.unifiIsEnabled == 1,
         accessPoints = points
           .sortBy(_.mac)
           .map(point =>
@@ -120,201 +124,69 @@ object UiRoutes:
               port = point.unifiPort,
               siteId = point.unifiSiteId,
               // Whether, never what. The value leaves this server only towards the controller.
-              tokenSet = point.unifiApiToken.nonEmpty
+              tokenSet = point.unifiApiToken.nonEmpty,
+              durationMinutes = point.durationMinutes,
+              redirectUrl = point.redirectUrl,
+              enabled = point.unifiIsEnabled == 1
             ))
       )
       end for
 
-  /** Turns the location's UniFi calls on or off, leaving its stored settings as they are. */
-  private[mcp] def setEnabled(
-      slug: String,
-      enabled: Boolean): ZIO[QuillSqlite, String, UnifiSettings] = ZIO.serviceWithZIO[QuillSqlite]:
-    quill =>
-      import quill.*
-      val flag =
-        if enabled then
-          1
-        else
-          0
-      for
-        _        <- locationFor(slug)
-        affected <-
-          run(
-            bySlug(lift(slug)).update(
-              _.unifiIsEnabled -> lift(flag),
-              _.updatedAt      -> lift(Instant.now.toString))).orDie
-        _       <- Writes.expectOne(affected, s"Cambiando UniFi de '$slug'")
-        current <- currentFor(slug)
-      yield current
-
-  /** Stores the location's own settings, the redirect URL and the access duration, as given. */
-  private[mcp] def storeLocationSettings(
-      slug: String,
-      redirectUrl: Option[String],
-      durationMinutes: Option[Int])
-      : ZIO[QuillSqlite, String, UnifiSettings] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
-    import quill.*
+  /** Refuses `slug` a deploy or a resume that would leave it deployed through no access point, or
+    * through one another deployed location takes its guests through: what `deploy_location` and
+    * `resume_location` ask before a location starts taking guests. Deployed is the state recorded
+    * on the location, which a paused one is not, so a paused location's access points are free.
+    */
+  private[mcp] def refuseSharedAccessPoints(slug: String): ZIO[QuillSqlite, String, Unit] =
     for
-      affected <-
-        run(
-          bySlug(lift(slug)).update(
-            _.unifiRedirectUrl     -> lift(redirectUrl),
-            _.unifiDurationMinutes -> lift(durationMinutes),
-            _.updatedAt            -> lift(Instant.now.toString))).orDie
-      _       <- Writes.expectOne(affected, s"Cambiando UniFi de '$slug'")
       current <- currentFor(slug)
-    yield current
+      _       <-
+        ZIO.when(current.accessPoints.isEmpty)(
+          ZIO.fail(
+            s"'$slug' no tiene ningún AP: desplegada, rechazaría a todo invitado. Registrá uno con configure_unifi."))
+      repositories <- ZIO.serviceWith[QuillSqlite](LocationRepositoryQuill(_))
+      _            <-
+        ZIO.foreachDiscard(current.accessPoints.flatMap(point => Mac.parse(point.apMac))): mac =>
+          repositories
+            .deployedHolders(mac)
+            .orDie
+            .flatMap: holders =>
+              ZIO.foreachDiscard(holders.find(_.asString != slug))(other =>
+                ZIO.fail(LocationCommands.describe(LocationError.AccessPointHeld(mac, other))))
+    yield ()
 
-  /** The location's access point with this MAC, or why there is none. */
-  private def pointFor(
-      location: LocationRow,
-      mac: String): ZIO[QuillSqlite, String, AccessPointRow] = ZIO.serviceWithZIO[QuillSqlite]:
-    quill =>
-      import quill.*
-      run(pointOf(lift(location.id), lift(mac)))
-        .orDie
-        .map(_.headOption)
-        .someOrFail(
-          s"'${location.slug}' no tiene un AP con la MAC $mac. get_unifi_config los lista.")
-
-  /** Stores an access point's settings that are not secret, as `point` gives them — its MAC among
-    * them, which may change — leaving its token as it is.
+  /** Registers the access point the page names, or changes it — its controller, the access duration
+    * and the redirect URL — as the operator token `actor`. A blank token keeps the one stored,
+    * which is how the page avoids ever rendering it back; a blank duration or redirect URL clears
+    * it.
     */
-  private[mcp] def storeAccessPoint(
-      slug: String,
-      mac: String,
-      point: AccessPoint): ZIO[QuillSqlite & AssetStore, String, UnifiSettings] = ZIO
-    .serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      for
-        location <- locationFor(slug)
-        _        <- pointFor(location, mac)
-        _        <-
-          ZIO.when(point.apMac != mac)(
-            run(pointOf(lift(location.id), lift(point.apMac)))
-              .orDie
-              .filterOrFail(_.isEmpty)(s"'$slug' ya tiene un AP con la MAC ${point.apMac}.") *>
-              refuseRunningElsewhere(slug, point.apMac))
-        affected <-
-          run(
-            pointOf(lift(location.id), lift(mac)).update(
-              _.mac         -> lift(point.apMac),
-              _.unifiHost   -> lift(point.host),
-              _.unifiPort   -> lift(point.port),
-              _.unifiSiteId -> lift(point.siteId),
-              _.updatedAt   -> lift(Instant.now.toString)
-            )).orDie
-        _       <- Writes.expectOne(affected, s"Cambiando el AP $mac de '$slug'")
-        current <- currentFor(slug)
-      yield current
-      end for
-
-  /** Takes an access point off the location; a guest who arrives through it afterwards is turned
-    * away.
-    */
-  private[mcp] def removeAccessPoint(
-      slug: String,
-      mac: String): ZIO[QuillSqlite, String, UnifiSettings] = ZIO.serviceWithZIO[QuillSqlite]:
-    quill =>
-      import quill.*
-      for
-        location <- locationFor(slug)
-        _        <- pointFor(location, mac)
-        affected <- run(pointOf(lift(location.id), lift(mac)).delete).orDie
-        _        <- Writes.expectOne(affected, s"Quitando el AP $mac de '$slug'")
-        current  <- currentFor(slug)
-      yield current
-
-  /** Refuses `mac` to `slug` while another running location has it: an access point takes the
-    * guests of one running location, which is what the portal dispatcher counts on. Running is
-    * active and not paused — a paused location's page is the maintenance page, and its access
-    * points are free to take.
-    */
-  private[mcp] def refuseRunningElsewhere(
-      slug: String,
-      mac: String): ZIO[QuillSqlite & AssetStore, String, Unit] = ZIO.serviceWithZIO[QuillSqlite]:
-    quill =>
-      import quill.*
-      for
-        holders <- run(query[AccessPointRow].filter(_.mac == lift(mac)).map(_.locationId)).orDie
-        others  <- ZIO
-          .foreach(holders.distinct)(id => run(query[LocationRow].filter(_.id == lift(id))).orDie)
-          .map(_.flatten.filter(other => other.slug != slug && other.isActive == 1))
-        assets  <- ZIO.service[AssetStore]
-        running <- ZIO.filter(others)(other => assets.isPaused(other.slug).map(!_))
-        _       <-
-          ZIO.foreachDiscard(running.headOption)(other =>
-            ZIO.fail(
-              s"El AP $mac ya está en '${other
-                  .slug}', que está activa: un AP lleva a los invitados de una sola location activa. Pausala con pause_location antes de usarlo en '$slug'."))
-      yield ()
-
-  /** Refuses `slug` while another running location shares one of its access points: what
-    * `deploy_location` and `resume_location` ask before a location starts taking guests.
-    */
-  private[mcp] def refuseSharedAccessPoints(
-      slug: String): ZIO[QuillSqlite & AssetStore, String, Unit] = currentFor(slug).flatMap(
-    current =>
-      ZIO.foreachDiscard(current.accessPoints)(point => refuseRunningElsewhere(slug, point.apMac)))
-
-  /** Registers the access point the page names, or changes it, with its controller's settings, and
-    * the location's access duration and redirect URL beside them.
-    */
-  private def save(slug: String, form: Form): ZIO[QuillSqlite & AssetStore, String, String] = ZIO
-    .serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      for
-        location <- locationFor(slug).orElseFail(s"La location '$slug' ya no existe.")
-        rawMac   <- ZIO.fromOption(field(form, "apMac")).orElseFail("Falta la MAC del AP.")
-        mac      <- ZIO.fromEither(macOf(rawMac))
-        host     <- ZIO.fromOption(field(form, "host")).orElseFail("Falta el host.")
-        siteId   <- ZIO.fromOption(field(form, "siteId")).orElseFail("Falta el site id.")
-        existing <- run(pointOf(lift(location.id), lift(mac))).orDie.map(_.headOption)
-        // Kept when the field is blank, which is how the page avoids ever rendering it back; an AP
-        // with no token stored yet has nothing to keep, so there the field is required.
-        token <- ZIO
-          .fromOption(field(form, "apiToken").orElse(existing.map(_.unifiApiToken)))
-          .orElseFail(s"Falta el API token: el AP $mac todavía no tiene uno.")
-        port     <- ZIO.fromEither(number(form, "port", "El puerto"))
-        duration <- ZIO.fromEither(number(form, "durationMinutes", "La duración"))
-        _        <- refuseRunningElsewhere(slug, mac)
-        now = Instant.now.toString
-        written <-
-          existing match
-            case Some(_) =>
-              run(
-                pointOf(lift(location.id), lift(mac)).update(
-                  _.unifiHost     -> lift(host),
-                  _.unifiPort     -> lift(port),
-                  _.unifiSiteId   -> lift(siteId),
-                  _.unifiApiToken -> lift(token),
-                  _.updatedAt     -> lift(now))).orDie
-            case None =>
-              run(
-                query[AccessPointRow].insertValue(
-                  lift(
-                    AccessPointRow(
-                      id = UUID.randomUUID.toString,
-                      locationId = location.id,
-                      mac = mac,
-                      unifiHost = host,
-                      unifiPort = port,
-                      unifiSiteId = siteId,
-                      unifiApiToken = token,
-                      createdAt = now,
-                      updatedAt = now
-                    )))).orDie
-        _        <- Writes.expectOne(written, s"Guardando el AP $mac de '$slug'")
-        affected <-
-          run(
-            bySlug(lift(slug)).update(
-              _.unifiDurationMinutes -> lift(duration),
-              _.unifiRedirectUrl     -> lift(field(form, "redirectUrl")),
-              _.updatedAt            -> lift(now))).orDie
-        _ <- Writes.expectOne(affected, s"Configurando UniFi para '$slug'")
-      // Says what changed without saying what it changed to: this body is shown on the page.
-      yield s"Listo. El AP $mac de '$slug' queda configurado contra $host."
-      end for
+  private def save(slug: String, form: Form, actor: String): ZIO[QuillSqlite, String, String] =
+    for
+      place    <- ZIO.fromEither(Slug.parse(slug)).mapError(LocationCommands.describe)
+      rawMac   <- ZIO.fromOption(field(form, "apMac")).orElseFail("Falta la MAC del AP.")
+      mac      <- ZIO.fromEither(parsedMac(rawMac))
+      host     <- ZIO.fromOption(field(form, "host")).orElseFail("Falta el host.")
+      siteId   <- ZIO.fromOption(field(form, "siteId")).orElseFail("Falta el site id.")
+      port     <- ZIO.fromEither(number(form, "port", "El puerto"))
+      duration <- ZIO.fromEither(number(form, "durationMinutes", "La duración"))
+      _        <-
+        LocationCommands.run(
+          actor,
+          RegisterAccessPointCommand(
+            place,
+            mac,
+            host,
+            port,
+            siteId,
+            field(form, "apiToken").flatMap(Secret.parse),
+            SettingsChange(
+              durationMinutes = Some(duration),
+              redirectUrl = Some(field(form, "redirectUrl"))),
+            Instant.now
+          )
+        )(repositories => RegisterAccessPointHandler[Task](repositories, repositories))
+    // Says what changed without saying what it changed to: this body is shown on the page.
+    yield s"Listo. El AP ${mac.show} de '$slug' queda configurado contra $host."
 
   /** Expiry is separated because it is the one an honest operator hits and the remedy differs.
     * Everything else answers the same way: distinguishing "forged" from "revoked" would tell
@@ -333,7 +205,10 @@ object UiRoutes:
     * being usable. That is the point of keying on the token rather than on a server-wide secret —
     * revocation reaches the pages that token opened, without touching anybody else's.
     */
-  private def slugFor(ticket: String): ZIO[QuillSqlite, UiTicket.Rejected, String] =
+  /** The token that opened the page, which the change is recorded under, and the location it was
+    * opened for.
+    */
+  private def slugFor(ticket: String): ZIO[QuillSqlite, UiTicket.Rejected, (String, String)] =
     UiTicket.tokenIdOf(ticket) match
       case None =>
         ZIO.fail(UiTicket.Rejected.Malformed)
@@ -342,7 +217,9 @@ object UiRoutes:
           .byIdentifier(tokenId)
           .flatMap:
             case Some(row) if row.revokedAt.isEmpty =>
-              ZIO.fromEither(UiTicket.verify(row.tokenSha256, ticket, Instant.now))
+              ZIO
+                .fromEither(UiTicket.verify(row.tokenSha256, ticket, Instant.now))
+                .map(slug => (tokenId, slug))
             case _ =>
               ZIO.fail(UiTicket.Rejected.UnknownToken)
 
@@ -359,8 +236,8 @@ object UiRoutes:
                 ZIO.succeed(rejected(UiTicket.Rejected.Malformed))
               case Some(ticket) =>
                 slugFor(ticket)
-                  .flatMap: slug =>
-                    save(slug, form)
+                  .flatMap: (actor, slug) =>
+                    save(slug, form, actor)
                       .map(text(Status.Ok, _))
                       .catchAll(message => ZIO.succeed(text(Status.BadRequest, message)))
                   .catchAll(reason => ZIO.succeed(rejected(reason))))

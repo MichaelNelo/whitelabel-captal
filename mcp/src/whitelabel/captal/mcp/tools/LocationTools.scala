@@ -4,6 +4,13 @@ import java.util.UUID
 
 import com.jamesward.ziohttp.mcp.*
 import io.getquill.*
+import whitelabel.captal.core.application.commands.{
+  CreateLocationCommand,
+  CreateLocationHandler,
+  RequireFingerprintCommand,
+  RequireFingerprintHandler
+}
+import whitelabel.captal.core.location.{LocationId, Slug}
 import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
 import whitelabel.captal.mcp.{QuillArrow, Writes}
@@ -11,6 +18,7 @@ import whitelabel.captal.platform.{AccessPointRow, LocationRow}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
 import zio.*
+import zio.interop.catz.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
@@ -22,12 +30,6 @@ import ToolSchema.readOnly
   * cookies).
   */
 object LocationTools:
-  /** Max slug length: 25 chars (AWS ALB target group limit of 32 minus "captal-"). */
-  private val MaxSlugLength = 32 - "captal-".length
-
-  /** Kebab-case, stricter than [a-z0-9-]+ (no leading, trailing, or doubled hyphens). */
-  private val SlugPattern = "[a-z0-9]+(-[a-z0-9]+)*".r
-
   /** Top-level prefixes the bucket and the distribution already give a meaning: the shared bundle,
     * the MCP App pages' scripts with their own edge behavior, the client's published releases, and
     * this server's own endpoint. A location there would share its prefix with them.
@@ -100,26 +102,20 @@ object LocationTools:
     configured,
     row.fingerprintIsRequired == 1)
 
-  private def validateSlug(raw: String): ZIO[Any, String, String] =
-    val slug = raw.trim
-    if slug.isEmpty then
-      ZIO.fail("Slug must not be blank.")
-    else if slug.length > MaxSlugLength then
-      ZIO.fail(
-        s"Slug is ${slug
-            .length} characters; the maximum is $MaxSlugLength. It becomes the ALB target group name 'captal-$slug', and AWS caps those at 32.")
-    else if !SlugPattern.matches(slug) then
-      ZIO.fail(
-        s"Slug '$slug' is not kebab-case. Use lowercase letters, digits and single hyphens between them — no spaces, underscores, capitals, or leading, trailing or doubled hyphens.")
-    else if ReservedSlugs.contains(slug) then
-      ZIO.fail(
-        s"Slug '$slug' is reserved: '/$slug/' already means something every location shares, in the assets bucket or at the distribution. Pick another.")
-    else
-      ZIO.succeed(slug)
+  /** The slug `raw` says, as `core` has it shaped, and not one of the prefixes the bucket and the
+    * distribution already give a meaning: that is theirs to say, not the location's.
+    */
+  private def slugOf(raw: String): IO[String, Slug] =
+    ZIO
+      .fromEither(Slug.parse(raw))
+      .mapError(LocationCommands.describe)
+      .filterOrFail(slug => !ReservedSlugs.contains(slug.asString))(
+        s"Slug '${raw.trim}' is reserved: '/${raw
+            .trim}/' already means something every location shares, in the assets bucket or at the distribution. Pick another.")
 
-  private def validateName(raw: String): ZIO[Any, String, String] =
-    val name = raw.trim
-    ZIO.fail("Name must not be blank.").when(name.isEmpty).as(name)
+  private def callerOf(ctx: McpToolContext): IO[String, String] = ZIO
+    .fromOption(Auth.callerId(ctx.principal))
+    .orElseFail("This call carries no operator token to record the change under.")
 
   val list: McpToolHandlerR[QuillSqlite] = McpTool("list_locations")
     .description(
@@ -146,70 +142,43 @@ object LocationTools:
     .description(
       "Create a location: the portal instance the other tools hang content off. The slug is permanent — it becomes the URL prefix, the asset prefix in S3 and the AWS resource names, so it cannot be renamed later. Creates nothing else: the location starts with no translations, so add them with set_translations before deploying or the portal renders raw key names. UniFi credentials are configured separately.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: CreateRequest) =>
-      ZIO.serviceWithZIO[QuillSqlite]: quill =>
-        import quill.*
-        for
-          slug <- validateSlug(in.slug)
-          name <- validateName(in.name)
-          // Unlike `advertisers`, this column really is UNIQUE and rqlite really does reject the
-          // duplicate — but as a field inside an HTTP 200, which the driver turns into zero rows
-          // affected. Without this check `Writes.expectOne` still stops the write, reporting "the
-          // database rejected it silently" and leaving the operator to guess why. Verified by
-          // disabling it: the row stays out, only the message degrades.
-          clashes <- run(bySlugQuery(lift(slug))).orDie
-          _       <-
-            ZIO.when(clashes.nonEmpty)(
-              ZIO.fail(
-                s"A location with slug '$slug' already exists, named '${clashes
-                    .head
-                    .name}'. Slugs are permanent; pick another one."))
-          now = java.time.Instant.now.toString
-          id  = UUID.randomUUID.toString
-          affected <-
-            run(
-              query[LocationRow].insertValue(
-                lift(
-                  LocationRow(
-                    id = id,
-                    slug = slug,
-                    name = name,
-                    isActive = 1,
-                    createdAt = now,
-                    updatedAt = now)))).orDie
-          _ <- Writes.expectOne(affected, s"Creating location '$slug'")
-        yield CreateResponse(id, slug, name, active = true)
-        end for
+    .handleWithContext: (in: CreateRequest, ctx: McpToolContext) =>
+      for
+        slug    <- slugOf(in.slug)
+        caller  <- callerOf(ctx)
+        created <-
+          LocationCommands.run(
+            caller,
+            CreateLocationCommand(
+              LocationId(UUID.randomUUID.toString),
+              slug,
+              in.name,
+              java.time.Instant.now))(CreateLocationHandler[Task](_))
+      yield CreateResponse(created.id.asString, created.slug.asString, created.name, active = true)
 
   val setFingerprintRequired: McpToolHandlerR[QuillSqlite] = McpTool("set_fingerprint_required")
     .description(
       "Whether a location's portal requires the link shortener's fingerprint on the redirect. Off, a guest whose redirect carries none is given one fixed fingerprint instead of being turned away, so their devices are told apart by MAC alone. Takes effect on the next guest, with no redeploy.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: SetFingerprintRequiredRequest) =>
-      ZIO.serviceWithZIO[QuillSqlite]: quill =>
-        import quill.*
-        val slug = in.slug.trim
-        val flag =
-          if in.required then
-            1
-          else
-            0
-        for
-          rows <- run(bySlugQuery(lift(slug))).orDie
-          row  <- ZIO
-            .fromOption(rows.headOption)
-            .orElseFail(s"No location has the slug '$slug'. Call list_locations for the slugs.")
-          affected <-
-            run(
-              query[LocationRow]
-                .filter(_.slug == lift(slug))
-                .update(
-                  _.fingerprintIsRequired -> lift(flag),
-                  _.updatedAt             -> lift(java.time.Instant.now.toString))).orDie
-          _      <- Writes.expectOne(affected, s"Setting whether '$slug' requires a fingerprint")
-          points <- run(query[AccessPointRow].filter(_.locationId == lift(row.id))).orDie
-        yield view(row.copy(fingerprintIsRequired = flag), points.nonEmpty)
-        end for
+    .handleWithContext: (in: SetFingerprintRequiredRequest, ctx: McpToolContext) =>
+      for
+        slug   <- ZIO.fromEither(Slug.parse(in.slug)).mapError(LocationCommands.describe)
+        caller <- callerOf(ctx)
+        _      <-
+          LocationCommands.run(
+            caller,
+            RequireFingerprintCommand(slug, in.required, java.time.Instant.now))(
+            RequireFingerprintHandler[Task](_))
+        found <- ZIO.serviceWithZIO[QuillSqlite]: quill =>
+          import quill.*
+          for
+            rows <- run(bySlugQuery(lift(slug.asString))).orDie
+            row  <- ZIO
+              .fromOption(rows.headOption)
+              .orDieWith(_ => IllegalStateException(slug.asString))
+            points <- run(query[AccessPointRow].filter(_.locationId == lift(row.id))).orDie
+          yield view(row, points.nonEmpty)
+      yield found
 
   /** The slugs, for the prompt's catalogue and for completing the `{slug}` template argument. */
   private[mcp] def slugs: ZIO[QuillSqlite, Nothing, List[String]] = ZIO.serviceWithZIO[QuillSqlite]:

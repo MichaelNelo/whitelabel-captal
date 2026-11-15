@@ -102,11 +102,18 @@ final case class DeployTargets(
     otlpEndpoint: Option[String] = None,
     devEndpoints: Boolean = false):
 
-  /** `captal-<slug>`. AWS caps a target group name at 32 characters, which is where
-    * `LocationTools.MaxSlugLength` comes from; the two have to agree or a slug `create_location`
-    * accepted produces a deploy that cannot name its target group.
+  /** `captal-<slug>` while that fits the 32 characters AWS allows a target group's name; past them,
+    * the slug's first 16 characters and 8 of its hash, the same every time for the same slug. A
+    * slug has no length of its own, so this is where the limit is met; a location whose name fits
+    * keeps the one it always had.
     */
-  def targetGroupName(slug: String): String = s"captal-$slug"
+  def targetGroupName(slug: String): String =
+    val whole = s"captal-$slug"
+    if whole.length <= 32 then
+      whole
+    else
+      val digest = java.security.MessageDigest.getInstance("SHA-256").digest(slug.getBytes("UTF-8"))
+      s"captal-${slug.take(16)}-${digest.take(4).map(b => f"${b & 0xff}%02x").mkString}"
 
   def serviceName(slug: String): String = s"captal-$slug"
 

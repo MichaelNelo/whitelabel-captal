@@ -6,7 +6,7 @@ import whitelabel.captal.mcp.access.{Auth, Tokens}
 import whitelabel.captal.mcp.apps.{RunRoutes, RunTicket, RunUi, UiRoutes}
 import whitelabel.captal.mcp.aws.{AssetStore, BundleCopy, InfraStore, Runs}
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
-import whitelabel.captal.platform.{LocationRow, Terms}
+import whitelabel.captal.platform.{LocationRow, LocationStates, Terms}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
 import zio.*
@@ -98,6 +98,13 @@ object DeployTools:
     .fromOption(Auth.callerId(ctx.principal))
     .orElseFail("Could not tell which token made this call.")
 
+  /** `work`, then, once it succeeded, the location `slug` recorded as `state` by the run `run`:
+    * where `core` reads it stands, until operations are commands of their own.
+    */
+  private def recording[R](slug: String, state: String, run: Runs.Progress)(
+      work: ZIO[R, String, String]): ZIO[R & QuillSqlite, String, String] = work.tap(_ =>
+    ZIO.serviceWithZIO[QuillSqlite](LocationStates.record(_, slug, state, run.runId)).orDie)
+
   /** Tool declaration without store (for testing). */
   private[mcp] val declaration: McpTool = McpTool("deploy_location")
     .description(
@@ -138,7 +145,8 @@ object DeployTools:
         caller   <- callerOf(ctx)
         launched <-
           Runs.launch(in.slug, "deploy", DeploySteps.all, caller)(run =>
-            deploy(store, location, run).map(encode(_)))
+            recording(in.slug, LocationStates.Deployed, run)(
+              deploy(store, location, run).map(encode(_))))
         view <- started(launched, caller, uiOrigin)
       yield view
     .withUi(RunUi.AppUri)
@@ -324,7 +332,8 @@ object DeployTools:
         caller   <- callerOf(ctx)
         launched <-
           Runs.launch(in.slug, "pause", PauseSteps.all, caller)(run =>
-            pause(store, in.slug, run).map(encode(_)))
+            recording(in.slug, LocationStates.Paused, run)(
+              pause(store, in.slug, run).map(encode(_))))
         view <- started(launched, caller, uiOrigin)
       yield view
     .withUi(RunUi.AppUri)
@@ -382,7 +391,8 @@ object DeployTools:
         caller   <- callerOf(ctx)
         launched <-
           Runs.launch(in.slug, "resume", ResumeSteps.all, caller)(run =>
-            resume(store, in.slug, run).map(encode(_)))
+            recording(in.slug, LocationStates.Deployed, run)(
+              resume(store, in.slug, run).map(encode(_))))
         view <- started(launched, caller, uiOrigin)
       yield view
     .withUi(RunUi.AppUri)
@@ -503,7 +513,8 @@ object DeployTools:
             DestroySteps.Keep)
         launched <-
           Runs.launch(in.slug, "destroy", steps, caller)(run =>
-            destroy(store, in.slug, wanted, run).map(encode(_)))
+            recording(in.slug, LocationStates.Destroyed, run)(
+              destroy(store, in.slug, wanted, run).map(encode(_))))
         view <- started(launched, caller, uiOrigin)
       yield view
     .withUi(RunUi.AppUri)
