@@ -19,6 +19,7 @@ import software.amazon.awssdk.services.ecs.model.{
   DeploymentConfiguration,
   DeregisterTaskDefinitionRequest,
   DescribeServicesRequest,
+  DescribeTaskDefinitionRequest,
   KeyValuePair,
   LaunchType,
   ListTaskDefinitionsRequest,
@@ -438,6 +439,18 @@ final case class InfraStore(
         .taskDefinition()
         .taskDefinitionArn()
     .mapError(e => s"Could not register the task definition for $slug: ${e.getMessage}")
+
+  /** The latest active revision of the location's task definition family: what a deploy registered
+    * last, for the steps after the one that registered it to find again rather than be handed.
+    */
+  def latestRevision(slug: String): ZIO[Any, String, String] = ZIO
+    .attemptBlocking:
+      ecs
+        .describeTaskDefinition(
+          DescribeTaskDefinitionRequest.builder().taskDefinition(targets.serviceName(slug)).build())
+        .taskDefinition()
+        .taskDefinitionArn()
+    .mapError(e => s"Could not read the latest task definition of $slug: ${e.getMessage}")
 
   /** Create or update. An existing service is updated in place so a redeploy does not drop the
     * location's traffic; `updateService` has to carry `loadBalancers` too, or a service created

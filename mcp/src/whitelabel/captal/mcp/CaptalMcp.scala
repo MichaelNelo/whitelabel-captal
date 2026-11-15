@@ -14,6 +14,7 @@ import whitelabel.captal.mcp.tools.{
   I18nTools,
   LocationFlows,
   LocationTools,
+  OperationFlows,
   PreviewTools,
   Prompts,
   RecoveryTools,
@@ -134,7 +135,8 @@ object CaptalMcp:
   /** What the tools need from the runtime: the database, the asset store, the tracer, and the flows
     * composed once in [[Main]] with the operator context they log under.
     */
-  type Env = QuillSqlite & AssetStore & Tracing & OperatorContext & LocationFlows.All
+  type Env =
+    QuillSqlite & AssetStore & Tracing & OperatorContext & LocationFlows.All & OperationFlows.Start
 
   /** Auth is not optional: the SDK silently ignores every `requireScopes` declaration when no
     * `.auth(...)` is configured, leaving every tool open to anyone who can reach the port.

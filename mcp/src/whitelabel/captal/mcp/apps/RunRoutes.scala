@@ -1,9 +1,11 @@
 package whitelabel.captal.mcp.apps
 
+import whitelabel.captal.core.application.queries.RunStatusQuery
 import whitelabel.captal.mcp.access.Tokens
-import whitelabel.captal.mcp.aws.Runs
 import whitelabel.captal.mcp.tools.DeployTools
 import whitelabel.captal.mcp.tools.DeployTools.given
+import whitelabel.captal.platform.operations.RunRecords
+import whitelabel.captal.platform.queries.RunStatus
 import whitelabel.captal.platform.schema.QuillSqlite
 import zio.*
 import zio.http.*
@@ -54,11 +56,15 @@ object RunRoutes:
 
   private def events(runId: String): ZStream[QuillSqlite, Nothing, String] = ZStream
     .repeatZIOWithSchedule(
-      Runs.get(runId).flatMap(ZIO.foreach(_)(DeployTools.viewOf(_, alreadyGoing = false))),
-      Schedule.spaced(PollEvery))
+      ZIO
+        .serviceWithZIO[QuillSqlite](RunStatus(_).execute(RunStatusQuery.ById(runId)))
+        .orDie
+        .map(_.toOption.map(DeployTools.viewOf(_, alreadyGoing = false))),
+      Schedule.spaced(PollEvery)
+    )
     .collectSome
     .changes
-    .takeUntil(_.status != Runs.Running)
+    .takeUntil(_.status != RunRecords.Running)
     .map(view => s"data: ${encoder.encodeJson(view, None)}\n\n")
 
   private def stream(runId: String): ZIO[QuillSqlite, Nothing, Response] = ZIO
@@ -90,12 +96,13 @@ object RunRoutes:
                 runIdFor(ticket).foldZIO(
                   _ => ZIO.succeed(text(Status.Forbidden, "Este ticket no es válido.")),
                   runId =>
-                    Runs
-                      .get(runId)
+                    ZIO
+                      .serviceWithZIO[QuillSqlite](RunStatus(_).execute(RunStatusQuery.ById(runId)))
+                      .orDie
                       .flatMap:
-                        case None =>
+                        case Left(_) =>
                           ZIO.succeed(text(Status.NotFound, "Ese run no existe."))
-                        case Some(_) =>
+                        case Right(_) =>
                           stream(runId)
                 ))
 end RunRoutes

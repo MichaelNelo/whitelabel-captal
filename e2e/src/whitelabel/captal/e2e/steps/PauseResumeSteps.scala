@@ -37,8 +37,8 @@ final class PauseResumeSteps extends ScalaDsl with EN:
 
   When("""the operator pauses {string}""") { (name: String) =>
     val finished = operate("pause_location", World.location(name).slug)
-    if finished.paused.isEmpty then
-      throw AssertionError(s"The pause of $name ended without a pause result")
+    if finished.status != "succeeded" then
+      throw AssertionError(s"The pause of $name ended ${finished.status}: ${finished.error}")
   }
 
   When("""the operator resumes {string}""") { (name: String) =>
@@ -53,8 +53,8 @@ final class PauseResumeSteps extends ScalaDsl with EN:
     val finished = Operator.run(
       "destroy_location",
       DeployTools.DestroyRequest(slug = slug, confirm = slug))
-    if finished.destroyed.isEmpty then
-      throw AssertionError(s"The destroy of $name ended without a destroy result")
+    if finished.status != "succeeded" then
+      throw AssertionError(s"The destroy of $name ended ${finished.status}: ${finished.error}")
   }
 
   /** A guest's next step once the location is paused. The portal may have left the question

@@ -4,7 +4,7 @@ import io.opentelemetry.api.trace.SpanKind
 import whitelabel.captal.cdc.protocol.ChangeFeedFollower
 import whitelabel.captal.mcp.access.{Auth, OauthMetadata, Tokens}
 import whitelabel.captal.mcp.apps.{RunRoutes, ScriptDelivery, UiRoutes}
-import whitelabel.captal.mcp.aws.{DeployTargets, InfraStore}
+import whitelabel.captal.mcp.aws.{DeployTargets, InfraSteps, InfraStore}
 import whitelabel.captal.mcp.protocol.{Skills, SkillsExtension}
 import whitelabel.captal.mcp.resources.Readiness
 import whitelabel.captal.mcp.tools.{
@@ -14,6 +14,8 @@ import whitelabel.captal.mcp.tools.{
   I18nTools,
   LocationFlows,
   LocationTools,
+  OperationFlows,
+  OperationRunner,
   PreviewTools,
   RecoveryTools,
   SkillTools,
@@ -26,6 +28,7 @@ import whitelabel.captal.mcp.tools.{
 }
 import whitelabel.captal.platform.{OperatorContext, RqliteDataSource}
 import whitelabel.captal.platform.aws.AssetStore
+import whitelabel.captal.platform.operations.OperationQueue
 import whitelabel.captal.platform.schema.{QuillSqlite, TracedSqlite}
 import whitelabel.captal.telemetry.Telemetry
 import zio.*
@@ -171,6 +174,7 @@ object Main extends ZIOAppDefault:
             // must reach would serve a page whose PUT the browser blocks, and nothing would say so.
             .mapError(new IllegalStateException(_))
             .zipLeft(VideoFileCollector.runner.flatMap(followChanges))
+            .zipLeft(startRunner(infra))
             .flatMap: origin =>
               // Read off the same store, so the origin the pages declare and the URL they name
               // cannot disagree.
@@ -205,13 +209,32 @@ object Main extends ZIOAppDefault:
         .provideLayer(layers(p))
     yield ()
 
+  /** The runner that takes the runs the operation tools start, for as long as the server runs: none
+    * without the deploy configuration, where those tools are not registered either.
+    */
+  private def startRunner(infra: Option[InfraStore]): ZIO[
+    Scope & QuillSqlite & AssetStore & OperatorContext & OperationQueue & OperationFlows.Complete,
+    Nothing,
+    Unit] =
+    ZIO.foreachDiscard(infra): store =>
+      for
+        queue     <- ZIO.service[OperationQueue]
+        quill     <- ZIO.service[QuillSqlite]
+        assets    <- ZIO.service[AssetStore]
+        operators <- ZIO.service[OperatorContext]
+        complete  <- ZIO.service[OperationFlows.Complete]
+        _ <- OperationRunner.start(queue, quill, InfraSteps(store, assets), complete, operators)
+        _ <- ZIO.logInfo("Operation runner started")
+      yield ()
+
+  type Layers =
+    CaptalMcp.Env & Option[InfraStore] & Server & OperationQueue & OperationFlows.Complete
+
   /** Everything the server runs on, built against a declared type, as the API's `appLayers` is: the
     * flows' refined types meet in one intersection, which only a declared target splits back into
     * the layers that make them.
     */
-  private def layers(
-      port: Int): ZLayer[Any, Throwable, CaptalMcp.Env & Option[InfraStore] & Server] = ZLayer.make[
-    CaptalMcp.Env & Option[InfraStore] & Server](
+  private def layers(port: Int): ZLayer[Any, Throwable, Layers] = ZLayer.make[Layers](
     Server.defaultWithPort(port),
     RqliteDataSource.layer,
     AssetStore.layer,
@@ -227,6 +250,9 @@ object Main extends ZIOAppDefault:
     LocationFlows.requireFingerprint,
     LocationFlows.registerAccessPoint,
     LocationFlows.updateAccessPoint,
-    LocationFlows.removeAccessPoint
+    LocationFlows.removeAccessPoint,
+    OperationQueue.layer,
+    OperationFlows.startLayer,
+    OperationFlows.completeLayer
   )
 end Main

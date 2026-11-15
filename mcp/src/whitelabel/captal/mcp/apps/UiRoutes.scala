@@ -10,7 +10,6 @@ import whitelabel.captal.mcp.QuillArrow
 import whitelabel.captal.mcp.access.Tokens
 import whitelabel.captal.mcp.tools.{LocationCommands, LocationFlows}
 import whitelabel.captal.platform.aws.AssetStore
-import whitelabel.captal.platform.repositories.LocationRepositoryQuill
 import whitelabel.captal.platform.{AccessPointRow, LocationRow, Operator, OperatorContext}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
@@ -128,29 +127,6 @@ object UiRoutes:
             ))
       )
       end for
-
-  /** Refuses `slug` a deploy or a resume that would leave it deployed through no access point, or
-    * through one another deployed location takes its guests through: what `deploy_location` and
-    * `resume_location` ask before a location starts taking guests. Deployed is the state recorded
-    * on the location, which a paused one is not, so a paused location's access points are free.
-    */
-  private[mcp] def refuseSharedAccessPoints(slug: String): ZIO[QuillSqlite, String, Unit] =
-    for
-      current <- currentFor(slug)
-      _       <-
-        ZIO.when(current.accessPoints.isEmpty)(
-          ZIO.fail(
-            s"'$slug' no tiene ningún AP: desplegada, rechazaría a todo invitado. Registrá uno con configure_unifi."))
-      repositories <- ZIO.serviceWith[QuillSqlite](LocationRepositoryQuill(_))
-      _            <-
-        ZIO.foreachDiscard(current.accessPoints.flatMap(point => Mac.parse(point.apMac))): mac =>
-          repositories
-            .deployedHolders(mac)
-            .orDie
-            .flatMap: holders =>
-              ZIO.foreachDiscard(holders.find(_.asString != slug))(other =>
-                ZIO.fail(LocationCommands.describe(LocationError.AccessPointHeld(mac, other))))
-    yield ()
 
   /** Registers the access point the page names, or changes it — its controller, the access duration
     * and the redirect URL — as the operator token `actor`. A blank token keeps the one stored,

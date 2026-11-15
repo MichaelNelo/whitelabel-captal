@@ -25,9 +25,11 @@ import software.amazon.awssdk.services.s3.model.{
   PutObjectRequest
 }
 import whitelabel.captal.core.i18n.{I18n, I18nSchema}
+import whitelabel.captal.core.operation.Step as CoreStep
 import whitelabel.captal.mcp.access.{Auth, Tokens}
 import whitelabel.captal.mcp.apps.RunRoutes
-import whitelabel.captal.mcp.aws.{DeployTargets, InfraStore}
+import whitelabel.captal.mcp.aws.{DeployTargets, InfraSteps, InfraStore}
+import whitelabel.captal.platform.operations.OperationQueue
 import whitelabel.captal.mcp.resources.Readiness
 import whitelabel.captal.mcp.tools.{
   AdvertiserTools,
@@ -39,6 +41,8 @@ import whitelabel.captal.mcp.tools.{
   LocalizedText,
   LocationFlows,
   LocationTools,
+  OperationFlows,
+  OperationRunner,
   PlaybackExpiry,
   SurveyTools,
   TermsTools,
@@ -52,6 +56,7 @@ import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.telemetry.{Telemetry, Tracing}
 import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.{
+  AccessPointRow,
   AdvertiserRow,
   AdvertiserVideoRow,
   LocalizedTextRow,
@@ -203,16 +208,24 @@ object DeployE2ESpec extends ZIOSpecDefault:
       body <- response.body.asString
     yield (response.status, body)
 
-  /** The operation's own result from a finished run, or a failure saying where it stopped. */
-  private def resultOf[A](run: DeployTools.RunView)(pick: DeployTools.RunView => Option[A]): A =
-    pick(run).getOrElse(
+  /** A finished run that succeeded, or a failure saying where it stopped. */
+  private def succeeded(run: DeployTools.RunView): DeployTools.RunView =
+    if run.status == "succeeded" then
+      run
+    else
       throw new AssertionError(
         s"The ${run.operation} of ${run.slug} ended ${run.status}: ${run
             .error
             .getOrElse("no error recorded")}. Steps: ${run
             .steps
             .map(step => s"${step.name}=${step.state}")
-            .mkString(", ")}"))
+            .mkString(", ")}")
+
+  /** What the step `step` of a run found, as the run's page shows it. */
+  private def noteOf(run: DeployTools.RunView, step: CoreStep): Option[String] = run
+    .steps
+    .find(_.name == step.description)
+    .flatMap(_.detail)
 
   private def text(value: String) = LocalizedText(Locale, value)
 
@@ -341,6 +354,17 @@ object DeployE2ESpec extends ZIOSpecDefault:
       tracing    <- Telemetry.noop.build.map(_.get[Tracing])
       operators  <- Operators.make.build.map(_.get)
       extensions <- CaptalMcp.extensions
+      // The runs the operation tools start, taken by a runner as `Main` starts one.
+      queue <- OperationQueue.layer.build.map(_.get)
+      start = OperationFlows.start(env.get[QuillSqlite], operators, queue)
+      _ <-
+        ZIO.foreachDiscard(infra)(store =>
+          OperationRunner.start(
+            queue,
+            env.get[QuillSqlite],
+            InfraSteps(store, env.get[AssetStore]),
+            OperationFlows.complete(env.get[QuillSqlite], operators),
+            operators))
       routes = CaptalMcp
         .server(
           Auth.mcpAuth(resource),
@@ -352,7 +376,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
           extensions)
         .statelessRoutes
         .provideEnvironment(
-          env.add(tracing).add[Operators](operators) ++
+          env.add(tracing).add[Operators](operators).add[OperationFlows.Start](start) ++
             LocationFlows.environment(env.get[QuillSqlite], operators))
       _ <- TestClient.addRoutes(routes)
       // The run page's stream, which lives beside the protocol rather than inside it.
@@ -643,6 +667,28 @@ object DeployE2ESpec extends ZIOSpecDefault:
 
       video       <- buildContent(client)
       replacement <- replaceFile(client, video.videoId)
+      // An access point, which a deploy needs: written as the UniFi page's save would, since that
+      // page posts under a ticket rather than through a tool.
+      _ <- ZIO.serviceWithZIO[QuillSqlite]: quill =>
+        import quill.*
+        for
+          location <- quill.run(query[LocationRow].filter(_.slug == lift(Slug))).map(_.head)
+          now = java.time.Instant.now.toString
+          _ <- quill.run(
+            query[AccessPointRow].insertValue(
+              lift(
+                AccessPointRow(
+                  id = s"$Slug-ap",
+                  locationId = location.id,
+                  mac = "1c:6a:1b:ee:5c:be",
+                  unifiHost = "unifi.e2e.test",
+                  unifiPort = None,
+                  unifiSiteId = "default",
+                  unifiApiToken = "token",
+                  createdAt = now,
+                  updatedAt = now
+                ))))
+        yield ()
 
       // The content half, read back through the tool an operator would call.
       ready <- client.tool[Readiness.ReadinessRequest, Readiness.LocationReadiness](
@@ -655,7 +701,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
         "deploy_location",
         DeployTools.DeployRequest(Slug))
       deployDone <- client.awaitRun(deployRun)
-      deployed = resultOf(deployDone)(_.deployed)
+      deployed = succeeded(deployDone)
       // What the run page does with the same answer: follow the run through its own stream, which
       // a ticket for another run, or for nothing, does not open.
       watch <- ZIO
@@ -664,14 +710,13 @@ object DeployE2ESpec extends ZIOSpecDefault:
       streamed <- readStream(watch.streamUrl, watch.ticket)
       forged   <- readStream(watch.streamUrl, watch.ticket + "x")
 
-      // Again, which is both what a redeploy does and the only history-independent way
-      // to observe `created`. The first call's value depends on whether a previous run
-      // left the service behind — asserting it was true passed once and never again. It
-      // also waits for the new revision to settle while the previous one still runs.
-      redeployRun <- client.tool[DeployTools.DeployRequest, DeployTools.RunView](
-        "deploy_location",
-        DeployTools.DeployRequest(Slug))
-      redeployed <- client.awaitRun(redeployRun).map(resultOf(_)(_.deployed))
+      // Again, which a deployed location refuses: new images and bundles reach it through the
+      // release, so a deploy has nothing to do.
+      redeploy <-
+        client
+          .callToolAs[DeployTools.RunView]("deploy_location", args(DeployTools.DeployRequest(Slug)))
+          .either
+      revision <- store.latestRevision(Slug).mapError(new AssertionError(_))
 
       // What AWS actually has, asked of AWS rather than read back from the response
       // that claimed to have created it.
@@ -691,10 +736,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
         store
           .ecs
           .describeTaskDefinition(
-            DescribeTaskDefinitionRequest
-              .builder()
-              .taskDefinition(redeployed.taskDefinitionArn)
-              .build())
+            DescribeTaskDefinitionRequest.builder().taskDefinition(revision).build())
           .taskDefinition()
           .containerDefinitions()
           .get(0)
@@ -731,7 +773,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
       pauseRun <- client.tool[DeployTools.PauseRequest, DeployTools.RunView](
         "pause_location",
         DeployTools.PauseRequest(Slug))
-      paused <- client.awaitRun(pauseRun).map(resultOf(_)(_.paused))
+      paused <- client.awaitRun(pauseRun).map(succeeded)
       // What the edge now serves for this location, and what it does not.
       pausedIndex <- objectText(AssetStore.indexKey(Slug))
       savedPage   <- objectText(AssetStore.savedPageKey(Slug))
@@ -783,7 +825,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
       resumeRun <- client.tool[DeployTools.PauseRequest, DeployTools.RunView](
         "resume_location",
         DeployTools.PauseRequest(Slug))
-      resumed      <- client.awaitRun(resumeRun).map(resultOf(_)(_.resumed))
+      resumed      <- client.awaitRun(resumeRun).map(succeeded)
       resumedIndex <- objectText(AssetStore.indexKey(Slug))
       savedGone    <- ZIO
         .serviceWithZIO[AssetStore](_.exists(AssetStore.savedPageKey(Slug)))
@@ -801,20 +843,20 @@ object DeployE2ESpec extends ZIOSpecDefault:
             args(DeployTools.DestroyRequest(Slug, "not-the-slug")))
           .either
       // Twice, because the question about the S3 objects is answered differently each time — see
-      // `answerElicitations`. The first run proves the safe default and the second proves the
-      // delete, and together they prove a teardown can follow a teardown. The question is asked in
-      // the call; only the teardown is a run.
+      // `connect`. The first run proves the safe default and the second proves the delete, and
+      // together they prove a teardown can follow a teardown. The question is asked in the call,
+      // before the command; only the teardown is a run.
       declinedRun <- client.tool[DeployTools.DestroyRequest, DeployTools.RunView](
         "destroy_location",
         DeployTools.DestroyRequest(Slug, Slug))
-      declined <- client.awaitRun(declinedRun).map(resultOf(_)(_.destroyed))
+      declined <- client.awaitRun(declinedRun).map(succeeded)
       iconKept <- ZIO
         .serviceWithZIO[AssetStore](_.get(Slug, Asset.BrandIcon))
         .mapError(new AssertionError(_))
       destroyedRun <- client.tool[DeployTools.DestroyRequest, DeployTools.RunView](
         "destroy_location",
         DeployTools.DestroyRequest(Slug, Slug))
-      destroyed <- client.awaitRun(destroyedRun).map(resultOf(_)(_.destroyed))
+      destroyed <- client.awaitRun(destroyedRun).map(succeeded)
       // A deleted service lingers as INACTIVE rather than vanishing, which is the state
       // `upsertService` already knows to create over.
       servicesAfter <- ZIO.attemptBlocking:
@@ -883,13 +925,10 @@ object DeployE2ESpec extends ZIOSpecDefault:
         // the token's scopes let this caller see it.
         tools.exists(_.name.value == "deploy_location"),
         tools.exists(_.name.value == "create_location"),
-        // Content: one step left, and it is the one no tool call can close. UniFi
-        // credentials never travel as tool arguments — they are posted to this server's
-        // own page under an HMAC ticket, precisely so a token stays out of the
-        // conversation. Asserted exactly rather than as a count, so anything else
-        // appearing here fails with its own text.
-        ready.nextSteps.size == 1,
-        ready.nextSteps.head.startsWith("UniFi is not fully configured"),
+        // Content: nothing left, the access point included. Asserted exactly rather than as a
+        // count, so anything appearing here fails with its own text.
+        ready.nextSteps == Nil,
+        ready.unifiConfigured,
         ready.active,
         ready.hasStyles,
         ready.hasIcon,
@@ -914,22 +953,14 @@ object DeployE2ESpec extends ZIOSpecDefault:
         streamed._2.startsWith("data: "),
         streamed._2.contains("\"status\":\"succeeded\""),
         forged._1 == Status.Forbidden,
-        // The bundle copy, which is what makes the portal's own page exist. Two of the
-        // Three of the five published: the bundle's default icon is skipped because
-        // this location set one, and `maintenance.html` is never copied per location —
-        // it would be a public URL at every slug serving a maintenance page to guests
-        // of a perfectly healthy portal.
-        deployed.bundleObjects == 3,
-        deployed.iconPreserved,
-        deployed.pathPattern == pattern,
-        // Idempotent: the second call updates rather than creating a second anything,
-        // and reuses the target group and the rule it found. A fresh task definition
-        // revision each time is the one thing that is meant to differ.
-        !redeployed.created,
-        redeployed.targetGroupArn == deployed.targetGroupArn,
-        redeployed.ruleArn == deployed.ruleArn,
-        redeployed.serviceArn == deployed.serviceArn,
-        redeployed.taskDefinitionArn != deployed.taskDefinitionArn
+        // The bundle copy, which is what makes the portal's own page exist. Three of the five
+        // published: the bundle's default icon is skipped because this location set one, and
+        // `maintenance.html` is never copied per location — it would be a public URL at every slug
+        // serving a maintenance page to guests of a perfectly healthy portal.
+        noteOf(deployed, CoreStep.CopyBundle).contains("3 objects"),
+        // A deployed location refuses a second deploy rather than rolling it again.
+        redeploy.isLeft,
+        redeploy.left.exists(_.toString.contains("deployed already"))
       ) &&
       assertTrue(
         // Infrastructure, as AWS reports it.
@@ -970,7 +1001,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
         // Paused: no tasks asked for, and the rule answering rather than forwarding.
         // Both halves matter — at zero tasks a forward rule returns an empty 503, which
         // the portal cannot tell from an outage.
-        paused.scaledToZero,
+        paused.steps.forall(_.state == "done"),
         pausedCount == Some(0),
         pausedRule,
         // The exact body, and that it parses the way the SPA parses it. The two sides
@@ -985,8 +1016,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
         pausedForwards
       ) &&
       assertTrue(
-        paused.answersWith == InfraStore.PausedBody,
-        // And it wrote nothing: still one location, still active.
+        // And it wrote nothing of the content: still one location, still active.
         pausedRows.size == 1,
         pausedRows.head.isActive == 1,
 
@@ -1001,32 +1031,29 @@ object DeployE2ESpec extends ZIOSpecDefault:
 
         // Resumed: the page that was live is back, the saved copy is gone, and the API
         // is forwarding again with one task asked for.
-        resumed.pageRestored,
+        noteOf(resumed, CoreStep.RestorePage).isEmpty,
         resumedIndex == liveBefore,
         !savedGone,
         resumedCount == Some(1),
         !resumedRule,
-        resumed.targetGroupArn == deployed.targetGroupArn,
 
         // Destroyed, but only after the confirmation matched.
         refused.isLeft,
         // The first run took the infrastructure and declined the objects — the safe default, and it
         // is a default rather than a special case: an unanswered elicitation decodes as `decline`,
         // so a host that cannot ask keeps them too.
-        declined.serviceDeleted,
-        declined.rulesDeleted == 1,
-        declined.targetGroupDeleted,
-        declined.taskDefinitionsDeregistered >= 2,
-        declined.drained,
-        declined.assetsKept,
-        declined.objectsDeleted == 0,
+        noteOf(declined, CoreStep.Teardown).exists(note =>
+          note.startsWith("Service deleted") && note.contains("1 rule(s)") &&
+            note.contains("target group deleted")),
+        noteOf(declined, CoreStep.AwaitDrained).isEmpty,
+        declined.steps.exists(_.name == CoreStep.KeepAssets.description),
         iconKept.exists(_.contains("<rect")),
         // The second finds the infrastructure gone, which is what makes a teardown safe to re-run,
         // and this time accepts.
-        !destroyed.serviceDeleted,
-        destroyed.rulesDeleted == 0,
-        !destroyed.targetGroupDeleted,
-        !destroyed.assetsKept,
+        noteOf(destroyed, CoreStep.Teardown).exists(note =>
+          note.startsWith("Service already gone") && note.contains("0 rule(s)") &&
+            note.contains("target group already gone")),
+        destroyed.steps.exists(_.name == CoreStep.DeleteAssets.description),
         // As AWS reports it: no live service, no rule for this path, no target group.
         !servicesAfter.stream().anyMatch(service => service.status() != "INACTIVE"),
         !rulesAfter
@@ -1036,7 +1063,8 @@ object DeployE2ESpec extends ZIOSpecDefault:
         targetGroupAfter == 0,
         // The log group survives, because it says why this happened.
         logGroupsAfter == 1,
-        destroyed.logGroupKept == store.targets.logGroup(Slug),
+        noteOf(destroyed, CoreStep.Teardown).exists(
+          _.endsWith(s"${store.targets.logGroup(Slug)} kept")),
         // The database survives all of it, which is what keeps a teardown reversible: the location,
         // its translations and its surveys are there and `deploy_location` can stand the portal
         // back up.
@@ -1044,7 +1072,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
         videosAfter.size == 1,
         // The bucket does not, and this is the half the rows cannot tell you about — the video rows
         // just asserted still say `active` and their files are gone.
-        destroyed.objectsDeleted > 0,
+        noteOf(destroyed, CoreStep.DeleteAssets).exists(note => !note.startsWith("0 ")),
         iconAfter.isEmpty,
         indexAfter.isEmpty,
         // A slug that merely starts with this one keeps everything. `cafe/` matching `cafe-centro`

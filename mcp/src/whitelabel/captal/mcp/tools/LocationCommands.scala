@@ -66,7 +66,7 @@ object LocationCommands:
             .asString}' is deployed already, so a deploy has nothing to do: a new image or bundle reaches every location through the release. Use pause_location and resume_location to take it out of service and back."
       case LocationError.NotAllowedFrom(state, operation) =>
         s"A ${operation
-            .name} does not apply to a location that is $state: deploy from created or destroyed, pause from deployed, resume from paused, destroy from deployed or paused."
+            .name} does not apply to a location that is $state: deploy from created or destroyed, pause from deployed, resume from paused; destroy from any state."
       case LocationError.NoTermsOfService =>
         "No terms of service exist yet, and a portal cannot start a guest without them. Create the first version with create_terms_version, then try again."
       case LocationError.NoAccessPoint =>
