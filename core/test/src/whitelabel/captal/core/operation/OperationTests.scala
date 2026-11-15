@@ -237,6 +237,18 @@ object OperationTests extends TestSuite:
         assert(
           outcome(finishing) == started(Operation.Deploy, failed.pending, Some(failed.id), None))
 
+      // A deploy that failed part way leaves the location created, with resources in AWS.
+      test("destroys from any state, a created location included"):
+        val steps = List(Step.ScaleToZero, Step.AwaitDrained, Step.Teardown, Step.DeleteAssets)
+        assert(
+          outcome(starting().handle(start(Operation.Destroy(deleteAssets = true)))) ==
+            started(Operation.Destroy(true), steps),
+          outcome(
+            starting(location = Some(at(State.Destroyed(RunId("run-0"))))).handle(
+              start(Operation.Destroy(deleteAssets = true)))) ==
+            started(Operation.Destroy(true), steps)
+        )
+
       test("destroys over a run left part way, which it removes along with the rest"):
         val stale = run(
           Operation.Pause,

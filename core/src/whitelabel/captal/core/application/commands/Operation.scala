@@ -51,7 +51,8 @@ final case class StartOperationCommand(
   *     whatever is there, half changed or not;
   *   - the state the location is in, which the operation has to leave: a deploy of a deployed one
   *     is [[LocationError.AlreadyDeployed]], anything else out of place
-  *     [[LocationError.NotAllowedFrom]];
+  *     [[LocationError.NotAllowedFrom]]. A destroy leaves every state, since whatever stands in AWS
+  *     — a deploy that failed part way included — is what it removes;
   *   - for a deploy or a resume, which take guests: the terms of service in force, an access point
   *     at least, and none of them taking another deployed location's guests.
   *
@@ -143,7 +144,9 @@ object StartOperationHandler:
             None
           case (_: State.Paused, Operation.Resume) =>
             None
-          case (_: State.Deployed | _: State.Paused, Operation.Destroy(_)) =>
+          // From any state: a deploy that failed part way leaves the location created, or still
+          // destroyed, with resources standing in AWS, and a destroy is what removes them.
+          case (_, Operation.Destroy(_)) =>
             None
           case (state, _) =>
             Some(LocationError.NotAllowedFrom(nameOf(state), operation))
