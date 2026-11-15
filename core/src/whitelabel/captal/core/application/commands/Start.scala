@@ -17,33 +17,6 @@ import whitelabel.captal.core.infrastructure.{DeviceRepository, SessionData, Ter
   */
 private val AfterWelcome = NextStep(Phase.IdentificationQuestion)
 
-/** @param anonymous
-  *   whether the request carried neither the session nor the user cookie: a visitor nothing is
-  *   known about, asked to accept the terms whatever its device accepted.
-  */
-final case class ResolveWelcomeCommand(anonymous: Boolean, occurredAt: Instant)
-
-/** Which welcome the session's device is shown: `Welcome` once it accepted the terms of service in
-  * force, `WelcomeNeedsToS` until then. Emits nothing.
-  */
-object ResolveWelcomeHandler:
-  def withSession[F[_]: Monad](
-      devices: DeviceRepository[F],
-      session: SessionData): Handler.Aux[F, ResolveWelcomeCommand, NextStep] =
-    new Handler[F, ResolveWelcomeCommand]:
-      type Result = NextStep
-
-      def handle(cmd: ResolveWelcomeCommand) = devices
-        .findAccepted()
-        .map: accepted =>
-          val phase =
-            if !cmd.anonymous && accepted.isDefined then
-              Phase.Welcome
-            else
-              Phase.WelcomeNeedsToS
-          core.Op.pure[Event, Error, NextStep](NextStep(phase))
-end ResolveWelcomeHandler
-
 final case class StartCommand(occurredAt: Instant)
 
 /** Leaves the welcome, for a device that accepted the terms of service in force. One that has not

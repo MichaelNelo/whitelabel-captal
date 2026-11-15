@@ -23,4 +23,4 @@ trait DeviceLookup[F[_]]:
     */
   def matching(seen: Signals): F[Option[Device[State]]]
 
-  def find(id: user.DeviceId): F[Option[Device[State]]]
+  def byId(id: user.DeviceId): F[Option[Device[State]]]

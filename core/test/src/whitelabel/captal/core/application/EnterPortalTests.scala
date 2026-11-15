@@ -81,7 +81,7 @@ object EnterPortalTests extends TestSuite:
     ,
     new DeviceLookup[Id]:
       def matching(seen: Signals) = device
-      def find(id: user.DeviceId) = device.filter(_.id == id)
+      def byId(id: user.DeviceId) = device.filter(_.id == id)
     ,
     new UserDirectory[Id]:
       def exists(id: user.Id) = users.contains(id)
@@ -163,6 +163,12 @@ object EnterPortalTests extends TestSuite:
             List((KnownDevice, Some(KnownUser), Phase.Welcome)),
           entered.phase == Phase.Welcome
         )
+      test("asking a stranger for the terms whatever its device accepted"):
+        val Right((_, entered)) =
+          Op.run(
+            handler(device = Some(accepted(KnownDevice))).handle(
+              enter(anonymous = true))): @unchecked
+        assert(entered.phase == Phase.WelcomeNeedsToS)
       test("under no user when the one the cookie names is gone"):
         val Right((events, _)) =
           Op.run(handler().handle(enter(userId = Some(KnownUser)))): @unchecked

@@ -51,20 +51,6 @@ object TermsTests extends TestSuite:
         accepted.state == State.Accepted(InForce.id, Now),
         events == List(device.Event.TermsAccepted(DeviceId, InForce.id, Now)))
 
-    test("the welcome is WelcomeNeedsToS until the device accepted them, and for a stranger"):
-      def phaseOf(accepted: Boolean, anonymous: Boolean) = Op
-        .run(
-          ResolveWelcomeHandler
-            .withSession(devices(accepted), session)
-            .handle(ResolveWelcomeCommand(anonymous, Now)))
-        .toOption
-        .map(_._2.phase)
-      assert(
-        phaseOf(accepted = true, anonymous = false).contains(Phase.Welcome),
-        phaseOf(accepted = false, anonymous = false).contains(Phase.WelcomeNeedsToS),
-        phaseOf(accepted = true, anonymous = true).contains(Phase.WelcomeNeedsToS)
-      )
-
     test("starting needs them accepted"):
       def started(accepted: Boolean) = Op.run(
         StartHandler.withSession(devices(accepted), session).handle(StartCommand(Now)))

@@ -129,9 +129,8 @@ object EnterPortalHandler:
                           case None =>
                             refused(
                               Error.InvalidClient(
-                                List(
-                                  Option.when(clientMac.isEmpty)(RedirectField.ClientMac),
-                                  Option.when(apMac.isEmpty)(RedirectField.AccessPoint)).flatten))
+                                RedirectField.ClientMac ::
+                                  Option.when(apMac.isEmpty)(RedirectField.AccessPoint).toList))
               end match
       end handle
 
@@ -180,7 +179,7 @@ object EnterPortalHandler:
         val atWelcome = stored == Phase.Welcome || stored == Phase.WelcomeNeedsToS
         val decided =
           if atWelcome then
-            devices.find(session.deviceId).map(device => welcome(device, cmd.anonymous))
+            devices.byId(session.deviceId).map(device => welcome(device, cmd.anonymous))
           else
             Monad[F].pure(stored)
         decided.map: phase =>
