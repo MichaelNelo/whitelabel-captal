@@ -596,9 +596,14 @@ before this variable existed has none until its next `deploy_location`.
 rule, task definition, service — because `CreateService` with a `loadBalancers` block fails with
 "no associated load balancer" when the target group is not yet reachable through a listener; the
 rule has to exist first. `pause_location` updates the edge (swaps in the maintenance page, waits out
-the CloudFront invalidation) *before* touching the API (repoint the rule to a fixed `503` JSON
-response, scale the service to zero) — so a guest is never told "paused" by a page that still looks
-live. `resume_location` reverses that order. `destroy_location` requires the slug typed back as
+the CloudFront invalidation) *before* touching the API (put a rule above the location's forward rule
+that answers with a fixed `503` JSON response, scale the service to zero) — so a guest is never told
+"paused" by a page that still looks live. The forward rule stays under it, so the target group stays
+reachable through the listener: a release moving every location onto a new API image updates the
+paused ones' services too, and ECS refuses that deployment with the same "no associated load
+balancer" when no rule forwards to the service's target group. `resume_location` reverses the order
+and drops the answering rule.
+`destroy_location` requires the slug typed back as
 confirmation, removes the service, the rule, the target group and every task-definition revision for
 the family, and — only if an operator explicitly says yes to an elicitation — the location's S3
 prefix (its bundle copy, stylesheet, icon and uploaded videos). It keeps the log group on purpose and
