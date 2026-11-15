@@ -85,10 +85,12 @@ container.
 * **There is no slug.** `ApiBase.none` is what `apiBaseLayer` provides, so every route in this
   suite mounts unprefixed at `/api/...`. The slug-prefixed form has no automated coverage; see
   <<What is deliberately not covered>>. The location is `CurrentLocation.empty` too, so
-  `/api/status` checks no access point, and `UnifiAccessHandler` is given one test controller and
-  one switch, `TestUnifiSwitch`, for every session's AP. A test that needs a served location builds
-  a `/api/status` backend for one, seeding its access points with `TestFixtures.seedAccessPoint`,
-  each with its own switch.
+  `/api/status` checks neither a deployed state nor an access point, and `UnifiAccessHandler` is
+  given one test controller and one switch, `TestUnifiSwitch`, for every session's AP. A test that
+  needs a served location builds a `/api/status` backend for one, seeding the location deployed —
+  `TestFixtures.seedLocation` does unless told `deployed = false`, since the portal admits guests
+  only into a deployed location — and its access points with `TestFixtures.seedAccessPoint`, each
+  with its own switch.
 
 `TestFixtures.scala` is the seeding and read-back layer the suites share: `seedEmailSurvey`,
 `seedProfilingSurvey`, `seedAllIdentificationSurveys`, `seedMultiQuestionProfilingSurvey`,

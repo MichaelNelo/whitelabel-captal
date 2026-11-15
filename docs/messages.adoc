@@ -165,7 +165,7 @@ final case class StatusResponse(
 | `locale` | the session's locale
 | `redirectUrl` | the captive-portal return URL, present only when the session stored a non-empty one
 | `secondsRemaining` | server-computed seconds of access left, present only while the session is `Authorized` with an `accessExpiresAt`
-| `recovery` | the id of a server error recorded while `/api/status` created this session — today, a redirect without the fingerprint its location requires. The page leaves through it at once (`Recovery.serverError`). A field of a success rather than an error, because the session cookie travels only with a success and the way out needs the session
+| `recovery` | the id of a server error recorded as `/api/status` started this session — today, a redirect without the fingerprint its location requires. The page leaves through it at once (`Recovery.serverError`). A field of a success rather than an error, because the session cookie travels only with a success and the way out needs the session
 |===
 
 `accessExpiresAt` is **not** a field of this response. It is session state (`sessions.access_expires_at`, surfaced in `core.infrastructure.SessionData`), and the only thing the client receives is the difference:
@@ -180,7 +180,7 @@ def secondsRemainingFrom(expiresAt: Option[Instant], now: Instant): Option[Int] 
 
 IMPORTANT: the client must count down from `secondsRemaining`, never from an absolute instant. Behind a captive portal the device clock may be unsynced, so an absolute deadline is not comparable against `Date.now()`. The type is `Int` rather than `Long` because Scala.js has no native 64-bit integers.
 
-`GET /api/status` has a second behaviour worth knowing: when the session is `Authorized` and its `accessExpiresAt` is already in the past, the route resets the session and answers `StatusResponse(Phase.Welcome, locale, None)` — no `secondsRemaining`. `POST /api/finish` re-reads the session after the post-commit handlers ran, so the `phase` it returns is `Authorized` only if the UniFi grant succeeded (see xref:unifi.adoc[UniFi integration]).
+`GET /api/status` has a second behaviour worth knowing: when the session is `Authorized` and its `accessExpiresAt` is already in the past, `EnterPortalCommand` resets the session and the route answers the welcome — `Welcome` or `WelcomeNeedsToS`, as the device's terms decide — with no `redirectUrl` and no `secondsRemaining`. `POST /api/finish` re-reads the session after the post-commit handlers ran, so the `phase` it returns is `Authorized` only if the UniFi grant succeeded (see xref:unifi.adoc[UniFi integration]).
 
 === I18n
 
@@ -206,9 +206,9 @@ IMPORTANT: the client must count down from `secondsRemaining`, never from an abs
 |===
 | Variant | Payload | Produced by
 
-| `SessionMissing` | — | `SessionEndpoint` when no session can be resolved or created; also `ApiErrors.toApiError` for `SessionContext.NotSet`
-| `SessionInvalid` | `reason: String` | `SessionEndpoint.resolveSession` on a malformed session cookie
-| `SessionExpired` | — | `SessionEndpoint.resolveSession` when the cookie names a session that no longer exists and the route does not create one
+| `SessionMissing` | — | `SessionEndpoint` when the request carries no session cookie; also `ApiErrors.toApiError` for `SessionContext.NotSet`
+| `SessionInvalid` | `reason: String` | `SessionEndpoint.resolveSession`, and `GET /api/status`, on a malformed session cookie
+| `SessionExpired` | — | `SessionEndpoint.resolveSession` when the cookie names a session that no longer exists
 | `WrongPhase` | `current: String`, `expected: List[String]` | `SessionEndpoint.authorise` when the session's phase is not in the route's allowed set
 | `NoSurveyAssigned` | — | `Error.NoSurveyAssigned`
 | `UserNotIdentified` | — | `Error.UserNotIdentified`
@@ -241,8 +241,9 @@ IMPORTANT: the client must count down from `secondsRemaining`, never from an abs
 | `StaleVideoFile` | `videoId`, `videoUrl` | `video.Error.StaleFile`
 | `InvalidPlaybackId` | `value` | the playback routes, for an id that is not a UUID
 | `LocationNotFound` | `slug: String` | nothing constructs it today
-| `UnknownAccessPoint` | `apMac: String` | `SurveyRoutes.requireAccessPoint`, for a redirect into a served location through an access point that is not one of the location's, the MAC as `Mac.show` writes it. An expected refusal, not recorded in `errors`; the client shows `error.unknownAccessPoint` with no retry
-| `InvalidClient` | `missing: List[String]` | `GET /api/status`, for a page reached without the network's redirect: no session and no readable `X-Client-Mac`, or a served location's redirect with no readable `X-Ap-Mac`. `missing` names those headers. An expected refusal, not recorded in `errors`; the client shows `error.invalidClient` with no retry
+| `UnknownAccessPoint` | `apMac: String` | `Error.UnknownAccessPoint`, from `EnterPortalCommand` at `GET /api/status`: a redirect into a served location through an access point that is not one of the location's, the MAC as `Mac.show` writes it. An expected refusal, not recorded in `errors`; the client shows `error.unknownAccessPoint` with no retry
+| `InvalidClient` | `missing: List[String]` | `Error.InvalidClient`, from `EnterPortalCommand` at `GET /api/status`: a page reached without the network's redirect — no session and no readable `X-Client-Mac`, or a served location's redirect with no readable `X-Ap-Mac`. `missing` names those headers, each `RedirectField` as the header it arrives in. An expected refusal, not recorded in `errors`; the client shows `error.invalidClient` with no retry
+| `LocationNotDeployed` | `location: String` | `Error.LocationNotDeployed`, from `EnterPortalCommand` at `GET /api/status`, on every call while the served location is not deployed — still being stood up, or an operation on it did not finish; `location` is its id. An expected refusal: no session, nothing recorded in `errors`; the client shows `error.generic` with a retry
 | `UnknownError` | `errorId` | `recovery.Error.UnknownError`, and `RecoveryRoutes` for an id that is not a UUID
 | `RecoveryAlreadyUsed` | `errorId` | `recovery.Error.AlreadyRedeemed`
 | `RecoveryNotYet` | `availableAt: String` | `recovery.Error.NotYet`
@@ -251,7 +252,7 @@ IMPORTANT: the client must count down from `secondsRemaining`, never from an abs
 | `InternalError` | `message: String`, `errorId: Option[String]` | `ApiErrors.toApiError` for a defect, with the id it was recorded under; `ApiError.fromThrowable`, and the two routes that reject a session with no `currentVideoId`, without one
 |===
 
-Forty-two variants; every opaque id becomes a `String`, and every numeric bound that is not a `Float` becomes a `String`, so the enum carries no domain types.
+Forty-four variants; every opaque id becomes a `String`, and every numeric bound that is not a `Float` becomes a `String`, so the enum carries no domain types.
 
 === Translation
 
@@ -262,7 +263,7 @@ def fromAppError(err: AppError): ApiError
 def fromThrowable(cause: Throwable): ApiError
 ----
 
-`fromAppErrors` keeps only the head of the chain: validation accumulates every broken rule inside `Op`, and exactly one of them reaches the client. `fromAppError` dispatches to the three private per-aggregate functions, each total over its aggregate's `Error`. `fromThrowable` yields `InternalError(message)`, falling back to `"Unknown error"` when the throwable has none.
+`fromAppErrors` keeps only the head of the chain: validation accumulates every broken rule inside `Op`, and exactly one of them reaches the client. `fromAppError` dispatches to the four private per-aggregate functions, each total over its aggregate's `Error`; the refusals of entering the portal map one to one, and a location error, which no guest route can meet, becomes `InternalError`. `fromThrowable` yields `InternalError(message)`, falling back to `"Unknown error"` when the throwable has none.
 
 On the server side, `api/ApiErrors.scala` is the single translation point: `Flow.HandlerError` goes through `fromAppErrors`, `SessionContext.NotSet` becomes `SessionMissing`, and anything else is logged with its cause and recorded in `errors` before becoming an `InternalError` carrying the record's id.
 

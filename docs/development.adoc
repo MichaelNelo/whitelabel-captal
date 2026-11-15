@@ -118,7 +118,10 @@ IMPORTANT: **A location row must already exist before this will boot.** `ServerS
 resolve `LOCATION_SLUG` against the `locations` table during layer construction and fail the whole
 process with `LocationNotFound` if it is absent — see xref:api.adoc[Guest API]. Nothing in this task
 writes that row. Create the location first (through the MCP backoffice's `create_location` tool —
-run `mcp.dev` and drive it from a client) before running `api.dev` against a fresh database.
+run `mcp.dev` and drive it from a client) before running `api.dev` against a fresh database. Booting
+is not admitting: the server admits guests only while that location's recorded state is `deployed`,
+with an access point — what a `deploy_location` run that succeeded leaves — and answers every
+`/api/status` of a location only created with `LocationNotDeployed`.
 
 It runs on the host, beside what `mcp.dev` released into LocalStack, and returns once it serves, so
 it does not hold Mill while the server runs.

@@ -817,8 +817,11 @@ The last thing a run's work does, once everything else succeeded, is record wher
 stands (`LocationStates.record`): `locations.state` becomes `deployed` after a deploy or a resume,
 `paused` after a pause and `destroyed` after a destroy, and `state_run` the run's id. A run that
 fails earlier leaves the state as it was, and one whose state cannot be recorded fails. That state is what `core`'s location commands read — a deployed location keeps its last access
-point, and an access point another deployed location has is refused — and what a deploy or a resume
-checks access points against.
+point, and an access point another deployed location has is refused — what a deploy or a resume
+checks access points against, and what the location's portal reads before it admits a guest: only
+while it is `deployed`. A first deploy or a resume records it last, so while one runs, and after one
+that failed half-way, the portal turns every guest away until a run succeeds (see
+xref:api.adoc[Guest API]).
 
 Inside a run every wait polls AWS every five seconds and gives up after 15 minutes.
 

@@ -12,7 +12,7 @@ customer LAN.
 
 == Where it lives
 
-The integration is not a module. Its moving parts are spread across four of them:
+The integration is not a module. Its moving parts are spread across five of them:
 
 [cols="2,3"]
 |===
@@ -27,18 +27,22 @@ The integration is not a module. Its moving parts are spread across four of them
   host, token, port, site id and access duration.
 
 | `platform/src/whitelabel/captal/platform/services/LocationService.scala`
-| The reads by location id and AP MAC: `hasAccessPoint`, which `/api/status` checks a redirect
-  with, `unifiEnabled`, an AP's switch, and `unifiFor`, which builds an AP's `UnifiAccess` when an
-  event needs it.
+| The reads by location id and AP MAC: `unifiEnabled`, an AP's switch, and `unifiFor`, which builds
+  an AP's `UnifiAccess` when an event needs it.
 
 | `platform/src/whitelabel/captal/platform/eventhandlers/UnifiAccessHandler.scala`
 | The post-commit event adapter. Resolves the controller of the session's access point on every
   event, maps `AccessGranted` to authorize and `AccessExpired` to revoke, and on a successful
   authorize writes `Phase.Authorized` plus `accessExpiresAt` and enqueues the expiry job.
 
+| `core/src/whitelabel/captal/core/application/commands/EnterPortal.scala`
+| `EnterPortalHandler`: the check that turns away a redirect through an access point that is not
+  one of the deployed location's, which `LocationRepositoryQuill.findDeployed` reads with its
+  access points.
+
 | `api/src/whitelabel/captal/api/routes/SurveyRoutes.scala`
-| `requireAccessPoint`: the check that turns away a redirect through an access point that is not
-  the location's.
+| `/api/status`, which reads the redirect's headers into `EnterPortalCommand` and logs the refusal
+  of an access point that is not the location's.
 
 | `platform/src/whitelabel/captal/platform/session/JobScheduler.scala`
 | `JobQueue` and `JobRunner`: where the expiry deadline is parked and the fibers that fire it. See
@@ -76,10 +80,13 @@ The integration is not a module. Its moving parts are spread across four of them
     location slug from the `ap` parameter — the running location that has that access point — and
     302s to the portal, preserving the query string.
  4. The SPA loads, reads the query parameters and forwards them as `X-*` headers on
-    `GET /api/status`, which checks that `X-Ap-Mac` is one of the location's access points and
-    creates the session row, its `ap_mac` included.
-      └─ any other AP, or none → `ApiError.UnknownAccessPoint`; no session, and the error page
-               offers no retry.
+    `GET /api/status`, whose `EnterPortalCommand` checks that the location is deployed and that
+    `X-Ap-Mac` is one of its access points, and starts the session, its `ap_mac` included.
+      ├─ location not deployed → `ApiError.LocationNotDeployed`; no session, and the error page
+      │        offers a retry.
+      ├─ any other AP → `ApiError.UnknownAccessPoint`; no session, and the error page offers no
+      │        retry.
+      └─ none → `ApiError.InvalidClient`; the same.
  5. The guest completes the flow (email → profiling → video → advertiser survey).
  6. The last answer leaves the session in `Phase.Ready`; the client routes to `/ready`.
  7. `ReadyView` mounts and issues `POST /api/finish`, which runs `FinishCommand` and emits
@@ -121,32 +128,39 @@ malformed sequence falls back to the raw string):
 
 `client/src/whitelabel/captal/client/views/ErrorView.scala` repeats the same mapping so a retry from
 the error page carries the parameters too. `GET /api/status` declares all five as optional headers
-(`api/src/whitelabel/captal/api/routes/SurveyRoutes.scala`) and builds a
-`CaptivePortalParams(clientMac, apMac, redirectUrl, ssid, fingerprint)` only when `X-Client-Mac`
-**and** a non-empty `X-Fingerprint` are both present. Creating a session without them fails with
-`ApiError.SessionMissing`; a request that already carries a session cookie ignores the parameters,
-save for the access point check below. A MAC header that is not twelve hex digits counts as
-missing. The values land on
+(`api/src/whitelabel/captal/api/routes/SurveyRoutes.scala`) and reads them into the `Redirect` of
+`EnterPortalCommand`. A session is started only from a redirect with `X-Client-Mac`; without one,
+and no session to resume, the answer is `ApiError.InvalidClient`. A missing `X-Fingerprint` starts
+the session with the stand-in `Signals.NoFingerprint`, and where the location requires one the guest
+leaves through a recorded error (see xref:api.adoc[Guest API]). A request whose cookie names an
+existing session starts nothing from the parameters, save for the access point check below. A MAC
+header that is not twelve hex digits counts as missing. The values land on
 `sessions.client_mac` and `ap_mac`, each its 48-bit big-endian integer (V31), `redirect_url` and
 `ssid` (V11), and `fingerprint` (V14 adds it as `click_id`, V30 renames it).
 
 === The access point check
 
-An API serving a location admits a redirect only through one of that location's access points,
-because the AP is what names the controller: a guest who came through any other could never be
-authorized. `SurveyRoutes.requireAccessPoint` runs on every `/api/status` that carries the
-redirect's parameters — the pair that builds `CaptivePortalParams` — before any session is resolved
-or created, and asks `LocationService.hasAccessPoint` whether the location has an access point with
-the `X-Ap-Mac` it was sent. The header is read as a `Mac`, so any spelling matches.
+An API serving a location admits guests only while the location is deployed, and a redirect only
+through one of its access points, because the AP is what names the controller: a guest who came
+through any other could never be authorized. `EnterPortalHandler` reads the location on every
+`/api/status` with `LocationRepository.findDeployed`, which answers it only while its recorded state
+is `deployed`, with its access points; a location in any other state — still being stood up, or left
+by an operation that did not finish — is refused first, on every call, with
+`ApiError.LocationNotDeployed(location)` (400). The client's `ErrorView` shows `error.generic` for
+it with the retry button, which is what helps while the location is being stood up.
 
-An AP the location does not have, and a header that is missing or is not a MAC, are refused the
-same way: a warning in the log and `ApiError.UnknownAccessPoint(apMac)` (400), carrying the MAC as
-`Mac.show` writes it, or the raw header when it is not one. No session is created, and nothing is
-recorded in `errors`: it is an expected refusal, not a fault to offer a way out of. The client's
-`ErrorView` shows `error.unknownAccessPoint` for it and hides the retry button, since retrying
-cannot change the AP (see xref:client.adoc[Client]).
+The access point check runs on every `/api/status` whose `X-Client-Mac` reads as a MAC, before any
+session is resumed or started, and looks for the `X-Ap-Mac` it was sent among the deployed
+location's access points. The header is read as a `Mac`, so any spelling matches. An AP the location
+does not have is refused with `ApiError.UnknownAccessPoint(apMac)` (400), carrying the MAC as
+`Mac.show` writes it, and a warning in the log; a header that is missing or is not a MAC, with
+`ApiError.InvalidClient(List("X-Ap-Mac"))`, since UniFi always sends it.
 
-An API serving no location (`LOCATION_SLUG` unset, as the API's tests run it) checks nothing.
+No refusal starts a session or records anything in `errors`: each is expected, not a fault to offer
+a way out of. For `UnknownAccessPoint` the client's `ErrorView` shows `error.unknownAccessPoint` and
+hides the retry button, since retrying cannot change the AP (see xref:client.adoc[Client]).
+
+An API serving no location (`LOCATION_SLUG` unset, as the API's tests run it) checks neither.
 
 == Phase semantics
 
@@ -202,6 +216,10 @@ guest's traffic counters.
 | Redirected through an access point that is not the location's
 | `/api/status` answers `UnknownAccessPoint` and no session is created. The guest sees the error
   page with `error.unknownAccessPoint` and no retry button, before the first screen.
+
+| The location is not deployed
+| `/api/status` answers `LocationNotDeployed` and no session is created. The guest sees the error
+  page with `error.generic` and the retry button, before the first screen.
 |===
 
 A location that is fully translated and has videos but has no access point therefore turns every
@@ -236,19 +254,23 @@ xref:event-sourcing.adoc[Event sourcing].
 The cut therefore happens whether or not the guest still has the portal open — nothing in the
 expiry path depends on a client request.
 
-`GET /api/status` keeps an independent expiry check as a safety net. When the session is
-`Authorized` and `accessExpiresAt` is already in the past, the route calls
-`SessionService.resetForExpiration` and answers `Phase.Welcome` with no `secondsRemaining`:
+`GET /api/status` keeps an independent expiry check as a safety net. When the session the cookie
+names is `Authorized` and `accessExpiresAt` is already in the past, `EnterPortalCommand` emits
+`AccessExpired` — which the chain entering the portal writes through resets with
+`SessionExpirationHandler` and logs as `access.expired` — and the route answers the welcome with no
+`secondsRemaining`:
 
 [source,scala]
 ----
-isExpired = session.phase == Phase.Authorized && session.accessExpiresAt.exists(_.isBefore(now))
+val expired =
+  session.phase == Phase.Authorized &&
+    session.accessExpiresAt.exists(_.isBefore(cmd.occurredAt))
 ----
 
 This covers the cases the in-memory scheduler cannot: a task that restarted and has not rehydrated
 yet, a scheduler that is not running, and an access point with no UniFi configuration at all. Note that
-this branch resets *our* session row; it issues no revoke, because no authorization was ever
-recorded for it to revoke.
+this branch resets *our* session row; it issues no revoke, because `UnifiAccessHandler` is not in
+the chain entering the portal writes through.
 
 == The Integration v1 API
 
@@ -737,15 +759,16 @@ resolver that answers one fabricated `UnifiAccess` (`host = "unifi.test"`,
 `defaultDurationMinutes = 0`) for every session's AP, so the handler walks the real code path and
 every authorization is due the instant it is granted, and with one switch, `TestUnifiSwitch`, for
 every AP. The tests' API serves no location
-(`CurrentLocation.empty`), so its `/api/status` checks no access point.
+(`CurrentLocation.empty`), so its `/api/status` checks neither a deployed state nor an access point.
 `suites/AuthorizedSuite.scala` covers the four outcomes that matter: `/api/status` reporting
 `Authorized` with `secondsRemaining`, the `/api/status` reset when the expiry is already past,
 `/api/finish` leaving the session in `Ready` when the authorize call fails, and the full scheduler
 path — authorize, then a `JobRunner`-driven expiry that resets the session, records
 `access.expired` and issues the revoke, all without the client asking for anything. It also covers
 the access points, against an API serving a location with `TestFixtures.seedAccessPoint`: a
-redirect is admitted through one of the location's APs in any spelling, and refused with
-`UnknownAccessPoint` and no session through another or none; `Flows.unifiFor` resolves each AP
+redirect is admitted through one of the location's APs in any spelling, and refused with no session
+through another, `UnknownAccessPoint`, or none, `InvalidClient`; a location that is not deployed
+admits no guest, with `LocationNotDeployed`, no session and nothing in `errors`; `Flows.unifiFor` resolves each AP
 to its own controller with its own duration, and to none for an unknown AP, a session without one,
 or an API serving no location; and `Flows.unifiEnabled` reads each AP's own switch, on for an AP
 the location does not have, a session without one, or an API serving no location.

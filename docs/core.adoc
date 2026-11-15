@@ -190,9 +190,10 @@ enum Event:
   case Recovery(event: recovery.Event)
   case Access(event: access.Event)
   case Location(event: location.Event)
+  case Session(event: session.Event)
 ----
 
-`application/Error.scala` mirrors the aggregates that can refuse, plus three errors that belong to none:
+`application/Error.scala` mirrors the aggregates that can refuse, plus the errors that belong to none — among them the three refusals of entering the portal:
 
 [source,scala]
 ----
@@ -207,7 +208,12 @@ enum Error:
   case Video(errors: NonEmptyChain[video.Error])
   case Recovery(errors: NonEmptyChain[recovery.Error])
   case Location(errors: NonEmptyChain[location.Error])
+  case InvalidClient(missing: List[RedirectField])
+  case UnknownAccessPoint(apMac: device.Mac)
+  case LocationNotDeployed(id: location.LocationId)
 ----
+
+`RedirectField` (`ClientMac`, `AccessPoint`) names what UniFi's redirect always carries; the API answers each as the header it arrives in.
 
 == Command handlers
 
@@ -241,11 +247,11 @@ All under `core/src/whitelabel/captal/core/application/commands/`. Every command
 | `SurveyRepository`, `UserRepository`
 | `QuestionAnswered(AdvertiserQuestionAnswered)`
 
-| `ResolveWelcomeCommand(anonymous, occurredAt)`
-| `ResolveWelcomeHandler`
-| `NextStep(Welcome)` or `NextStep(WelcomeNeedsToS)`
-| `DeviceRepository`
-| none
+| `EnterPortalCommand(location, redirect, sessionId, userId, anonymous, userAgent, locale, newSession, newDevice, newError, occurredAt)`
+| `EnterPortalHandler`
+| `Entered(sessionId, phase, locale, redirectUrl, accessExpiresAt, recovery)`
+| `LocationRepository`, `SessionRepository`, `DeviceLookup`, `UserDirectory`
+| a session started: `DeviceRegistered` or `DeviceRecognized`, then `SessionStarted`, then `FingerprintMissing` when a fingerprint the location requires did not come. A session resumed: `AccessExpired` once its access ran out, `WelcomeResolved` when its welcome changed. Refused with `LocationNotDeployed`, `UnknownAccessPoint` or `InvalidClient`, emitting nothing
 
 | `StartCommand(occurredAt)`
 | `StartHandler`
@@ -380,6 +386,13 @@ The other three `Answer*` handlers follow one shape: find the user in the state 
 `ProvideNextVideoHandler` fails with `Error.UserNotIdentified` when no user has an email: reaching the video phase unidentified is treated as a broken flow, not as a case to serve. With a user and no video, it returns `NextStep(fallback.phase)` and emits nothing.
 
 `MarkVideoWatchedHandler` has two constructors. `withSession` is the one the server uses — it reads `session.currentVideoId`, looks the video up to recover `advertiserId` and `videoType`, and emits `VideoVisualized` plus a `PlaybackEnded` for each playback `VideoRepository.openPlaybacks` reports: watched, the file is no longer being fetched. A missing `currentVideoId` fails with `video.Error.NoVideoAvailable` and an unknown id with `video.Error.VideoNotFound`. The plain `apply` emits no event and returns the next step unchanged.
+
+`EnterPortalHandler` is every load of the portal's page — a first arrival, a reload, a return, the way back from the error page — and the one guest handler that runs with no session in context, since there may be none yet: it reads through `SessionRepository`, `DeviceLookup` and `UserDirectory`, which need none, and the ids a session it starts takes (`newSession`, `newDevice`, `newError`) come in the command, made by the caller as the instant is. Its rules, in order:
+
+* A location the portal serves (`location`; none in development, where nothing of a location is checked) has to be deployed: `LocationRepository.findDeployed` answers it as a `Location[State.Deployed]`, or the command is refused with `LocationNotDeployed`, whatever the request carries. A redirect into it that carries the device's MAC has to name one of its access points: `InvalidClient(List(AccessPoint))` without a readable one, `UnknownAccessPoint` for one it does not have. Refusals are expected, write nothing and offer no way out.
+* The session the cookie names is resumed. One `Authorized` whose `accessExpiresAt` has passed is reset to the welcome, by `AccessExpired`, and answered with no redirect URL and no expiry.
+* Otherwise a session is started, and only from a redirect with the device's MAC — without one there is no device to grant access to, and the command is refused with `InvalidClient`, naming `ClientMac`, and `AccessPoint` too when that is missing as well. Its device is the known one the signals match under the policy (`DeviceLookup.matching`, `DeviceRecognized`), or a new one (`DeviceRegistered`); its user is the one the cross-location cookie names, when `UserDirectory.exists` still knows it. A fingerprint the location does not require and the redirect lacks is `Signals.NoFingerprint`. One it requires and the redirect lacks is the link shortener failing, not the guest: the session starts with the same stand-in, `FingerprintMissing` records the error, and `Entered.recovery` is the way out the guest leaves through. Without a location, the fingerprint is required.
+* At the welcome — a session started, or one resumed at `Welcome` or `WelcomeNeedsToS`, the reset included — a guest who is known (`anonymous` false: the request carried either cookie) and whose device accepted the terms in force is `Welcome`; anyone else, `WelcomeNeedsToS`. A started session carries its welcome in `SessionStarted`; a resumed one whose welcome changed emits `WelcomeResolved`.
 
 `StartHandler` and `AcceptTermsHandler` are the only way out of the welcome, and both answer `NextStep(IdentificationQuestion)`: the identification questions hand the guest on themselves when none is left to ask. Where a device stands with the terms is a typestate, as a user's place in the flow is: `Device[S <: State]` (`device/State.scala`), with `State.NotAccepted` — never, or a version that is no longer in force — and `State.Accepted(termsId, acceptedAt)`. `acceptTerms` (`device/ops.scala`) exists only on `Device[State.NotAccepted.type]`, emits `TermsAccepted` and answers the `Accepted` device. `DeviceRepository` finds the session's device in one state or the other (`findAccepted`, `findNotAccepted`), reading it against the version in force; `TermsRepository` answers that version, `TermsVersion(id, number)`, which is the one a device accepts — the page never names one.
 
@@ -567,10 +580,10 @@ What the network says about the device a session runs on, and the rule for findi
 | Type | Contents
 
 | `Mac` | a MAC as the unsigned 48-bit integer its six bytes spell, most significant first. `Mac.parse` reads twelve hex digits separated by `:`, `-` or nothing, in either case; `show` writes it lower case with colons, as UniFi does
-| `Signals` | `clientMac` (a `Mac`, when the redirect carried a readable one) and `fingerprint`, both from the redirect: the MAC is UniFi's, the fingerprint the link shortener's, computed from what the browser reports
+| `Signals` | `clientMac` (a `Mac`, when the redirect carried a readable one) and `fingerprint`, both from the redirect: the MAC is UniFi's, the fingerprint the link shortener's, computed from what the browser reports. `Signals.NoFingerprint` (`"no-fingerprint"`) is the fingerprint of a session whose redirect carried none: one value for all of them, so under the default policy their devices are told apart by the MAC alone, and under `ByFingerprint` they would all be one device
 | `Matching` | `inline def matches(known, seen)`, implemented by `ByFingerprint`, `ByMac` and `ByMacAndFingerprint`. Inline so a repository can splice it into its query and the database finds the device: Quill reduces it to a `WHERE` at compile time, and it runs as plain Scala everywhere else. It cannot be called through the trait — the compiler refuses to inline it there — only on a concrete policy
 | `Policy` | which `Matching` configuration names, `ByMacAndFingerprint` by default: a fingerprint alone is shared by phones of one model and system, and a MAC alone changes when a phone rotates its private address. `covers(seen)` says whether the signals carry what it compares; ones that do not are a new device, since an empty fingerprint would match every other empty one
-| `Event` | `DeviceLinked(userId, deviceId, occurredAt)`; `TermsAccepted(deviceId, termsId, occurredAt)`, the device accepting the terms of service in force
+| `Event` | `DeviceLinked(userId, deviceId, occurredAt)`; `TermsAccepted(deviceId, termsId, occurredAt)`, the device accepting the terms of service in force; `DeviceRegistered(deviceId, userAgent, signals, occurredAt)`, a device seen for the first time — no known one matches its signals under the policy, or they lack what it compares; `DeviceRecognized(deviceId, userAgent, signals, occurredAt)`, a known one seen again, what the policy did not compare moving with it: a MAC randomized per network, a fingerprint the shortener computed anew
 |===
 
 A configured policy reaches the query through a `match` where the query is written, one branch per
@@ -599,7 +612,7 @@ through the flow would, unless the guest has shown that they would have.
 | `Evidence` | what the wait is computed from: activity, progress, recent recoveries, verdict
 | `WaitPolicy` | the wait itself, and `recurring`, the shortening of one found recurrent later; `WaitPolicy.Default` is the one a location follows for whatever it did not set (see xref:platform.adoc#location-recovery[`LocationRecovery`])
 | `ErrorRecord` | an error as stored: `origin`, its session, `recordedAt`, a client error's `fingerprint` and `verdict`, `availableAt`, `redeemedAt`
-| `Event` | `ErrorRecorded`, `RecoveryOffered`, `RecoveryShortened`, `RecoveryRedeemed`
+| `Event` | `ErrorRecorded`, `RecoveryOffered`, `RecoveryShortened`, `RecoveryRedeemed`; `FingerprintMissing(errorId, sessionId, deviceId, location, occurredAt)`, a redirect that lacked the fingerprint its location requires, recorded as a server error against the session it started
 | `Error` | `UnknownError(errorId)`, `AlreadyRedeemed(errorId)`, `NotYet(availableAt)`
 |===
 
@@ -685,6 +698,16 @@ through an error before giving an email has no user at all.
 | `Event` | `AccessGranted(sessionId, userId: Option, occurredAt)`: the controller is asked to authorize the session's device, again on each retry until it confirms. `AccessExpired(sessionId, userId: Option, occurredAt)`: the access reached its end
 |===
 
+=== session
+
+What entering the portal decides of a session (`session/Event.scala`). The session itself is read as `SessionData` (see <<Repository traits>>).
+
+|===
+| Type | Contents
+
+| `Event` | `SessionStarted(sessionId, deviceId, userId: Option, locationId: Option, locale, phase, clientMac, apMac: Option, redirectUrl, ssid, fingerprint, occurredAt)`: a guest's session started on its device, under its user when the guest is a known one, at the welcome already decided, with what the redirect said. `WelcomeResolved(sessionId, phase, occurredAt)`: a session at the welcome moved between `Welcome` and `WelcomeNeedsToS` — its device accepted the terms in force since, or the version in force changed
+|===
+
 === location
 
 A location as the backoffice administers it: its slug, its name, whether its portal requires the fingerprint, where it stands, and its access points. It has no `ops`: the location commands decide on what their repositories read (see <<Handler notes>>).
@@ -735,11 +758,16 @@ A location as the backoffice administers it: its slug, its name, whether its por
 | `RecoveryRepository.recoveriesSince(deviceId, since)` | `Int` — ways out this device took since `since`
 | `RecoveryRepository.activity(userId, deviceId)` | `Activity` — the user's watched videos on this device and their answers, by the category of the survey each belongs to
 | `LocationRepository.find(slug)` | `Location[State]`, in whatever state it is
+| `LocationRepository.findDeployed(id)` | `Location[State.Deployed]` — the location, if it is deployed
 | `AccessPointRepository.of(location)` | `List[AccessPoint]` — the location's, whatever its state
 | `AccessPointRepository.deployedHolders(mac)` | `List[Slug]` — the deployed locations that take their guests through that access point
+| `SessionRepository.find(id)` | `SessionData` — the session a cookie names
+| `DeviceLookup.matching(seen)` | `Device[State]` — the known device `seen` matches under the deployment's policy; none when none does, or when `seen` lacks what the policy compares
+| `DeviceLookup.byId(id)` | `Device[State]`
+| `UserDirectory.exists(id)` | `Boolean` — whether the user a cookie names is still known
 |===
 
-The location's two are implemented together by `LocationRepositoryQuill`, which takes no `SessionContext`: the location commands run with no guest session.
+The location's two are implemented together by `LocationRepositoryQuill`, which takes no `SessionContext`: the location commands run with no guest session, and entering the portal reads the served location before it has one. `SessionRepository`, `UserDirectory` (`infrastructure/SessionRepository.scala`) and `DeviceLookup` (`infrastructure/DeviceRepository.scala`) are what entering the portal reads outside any session, and take none either; `EntryRepositoriesQuill` implements the three together. Each device either lookup answers comes with where it stands with the terms of service in force.
 
 `infrastructure/Session.scala` holds `SessionData`, the session projection the handlers and `MarkVideoWatchedHandler.withSession` read: `sessionId`, `deviceId`, `userId: Option`, `locale`, `phase`, `currentQuestion: Option[FullyQualifiedQuestionId]`, `currentVideoId`, `currentAdvertiserId`, `locationId`, `clientMac`, `apMac`, `redirectUrl`, `ssid`, `fingerprint`, `accessExpiresAt: Option[Instant]`.
 
@@ -769,4 +797,4 @@ At runtime `platform.services.LocaleServiceQuill.getI18n(locale)` reads `localiz
 
 == Tests
 
-`core/test/` holds the module's own suites (utest + ScalaCheck): `application/HandlerTests.scala`, `location/LocationTests.scala` (the location commands against in-memory repositories), `recovery/RecoveryTests.scala`, `survey/ValidationSuccessTests.scala`, `survey/ValidationFailureTests.scala`, `i18n/I18nSchemaTests.scala`, and shared generators in `generators.scala`. See xref:testing.adoc[Test strategy].
+`core/test/` holds the module's own suites (utest + ScalaCheck): `application/HandlerTests.scala`, `application/EnterPortalTests.scala` (entering the portal against in-memory repositories: its refusals, a session started, a session resumed), `location/LocationTests.scala` (the location commands against in-memory repositories), `recovery/RecoveryTests.scala`, `survey/ValidationSuccessTests.scala`, `survey/ValidationFailureTests.scala`, `i18n/I18nSchemaTests.scala`, and shared generators in `generators.scala`. See xref:testing.adoc[Test strategy].

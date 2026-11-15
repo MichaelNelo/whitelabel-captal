@@ -13,7 +13,7 @@ The model is event-*driven* persistence, not an event store that state is replay
 * `event_log` is an append-only audit trail. Nothing in the application reads it, and no projection is rebuilt from it;
 * `core` contains no SQL and no effect type; it produces `List[Event]` and hands them over.
 
-Three aggregates emit: `user`, `survey` (wrapping `survey.question`) and `video`. `application.Event` is the sum of the three, and the whole chain is written against it.
+The guest's events come from `user`, `survey` (wrapping `survey.question`), `video`, `device`, `recovery`, `access` and `session`, the backoffice's from `location`. `application.Event` is the sum of them, and every chain is written against it.
 
 == From command to events
 
@@ -31,7 +31,7 @@ def execute(command: C): F[R] =
 
 The path of one request:
 
-. The route resolves the session and checks the phase (`SessionEndpoint.authorise`), then publishes it into the ambient `SessionContext`. Every repository and every handler reads the session from there, which is why no command carries a session id.
+. The route resolves the session and checks the phase (`SessionEndpoint.authorise`), then publishes it into the ambient `SessionContext`. Every repository and every handler reads the session from there, which is why no command carries a session id. Entering the portal is the exception: `GET /api/status` may have no session yet, so `EnterPortalCommand` carries the one the cookie names, its handler reads outside any session, and its events go through a chain of their own that names the session from them (<<Entry chain>>).
 . The route reads the clock once and builds the command — `occurredAt` is always supplied from outside the domain.
 . The handler queries repositories and returns `F[Op[Result]]`. Nothing has been written yet.
 . `Op.run` yields either a `NonEmptyChain[Error]` — which becomes `Flow.HandlerError`, then an `ApiError` (see xref:messages.adoc[Messages]) — or a pair of `List[Event]` and the result.
@@ -114,9 +114,17 @@ The logged `answer` is the `AnswerValue` encoded with the same circe codec the b
 | `TermsAccepted`
 | `deviceId`, `termsId`, `occurredAt` — the device accepted the terms of service in force, version `termsId`, which `AcceptTermsHandler` read when the acceptance arrived
 | `device.terms_accepted`
+
+| `DeviceRegistered`
+| `deviceId`, `userAgent`, `signals` (the redirect's MAC and fingerprint), `occurredAt` — entering the portal started a session on a device seen for the first time: none known matches its signals under the policy, or they lack what it compares. Logged with the MAC, not the fingerprint
+| `device.registered`
+
+| `DeviceRecognized`
+| `deviceId`, `userAgent`, `signals`, `occurredAt` — entering the portal started a session on a known device; what the policy did not compare moves with it. Logged as `DeviceRegistered` is
+| `device.recognized`
 |===
 
-The device itself is not an event: `SessionService.create` resolves it from the fingerprint before the session exists, and the commands that link it carry its id, taken from the session by the route.
+The commands that link a device carry its id, taken from the session by the route.
 
 === Recovery events
 
@@ -139,9 +147,30 @@ The device itself is not an event: `SessionService.create` resolves it from the 
 | `RecoveryRedeemed`
 | `errorId`, `sessionId`, `occurredAt` — it left through it: the session moves to `Recovered`, where `finish` grants access
 | `recovery.redeemed`
+
+| `FingerprintMissing`
+| `errorId`, `sessionId`, `deviceId`, `location` (the slug, when the portal serves one), `occurredAt` — a redirect into the location carried no fingerprint where it requires one: the link shortener failing, not the guest. Recorded as a server error against the session it started, which the guest leaves through at once
+| `recovery.fingerprint_missing`
 |===
 
-A server error is not an event: the API records it where it catches the defect, with no command running (see xref:api.adoc#_error_model[Error model]).
+Any other server error is not an event: the API records it where it catches the defect, with no command running (see xref:api.adoc#_error_model[Error model]).
+
+=== Session events
+
+`core/src/whitelabel/captal/core/session/Event.scala`. Emitted by `EnterPortalCommand` alone.
+
+[cols="2,3,2"]
+|===
+| Event | Payload | `event_log.event_type`
+
+| `SessionStarted`
+| `sessionId`, `deviceId`, `userId: Option` — when the cross-location cookie names a user still known — `locationId: Option`, `locale`, `phase` — the welcome already decided — `clientMac`, `apMac: Option`, `redirectUrl`, `ssid`, `fingerprint`, `occurredAt`. Logged with the ids, the location, the phase and the access point
+| `session.started`
+
+| `WelcomeResolved`
+| `sessionId`, `phase`, `occurredAt` — a session at the welcome moved between `Welcome` and `WelcomeNeedsToS`: its device accepted the terms in force since, or the version in force changed
+| `session.welcome_resolved`
+|===
 
 === Access events
 
@@ -154,7 +183,7 @@ A server error is not an event: the API records it where it catches the defect, 
 | `access.granted`
 
 | `AccessExpired`
-| `sessionId`, `userId: Option`, `occurredAt` — the session's access reached its `accessExpiresAt`. Emitted by the expiration scheduler, not by a request. The session's, not a user's: a session that left through an error before giving an email is authorized with no user
+| `sessionId`, `userId: Option`, `occurredAt` — the session's access reached its `accessExpiresAt`. Emitted by the expiration scheduler, and by entering the portal when it resumes a session whose access ran out before the scheduler fired. The session's, not a user's: a session that left through an error before giving an email is authorized with no user
 | `access.expired`
 |===
 
@@ -237,7 +266,7 @@ val dbHandler = EventLogHandler(ctx)
   .andThen(SessionPhaseHandler(ctx, nextAfterIdentification.phase, nextAfterVideo.phase))
   .andThen(SessionSurveyHandler(ctx))
   .andThen(SessionVideoHandler(ctx))
-  .andThen(SessionExpirationHandler(ctx))
+  .andThen(SessionExpirationHandler())
   .andThen(SurveyProgressHandler())
   .andThen(RecoveryHandler())
 val transactional = TransactionalEventHandler(dbHandler, quill)
@@ -251,7 +280,7 @@ val unifiAccess = UnifiAccessHandler(
 transactional.andThen(PlaybackHandler(quill)).andThen(unifiAccess)
 ----
 
-Every `Flow` in the application shares this one `EventHandler[Task, Event]` instance.
+Every `Flow` in the API shares this one `EventHandler[Task, Event]` instance but entering the portal's, which has a chain of its own (<<Entry chain>>).
 
 === Transactional chain
 
@@ -287,16 +316,47 @@ All nine run inside one transaction, in this order. All live in `platform/src/wh
 
 | `SessionExpirationHandler`
 | `AccessExpired`
-| one UPDATE — the same `SessionService.resetForExpirationQuery` the `/api/status` safety net runs — setting `phase = Welcome` and clearing `currentSurveyId`, `currentQuestionId`, `currentVideoId`, `currentAdvertiserId` and `accessExpiresAt`. The session keeps its `userId`, and the `users` row and the cross-location `captal_user` cookie survive.
+| one UPDATE, `SessionService.resetForExpirationQuery`, for the session the event names — setting `phase = Welcome` and clearing `currentSurveyId`, `currentQuestionId`, `currentVideoId`, `currentAdvertiserId` and `accessExpiresAt`. The session keeps its `userId`, and the `users` row and the cross-location `captal_user` cookie survive. The entry chain runs it too.
 
 | `SurveyProgressHandler`
 | any `QuestionAnswered`
 | upserts `user_survey_progress` for the `(userId, surveyId)` pair, then marks it complete when `SurveyService.isSurveyCompleteQuery` says every question is answered
 
 | `RecoveryHandler`
-| `ErrorRecorded`, `RecoveryOffered`, `RecoveryShortened`, `RecoveryRedeemed`
-| inserts the client error into `errors` with its fingerprint and verdict; sets `available_at` on an offer, `available_at` and the verdict `recurrent` on a shortening, and `redeemed_at` on a redemption
+| `ErrorRecorded`, `FingerprintMissing`, `RecoveryOffered`, `RecoveryShortened`, `RecoveryRedeemed`
+| inserts the client error into `errors` with its fingerprint and verdict, and on `FingerprintMissing` a server error against the session, logged as a warning; sets `available_at` on an offer, `available_at` and the verdict `recurrent` on a shortening, and `redeemed_at` on a redemption. The entry chain runs it too.
 |===
+
+=== Entry chain
+
+`EnterPortalCommand` — every `GET /api/status` — runs with no session in the context, since there may be none yet, and writes through a chain of its own, built once in `Flows.enterPortalFlow`. Its handlers name the session from the events. One transaction, in this order, and no post-commit handler:
+
+[cols="2,2,3"]
+|===
+| Handler | Reacts to | Writes
+
+| `DevicePersistenceHandler`
+| `DeviceRegistered`, `DeviceRecognized`
+| inserts the `devices` row; for a recognized one, updates its user agent, `client_mac`, `fingerprint` and `updated_at`. First, because the session's row points to the device
+
+| `SessionExpirationHandler`
+| `AccessExpired`
+| the reset above, before the welcome is written
+
+| `SessionPersistenceHandler`
+| `SessionStarted`, `WelcomeResolved`
+| inserts the `sessions` row; on `WelcomeResolved`, `sessions.phase`. `SessionPhaseHandler` cannot write it, as it reads the session from the context
+
+| `RecoveryHandler`
+| `FingerprintMissing`
+| the server error row, as above
+
+| `EventLogHandler.forEntry`
+| every event
+| one `event_log` row per event, under the session the events name and the user they name, if any
+|===
+
+`UnifiAccessHandler` is not in it: an `AccessExpired` that entering the portal emits resets the session and is logged, and no revoke reaches the controller.
 
 === Post-commit chain
 
@@ -326,8 +386,8 @@ Created by `platform/resources/db/migration/V8__add_event_log.sql` and rebuilt b
 | `id` | random UUID per row
 | `event_type` | the dotted type from the catalogue above
 | `event_data` | the event as compact JSON, built by hand per event in `EventLogHandler`
-| `session_id` | the session the command ran in; `NULL` for an operator's change
-| `user_id` | the session's user id at the time of the write; `NULL` before one exists, and for an operator's change
+| `session_id` | the session the command ran in — for entering the portal, the one its events name; `NULL` for an operator's change
+| `user_id` | the session's user id at the time of the write — for entering the portal, the user its events name, if any; `NULL` before one exists, and for an operator's change
 | `actor` | the id of the operator token that made a backoffice change (`EventLogHandler.forOperator`); `NULL` for a guest's event
 | `occurred_at` | the event's own `occurredAt`
 | `created_at` | when the row was written
@@ -346,12 +406,12 @@ One pass through the portal, with the endpoint, the phase it requires, the event
 | 1. Connect
 | `GET /api/status` with the captive-portal headers (`X-Client-Mac`, `X-Ap-Mac`, `X-Redirect-Url`, `X-Ssid`, `X-Fingerprint`)
 | any
-| No events. The session row is created at `Welcome` (both `clientMac` and `fingerprint` are required, else `SessionMissing`; an API serving a location also requires `X-Ap-Mac` to be one of its access points, else `UnknownAccessPoint` and no session), the session cookie is set, and the `captal_user` cookie is used to pre-attach a returning user.
+| `EnterPortalCommand`: `DeviceRegistered` or `DeviceRecognized`, then `SessionStarted` at the welcome it decided — `Welcome` for a known guest whose device accepted the terms in force, `WelcomeNeedsToS` otherwise — under the user the `captal_user` cookie names, if still known; `FingerprintMissing` too when the location requires a fingerprint and none came, and the guest leaves through it. The session cookie is set. Refused with no session and nothing recorded: `LocationNotDeployed` while an API's location is not deployed, `UnknownAccessPoint` through an access point that is not one of its, `InvalidClient` without the client's MAC or, into a location, the AP's.
 
 | 2. Ask for a question
 | `GET /api/survey/next`
-| `Welcome`, `IdentificationQuestion`
-| The route moves `Welcome` → `IdentificationQuestion` itself. `NewUserArrived` for a first-time visitor, or `SurveyAssigned` for a known one; `IdentificationCompleted` when the pool is exhausted. `SessionSurveyHandler` records the question.
+| `IdentificationQuestion`
+| Reached from the welcome through `POST /api/start`, or `POST /api/terms` when the terms in force still have to be accepted. `NewUserArrived` for a first-time visitor, or `SurveyAssigned` for a known one; `IdentificationCompleted` when the pool is exhausted. `SessionSurveyHandler` records the question.
 
 | 3. Answer it
 | `POST /api/survey/email` \| `/profiling` \| `/location`
@@ -396,7 +456,7 @@ One pass through the portal, with the endpoint, the phase it requires, the event
 | 9. Browse
 | `GET /api/status` (polled)
 | any
-| No events. While `Authorized`, the response carries `secondsRemaining`.
+| No events while the access lasts, and the response carries `secondsRemaining`. Once it has run out, `AccessExpired` (see <<Expiry>>).
 
 | 10. Expiry
 | none — the scheduler
@@ -462,7 +522,7 @@ That gives retry for free:
 | handled in the domain, not the scheduler: `ExpireAccessHandler` is a silent no-op unless the session is `Authorized` and past its own `accessExpiresAt`. A session reset in between, or a guest who redid the flow and got re-authorized until later, leaves the old job harmless, which is why jobs are never cancelled or indexed.
 |===
 
-A second, independent safety net lives in `GET /api/status`: when the session is `Authorized` and `accessExpiresAt` is already past, the route resets the session itself and answers `Welcome`. It runs the same `resetForExpirationQuery` the event handler does, but emits no event — so a reset that happens this way reaches neither `event_log` nor the controller.
+A second, independent safety net lives in `GET /api/status`: when the session the cookie names is `Authorized` and `accessExpiresAt` is already past, `EnterPortalCommand` emits `AccessExpired` and answers the welcome. The entry chain's `SessionExpirationHandler` resets the session and `EventLogHandler.forEntry` logs `access.expired`, but `UnifiAccessHandler` is not in that chain — so a reset that happens this way reaches `event_log` and not the controller.
 
 `AccessExpired` is a genuine domain event rather than bookkeeping: it is what sends the guest back through the flow, which is the business model. The reset keeps the `users` row and the `captal_user` cookie, so the next visit skips the questions already answered and asks the next one.
 

@@ -127,9 +127,8 @@ xref:development.adoc[Local development].
 `api/src/whitelabel/captal/api/AppLayers.scala` holds one `ZLayer.makeSome` producing
 `FullEnv & Server.Config & JobRunner` from `ServerSettings`. `FullEnv` is the type alias for
 everything a request handler may ask for: `SessionContext`, `SessionService`, `LocaleService`,
-`QuillSqlite`, `SessionCookieConfig`, `ApiBase`, `CurrentLocation`, `UserCookieConfig`,
-`UserLookup`, the seven route classes, and the seventeen `Flow.Aux` refinements the routes resolve by
-type.
+`QuillSqlite`, `SessionCookieConfig`, `ApiBase`, `CurrentLocation`, `UserCookieConfig`, the seven
+route classes, and the seventeen `Flow.Aux` refinements the routes resolve by type.
 
 `JobRunner` is produced by the composition but deliberately absent from `FullEnv`: `Main.run`
 consumes it to fork the scheduler and no endpoint needs it. The scheduler's `Scope` is created with
@@ -165,6 +164,13 @@ the controller of the access point the session came through (`Flows.unifiEnabled
 `Flows.unifiFor`): a
 change through `set_recovery_policy` applies to the next request with no redeploy. Without a
 location they use `WaitPolicy.Default`.
+
+`enterPortalFlowLayer` (`Flows.enterPortalFlow`) is built once, yet writes through a chain of its own
+rather than `eventHandlerLayer`'s: entering the portal reads no session from the context, since there
+may be none yet, and its chain names the session from its events — `DevicePersistenceHandler` →
+`SessionExpirationHandler` → `SessionPersistenceHandler` → `RecoveryHandler` →
+`EventLogHandler.forEntry`, in one transaction, each in a span, with no post-commit handler. See
+xref:platform.adoc[Platform].
 
 `Phases.scala` is the pipeline expressed as values, and is the only place the order of the guest
 journey is written down:
@@ -224,9 +230,10 @@ exits non-zero. A location must exist in the database before its task starts.
 
 IMPORTANT: With no `LOCATION_SLUG` the server still boots. `ApiBase` adds no prefix, the session
 cookie falls back to `captal_session` at `Path=/`, `CurrentLocation` is `CurrentLocation.empty` (no
-location id, so `/api/status` checks no access point and the UniFi handler finds a controller for no
-session) and the session and locale services are built with `locationId = None`, so their queries
-are not scoped to a location. This is a development shape, not a deployment shape.
+location id, so `/api/status` checks neither that a location is deployed nor an access point, and
+the UniFi handler finds a controller for no session) and the session and locale services are built
+with `locationId = None`, so their queries are not scoped to a location. This is a development
+shape, not a deployment shape.
 
 === Route mounting
 
@@ -381,7 +388,7 @@ declares `outError[ApiError](Status.BadRequest)`.
 |`/api/status`
 |–
 |`StatusResponse` + optional `Set-Cookie` (session)
-|any; creates a session when missing
+|any; starts a session when missing. Refused while the served location is not deployed
 
 |GET
 |`/api/terms`
@@ -558,10 +565,6 @@ gated by the separate `server.dev-mode` / `SERVER_DEV_MODE` flag and serves no A
 
 These routes write a phase themselves rather than relying on the event handlers:
 
-* `GET /api/status`, for a session at the welcome, runs `ResolveWelcomeHandler` and records the
-  phase it answers: `WelcomeNeedsToS` when its device has not accepted the terms of service in
-  force — never, or an older version — or the request carried neither the session nor the
-  `captal_user` cookie; `Welcome` otherwise.
 * `POST /api/terms` and `POST /api/start` are the only way out of the welcome. Each runs its
   operation — `AcceptTermsHandler`, which records the version in force on the device, or
   `StartHandler`, which requires that the device accepted it (`TermsNotAccepted` otherwise) — and
@@ -577,6 +580,9 @@ These routes write a phase themselves rather than relying on the event handlers:
 
 Both advertiser routes read `currentVideoId` off the session, never from the request; a session with
 no `currentVideoId` is answered `ApiError.InternalError("No video ID in session")`.
+
+`GET /api/status` writes no phase itself: the welcome it decides reaches the session through its
+events (see <<Captive-portal headers>>).
 
 == Session and identity
 
@@ -617,28 +623,29 @@ not derived from the slug — `Path=/` is what makes the browser send it to ever
 domain, and the `Max-Age` is what makes it outlive the tab.
 
 It is written by `POST /api/survey/email` (from the `userId` that `UserPersistenceHandler` put into
-`SessionContext` during the flow) and read by `GET /api/status`, where a returning visitor's
-`user.Id` turns session creation into `OnMissing.CreateForUser` so the email question is skipped.
+`SessionContext` during the flow) and read by `GET /api/status`, which hands a returning visitor's
+`user.Id` to `EnterPortalCommand`: a session started for them is started under that user, so the
+email question is skipped.
 
-`api/src/whitelabel/captal/api/session/UserLookup.scala` is the validation behind that: a single
-`trait UserLookup { def existsById(userId: user.Id): UIO[Boolean] }` over `QuillSqlite`, kept
-separate from `UserRepository` because `UserRepository` is state-based and reads the ambient
-`SessionContext`, which does not exist yet while a session is being created. A `captal_user` cookie
-whose id is malformed or absent from the `users` table falls back to a plain `OnMissing.Create`.
+Whether that user still exists is `UserDirectory.exists`, which `EntryRepositoriesQuill` answers
+outside any session, because `UserRepository` is state-based and reads the ambient
+`SessionContext`, which does not exist yet while a session is being started. A `captal_user` cookie
+whose id is malformed or absent from the `users` table starts a session with no user.
 
 === Current location
 
 `api/src/whitelabel/captal/api/session/CurrentLocation.scala` is `(id, slug)` of the row
 `LOCATION_SLUG` names, resolved once at startup: which location this process serves, and nothing
-else about it. Its access points — each with its UniFi controller, access duration and UniFi
-switch — and its fingerprint requirement are read from the database when they are needed — the
-access point check and the fingerprint requirement per request, an access point's controller and
-switch per event — so a change through the backoffice applies without a restart.
+else about it. Its recorded state, its access points — each with its UniFi controller, access
+duration and UniFi switch — and its fingerprint requirement are read from the database when they
+are needed — the state, the access point check and the fingerprint requirement per request
+(`LocationRepository.findDeployed`), an access point's controller and switch per event — so a change
+through the backoffice applies without a restart.
 `CurrentLocation.empty` is what a slugless server gets.
 
 === Captive-portal headers
 
-`GET /api/status` is the only route reading them, and the only route that can create a session:
+`GET /api/status` is the only route reading them, and the only route that can start a session:
 
 [source,http]
 ----
@@ -656,20 +663,21 @@ All seven inputs are optional at the codec level; the rules are in the handler.
 
 [cols="2,2,4"]
 |===
-|Header |On session CREATE |Notes
+|Header |On session start |Notes
 
 |`X-Client-Mac`
 |Mandatory
-|One half of the pair that builds `CaptivePortalParams`.
+|The device access is granted to. Read as a `Mac`, it is the session's `client_mac`.
 
 |`X-Fingerprint`
-|Mandatory, and must be non-empty
-|The other half.
+|Optional; a location may require it
+|Missing or empty, the session takes `Signals.NoFingerprint`; where the location requires one, the
+guest leaves through a recorded error too, see below.
 
 |`X-Ap-Mac`
 |Mandatory for an API serving a location
 |Has to be one of the location's access points, in any spelling; see below. Read as a `Mac`, it is
-`CaptivePortalParams.apMac` and the session's `ap_mac`.
+the session's `ap_mac`.
 
 |`X-Redirect-Url`
 |Optional
@@ -692,56 +700,74 @@ The headers split by who sends them, and so by what a missing one means:
 * `X-Fingerprint` comes from the link shortener in front of the portal. A location that requires one
   and gets none has that configuration failing, not the guest, who can still be let in.
 
-`CaptivePortalParams` is built whenever `X-Client-Mac` reads as a MAC, with the fingerprint the
-redirect carried or, where it carried none, `SurveyRoutes.NoFingerprint`. With no readable client
-MAC and no resolvable session, the route answers `ApiError.InvalidClient(missing)` (400), naming the
-UniFi headers that are missing or unreadable: no session is created, nothing is recorded in
-`errors`, and the page shows `error.invalidClient` with no retry.
+The route reads the request into `EnterPortalCommand` — the headers as its `Redirect`, the session
+the cookie names, the user `captal_user` names, whether it carried neither cookie, the served
+location's id, and the ids a session started here takes, generated as the instant is — and answers
+its `Entered` as `StatusResponse`, with the session cookie. The command decides everything; its rules
+are in xref:core.adoc[Core]. A session cookie that does not read as a `user.SessionId` is
+`ApiError.SessionInvalid("Malformed session ID")` before it runs.
 
-A fingerprint that was required and did not come still creates the session, with the stand-in. Then,
-for a session created by that request, `recordMissingFingerprint` records a server error against it
-("the redirect into /<slug> carried no fingerprint, which it requires: the link shortener in front of
-it may be misconfigured"), logs it, and the route answers a *success* with the error's id in
-`StatusResponse.recovery`. A success, because the session cookie travels only with one and the way
+With no readable client MAC and no session to resume, the answer is
+`ApiError.InvalidClient(missing)` (400), naming the UniFi headers that are missing or unreadable: no
+session is started, nothing is recorded in `errors`, and the page shows `error.invalidClient` with no
+retry.
+
+A fingerprint that was required and did not come still starts the session, with the stand-in, and
+the command emits `FingerprintMissing`: `RecoveryHandler` records it as a server error against that
+session ("the redirect into /<slug> carried no fingerprint, which it requires: the link shortener in
+front of it may be misconfigured") and logs it, and the route answers a *success* with the error's id
+in `StatusResponse.recovery`. A success, because the session cookie travels only with one and the way
 out needs the session; the page leaves through `Recovery.serverError(id)` at once, and the guest gets
 access through `Recovered` and `finish` without the flow. Back with its cookie, the session is the
 one already made, and nothing more is recorded. The terms of service are not asked for on that way
 out: the guest left before the welcome, as any way out does.
 
-Once the session cookie resolves an existing session, all of these headers are ignored: the route
-returns that session's stored phase, locale and redirect URL, and the `CaptivePortalParams` it was
-created with. Only `X-Ap-Mac` is still inspected, by `requireAccessPoint`, which runs before session
-resolution on every call that carries the redirect's parameters — whenever `CaptivePortalParams`
-is built.
+Once the session cookie names an existing session, these headers start nothing: the command resumes
+that session and answers its stored phase, locale and redirect URL. Only `X-Ap-Mac` is still
+inspected, by the access point check, which runs before the session is looked up on every call whose
+`X-Client-Mac` reads as a MAC.
 
-For an API serving a location, the redirect has to name one of that location's access points: the
-AP is what says which UniFi controller authorizes the guest, so a guest through any other could
-never be. `requireAccessPoint` asks `LocationService.hasAccessPoint` with the header read as a
-`Mac`, so its spelling does not count. An AP the location does not have fails with
+For an API serving a location, the location has to be deployed. `LocationRepository.findDeployed`
+reads it on every call and answers it only while its recorded state (`locations.state`, which the
+backoffice's deploy, pause, resume and destroy write once they succeed) is `deployed`, with at least
+one access point. Otherwise — a location still being stood up, or one an operation on it did not
+finish — every call is refused with `ApiError.LocationNotDeployed(location)` (400), the location's
+id, a session cookie or not: no session is started or resumed, nothing is recorded in `errors`, and
+the page shows `error.generic` with a retry, which is what helps while the location is being stood
+up.
+
+The redirect into it has to name one of its access points: the AP is what says which UniFi
+controller authorizes the guest, so a guest through any other could never be. The header is read as
+a `Mac`, so its spelling does not count. An AP the location does not have fails with
 `ApiError.UnknownAccessPoint(apMac)` (400), the MAC as `Mac.show` writes it; a header that is
 missing or is not a MAC fails with `ApiError.InvalidClient(List("X-Ap-Mac"))`, since UniFi always
-sends it. Both after a warning in the log; no session is created and nothing is recorded in
-`errors`: expected refusals, with no way out to offer. An API serving no location checks nothing.
-See xref:unifi.adoc[UniFi integration].
+sends it. No session is started and nothing is recorded in `errors`: expected refusals, with no way
+out to offer. `UnknownAccessPoint` and `LocationNotDeployed` are logged as warnings, being an
+operator's to fix. An API serving no location checks neither. See xref:unifi.adoc[UniFi
+integration].
 
 `GET /api/locales` offers only the locales the terms of service in force are written in, so a guest
 reads them in the language they picked; before any version exists it offers every locale with
 translations.
 
-New sessions are created at `Phase.Welcome` with locale `"es"` (`SurveyRoutes.defaultLocale`), and
-the same `/api/status` turns them to `WelcomeNeedsToS`: a session nothing is known about has
-accepted nothing. The
-locale is not negotiated: `session/LocaleDetector.scala` parses `Accept-Language` with quality
-values and falls back to `"es"`, but it has no call site — no route reads `Accept-Language`. A
-client changes language with `PUT /api/session/locale`.
+A session is started with locale `"es"` (`SurveyRoutes.defaultLocale`), at the welcome the command
+decides: `Welcome` for a guest who is known — the request carried either cookie — and whose device
+accepted the terms of service in force; `WelcomeNeedsToS` for anyone else, a device that never
+accepted them or accepted an older version included, since a guest nothing is known about has
+accepted nothing. A session resumed at the welcome is decided again on every call, and a change is
+written by its event, `WelcomeResolved`. The locale is not negotiated: `session/LocaleDetector.scala`
+parses `Accept-Language` with quality values and falls back to `"es"`, but it has no call site — no
+route reads `Accept-Language`. A client changes language with `PUT /api/session/locale`.
 
 === Expired access on status
 
-When a resolved session is at `Phase.Authorized` with an `accessExpiresAt` already in the past,
-`/api/status` calls `SessionService.resetForExpiration` (phase back to `Welcome`, the visit's
-fields cleared, row, cookie and `userId` kept) and answers `StatusResponse(Welcome, locale, None)`.
-The session's user, the user record and the `captal_user` cookie survive, so the next visit skips
-what the guest already answered, the email first.
+When the session the cookie names is at `Phase.Authorized` with an `accessExpiresAt` already in the
+past, `EnterPortalCommand` emits `AccessExpired`, which the entry chain's `SessionExpirationHandler`
+writes (phase back to `Welcome`, the visit's fields cleared, row, cookie and `userId` kept) and
+`EventLogHandler.forEntry` logs as `access.expired`. The route answers the welcome the device's
+terms decide, with no redirect URL and no `secondsRemaining`. No revoke is sent: `UnifiAccessHandler`
+is not in that chain. The session's user, the user record and the `captal_user` cookie survive, so
+the next visit skips what the guest already answered, the email first.
 Otherwise it answers the live phase plus
 `StatusResponse.secondsRemainingFrom(session.accessExpiresAt, now)` — a server-computed countdown,
 because a device behind a captive portal may have an unsynced clock.
@@ -769,26 +795,13 @@ def authorise(
 An empty `allowedPhases` means any phase. Each route calls it with the phases from the table above,
 usually through a small private helper (`identifying`, `watching`, `session`).
 
-`resolveSession` decides what a cookie-less or unknown-session request means, driven by the
-`OnMissing` enum:
-
-[cols="2,5"]
-|===
-|`OnMissing` |Behaviour
-
-|`Fail`
-|No cookie → `ApiError.SessionMissing`. Cookie naming an unknown session → `ApiError.SessionExpired`.
-Used by every route but `/api/status`.
-
-|`Create(userAgent, locale, portalParams)`
-|Creates a `Phase.Welcome` session from `portalParams`; `None` params → `ApiError.SessionMissing`.
-
-|`CreateForUser(userAgent, locale, portalParams, userId)`
-|As `Create`, with `userId` pre-populated from the `captal_user` cookie.
-|===
+`resolveSession` resolves only a session that exists. The `OnMissing` enum has one case, `Fail`: no
+cookie → `ApiError.SessionMissing`, a cookie naming an unknown session → `ApiError.SessionExpired`.
+Every route but `/api/status` goes through it; a session is started only by entering the portal,
+through its command (see <<Captive-portal headers>>).
 
 A cookie present but not parseable as a `user.SessionId` is `ApiError.SessionInvalid("Malformed
-session ID")` regardless of `OnMissing`.
+session ID")`, here and at `/api/status` alike.
 
 What the client receives on a phase violation is an HTTP 400 whose body is the derived `ApiError`
 encoding of `WrongPhase`, with phases rendered by Scala's `toString` (not the snake-case database
@@ -830,13 +843,16 @@ def toApiError(error: Throwable): URIO[QuillSqlite & SessionContext, ApiError] =
 ----
 
 * `Flow.HandlerError` carries a `NonEmptyChain[core.application.Error]`; `ApiError.fromAppErrors`
-  takes its head and maps the domain error — survey validation, user, video — onto the matching
-  `ApiError` variant (`RequiredAnswerMissing`, `TooManySelections`, `EmailAlreadyRegistered`,
-  `NoVideoAvailable`, and so on). The mapping is total and exhaustive over the domain enums.
+  takes its head and maps the domain error — survey validation, user, video, recovery, the refusals
+  of entering the portal — onto the matching `ApiError` variant (`RequiredAnswerMissing`,
+  `TooManySelections`, `EmailAlreadyRegistered`, `NoVideoAvailable`, `LocationNotDeployed`, and so
+  on). The mapping is total and exhaustive over the domain enums; a location error, which no guest
+  route can meet, becomes `InternalError`.
 * `SessionContext.NotSet` means a handler reached a repository without a published session, and is
   reported as `SessionMissing`.
 * Anything else is a defect of ours. It is logged with its `Cause` (stack trace preserved),
-  recorded in `errors` with origin `server` against the session in context, and answered as
+  recorded in `errors` with origin `server` against the session in context — at `/api/status`,
+  the one the cookie names before the command runs, and the one it started after — and answered as
   `ApiError.InternalError(message, errorId)` — the message only, never the trace. `errorId` is
   what the page sends to `POST /api/recovery` to leave through the error; it is `None` when the
   record itself could not be written, which is logged and never replaces the original failure.

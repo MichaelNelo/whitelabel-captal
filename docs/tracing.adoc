@@ -63,7 +63,7 @@ statement's values are bound parameters, never in its text, so none of them reac
 the database shows in one.
 
 |`events <handler>`
-|Each event handler of the API's chain (`TracedEventHandler`), the transactional ones inside the
+|Each event handler of the API's chains (`TracedEventHandler`), the transactional ones inside the
 `transaction` span: which handler a write came from.
 
 |`UniFi <action>`, client

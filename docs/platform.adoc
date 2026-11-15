@@ -196,7 +196,7 @@ It supplies:
 
 == Repositories
 
-`repositories/` holds the Quill implementations of the three `core` repository traits. Each is an
+`repositories/` holds the Quill implementations of the `core` repository traits. Each is an
 `object` whose `apply(quill, ctx)` returns the trait at `F = Task`; the queries are `inline def`s on
 the companion so they can be referenced from elsewhere (the event handlers reuse several) and so
 Quill expands them at compile time.
@@ -244,9 +244,20 @@ is ambient, which is what lets the same repository serve a request and a schedul
 | `locations` and `access_points` for the backoffice's location commands: `find(slug)`, the location
   with its state read from `state` and `state_run` (a deployed one with its access points), `of`,
   the location's access points, and `deployedHolders(mac)`, the slugs of the locations whose `state`
-  is `deployed` that have that MAC. `apply(quill)` alone: no guest session. A row the model cannot
+  is `deployed` that have that MAC. For entering the portal, `findDeployed(id)`: the location only
+  while its `state` is `deployed`. `apply(quill)` alone: no guest session. A row the model cannot
   hold — a deployed location with no access point, an access point with no token, a state it does
-  not know — is a defect, since no command writes one.
+  not know — is a defect, since no command writes one; `findDeployed` answers none for a deployed
+  one with no access point, which would admit no guest anyway.
+
+| `SessionRepository[Task]`, `DeviceLookup[Task]`, `UserDirectory[Task]`
+| `repositories/EntryRepositoriesQuill.scala`
+| What entering the portal reads, outside any session: `find`, the session a cookie names, through
+  `SessionService.findById`; `matching`, the `devices` row the redirect's signals match under the
+  deployment's `Policy`, one static query per policy, none when the signals lack what it compares;
+  `byId`, a device by id; `exists`, whether a `users` row has that id. Each device comes `Accepted`
+  when the version it accepted last is the one in force (`Terms.current`), `NotAccepted` otherwise.
+  `apply(quill, sessions, policy)`: no `SessionContext`.
 |===
 
 `Errors` is the `errors` table's vocabulary. `recordServer` inserts a defect the API caught and
@@ -322,29 +333,33 @@ after another, so the previous job's session must not be left in the slot.
 
 === `SessionService`
 
-`session/SessionService.scala` owns the `sessions` table. The trait is the write surface plus two
-reads; the companion holds every statement as an `inline def` quote, which the event handlers reuse
-directly rather than going through the service.
+`session/SessionService.scala` owns the `sessions` table as the routes past the welcome read and
+move it. It starts no session: entering the portal does, and its events write the row (see
+<<The entry chain>>). The trait is the write surface plus two reads and the device policy; the
+companion holds every statement as an `inline def` quote, which the event handlers reuse directly
+rather than going through the service.
 
 |===
 | Operation | Effect on `sessions`
 
 | `findById` | one row, mapped to `core`'s `SessionData`
-| `create` | resolves the device — the `devices` row the fingerprint matches under the configured `Policy`, or a new one — then inserts the session with it and the captive-portal parameters
-| `createForUser` | the same, with `user_id` pre-populated for a recognised returning user
+| `matching` | none: the `Policy` the service was built with (`DEVICE_MATCHING`), under which entering the portal finds a session's device
 | `setPhase`, `setLocale` | one column
 | `setCurrentQuestion` / `clearCurrentQuestion` | `current_survey_id` + `current_question_id`
 | `setAuthorized` | `phase = authorized` and `access_expires_at`
-| `resetForExpiration` | `phase = welcome` and clears `current_survey_id`, `current_question_id`, `current_video_id`, `current_advertiser_id`, `access_expires_at` in one statement; the row is kept so the cookie still resolves, and so is its `user_id`, so the phone's next visit is the same guest's
 | `findPendingExpirations()` | the `(session_id, access_expires_at)` pairs for this location's authorized sessions that still have a deadline
 |===
 
-The captive-portal parameters travel as one `CaptivePortalParams(clientMac, apMac, redirectUrl, ssid, fingerprint)`.
+`resetForExpirationQuery` is the reset of an access that ran out, which `SessionExpirationHandler`
+runs: `phase = welcome` and `current_survey_id`, `current_question_id`, `current_video_id`,
+`current_advertiser_id` and `access_expires_at` cleared in one statement. The row is kept so the
+cookie still resolves, and so is its `user_id`, so the phone's next visit is the same guest's.
 
-The service is location-scoped: `SessionService.layerWithLocation(locationId)` fixes the
-`location_id` written on every new session and filters `findPendingExpirations` by it. Each deployed
-task serves a single location, so there is no cross-location lookup. `SessionService.layer` is the
-unscoped variant (`locationId = None`).
+The service is location-scoped: `SessionService(quill, locationId, devices)` — `layerWithLocation`
+for the default policy — fixes the `location_id` that `findPendingExpirations` filters by. A new
+session's `location_id` is the one in the command that started it, the served location's
+(`CurrentLocation`). Each deployed task serves a single location, so there is no cross-location
+lookup. `SessionService.layer` is the unscoped variant (`locationId = None`).
 
 === Scheduled jobs
 
@@ -434,7 +449,7 @@ val dbHandler = EventLogHandler(ctx)
   .andThen(SessionPhaseHandler(ctx, nextAfterIdentification.phase, nextAfterVideo.phase))
   .andThen(SessionSurveyHandler(ctx))
   .andThen(SessionVideoHandler(ctx))
-  .andThen(SessionExpirationHandler(ctx))
+  .andThen(SessionExpirationHandler())
   .andThen(SurveyProgressHandler())
   .andThen(RecoveryHandler())
 TransactionalEventHandler(dbHandler, quill).andThen(PlaybackHandler(quill)).andThen(unifiAccess)
@@ -450,15 +465,15 @@ every handler sees every event.
 |===
 | Handler | Writes
 
-| `EventLogHandler` | one `event_log` row per event: a stable `event_type` string (`user.created`, `user.survey_assigned`, `user.video_assigned`, …) and the event's fields as JSON in `event_data`, plus session id, user id and both timestamps. `EventLogHandler(ctx)` writes a guest's events under their session; `EventLogHandler.forOperator(actor)` writes the backoffice's under the operator token that made the change, as `actor`, with no session. A location's events are logged without its access points' tokens
+| `EventLogHandler` | one `event_log` row per event: a stable `event_type` string (`user.created`, `user.survey_assigned`, `user.video_assigned`, …) and the event's fields as JSON in `event_data`, plus session id, user id and both timestamps. `EventLogHandler(ctx)` writes a guest's events under their session; `EventLogHandler.forEntry` writes entering the portal's under the session the events name, with the user they name, if any; `EventLogHandler.forOperator(actor)` writes the backoffice's under the operator token that made the change, as `actor`, with no session. A location's events are logged without its access points' tokens
 | `AnswerPersistenceHandler` | one `answers` row per answered question, with `answer_value` encoded through `surveySchemas.encode`
 | `UserPersistenceHandler` | the user `core` resolved: inserts the row on `UserCreated`, not on `UserRecognized`; on both sets `sessions.user_id` and writes the id back into `SessionContext`. On `DeviceLinked`, upserts the `device_users` pair, moving `last_seen_at` when it exists
 | `SessionPhaseHandler` | `sessions.phase`, chosen from which event shape is present: a redeemed recovery → `Recovered`; identification answer, recognized user or identification completed → the configured next phase; video survey assigned → `AdvertiserVideoSurvey`; video visualized → the configured post-video phase
 | `SessionSurveyHandler` | `sessions.current_survey_id` + `current_question_id` from `SurveyAssigned`, `NewUserArrived` and `VideoSurveyAssigned`
 | `SessionVideoHandler` | `sessions.current_video_id` and `current_advertiser_id` on assignment; one `video_views` row per `VideoVisualized`
-| `SessionExpirationHandler` | on `AccessExpired`, the single `resetForExpirationQuery` UPDATE. `users` and the cross-location cookie survive, so a returning guest skips the questions they already answered
+| `SessionExpirationHandler` | on `AccessExpired`, the single `resetForExpirationQuery` UPDATE, for the session the event names rather than the context's: entering the portal has none set when it finds an access that ran out. `users` and the cross-location cookie survive, so a returning guest skips the questions they already answered
 | `SurveyProgressHandler` | upserts `user_survey_progress` (insert or bump `updated_at`), then runs `SurveyService.isSurveyCompleteQuery` and sets `completed_at` when every active question has an answer
-| `RecoveryHandler` | inserts a client error into `errors` on `ErrorRecorded`; sets `available_at` on `RecoveryOffered`, `available_at` and the verdict `recurrent` on `RecoveryShortened`, and `redeemed_at` on `RecoveryRedeemed`
+| `RecoveryHandler` | inserts a client error into `errors` on `ErrorRecorded`, and a server error on `FingerprintMissing`, which it also logs as a warning; sets `available_at` on `RecoveryOffered`, `available_at` and the verdict `recurrent` on `RecoveryShortened`, and `redeemed_at` on `RecoveryRedeemed`
 |===
 
 === The backoffice's chain
@@ -481,6 +496,33 @@ settings; `AccessPointUpdated` updates the row with the location and the old MAC
 every write to the commit and reports none of them affecting a row. What a count would catch is
 checked before — the commands read that the slug is free and that the access point is there before
 deciding — and a statement rqlite refuses fails the commit.
+
+=== The entry chain
+
+Entering the portal (`EnterPortalCommand`, run by every `GET /api/status`) has no session in the
+context — there may be none yet — so it writes through a chain of its own, whose handlers name the
+session from the events (`Flows.enterPortalFlow`):
+
+[source,scala]
+----
+TransactionalEventHandler(
+  DevicePersistenceHandler()
+    .andThen(SessionExpirationHandler())
+    .andThen(SessionPersistenceHandler())
+    .andThen(RecoveryHandler())
+    .andThen(EventLogHandler.forEntry),
+  quill)
+----
+
+The device is written before the session, whose row points to it, and an expired session is reset
+before its welcome is written. `DevicePersistenceHandler` inserts the `devices` row on
+`DeviceRegistered`, and on `DeviceRecognized` updates the known one's user agent, `client_mac`,
+`fingerprint` and `updated_at`: what the policy did not compare moves with the device.
+`SessionPersistenceHandler` inserts the `sessions` row on `SessionStarted`, and on `WelcomeResolved`
+sets `sessions.phase` with `SessionService.updatePhaseQuery`, which `SessionPhaseHandler` cannot do
+here: it reads the session from the context. `SessionExpirationHandler` and `RecoveryHandler` are
+the ones above. No post-commit handler follows, so an expiry found here resets the session and is
+logged, and the controller is not asked to revoke.
 
 === Post-commit handlers
 

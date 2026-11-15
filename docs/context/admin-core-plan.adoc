@@ -2,8 +2,8 @@
 :toc:
 :toclevels: 2
 
-A plan agreed in conversation on 2026-11-13, revised on 2026-11-14, with its first step done on
-2026-11-15 (see <<order-of-work>> for what it became). It moves the
+A plan agreed in conversation on 2026-11-13, revised on 2026-11-14, with its first two steps done on
+2026-11-15 (see <<order-of-work>> for what they became). It moves the
 backoffice's business rules into `core`, models a location as an entity whose state is in its type and
 each operation on it as a run of its own, run by a saga, and then moves `/api/status`'s logic into a
 command on that model. One question stays open that blocks part of it: the availability of the change
@@ -531,6 +531,44 @@ points to the device, and `SessionExpirationHandler` before `SessionPhaseHandler
 not exist yet: `SessionExpirationHandler` reads the session from the event instead of the context.
 `DeviceRepository` gains a lookup by signals, with whether that device accepted the terms in force.
 `EventLogHandler` records the new events, so every session started reaches `event_log`.
++
+*Done on 2026-11-15*: `application/commands/EnterPortal.scala` (`Redirect`, `EnterPortalCommand`,
+`Entered`, `EnterPortalHandler`), its three refusals in `application.Error` (`InvalidClient` with
+`RedirectField`, `UnknownAccessPoint`, `LocationNotDeployed`), `session.Event`, the device and
+recovery events of the table and `Signals.NoFingerprint`; `platform`'s `EntryRepositoriesQuill`,
+`LocationRepositoryQuill.findDeployed`, `DevicePersistenceHandler`, `SessionPersistenceHandler`,
+`EventLogHandler.forEntry`, `RecoveryHandler`'s case for `FingerprintMissing`, and a
+`SessionExpirationHandler` that takes the session from the event; `/api/status` reads the request
+into the command and its `Entered` into `StatusResponse`, through `Flows.enterPortalFlow`, built
+once. `SessionService` lost `create`, `createForUser`, `resetForExpiration` and
+`CaptivePortalParams`, `SessionEndpoint` resolves only sessions that exist (`OnMissing.Fail`), and
+`ResolveWelcomeCommand` went. What it became, against the sketch above:
++
+* *`WelcomeResolved` is written by `SessionPersistenceHandler`*, not by one more case of
+  `SessionPhaseHandler`, which reads the session from the context and so cannot run where there is
+  none. The entry has a chain of its own, `DevicePersistenceHandler` → `SessionExpirationHandler` →
+  `SessionPersistenceHandler` → `RecoveryHandler` → `EventLogHandler.forEntry`, in one transaction.
+* *`UnifiAccessHandler` is not in that chain*, so an expiry `/api/status` finds before the scheduler
+  resets the session without revoking at UniFi, as the route's own reset did before; it is logged
+  now, as `access.expired`.
+* *The entry requires `Location[Deployed]`*, which the route never checked: a portal admits guests
+  only while its location's recorded state is `deployed`, with an access point, and answers
+  `LocationNotDeployed` otherwise — 400, no session, nothing recorded, the generic message with a
+  retry. A behaviour change, accepted by the user: a guest who arrives during a first deploy, or
+  after a run that failed half-way, is turned away, which is a sign to resume the operation. The gap
+  the backfill leaves — a location deployed only before runs were recorded reads as created, and so
+  would turn its guests away — does not apply in production.
+* *New traits rather than a bigger `DeviceRepository`*: what the entry reads outside any session is
+  `SessionRepository.find`, `UserDirectory.exists` and `DeviceLookup` (`matching`, `byId`),
+  implemented together by `EntryRepositoriesQuill`; `DeviceRepository` stays the session's device.
+  `DeviceLookup.byId` rather than `find`, because the session and device ids erase to the same JVM
+  type, and two `find` overloads on that one object would clash.
+* *The events' shapes*: the device events carry `Signals` rather than the MAC and the fingerprint
+  apart, and `FingerprintMissing` names the location by its slug, which its error message prints.
+* *What it left unused went with it*: `UserLookup`, and `LocationService.fingerprintRequired` and
+  `hasAccessPoint`. The route publishes into `SessionContext` the session the cookie names before
+  the command runs, and the one it started after, so a server error at `/api/status` is recorded
+  against a session and the guest can leave through it, as before the command.
 . Readiness into `core`.
 . The lifecycle: the `Run[S]` entity, `StartOperation` and `CompleteOperation`, the `current_run`
   column (`state` came with the first step), the lock, the queue and `OperationRunner`, the

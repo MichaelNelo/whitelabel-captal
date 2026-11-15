@@ -106,10 +106,11 @@ aside.
 
 == The administrative side has no model in core
 
-The backoffice's rules live in its tools, which write rows directly, and `/api/status`'s live in its
-route. The agreed plan to move them into `core`, with a location as an entity whose state is in its
-type and each operation a run of its own, run by a saga, and then `/api/status` as a command on that
-model, is xref:admin-core-plan.adoc[the admin core plan].
+The backoffice's rules live in its tools, which write rows directly, save those of the location
+commands — creating a location, its fingerprint requirement, its access points. The agreed plan to move them into `core`, with a location as an entity whose state is in
+its type and each operation a run of its own, run by a saga, is xref:admin-core-plan.adoc[the admin
+core plan]. Its first two steps are done: the location and its access points as `core`'s commands,
+and `/api/status` as `EnterPortalCommand` on that model.
 
 == The backoffice cannot talk to UniFi yet
 

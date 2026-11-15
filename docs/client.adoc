@@ -665,6 +665,10 @@ for:
 * `InvalidClient`, a page reached without the network's redirect, which always carries the device's
   MAC and the access point's: `i18n.error.invalidClient`.
 
+The third refusal of `/api/status`, `LocationNotDeployed` — a location still being stood up, or one
+an operation on it did not finish — is not among them: it gets `i18n.error.generic` and the retry,
+which is what helps while the location is being stood up.
+
 A status check can also answer a success that carries `recovery`, the id of a server error recorded
 as the session was made — a redirect without the fingerprint its location requires. The boot check
 (`App.syncPhaseOnLoad`) and `ErrorView`'s retry then leave through `Recovery.serverError(id)`
