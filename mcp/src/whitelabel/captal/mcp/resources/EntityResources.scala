@@ -8,13 +8,7 @@ import whitelabel.captal.platform.aws.{Asset, AssetStore}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.{
-  AdvertiserRow,
-  AdvertiserVideoRow,
-  LocalizedTextRow,
-  LocationRow,
-  SurveyRow
-}
+import whitelabel.captal.platform.{AdvertiserRow, AdvertiserVideoRow, LocationRow, SurveyRow}
 import zio.*
 import zio.schema.codec.JsonCodec as SchemaJsonCodec
 
@@ -307,33 +301,21 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
   /** Signed upload URL for one video. One signature per read. */
   private def uploadTicket(
       uri: String,
-      videoId: String): ZIO[QuillSqlite & AssetStore, String, Chunk[ResourceContents]] = ZIO
-    .serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      for
-        videos <- run(query[AdvertiserVideoRow]).orDie
-        video  <- ZIO
-          .succeed(videos.find(_.id.toString == videoId))
-          .someOrFail(s"No video with id '$videoId'.")
-        file <- VideoTools
-          .waitingFile(video.id)
-          .someOrFail(s"Video '$videoId' has no file waiting to be uploaded.")
-        locations <- run(query[LocationRow]).orDie
-        titles    <- run(query[LocalizedTextRow].filter(_.entityId == lift(videoId))).orDie
-        store     <- ZIO.service[AssetStore]
-        url       <- store.presignPut(store.keyOf(file.url), VideoTools.UploadValidFor)
-        slug = video.locationId.flatMap(id => locations.find(_.id == id)).map(_.slug)
-        styles <- ZIO.foreach(slug)(store.get(_, Asset.Styles)).map(_.flatten)
-        ticket = UploadTicket(
-          videoId = videoId,
-          title = titles.map(_.value).minOption.getOrElse(videoId),
-          slug = slug.getOrElse("—"),
-          uploadUrl = url,
-          expiresInSeconds = VideoTools.UploadValidFor.toSeconds,
-          styles = styles
-        )
-      yield contents(uri, encode(ticket))
-      end for
+      videoId: String): ZIO[QuillSqlite & AssetStore, String, Chunk[ResourceContents]] =
+    for
+      upload <- VideoTools.waiting(videoId)
+      store  <- ZIO.service[AssetStore]
+      url    <- store.presignPut(upload.key, VideoTools.UploadValidFor)
+      styles <- ZIO.foreach(upload.slug)(store.get(_, Asset.Styles)).map(_.flatten)
+      ticket = UploadTicket(
+        videoId = upload.video,
+        title = upload.title.getOrElse(upload.video),
+        slug = upload.slug.getOrElse("—"),
+        uploadUrl = url,
+        expiresInSeconds = VideoTools.UploadValidFor.toSeconds,
+        styles = styles
+      )
+    yield contents(uri, encode(ticket))
 
   /** `resources/directory/read`: the children of a directory, each either a leaf or another
     * directory. This is what makes the hierarchy worth having — the relationships are walkable

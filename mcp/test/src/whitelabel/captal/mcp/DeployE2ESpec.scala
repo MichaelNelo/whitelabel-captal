@@ -50,6 +50,7 @@ import whitelabel.captal.mcp.tools.{
   SurveyTools,
   TermsTools,
   VideoFileCollector,
+  VideoFlows,
   VideoTools
 }
 import whitelabel.captal.core.{user, video}
@@ -385,7 +386,8 @@ object DeployE2ESpec extends ZIOSpecDefault:
           env.add(tracing).add[Operators](operators).add[OperationFlows.Start](start) ++
             LocationFlows.environment(env.get[QuillSqlite], operators) ++
             ContentFlows.environment(env.get[QuillSqlite], operators) ++
-            AssetFlows.environment(env.get[QuillSqlite], operators, env.get[AssetStore]))
+            AssetFlows.environment(env.get[QuillSqlite], operators, env.get[AssetStore]) ++
+            VideoFlows.environment(env.get[QuillSqlite], operators, env.get[AssetStore]))
       _ <- TestClient.addRoutes(routes)
       // The run page's stream, which lives beside the protocol rather than inside it.
       _        <- TestClient.addRoutes(RunRoutes.routes.provideEnvironment(env))

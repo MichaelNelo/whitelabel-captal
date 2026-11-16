@@ -25,6 +25,7 @@ import whitelabel.captal.mcp.tools.{
   TermsTools,
   TokenTools,
   UnifiTools,
+  VideoFlows,
   VideoTools
 }
 import whitelabel.captal.platform.OperatorContext
@@ -139,7 +140,7 @@ object CaptalMcp:
     */
   type Env =
     QuillSqlite & AssetStore & Tracing & OperatorContext & LocationFlows.All & ContentFlows.All &
-      AssetFlows.All & OperationFlows.Start
+      AssetFlows.All & VideoFlows.All & OperationFlows.Start
 
   /** Auth is not optional: the SDK silently ignores every `requireScopes` declaration when no
     * `.auth(...)` is configured, leaving every tool open to anyone who can reach the port.

@@ -26,6 +26,7 @@ import whitelabel.captal.mcp.tools.{
   TokenTools,
   UnifiTools,
   VideoFileCollector,
+  VideoFlows,
   VideoTools
 }
 import whitelabel.captal.platform.{OperatorContext, RqliteDataSource}
@@ -281,6 +282,12 @@ object Main extends ZIOAppDefault:
     ContentFlows.reorderQuestionsLayer,
     AssetFlows.changeStylesLayer,
     AssetFlows.changeIconLayer,
+    VideoFlows.registerVideoLayer,
+    VideoFlows.confirmVideoFileLayer,
+    VideoFlows.startFileReplacementLayer,
+    VideoFlows.updateVideoLayer,
+    VideoFlows.retireVideoLayer,
+    VideoFlows.reinstateVideoLayer,
     OperationQueue.layer,
     OperationFlows.startLayer,
     OperationFlows.completeLayer,

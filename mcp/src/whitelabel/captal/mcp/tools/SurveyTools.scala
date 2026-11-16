@@ -34,16 +34,10 @@ import whitelabel.captal.core.survey.authoring.{
 import whitelabel.captal.core.survey.question
 import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
-import whitelabel.captal.platform.eventhandlers.SurveyAuthoringPersistenceHandler
 import whitelabel.captal.platform.queries.Surveys
 import whitelabel.captal.platform.repositories.SurveyAuthoringRepositoryQuill
 import whitelabel.captal.platform.schema.QuillSqlite
-import whitelabel.captal.platform.{
-  BackendTexts,
-  Operator,
-  OperatorContext,
-  SurveyCategory as StoredCategory
-}
+import whitelabel.captal.platform.{Operator, OperatorContext, SurveyCategory as StoredCategory}
 import zio.*
 import zio.schema.annotation.{description, discriminatorName, rejectExtraFields}
 import zio.schema.{DeriveSchema, Schema}
@@ -438,6 +432,11 @@ object SurveyTools:
       found.toList.map(message(side))
     case AppError.Location(found) =>
       found.toList.map(LocationCommands.describe)
+
+  /** What the operator reads for `error` where no pair of tools is in play: a question asked after
+    * a video, written with the video.
+    */
+  private[mcp] def refusal(error: AuthoringError): String = message(None)(error)
 
   private def message(side: Option[Side])(error: AuthoringError): String =
     def field(text: TextField) =
@@ -862,55 +861,6 @@ object SurveyTools:
           question.RangeRule.Min(bound)
         case RangeRuleKind.max =>
           question.RangeRule.Max(bound)
-
-  /** Writes a new entity's texts; the video tools' until their own commands write them. */
-  private[mcp] def writeTexts(
-      entityId: String,
-      texts: List[LocalizedText],
-      now: String): ZIO[QuillSqlite, String, Unit] = ZIO.serviceWithZIO[QuillSqlite](
-    BackendTexts.write(_, entityId, LocalizedText.toCore(texts), now).orDie)
-
-  /** Rewrites an entity's texts in the locales given; the video tools' until their own commands
-    * write them.
-    */
-  private[mcp] def replaceTexts(
-      entityId: String,
-      texts: List[LocalizedText],
-      now: String): ZIO[QuillSqlite, String, Unit] = ZIO.serviceWithZIO[QuillSqlite](
-    BackendTexts.replace(_, entityId, LocalizedText.toCore(texts), now).orDie)
-
-  /** Writes one question of a video's survey, which `create_advertiser_video` and
-    * `create_promo_video` build in the same call, until the video's own commands write it: refused
-    * for every reason `core` refuses a question, and written as its persistence handler writes one.
-    */
-  private[mcp] def writeQuestion(
-      surveyId: survey.Id,
-      surveyCategory: String,
-      text: List[LocalizedText],
-      spec: AnswerFormat,
-      descriptions: List[LocalizedText],
-      placeholders: List[LocalizedText],
-      required: Boolean,
-      points: Int,
-      hierarchyLevel: Option[Hierarchy],
-      displayOrder: Int,
-      now: String): ZIO[QuillSqlite, String, CreateQuestionResponse] =
-    for
-      written <- ZIO.fromEither(
-        specOf(text, spec, descriptions, placeholders, required, points, hierarchyLevel))
-      kind = SurveyAuthoringRepositoryQuill.kindOf(surveyCategory).getOrElse(SurveyKind.Advertiser)
-      _ <-
-        QuestionSpec.problems(written, kind) match
-          case Nil =>
-            ZIO.unit
-          case problems =>
-            ZIO.fail(problems.map(message(None)).mkString(" "))
-      _ <- ZIO.serviceWithZIO[QuillSqlite](
-        SurveyAuthoringPersistenceHandler.added(_, surveyId, written, displayOrder, now).orDie)
-    yield CreateQuestionResponse(
-      written.id.asString,
-      displayOrder,
-      written.answer.choices.map(_.id.asString))
 
   /** A survey belonging to a location through the video it follows, an advertiser's or a promo's:
     * it takes the video's location and advertiser, a promo's having none. Identification surveys go

@@ -1,5 +1,6 @@
 package whitelabel.captal.mcp
 
+import whitelabel.captal.core.video.authoring.VideoRules
 import whitelabel.captal.mcp.tools.{PlaybackExpiry, VideoFileCollector, VideoTools}
 import whitelabel.captal.telemetry.Telemetry
 import zio.test.*
@@ -13,18 +14,18 @@ object VideoToolsSpec extends ZIOSpecDefault:
     suite("minWatchSeconds, resolved once the file's length is known")(
       // Zero is what create stores when the caller omits it.
       test("omitted means the whole video"):
-        assertTrue(VideoTools.resolveMinWatch(0, 30) == 30)
+        assertTrue(VideoRules.minWatch(0, 30) == 30)
       ,
       test("a shorter request is kept"):
-        assertTrue(VideoTools.resolveMinWatch(10, 30) == 10)
+        assertTrue(VideoRules.minWatch(10, 30) == 10)
       ,
       // Lowered, not refused: by the time this runs the file is in S3 and no tool edits the
       // field.
       test("a request longer than the video is lowered to its length"):
-        assertTrue(VideoTools.resolveMinWatch(45, 30) == 30)
+        assertTrue(VideoRules.minWatch(45, 30) == 30)
       ,
       test("equal to the length is left alone"):
-        assertTrue(VideoTools.resolveMinWatch(30, 30) == 30)
+        assertTrue(VideoRules.minWatch(30, 30) == 30)
       ,
       // The property the three cases above are instances of.
       test("the result never exceeds the video"):
@@ -32,7 +33,7 @@ object VideoToolsSpec extends ZIOSpecDefault:
           for
             requested <- 0 to 60
             duration  <- 1 to 60
-          yield VideoTools.resolveMinWatch(requested, duration) <= duration
+          yield VideoRules.minWatch(requested, duration) <= duration
         assertTrue(cases.forall(identity))
     ),
     test("create_advertiser_video no longer asks for a duration"):
