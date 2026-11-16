@@ -29,3 +29,4 @@ enum Event:
   case I18n(event: i18n.Event)
   case Advertiser(event: advertiser.Event)
   case SurveyAuthoring(event: survey.authoring.Event)
+  case VideoAuthoring(event: video.authoring.Event)

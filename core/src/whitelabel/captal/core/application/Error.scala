@@ -32,6 +32,7 @@ enum Error:
   case I18n(errors: NonEmptyChain[i18n.Error])
   case Advertiser(errors: NonEmptyChain[advertiser.Error])
   case SurveyAuthoring(errors: NonEmptyChain[survey.authoring.Error])
+  case VideoAuthoring(errors: NonEmptyChain[video.authoring.Error])
 
   /** The page was not reached through the network's redirect: what UniFi always sends — the
     * device's MAC, the access point's — is `missing` or unreadable, so there is no device to grant
