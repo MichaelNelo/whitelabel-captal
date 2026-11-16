@@ -1,13 +1,19 @@
 package whitelabel.captal.mcp.tools
 
+import java.time.Instant
+
+import cats.syntax.foldable.*
 import com.jamesward.ziohttp.mcp.*
-import io.getquill.*
+import whitelabel.captal.core.application.commands.{ChangeIconCommand, ChangeStylesCommand}
+import whitelabel.captal.core.application.queries.{IconOfQuery, StylesOfQuery}
+import whitelabel.captal.core.application.{Error as AppError, Flow}
+import whitelabel.captal.core.location.Slug
 import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.protocol.{CssSchema, McpSchema, ToolSchema}
-import whitelabel.captal.platform.LocationRow
-import whitelabel.captal.platform.aws.{Asset, AssetStore}
+import whitelabel.captal.platform.aws.AssetStore
+import whitelabel.captal.platform.queries.PublishedDocuments
 import whitelabel.captal.platform.schema.QuillSqlite
-import whitelabel.captal.platform.schema.given
+import whitelabel.captal.platform.{Operator, OperatorContext}
 import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
@@ -15,7 +21,11 @@ import zio.schema.{DeriveSchema, Schema}
 import McpSchema.given
 import ToolSchema.readOnly
 
-/** Per-location CSS and SVG icon stored on S3, invalidating CDN after writes. */
+/** Per-location CSS and SVG icon: read through `core`'s `StylesOfQuery` and `IconOfQuery`, changed
+  * by `ChangeStylesCommand` and `ChangeIconCommand`, which publish to S3 and invalidate the CDN
+  * after the change is recorded. Whether the content is CSS or safe SVG is checked here: file
+  * formats stay out of `core`.
+  */
 object AssetTools:
   final case class GetRequest(
       @description("Which location's asset to read.")
@@ -75,11 +85,9 @@ object AssetTools:
   final case class SetResponse(
       @description("The location written to.")
       slug: String,
-      @description("Size of the stored object, after gzip where it applies.")
-      storedBytes: Int,
       @description(
-        "The CloudFront invalidation created, so the change is visible rather than waiting behind the edge cache.")
-      invalidationId: String)
+        "Size of the document, before compression. It is published and the edge invalidated before this answers, so the change is visible rather than waiting behind the edge cache.")
+      bytes: Int)
 
   given Schema[CssSchemaRequest] = DeriveSchema.gen
   given Schema[CssVariable] = DeriveSchema.gen
@@ -92,29 +100,22 @@ object AssetTools:
   given Schema[SetIconRequest] = DeriveSchema.gen
   given Schema[SetResponse] = DeriveSchema.gen
 
-  private inline def locationBySlugQuery = quote: (slugParam: String) =>
-    query[LocationRow].filter(_.slug == slugParam).take(1)
+  /** What the operator reads for each refusal of these tools. */
+  private val describe: PartialFunction[AppError, List[String]] =
+    case AppError.Location(found) =>
+      found.toList.map(LocationCommands.describe)
 
-  /** Verifies location exists before writing to S3. */
-  private def requireLocation(slug: String): ZIO[QuillSqlite, String, Unit] = ZIO.serviceWithZIO[
-    QuillSqlite]: quill =>
-    import quill.*
-    run(locationBySlugQuery(lift(slug)))
-      .orDie
-      .map(_.headOption)
-      .someOrFail(s"No location with slug '$slug'.")
-      .unit
+  private def slugOf(raw: String): IO[String, Slug] = ZIO
+    .fromEither(Slug.parse(raw.trim))
+    .mapError(LocationCommands.describe)
 
-  private def write(
-      slug: String,
-      asset: Asset,
-      content: String): ZIO[QuillSqlite & AssetStore, String, SetResponse] =
+  /** Runs `command` through `flow` as the calling operator: recorded, then published. */
+  private def changed[C](ctx: McpToolContext, slug: Slug, content: String, command: C)(
+      flow: Flow.Aux[Task, C, Unit]): ZIO[OperatorContext, String, SetResponse] =
     for
-      _            <- requireLocation(slug)
-      store        <- ZIO.service[AssetStore]
-      bytes        <- store.put(slug, asset, content)
-      invalidation <- store.invalidate(slug, asset)
-    yield SetResponse(slug, bytes, invalidation)
+      caller <- Commands.callerOf(ctx)
+      _      <- Commands.run(Operator(caller, None), command)(flow)(describe)
+    yield SetResponse(slug.asString, content.getBytes("UTF-8").length)
 
   /** Refuses SVG with scripts or event handlers. Served from portal origin so direct access runs
     * scripts.
@@ -159,22 +160,23 @@ object AssetTools:
     .readOnly
     .handle: (in: GetRequest) =>
       for
-        _     <- requireLocation(in.slug)
-        store <- ZIO.service[AssetStore]
-        css   <- store.get(in.slug, Asset.Styles)
-      yield GetStylesResponse(in.slug, css.isDefined, css)
+        slug     <- slugOf(in.slug)
+        quill    <- ZIO.service[QuillSqlite]
+        store    <- ZIO.service[AssetStore]
+        document <-
+          Commands.ask(PublishedDocuments.styles(quill, store), StylesOfQuery(slug))(describe)
+      yield GetStylesResponse(slug.asString, document.content.isDefined, document.content)
 
-  val setStyles: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("set_location_styles")
+  val setStyles: McpToolHandlerR[OperatorContext & AssetFlows.ChangeStyles] = McpTool(
+    "set_location_styles")
     .description(
       "Replace the location's custom stylesheet and invalidate the CDN so the change is visible immediately. Sends the whole file, not a patch — call get_location_styles first when editing rather than rewriting.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: SetStylesRequest) =>
+    .handleWithContext: (in: SetStylesRequest, ctx: McpToolContext) =>
       for
-        // Reject empty stylesheet; removal is a separate operation.
-        _ <-
-          ZIO.when(in.css.isBlank)(
-            ZIO.fail("The stylesheet is empty. To go back to the base theme, say so explicitly."))
-        out <- write(in.slug, Asset.Styles, in.css)
+        slug <- slugOf(in.slug)
+        flow <- ZIO.service[AssetFlows.ChangeStyles]
+        out  <- changed(ctx, slug, in.css, ChangeStylesCommand(slug, in.css, Instant.now))(flow)
       yield out
 
   val getIcon: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("get_location_icon")
@@ -183,25 +185,25 @@ object AssetTools:
     .readOnly
     .handle: (in: GetRequest) =>
       for
-        _     <- requireLocation(in.slug)
-        store <- ZIO.service[AssetStore]
-        svg   <- store.get(in.slug, Asset.BrandIcon)
-      yield GetIconResponse(in.slug, svg.isDefined, svg)
+        slug     <- slugOf(in.slug)
+        quill    <- ZIO.service[QuillSqlite]
+        store    <- ZIO.service[AssetStore]
+        document <- Commands.ask(PublishedDocuments.icon(quill, store), IconOfQuery(slug))(describe)
+      yield GetIconResponse(slug.asString, document.content.isDefined, document.content)
 
-  val setIcon: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("set_location_icon")
+  val setIcon: McpToolHandlerR[OperatorContext & AssetFlows.ChangeIcon] = McpTool(
+    "set_location_icon")
     .description(
       "Replace the location's brand icon and invalidate the CDN. The icon appears on every screen, including the loader shown before anything else renders, so a broken one is visible everywhere at once.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: SetIconRequest) =>
+    .handleWithContext: (in: SetIconRequest, ctx: McpToolContext) =>
       for
-        _   <- validateSvg(in.svg)
-        out <- write(in.slug, Asset.BrandIcon, in.svg)
+        _    <- validateSvg(in.svg)
+        slug <- slugOf(in.slug)
+        flow <- ZIO.service[AssetFlows.ChangeIcon]
+        out  <- changed(ctx, slug, in.svg, ChangeIconCommand(slug, in.svg, Instant.now))(flow)
       yield out
 
-  val all: List[McpToolHandlerR[QuillSqlite & AssetStore]] = List(
-    cssSchema,
-    getStyles,
-    setStyles,
-    getIcon,
-    setIcon)
+  val all: List[McpToolHandlerR[QuillSqlite & AssetStore & OperatorContext & AssetFlows.All]] =
+    List(cssSchema, getStyles, setStyles, getIcon, setIcon)
 end AssetTools

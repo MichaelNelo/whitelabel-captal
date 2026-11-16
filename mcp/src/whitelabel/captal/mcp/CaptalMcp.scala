@@ -9,6 +9,7 @@ import whitelabel.captal.mcp.protocol.{Skill, Skills, SkillsExtension, ToolSchem
 import whitelabel.captal.mcp.resources.{EntityResources, Readiness}
 import whitelabel.captal.mcp.tools.{
   AdvertiserTools,
+  AssetFlows,
   AssetTools,
   ContentFlows,
   DeployTools,
@@ -138,7 +139,7 @@ object CaptalMcp:
     */
   type Env =
     QuillSqlite & AssetStore & Tracing & OperatorContext & LocationFlows.All & ContentFlows.All &
-      OperationFlows.Start
+      AssetFlows.All & OperationFlows.Start
 
   /** Auth is not optional: the SDK silently ignores every `requireScopes` declaration when no
     * `.auth(...)` is configured, leaving every tool open to anyone who can reach the port.

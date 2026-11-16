@@ -9,6 +9,7 @@ import whitelabel.captal.mcp.protocol.{Skills, SkillsExtension}
 import whitelabel.captal.mcp.resources.Readiness
 import whitelabel.captal.mcp.tools.{
   AdvertiserTools,
+  AssetFlows,
   AssetTools,
   ContentFlows,
   DeployTools,
@@ -268,6 +269,8 @@ object Main extends ZIOAppDefault:
     ContentFlows.removeTermsTranslationLayer,
     ContentFlows.setTranslationsLayer,
     ContentFlows.removeTranslationLayer,
+    AssetFlows.changeStylesLayer,
+    AssetFlows.changeIconLayer,
     OperationQueue.layer,
     OperationFlows.startLayer,
     OperationFlows.completeLayer,

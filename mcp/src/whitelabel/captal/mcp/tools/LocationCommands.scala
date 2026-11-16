@@ -86,4 +86,8 @@ object LocationCommands:
         s"No run with id '$run'."
       case LocationError.NoRuns(slug) =>
         s"No deploy, pause, resume or destroy has run for '${slug.asString}'."
+      case LocationError.BlankStylesheet =>
+        "The stylesheet is empty. To go back to the base theme, say so explicitly."
+      case LocationError.BlankIcon =>
+        "The icon is empty."
 end LocationCommands
