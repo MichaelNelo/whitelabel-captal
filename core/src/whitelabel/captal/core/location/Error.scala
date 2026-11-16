@@ -70,4 +70,12 @@ enum Error:
 
   /** Nothing has been run on the location yet. */
   case NoRuns(slug: Slug)
+
+  /** A stylesheet with nothing in it, which would not take the portal back to its base theme but
+    * leave it unstyled.
+    */
+  case BlankStylesheet
+
+  /** An icon with nothing in it, which every screen would show as a broken image. */
+  case BlankIcon
 end Error

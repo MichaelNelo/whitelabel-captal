@@ -24,3 +24,10 @@ enum Event:
   case LocationPaused(id: LocationId, by: RunId, occurredAt: Instant)
   case LocationResumed(id: LocationId, by: RunId, occurredAt: Instant)
   case LocationDestroyed(id: LocationId, by: RunId, occurredAt: Instant)
+
+  /** The location's portal is styled by `css` from now on, in place of the stylesheet it had. */
+  case StylesChanged(id: LocationId, slug: Slug, css: String, occurredAt: Instant)
+
+  /** The location's portal shows `svg` as its brand icon from now on, on every screen. */
+  case IconChanged(id: LocationId, slug: Slug, svg: String, occurredAt: Instant)
+end Event
