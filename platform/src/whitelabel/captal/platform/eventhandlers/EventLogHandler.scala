@@ -344,6 +344,15 @@ object EventLogHandler:
         ("location.resumed", transitionJson(id, by), occurredAt)
       case LocationEvent.LocationDestroyed(id, by, occurredAt) =>
         ("location.destroyed", transitionJson(id, by), occurredAt)
+      // How large, not what: the document itself is in the assets bucket.
+      case LocationEvent.StylesChanged(id, _, css, occurredAt) =>
+        ("location.styles_changed", documentJson(id, css), occurredAt)
+      case LocationEvent.IconChanged(id, _, svg, occurredAt) =>
+        ("location.icon_changed", documentJson(id, svg), occurredAt)
+
+  private def documentJson(id: LocationId, content: String): Json = Json.obj(
+    "locationId" -> Json.fromString(id.asString),
+    "bytes"      -> Json.fromInt(content.getBytes("UTF-8").length))
 
   private def transitionJson(id: LocationId, by: RunId): Json = Json.obj(
     "locationId" -> Json.fromString(id.asString),
