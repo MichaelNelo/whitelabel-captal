@@ -624,8 +624,9 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
    for a while as the database's fencing token, a run's completion moving the location only while
    it still named the run. It went, and so did `supersedes`, which existed only for its
    compare-and-set: a run that lost its lock ends failed, even past its last step, so it never moves
-   the location. The column stays in the database, unused, as `migration_lock` does, until no
-   release that used them can still start.
+   the location. The column stayed in the database, unused, as `migration_lock` did, until no
+   release that used them could still start; V39 dropped both on 2026-11-16, once every location
+   ran api/v1.4.0.
 ** *A lock that belongs to a connection, with no TTL* — what the user wanted, since a TTL also
    frees a holder that is merely frozen or starved, not only one cut off. Postgres's advisory locks
    behave so, but would bring a Postgres only for them. lockd is NFS's lock manager, not a service

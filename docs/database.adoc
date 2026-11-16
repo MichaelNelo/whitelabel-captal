@@ -147,7 +147,7 @@ by the MCP server (`mcp/resources/db/migration-mcp`, `V1` … `V3`).
 | via its session
 
 | `locations`
-| A venue: `slug` (UNIQUE), `name`, `is_active`, `fingerprint_is_required` — the location's whichever access point a guest came through — and where it stands: `state` (`created`, `deployed`, `paused` or `destroyed`, each an operation that succeeded; `created` until a deploy) and `state_run`, the backoffice run that left it so, NULL for `created` (V35, filled for the locations that existed before by the backoffice's V3). The UniFi columns are still there and read by nothing in this release but the portal dispatcher's fallbacks: `unifi_duration_minutes`, `unifi_redirect_url` and `unifi_is_enabled`, which V36 copied to each access point, the dispatcher reading `unifi_redirect_url` on a database V36 has not reached; and `unifi_ap_mac`, `unifi_host`, `unifi_port`, `unifi_site_id` and `unifi_api_token`, which V34 copied to `access_points`, read on a database without that table. They stay for a dispatcher or API still on the previous release, and a later migration drops them. So does `current_run` (V38), the run an operation was going as, which the backoffice of an earlier release used as the location's lock and nothing reads or writes now that the lock is in Redis.
+| A venue: `slug` (UNIQUE), `name`, `is_active`, `fingerprint_is_required` — the location's whichever access point a guest came through — and where it stands: `state` (`created`, `deployed`, `paused` or `destroyed`, each an operation that succeeded; `created` until a deploy) and `state_run`, the backoffice run that left it so, NULL for `created` (V35, filled for the locations that existed before by the backoffice's V3). The UniFi columns are still there and read by nothing in this release but the portal dispatcher's fallbacks: `unifi_duration_minutes`, `unifi_redirect_url` and `unifi_is_enabled`, which V36 copied to each access point, the dispatcher reading `unifi_redirect_url` on a database V36 has not reached; and `unifi_ap_mac`, `unifi_host`, `unifi_port`, `unifi_site_id` and `unifi_api_token`, which V34 copied to `access_points`, read on a database without that table. They stay for a dispatcher or API still on the previous release, and a later migration drops them.
 | is the scope
 
 | `access_points`
@@ -165,10 +165,6 @@ by the MCP server (`mcp/resources/db/migration-mcp`, `V1` … `V3`).
 | `errors`
 | Every error a guest could be offered a way out of: `origin` (`server` or `client`), session, device, `message`, `detail` (a server error's stack trace; a client error's bundle version, error name and frames as JSON), and for client errors the `fingerprint` that makes two reports the same error — NULL when the report has no frame of the bundle's own — and the `verdict` on this one (`plausible`, `recurrent`, or `fabricated:` and its reasons). `available_at` is when the session may leave through it, NULL until offered; `redeemed_at`, when it did. Its `id` is what the page leaves through and what staff look an unrecoverable error up by. Rows outlive the sessions they name.
 | via its session
-
-| `migration_lock`
-| One row, `(id INTEGER PRIMARY KEY, holder TEXT NOT NULL)`, created on demand by the migration lock of an earlier release, not by a migration. Nothing reads or writes it now that the lock is in Redis; it goes once no release that took it can still start.
-| Global
 
 | `flyway_schema_history`
 | Flyway's own history for the portal schema.
