@@ -104,13 +104,14 @@ agreed fix — the relay publishes to SNS, every subscriber reads its own SQS qu
 stateless, deploys overlapped — is xref:relay-sns-sqs-plan.adoc[the relay plan], with the options set
 aside.
 
-== The administrative side has no model in core
+== The content tools have no model in core
 
-The backoffice's rules live in its tools, which write rows directly, save those of the location
-commands — creating a location, its fingerprint requirement, its access points. The agreed plan to move them into `core`, with a location as an entity whose state is in
-its type and each operation a run of its own, run by a saga, is xref:admin-core-plan.adoc[the admin
-core plan]. Its first two steps are done: the location and its access points as `core`'s commands,
-and `/api/status` as `EnterPortalCommand` on that model.
+The backoffice's content tools — videos and advertisers, surveys and questions, the recovery policy,
+the terms of service, i18n keys, styles and icon — write rows directly. The location, its access
+points, its readiness and its operations are `core`'s already, as commands and queries:
+xref:admin-core-plan.adoc[the admin core plan] has its first five steps done. The content tools are
+its seventh; the sixth, telling the run page of progress through the relay, waits on
+xref:relay-sns-sqs-plan.adoc[the relay plan].
 
 == The Redlock is the simple version
 
