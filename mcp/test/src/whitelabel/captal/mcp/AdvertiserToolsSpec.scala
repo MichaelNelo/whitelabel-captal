@@ -2,11 +2,10 @@ package whitelabel.captal.mcp
 
 import com.jamesward.ziohttp.mcp.{CallToolResult, ToolContent}
 import io.getquill.*
-import io.getquill.jdbczio.Quill
 import whitelabel.captal.mcp.tools.AdvertiserTools
+import whitelabel.captal.platform.AdvertiserRow
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.{AdvertiserRow, RqliteDataSource}
 import zio.*
 import zio.test.*
 
@@ -35,15 +34,18 @@ object AdvertiserToolsSpec extends ZIOSpecDefault:
 
   private def create(name: String, priority: Int) = AdvertiserTools
     .create
-    .call(json("name" -> str(name), "priority" -> num(priority)))
+    .callWithContext(
+      json("name" -> str(name), "priority" -> num(priority)),
+      OperatorContext.Default)
+
+  private def update(fields: (String, zio.json.ast.Json)*) = AdvertiserTools
+    .update
+    .callWithContext(json(fields*), OperatorContext.Default)
 
   private def rows
       : ZIO[QuillSqlite, Throwable, List[AdvertiserRow]] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*
     quill.run(query[AdvertiserRow])
-
-  private val quillLayer =
-    RqliteDataSource.layer >>> Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)
 
   def spec =
     suite("AdvertiserTools against rqlite")(
@@ -82,7 +84,7 @@ object AdvertiserToolsSpec extends ZIOSpecDefault:
           _       <- clear
           created <- create("Acme", 10)
           id = textOf(created).split("\"id\":\"").lift(1).map(_.takeWhile(_ != '"')).getOrElse("")
-          updated <- AdvertiserTools.update.call(json("id" -> str(id), "priority" -> num(3)))
+          updated <- update("id" -> str(id), "priority" -> num(3))
           stored  <- rows
         yield assertTrue(
           !updated.isError.contains(true),
@@ -95,7 +97,7 @@ object AdvertiserToolsSpec extends ZIOSpecDefault:
           _       <- create("Acme", 10)
           created <- create("Globex", 5)
           id = textOf(created).split("\"id\":\"").lift(1).map(_.takeWhile(_ != '"')).getOrElse("")
-          renamed <- AdvertiserTools.update.call(json("id" -> str(id), "name" -> str("Acme")))
+          renamed <- update("id" -> str(id), "name" -> str("Acme"))
           stored  <- rows
         yield assertTrue(
           renamed.isError.contains(true),
@@ -105,7 +107,7 @@ object AdvertiserToolsSpec extends ZIOSpecDefault:
       test("an unknown id is reported rather than silently doing nothing"):
         for
           _      <- clear
-          result <- AdvertiserTools.update.call(json("id" -> str("nope"), "priority" -> num(1)))
+          result <- update("id" -> str("nope"), "priority" -> num(1))
         yield assertTrue(result.isError.contains(true), textOf(result).contains("No advertiser"))
       ,
       test("retiring flips is_active and reports how many videos it takes down"):
@@ -115,7 +117,9 @@ object AdvertiserToolsSpec extends ZIOSpecDefault:
           id = textOf(created).split("\"id\":\"").lift(1).map(_.takeWhile(_ != '"')).getOrElse("")
           retired <- AdvertiserTools
             .setActive
-            .call(json("id" -> str(id), "active" -> zio.json.ast.Json.Bool(false)))
+            .callWithContext(
+              json("id" -> str(id), "active" -> zio.json.ast.Json.Bool(false)),
+              OperatorContext.Default)
           stored <- rows
           listed <- AdvertiserTools.list.call(json())
         yield assertTrue(
@@ -125,5 +129,5 @@ object AdvertiserToolsSpec extends ZIOSpecDefault:
           !textOf(listed).contains(id))
       // No migration layer: `mcp.test` lays the schema down once before forking — see
       // `migratedRqliteUrl` in build.mill.
-    ).provideShared(quillLayer) @@ TestAspect.sequential
+    ).provideLayerShared(ToolsEnvironment.withFlows) @@ TestAspect.sequential
 end AdvertiserToolsSpec

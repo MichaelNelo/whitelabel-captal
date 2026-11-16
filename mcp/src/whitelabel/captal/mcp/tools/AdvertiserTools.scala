@@ -1,24 +1,34 @@
 package whitelabel.captal.mcp.tools
 
-import java.util.UUID
+import java.time.Instant
 
+import cats.syntax.foldable.*
 import com.jamesward.ziohttp.mcp.*
-import io.getquill.*
+import whitelabel.captal.core.advertiser.Error as AdvertiserError
+import whitelabel.captal.core.application.commands.{
+  CreateAdvertiserCommand,
+  ReinstateAdvertiserCommand,
+  RetireAdvertiserCommand,
+  UpdateAdvertiserCommand
+}
+import whitelabel.captal.core.application.queries.ListAdvertisersQuery
+import whitelabel.captal.core.application.{Error as AppError, Flow}
+import whitelabel.captal.core.survey.AdvertiserId
 import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
-import whitelabel.captal.mcp.{QuillArrow, Writes}
-import whitelabel.captal.platform.AdvertiserRow
+import whitelabel.captal.platform.queries.ListAdvertisers
 import whitelabel.captal.platform.schema.QuillSqlite
-import whitelabel.captal.platform.schema.given
+import whitelabel.captal.platform.{Operator, OperatorContext}
 import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
 import McpSchema.given
-import QuillArrow.->
 import ToolSchema.readOnly
 
-/** Advertiser CRUD: name uniqueness enforced here (no schema constraint). */
+/** The advertisers, through `core`'s commands and `ListAdvertisersQuery`: a name is unique because
+  * the commands refuse a taken one, not because the schema does.
+  */
 object AdvertiserTools:
   final case class AdvertiserView(
       @description("What create_advertiser_video takes to attach a video to this advertiser.")
@@ -95,127 +105,102 @@ object AdvertiserTools:
   given Schema[SetActiveRequest] = DeriveSchema.gen
   given Schema[SetActiveResponse] = DeriveSchema.gen
 
-  private inline def byIdQuery = quote: (idParam: String) =>
-    query[AdvertiserRow].filter(_.id == idParam)
+  /** What the operator reads for each refusal of these tools. */
+  private val describe: PartialFunction[AppError, List[String]] =
+    case AppError.Advertiser(found) =>
+      found
+        .toList
+        .map:
+          case AdvertiserError.NotFound(id) =>
+            s"No advertiser with id '$id'. Call list_advertisers to see what exists."
+          case AdvertiserError.BlankName =>
+            "Name must not be blank."
+          case AdvertiserError.NegativePriority(priority) =>
+            s"Priority must be zero or greater, got $priority."
+          case AdvertiserError.NameTaken(name, by) =>
+            s"An advertiser named '$name' already exists (id ${by
+                .asString}). Use update_advertiser to change it."
+          case AdvertiserError.NothingToUpdate =>
+            "Nothing to update: give a name, a priority, or both."
 
-  private inline def byNameQuery = quote: (nameParam: String) =>
-    query[AdvertiserRow].filter(_.name == nameParam)
+  /** The advertiser `raw` names, or the operator's refusal for an id no advertiser can have. */
+  private def idOf(raw: String): IO[String, AdvertiserId] = ZIO
+    .fromOption(AdvertiserId.fromString(raw.trim))
+    .orElseFail(s"No advertiser with id '$raw'. Call list_advertisers to see what exists.")
 
-  private def find(id: String): ZIO[QuillSqlite, String, AdvertiserRow] = ZIO.serviceWithZIO[
-    QuillSqlite]: quill =>
-    import quill.*
-    run(byIdQuery(lift(id)))
-      .orDie
-      .map(_.headOption)
-      .someOrFail(s"No advertiser with id '$id'. Call list_advertisers to see what exists.")
-
-  /** Count active videos for an advertiser (see VideoTools). */
-  private def countActiveVideos(id: String): ZIO[QuillSqlite, Nothing, Int] = VideoTools
-    .countActiveFor(id)
-
-  private def validateName(name: String): ZIO[Any, String, String] =
-    val trimmed = name.trim
-    ZIO.fail("Name must not be blank.").when(trimmed.isEmpty).as(trimmed)
-
-  /** Priority must be >= 0 (zero means never drawn). */
-  private def validatePriority(priority: Int): ZIO[Any, String, Int] = ZIO
-    .fail(s"Priority must be zero or greater, got $priority.")
-    .when(priority < 0)
-    .as(priority)
+  /** Runs `command` through `flow` as the calling operator. */
+  private def changed[C, R](ctx: McpToolContext, command: C)(
+      flow: Flow.Aux[Task, C, R]): ZIO[OperatorContext, String, R] =
+    for
+      caller <- Commands.callerOf(ctx)
+      result <- Commands.run(Operator(caller, None), command)(flow)(describe)
+    yield result
 
   val list: McpToolHandlerR[QuillSqlite] = McpTool("list_advertisers")
     .description(
       "Advertisers with their rotation priority and how many active videos each one has. Inactive advertisers are hidden unless asked for.")
     .readOnly
     .handle: (in: ListRequest) =>
-      ZIO.serviceWithZIO[QuillSqlite]: quill =>
-        import quill.*
-        for
-          rows <- run(query[AdvertiserRow]).orDie
-          visible = rows.filter(r => in.includeInactive || r.isActive == 1).sortBy(_.name)
-          views <-
-            ZIO.foreach(visible): row =>
-              countActiveVideos(row.id).map: videos =>
-                AdvertiserView(row.id, row.name, row.priority, row.isActive == 1, videos)
-        yield ListResponse(views)
+      for
+        quill   <- ZIO.service[QuillSqlite]
+        reports <-
+          Commands.ask(ListAdvertisers(quill), ListAdvertisersQuery(in.includeInactive))(describe)
+      yield ListResponse(
+        reports.map(r => AdvertiserView(r.id, r.name, r.priority, r.active, r.activeVideos)))
 
-  val create: McpToolHandlerR[QuillSqlite] = McpTool("create_advertiser")
+  val create: McpToolHandlerR[OperatorContext & ContentFlows.CreateAdvertiser] = McpTool(
+    "create_advertiser")
     .description(
       "Register an advertiser. Priority weights the video rotation against the other active advertisers; zero means never drawn. Names must be unique. Call read_skill('add-advertiser') first.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: CreateRequest) =>
-      ZIO.serviceWithZIO[QuillSqlite]: quill =>
-        import quill.*
-        for
-          name     <- validateName(in.name)
-          priority <- validatePriority(in.priority)
-          // Enforced here because the table has no unique index; nothing would reject a duplicate.
-          clashes <- run(byNameQuery(lift(name))).orDie
-          _       <-
-            ZIO.when(clashes.nonEmpty)(
-              ZIO.fail(
-                s"An advertiser named '$name' already exists (id ${clashes
-                    .head
-                    .id}). Use update_advertiser to change it."))
-          now = java.time.Instant.now.toString
-          id  = UUID.randomUUID.toString
-          affected <-
-            run(
-              query[AdvertiserRow].insertValue(
-                lift(AdvertiserRow(id, name, priority, 1, now, now)))).orDie
-          _ <- Writes.expectOne(affected, s"Creating advertiser '$name'")
-        yield CreateResponse(id, name, priority)
+    .handleWithContext: (in: CreateRequest, ctx: McpToolContext) =>
+      for
+        flow    <- ZIO.service[ContentFlows.CreateAdvertiser]
+        created <-
+          changed(
+            ctx,
+            CreateAdvertiserCommand(AdvertiserId.generate, in.name, in.priority, Instant.now))(flow)
+      yield CreateResponse(created.id.asString, created.name, created.priority)
 
-  val update: McpToolHandlerR[QuillSqlite] = McpTool("update_advertiser")
+  val update: McpToolHandlerR[OperatorContext & ContentFlows.UpdateAdvertiser] = McpTool(
+    "update_advertiser")
     .description("Change an advertiser's name or rotation priority. Omitted fields are left alone.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: UpdateRequest) =>
-      ZIO.serviceWithZIO[QuillSqlite]: quill =>
-        import quill.*
-        for
-          existing <- find(in.id)
-          _        <-
-            ZIO.when(in.name.isEmpty && in.priority.isEmpty)(
-              ZIO.fail("Nothing to update: give a name, a priority, or both."))
-          name     <- ZIO.foreach(in.name)(validateName).map(_.getOrElse(existing.name))
-          priority <- ZIO.foreach(in.priority)(validatePriority).map(_.getOrElse(existing.priority))
-          clashes  <- run(byNameQuery(lift(name))).orDie
-          _        <-
-            ZIO.when(clashes.exists(_.id != in.id))(
-              ZIO.fail(s"Another advertiser is already named '$name'."))
-          now = java.time.Instant.now.toString
-          affected <-
-            run(
-              byIdQuery(lift(in.id)).update(
-                _.name      -> lift(name),
-                _.priority  -> lift(priority),
-                _.updatedAt -> lift(now))).orDie
-          _ <- Writes.expectOne(affected, s"Updating advertiser '${in.id}'")
-        yield UpdateResponse(in.id, name, priority)
-        end for
+    .handleWithContext: (in: UpdateRequest, ctx: McpToolContext) =>
+      for
+        id      <- idOf(in.id)
+        flow    <- ZIO.service[ContentFlows.UpdateAdvertiser]
+        updated <-
+          changed(ctx, UpdateAdvertiserCommand(id, in.name, in.priority, Instant.now))(flow)
+      yield UpdateResponse(updated.id.asString, updated.name, updated.priority)
 
-  val setActive: McpToolHandlerR[QuillSqlite] = McpTool("set_advertiser_active")
+  val setActive: McpToolHandlerR[
+    QuillSqlite & OperatorContext & ContentFlows.RetireAdvertiser &
+      ContentFlows.ReinstateAdvertiser] = McpTool("set_advertiser_active")
     .description(
       "Retire an advertiser or bring it back. Retiring also takes its videos out of the rotation, since the video query joins on the advertiser being active. See read_skill('add-advertiser').")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: SetActiveRequest) =>
-      ZIO.serviceWithZIO[QuillSqlite]: quill =>
-        import quill.*
-        for
-          _ <- find(in.id)
-          now  = java.time.Instant.now.toString
-          flag =
-            if in.active then
-              1
-            else
-              0
-          affected <-
-            run(byIdQuery(lift(in.id)).update(_.isActive -> lift(flag), _.updatedAt -> lift(now)))
-              .orDie
-          _ <- Writes.expectOne(affected, s"Setting advertiser '${in.id}' active=${in.active}")
-          // Reported so the operator sees the blast radius rather than discovering it in the portal.
-          videos <- countActiveVideos(in.id)
-        yield SetActiveResponse(in.id, in.active, videos)
+    .handleWithContext: (in: SetActiveRequest, ctx: McpToolContext) =>
+      for
+        id <- idOf(in.id)
+        now = Instant.now
+        _ <-
+          if in.active then
+            ZIO.serviceWithZIO[ContentFlows.ReinstateAdvertiser](
+              changed(ctx, ReinstateAdvertiserCommand(id, now))(_))
+          else
+            ZIO.serviceWithZIO[ContentFlows.RetireAdvertiser](
+              changed(ctx, RetireAdvertiserCommand(id, now))(_))
+        // Reported so the operator sees the blast radius rather than discovering it in the portal.
+        videos <- ZIO.serviceWithZIO[QuillSqlite](
+          ListAdvertisers.activeVideos(_, id.asString).orDie)
+      yield SetActiveResponse(id.asString, in.active, videos)
 
-  val all: List[McpToolHandlerR[QuillSqlite]] = List(list, create, update, setActive)
+  val all: List[McpToolHandlerR[
+    QuillSqlite & OperatorContext & ContentFlows.CreateAdvertiser & ContentFlows.UpdateAdvertiser &
+      ContentFlows.RetireAdvertiser & ContentFlows.ReinstateAdvertiser]] = List(
+    list,
+    create,
+    update,
+    setActive)
 end AdvertiserTools

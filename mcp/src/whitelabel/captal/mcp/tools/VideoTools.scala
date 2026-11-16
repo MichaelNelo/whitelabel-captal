@@ -323,22 +323,6 @@ object VideoTools:
   private inline def videoByIdQuery = quote: (idParam: String) =>
     query[AdvertiserVideoRow].filter(v => sql"${v.id}".as[String] == idParam)
 
-  private inline def activeVideoCountQuery = quote: (advertiserIdParam: String) =>
-    query[AdvertiserVideoRow]
-      .filter(v => v.advertiserId.contains(advertiserIdParam) && v.status == VideoStatus.Active)
-      .size
-
-  /** How many of one advertiser's videos are in rotation.
-    *
-    * Here rather than in [[AdvertiserTools]], which is the only caller: Quill derives the row's
-    * decoder while expanding the macro — for a count as much as for a select — and this module is
-    * the one that already carries the encodings the row's domain-typed columns need.
-    */
-  private[mcp] def countActiveFor(advertiserId: String): ZIO[QuillSqlite, Nothing, Int] = ZIO
-    .serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      run(activeVideoCountQuery(lift(advertiserId))).orDie.map(_.toInt)
-
   /** Storage key derived from slug and file id, without extension (read from file's content type).
     * A video's first file takes the video's id.
     */

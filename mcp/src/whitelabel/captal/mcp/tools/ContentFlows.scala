@@ -1,24 +1,36 @@
 package whitelabel.captal.mcp.tools
 
+import whitelabel.captal.core.advertiser.Advertiser
 import whitelabel.captal.core.application.commands.{
   ChangeRecoveryPolicyCommand,
   ChangeRecoveryPolicyHandler,
+  CreateAdvertiserCommand,
+  CreateAdvertiserHandler,
+  Handler,
   PublishTermsVersionCommand,
   PublishTermsVersionHandler,
+  ReinstateAdvertiserCommand,
+  ReinstateAdvertiserHandler,
   RemoveTermsTranslationCommand,
   RemoveTermsTranslationHandler,
   RemoveTranslationCommand,
   RemoveTranslationHandler,
+  RetireAdvertiserCommand,
+  RetireAdvertiserHandler,
   SetTermsTranslationCommand,
   SetTermsTranslationHandler,
   SetTranslationsCommand,
   SetTranslationsHandler,
-  TranslationRemoval
+  TranslationRemoval,
+  UpdateAdvertiserCommand,
+  UpdateAdvertiserHandler
 }
 import whitelabel.captal.core.application.{Event, Flow}
+import whitelabel.captal.core.infrastructure.AdvertiserRepository
 import whitelabel.captal.core.recovery.PolicyOverrides
 import whitelabel.captal.platform.OperatorContext
 import whitelabel.captal.platform.eventhandlers.{
+  AdvertiserPersistenceHandler,
   DbEventHandler,
   EventLogHandler,
   RecoveryHandler,
@@ -27,6 +39,7 @@ import whitelabel.captal.platform.eventhandlers.{
   TranslationPersistenceHandler
 }
 import whitelabel.captal.platform.repositories.{
+  AdvertiserRepositoryQuill,
   LocationRepositoryQuill,
   RecoveryPolicyRepositoryQuill,
   TermsRepositoryQuill,
@@ -47,9 +60,14 @@ object ContentFlows:
   type RemoveTermsTranslation = Flow.Aux[Task, RemoveTermsTranslationCommand, Unit]
   type SetTranslations = Flow.Aux[Task, SetTranslationsCommand, List[String]]
   type RemoveTranslation = Flow.Aux[Task, RemoveTranslationCommand, TranslationRemoval]
+  type CreateAdvertiser = Flow.Aux[Task, CreateAdvertiserCommand, Advertiser]
+  type UpdateAdvertiser = Flow.Aux[Task, UpdateAdvertiserCommand, Advertiser]
+  type RetireAdvertiser = Flow.Aux[Task, RetireAdvertiserCommand, Unit]
+  type ReinstateAdvertiser = Flow.Aux[Task, ReinstateAdvertiserCommand, Unit]
   type All =
     ChangeRecoveryPolicy & PublishTermsVersion & SetTermsTranslation & RemoveTermsTranslation &
-      SetTranslations & RemoveTranslation
+      SetTranslations & RemoveTranslation & CreateAdvertiser & UpdateAdvertiser & RetireAdvertiser &
+      ReinstateAdvertiser
 
   /** What `writes` persists, then the event log, in one transaction. */
   private def logged(quill: QuillSqlite, operators: OperatorContext)(
@@ -97,7 +115,37 @@ object ContentFlows:
     logged(quill, operators)(TranslationPersistenceHandler())
   )
 
+  /** An advertiser's command, through the chain that writes advertisers. */
+  private def advertiserFlow[C, R](quill: QuillSqlite, operators: OperatorContext)(
+      handler: AdvertiserRepository[Task] => Handler.Aux[Task, C, R]): Flow.Aux[Task, C, R] = Flow(
+    handler(AdvertiserRepositoryQuill(quill)),
+    logged(quill, operators)(AdvertiserPersistenceHandler()))
+
+  def createAdvertiser(quill: QuillSqlite, operators: OperatorContext): CreateAdvertiser =
+    advertiserFlow(quill, operators)(CreateAdvertiserHandler[Task](_))
+
+  def updateAdvertiser(quill: QuillSqlite, operators: OperatorContext): UpdateAdvertiser =
+    advertiserFlow(quill, operators)(UpdateAdvertiserHandler[Task](_))
+
+  def retireAdvertiser(quill: QuillSqlite, operators: OperatorContext): RetireAdvertiser =
+    advertiserFlow(quill, operators)(RetireAdvertiserHandler[Task](_))
+
+  def reinstateAdvertiser(quill: QuillSqlite, operators: OperatorContext): ReinstateAdvertiser =
+    advertiserFlow(quill, operators)(ReinstateAdvertiserHandler[Task](_))
+
   private type Needs = QuillSqlite & OperatorContext
+
+  val createAdvertiserLayer: ZLayer[Needs, Nothing, CreateAdvertiser] = ZLayer.fromFunction(
+    createAdvertiser)
+
+  val updateAdvertiserLayer: ZLayer[Needs, Nothing, UpdateAdvertiser] = ZLayer.fromFunction(
+    updateAdvertiser)
+
+  val retireAdvertiserLayer: ZLayer[Needs, Nothing, RetireAdvertiser] = ZLayer.fromFunction(
+    retireAdvertiser)
+
+  val reinstateAdvertiserLayer: ZLayer[Needs, Nothing, ReinstateAdvertiser] = ZLayer.fromFunction(
+    reinstateAdvertiser)
 
   val setTranslationsLayer: ZLayer[Needs, Nothing, SetTranslations] = ZLayer.fromFunction(
     setTranslations)
@@ -128,4 +176,8 @@ object ContentFlows:
     .add[RemoveTermsTranslation](removeTermsTranslation(quill, operators))
     .add[SetTranslations](setTranslations(quill, operators))
     .add[RemoveTranslation](removeTranslation(quill, operators))
+    .add[CreateAdvertiser](createAdvertiser(quill, operators))
+    .add[UpdateAdvertiser](updateAdvertiser(quill, operators))
+    .add[RetireAdvertiser](retireAdvertiser(quill, operators))
+    .add[ReinstateAdvertiser](reinstateAdvertiser(quill, operators))
 end ContentFlows
