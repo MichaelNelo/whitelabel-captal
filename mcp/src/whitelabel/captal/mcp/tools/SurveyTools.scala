@@ -8,8 +8,9 @@ import com.jamesward.ziohttp.mcp.*
 import whitelabel.captal.core.application.commands.{
   AddQuestionCommand,
   CreateSurveyCommand,
+  ReinstateQuestionCommand,
   ReorderQuestionsCommand,
-  SetQuestionActiveCommand,
+  RetireQuestionCommand,
   SurveyOwner,
   UpdateQuestionCommand
 }
@@ -110,6 +111,8 @@ object IdentificationCategory:
           SurveyKind.Profiling
         case IdentificationCategory.location =>
           SurveyKind.Location
+  end extension
+end IdentificationCategory
 
 enum Hierarchy:
   case state
@@ -628,8 +631,9 @@ object SurveyTools:
   val updateIdentificationQuestion: McpToolHandlerR[OperatorContext & ContentFlows.UpdateQuestion] =
     update(identification.copy(otherTool = "update_question"))
 
-  private def setActive(
-      side: Side): McpToolHandlerR[OperatorContext & ContentFlows.SetQuestionActive] = McpTool(
+  private type QuestionActivity = ContentFlows.RetireQuestion & ContentFlows.ReinstateQuestion
+
+  private def setActive(side: Side): McpToolHandlerR[OperatorContext & QuestionActivity] = McpTool(
     if side.identification then
       "set_identification_question_active"
     else
@@ -646,25 +650,26 @@ object SurveyTools:
         Auth.ContentWrite)
     .handleWithContext: (in: SetQuestionActiveRequest, ctx: McpToolContext) =>
       for
-        id       <- questionIdOf(in.questionId)
-        flow     <- ZIO.service[ContentFlows.SetQuestionActive]
+        id <- questionIdOf(in.questionId)
+        now = Instant.now
         activity <-
-          changed(
-            ctx,
-            SetQuestionActiveCommand(id, side.identification, in.active, Instant.now),
-            Some(side))(flow)
+          if in.active then
+            ZIO.serviceWithZIO[ContentFlows.ReinstateQuestion](
+              changed(ctx, ReinstateQuestionCommand(id, side.identification, now), Some(side))(_))
+          else
+            ZIO.serviceWithZIO[ContentFlows.RetireQuestion](
+              changed(ctx, RetireQuestionCommand(id, side.identification, now), Some(side))(_))
       yield SetQuestionActiveResponse(
         id.asString,
         in.active,
         activity.answers,
         activity.remainingActive)
 
-  val setQuestionActive: McpToolHandlerR[OperatorContext & ContentFlows.SetQuestionActive] =
-    setActive(Side(identification = false, otherTool = "set_identification_question_active"))
+  val setQuestionActive: McpToolHandlerR[OperatorContext & QuestionActivity] = setActive(
+    Side(identification = false, otherTool = "set_identification_question_active"))
 
-  val setIdentificationQuestionActive
-      : McpToolHandlerR[OperatorContext & ContentFlows.SetQuestionActive] = setActive(
-    identification.copy(otherTool = "set_question_active"))
+  val setIdentificationQuestionActive: McpToolHandlerR[OperatorContext & QuestionActivity] =
+    setActive(identification.copy(otherTool = "set_question_active"))
 
   private def reorderQuestions(
       side: Side): McpToolHandlerR[OperatorContext & ContentFlows.ReorderQuestions] = McpTool(

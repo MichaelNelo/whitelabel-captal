@@ -14,10 +14,12 @@ import whitelabel.captal.core.application.commands.{
   Handler,
   QuestionActivity,
   QuestionPlaced,
+  ReinstateQuestionCommand,
+  ReinstateQuestionHandler,
   ReorderQuestionsCommand,
   ReorderQuestionsHandler,
-  SetQuestionActiveCommand,
-  SetQuestionActiveHandler,
+  RetireQuestionCommand,
+  RetireQuestionHandler,
   UpdateQuestionCommand,
   UpdateQuestionHandler,
   PublishTermsVersionCommand,
@@ -83,9 +85,12 @@ object ContentFlows:
   type CreateSurvey = Flow.Aux[Task, CreateSurveyCommand, SurveyKind]
   type AddQuestion = Flow.Aux[Task, AddQuestionCommand, QuestionPlaced]
   type UpdateQuestion = Flow.Aux[Task, UpdateQuestionCommand, AnswersKept]
-  type SetQuestionActive = Flow.Aux[Task, SetQuestionActiveCommand, QuestionActivity]
+  type RetireQuestion = Flow.Aux[Task, RetireQuestionCommand, QuestionActivity]
+  type ReinstateQuestion = Flow.Aux[Task, ReinstateQuestionCommand, QuestionActivity]
   type ReorderQuestions = Flow.Aux[Task, ReorderQuestionsCommand, Unit]
-  type Surveys = CreateSurvey & AddQuestion & UpdateQuestion & SetQuestionActive & ReorderQuestions
+  type Surveys =
+    CreateSurvey & AddQuestion & UpdateQuestion & RetireQuestion & ReinstateQuestion &
+      ReorderQuestions
   type All =
     ChangeRecoveryPolicy & PublishTermsVersion & SetTermsTranslation & RemoveTermsTranslation &
       SetTranslations & RemoveTranslation & CreateAdvertiser & UpdateAdvertiser & RetireAdvertiser &
@@ -171,8 +176,11 @@ object ContentFlows:
   def updateQuestion(quill: QuillSqlite, operators: OperatorContext): UpdateQuestion =
     surveyFlow(quill, operators)(UpdateQuestionHandler[Task](_))
 
-  def setQuestionActive(quill: QuillSqlite, operators: OperatorContext): SetQuestionActive =
-    surveyFlow(quill, operators)(SetQuestionActiveHandler[Task](_))
+  def retireQuestion(quill: QuillSqlite, operators: OperatorContext): RetireQuestion =
+    surveyFlow(quill, operators)(RetireQuestionHandler[Task](_))
+
+  def reinstateQuestion(quill: QuillSqlite, operators: OperatorContext): ReinstateQuestion =
+    surveyFlow(quill, operators)(ReinstateQuestionHandler[Task](_))
 
   def reorderQuestions(quill: QuillSqlite, operators: OperatorContext): ReorderQuestions =
     surveyFlow(quill, operators)(ReorderQuestionsHandler[Task](_))
@@ -186,8 +194,11 @@ object ContentFlows:
   val updateQuestionLayer: ZLayer[Needs, Nothing, UpdateQuestion] = ZLayer.fromFunction(
     updateQuestion)
 
-  val setQuestionActiveLayer: ZLayer[Needs, Nothing, SetQuestionActive] = ZLayer.fromFunction(
-    setQuestionActive)
+  val retireQuestionLayer: ZLayer[Needs, Nothing, RetireQuestion] = ZLayer.fromFunction(
+    retireQuestion)
+
+  val reinstateQuestionLayer: ZLayer[Needs, Nothing, ReinstateQuestion] = ZLayer.fromFunction(
+    reinstateQuestion)
 
   val reorderQuestionsLayer: ZLayer[Needs, Nothing, ReorderQuestions] = ZLayer.fromFunction(
     reorderQuestions)
@@ -240,6 +251,7 @@ object ContentFlows:
     .add[CreateSurvey](createSurvey(quill, operators))
     .add[AddQuestion](addQuestion(quill, operators))
     .add[UpdateQuestion](updateQuestion(quill, operators))
-    .add[SetQuestionActive](setQuestionActive(quill, operators))
+    .add[RetireQuestion](retireQuestion(quill, operators))
+    .add[ReinstateQuestion](reinstateQuestion(quill, operators))
     .add[ReorderQuestions](reorderQuestions(quill, operators))
 end ContentFlows
