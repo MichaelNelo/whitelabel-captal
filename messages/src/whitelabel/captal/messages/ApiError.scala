@@ -125,12 +125,15 @@ object ApiError:
         ApiError.UnknownAccessPoint(apMac.show)
       case AppError.LocationNotDeployed(location) =>
         ApiError.LocationNotDeployed(location.asString)
-      // The backoffice's: no guest-facing route runs a location, terms or translations command.
+      // The backoffice's: no guest-facing route runs a location, terms, translations or advertiser
+      // command.
       case AppError.Location(errors) =>
         ApiError.InternalError(errors.head.toString)
       case AppError.Terms(errors) =>
         ApiError.InternalError(errors.head.toString)
       case AppError.I18n(errors) =>
+        ApiError.InternalError(errors.head.toString)
+      case AppError.Advertiser(errors) =>
         ApiError.InternalError(errors.head.toString)
 
   /** The header each field of UniFi's redirect reaches the API as. */
