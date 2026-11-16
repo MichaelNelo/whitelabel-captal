@@ -1,7 +1,7 @@
 package whitelabel.captal.mcp.tools
 
 import whitelabel.captal.core.application.commands.CompleteOperationCommand
-import whitelabel.captal.core.infrastructure.OperationSteps
+import whitelabel.captal.core.infrastructure.{OperationSteps, RunProgress, RunRepository}
 import whitelabel.captal.core.operation.{
   Execution,
   Outcome,
@@ -11,8 +11,7 @@ import whitelabel.captal.core.operation.{
   Step,
   StepFailure
 }
-import whitelabel.captal.core.location.Slug
-import whitelabel.captal.platform.locks.DistributedLock
+import whitelabel.captal.platform.locks.{DistributedLock, Lease}
 import whitelabel.captal.platform.operations.{OperationLock, OperationQueue, RunProgressQuill}
 import whitelabel.captal.platform.repositories.RunRepositoryQuill
 import whitelabel.captal.platform.schema.QuillSqlite
@@ -22,16 +21,15 @@ import zio.interop.catz.*
 
 /** Takes the runs [[OperationFlows.start]] queued, each on a fiber of its own so that one
   * location's long deploy keeps no other waiting: walks the run's steps through `steps` in `core`'s
-  * order, keeping its heartbeat fresh and its location's lock extended while it does, and ends it
-  * through [[OperationFlows.complete]] as the operator who started it.
+  * order, keeping its heartbeat fresh while it does, and ends it through
+  * [[OperationFlows.complete]] as the operator who started it.
   *
-  * The lock is the run's from the call that started it ([[OperationLock]]). Once it cannot be
-  * extended, or its time ran out before an extension answered — it expired while this process could
-  * not reach Redis or was frozen, and another operation may have taken it — no further step runs:
-  * the run fails at the next one rather than act on AWS for a location it no longer holds.
-  *
-  * A step and its record are never cut part way ([[Execution.run]]): the server stopping waits for
-  * the step going to end and be recorded, for as long as ECS gives it before it kills the process.
+  * The location's lock, taken by the start, is kept for as long as the run goes
+  * ([[DistributedLock.keep]]) and let go once it has ended. The walk races it: once the lock is
+  * lost — it expired while this process could not reach Redis, and another operation may have taken
+  * it — the walk stops between two steps, since a step and its record are never cut part way
+  * ([[Execution.run]]), and the run ends failed. Failed even when its last step was done: another
+  * operation may have moved the location meanwhile, so a run that lost its lock never moves it.
   *
   * A run interrupted by a restart is not taken up again on startup: its lock expires, and the next
   * operation asked of the location offers to finish it.
@@ -55,79 +53,76 @@ object OperationRunner:
       .forkScoped
       .unit
 
+  private val LockLost = StepFailure.Rejected(
+    "The location's lock was lost while this ran, so it stopped here: another operation may have taken over the location.")
+
   private def runOne(
       id: RunId,
       quill: QuillSqlite,
       steps: OperationSteps[Task],
       complete: OperationFlows.Complete,
       operators: OperatorContext,
-      locks: DistributedLock): Task[Unit] = RunRepositoryQuill(quill)
-    .findStarted(id)
-    .flatMap:
-      case None =>
-        ZIO.logWarning(s"Run ${id.asString} was queued but is not going")
-      case Some(run) =>
-        val progress = RunProgressQuill(quill)
-        val heartbeat = Clock
-          .instant
-          .flatMap(progress.heartbeat(run.id, _))
-          .repeat(Schedule.spaced(Duration.fromJava(Run.HeartbeatEvery)))
-        val resource = OperationLock.resource(run.location)
-        for
-          // Until when the lock is sure to be this run's, on this process's monotonic clock; none
-          // once it is lost. Lost once is lost: a lock that expired may already be another run's.
-          until <- Ref.make(Option.empty[Long])
-          renew =
+      locks: DistributedLock): Task[Unit] =
+    val runs = RunRepositoryQuill(quill, locks)
+    runs
+      .findStarted(id)
+      .flatMap:
+        case None =>
+          ZIO.logWarning(s"Run ${id.asString} was queued but is not going")
+        case Some(run) =>
+          val progress = RunProgressQuill(quill)
+          val heartbeat = Clock
+            .instant
+            .flatMap(progress.heartbeat(run.id, _))
+            .repeat(Schedule.spaced(Duration.fromJava(Run.HeartbeatEvery)))
+          ZIO.scoped:
             for
-              extended <- locks.extend(resource, run.id.asString, OperationLock.Ttl)
-              now      <- Clock.nanoTime
-              _        <- until.set(extended.map(now + _.toNanos))
-              _        <-
-                ZIO.when(extended.isEmpty)(
-                  ZIO.logWarning(s"Run ${run.id.asString} lost the lock of ${run.slug.asString}"))
-            yield extended.isDefined
-          // Once before the first step, so that a lock already gone stops the run there.
-          _ <- renew
-          extending = renew.delay(OperationLock.ExtendEvery).repeatWhile(identity)
-          // Checked against the clock, not only against the last extension's answer: a process that
-          // froze past the lock's time runs no step on waking before an extension says so.
-          guarded =
-            new OperationSteps[Task]:
-              def run(slug: Slug, step: Step): Task[Either[StepFailure, Option[String]]] = Clock
-                .nanoTime
-                .zip(until.get)
-                .flatMap: (now, held) =>
-                  // `nanoTime`'s values compare by their difference, which wraps as they do.
-                  if held.exists(now - _ < 0) then
-                    steps.run(slug, step)
-                  else
-                    ZIO.succeed(
-                      Left(
-                        StepFailure.Rejected(
-                          "The location's lock was lost while this ran, so it stopped here: another operation may have taken over the location.")))
-          outcome <- ZIO
-            .scoped(
-              heartbeat.forkScoped *> extending.forkScoped *> Execution.run(run, guarded, progress))
-            // Something the port did not answer for — the database, a defect — ends the run as
-            // failed at the step it had reached rather than leaving it going for ever; past its
-            // last step, every step was done.
-            .catchAllCause(cause =>
-              reached(quill, run).map(
-                _.fold(Outcome.Succeeded)(Outcome.Failed(_, failureOf(cause)))))
-          now <- Clock.instant
-          _   <-
-            operators.locally(Operator(run.startedBy, None))(
-              complete.execute(CompleteOperationCommand(run.id, outcome, now)))
-        yield ()
-        end for
+              outcome <- locks
+                .keep(OperationLock.resource(run.location), run.id.asString, OperationLock.Ttl)
+                .foldZIO(
+                  _ => ZIO.succeed(lost(run.pending.headOption)),
+                  lease => heartbeat.forkScoped *> walk(run, steps, progress, lease, runs))
+              now <- Clock.instant
+              _   <-
+                operators.locally(Operator(run.startedBy, None))(
+                  complete.execute(CompleteOperationCommand(run.id, outcome, now)))
+            yield ()
+  end runOne
+
+  /** The run's steps, raced against the loss of its lock. Something the port did not answer for —
+    * the database, a defect — ends the run failed at the step it had reached rather than leaving it
+    * going for ever; past its last step, every step was done.
+    */
+  private def walk(
+      run: Run[RunState.Started],
+      steps: OperationSteps[Task],
+      progress: RunProgress[Task],
+      lease: Lease,
+      runs: RunRepository[Task]): UIO[Outcome] = Execution
+    .run(run, steps, progress)
+    .map(Some(_))
+    .raceFirst(lease.lost.as(None))
+    .foldCauseZIO(
+      cause =>
+        reached(runs, run).map(_.fold(Outcome.Succeeded)(Outcome.Failed(_, failureOf(cause)))),
+      {
+        case Some(outcome) =>
+          ZIO.succeed(outcome)
+        // The race waited for the step going to end and be recorded, so what was reached is read
+        // as it stands.
+        case None =>
+          reached(runs, run).map(step => lost(step.orElse(run.pending.lastOption)))
+      }
+    )
+
+  /** A run that lost its lock, failed at `step`: none only for a run with no step to take. */
+  private def lost(step: Option[Step]): Outcome =
+    step.fold(Outcome.Succeeded)(Outcome.Failed(_, LockLost))
 
   /** The first step the run had not done, read again since the walk may have moved past the start.
     */
-  private def reached(quill: QuillSqlite, run: Run[RunState.Started]): UIO[Option[Step]] =
-    RunRepositoryQuill(quill)
-      .findStarted(run.id)
-      .map(_.fold(run.pending.headOption)(_.pending.headOption))
-      .orDie
+  private def reached(runs: RunRepository[Task], run: Run[RunState.Started]): UIO[Option[Step]] =
+    runs.findStarted(run.id).map(_.fold(run.pending.headOption)(_.pending.headOption)).orDie
 
   private def failureOf(cause: Cause[Throwable]): StepFailure = StepFailure.Rejected(
     Option(cause.squash.getMessage).getOrElse(cause.squash.toString))

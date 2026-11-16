@@ -237,7 +237,8 @@ object Main extends ZIOAppDefault:
       yield ()
 
   type Layers =
-    CaptalMcp.Env & Option[InfraStore] & Server & OperationQueue & OperationFlows.Complete
+    CaptalMcp.Env & Option[InfraStore] & Server & OperationQueue & OperationFlows.Complete &
+      DistributedLock
 
   /** Everything the server runs on, built against a declared type, as the API's `appLayers` is: the
     * flows' refined types meet in one intersection, which only a declared target splits back into
@@ -263,7 +264,8 @@ object Main extends ZIOAppDefault:
     OperationQueue.layer,
     OperationFlows.startLayer,
     OperationFlows.completeLayer,
-    // The locations' locks, on the Redis instances at `REDIS_LOCK_ADDRESSES`, connected on first use.
+    // The locations' locks, on the Redis instances at `REDIS_LOCK_ADDRESSES`, connected on first use;
+    // the server does not start without them.
     Redlock.layer
   )
 end Main

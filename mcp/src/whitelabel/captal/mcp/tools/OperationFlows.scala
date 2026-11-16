@@ -11,7 +11,6 @@ import whitelabel.captal.platform.OperatorContext
 import whitelabel.captal.platform.eventhandlers.{
   EventLogHandler,
   LocationPersistenceHandler,
-  OperationLockHandler,
   RunPersistenceHandler,
   TransactionalEventHandler
 }
@@ -28,46 +27,46 @@ import zio.interop.catz.*
 
 /** A location's operations as flows, composed once: one starts a run, the other ends it.
   *
-  * Starting takes the lock and writes the run under it in one transaction, and after the commit
-  * learns whether the lock was its own and queues the run for [[OperationRunner]] — data only, so
-  * no handler here runs a flow. Ending writes the location's new state, closes the run and releases
-  * the lock, in one transaction.
+  * Starting takes the location's lock in Redis for the run, then writes the run in one transaction
+  * and queues it for [[OperationRunner]] — data only, so no handler here runs a flow — keeping the
+  * lock for the runner; a start that fails lets it go. Ending writes the location's new state and
+  * closes the run in one transaction; the runner lets the lock go after it.
   */
 object OperationFlows:
   type Start = Flow.Aux[Task, StartOperationCommand, Unit]
   type Complete = Flow.Aux[Task, CompleteOperationCommand, Unit]
 
-  def start(quill: QuillSqlite, operators: OperatorContext, queue: OperationQueue): Start =
+  def start(
+      quill: QuillSqlite,
+      operators: OperatorContext,
+      queue: OperationQueue,
+      locks: DistributedLock): Start =
     val locations = LocationRepositoryQuill(quill)
     Flow(
       StartOperationHandler[Task](
         locations,
         locations,
-        RunRepositoryQuill(quill),
+        RunRepositoryQuill(quill, locks),
         TermsRepositoryQuill(quill)),
-      TransactionalEventHandler(
-        OperationLockHandler()
-          .andThen(RunPersistenceHandler())
-          .andThen(EventLogHandler.forOperator(operators)),
-        quill).andThen(OperationQueueHandler(quill, queue))
+      OperationLock.taking(locks)(
+        TransactionalEventHandler(
+          RunPersistenceHandler().andThen(EventLogHandler.forOperator(operators)),
+          quill).andThen(OperationQueueHandler(queue)))
     )
 
-  /** After the commit, the location's lock is let go: the run's end is written first, so the next
-    * operation to take the lock finds it ended.
-    */
   def complete(quill: QuillSqlite, operators: OperatorContext, locks: DistributedLock): Complete =
     Flow(
-      CompleteOperationHandler[Task](RunRepositoryQuill(quill)),
+      CompleteOperationHandler[Task](RunRepositoryQuill(quill, locks)),
       TransactionalEventHandler(
         LocationPersistenceHandler()
           .andThen(RunPersistenceHandler())
-          .andThen(OperationLockHandler())
           .andThen(EventLogHandler.forOperator(operators)),
-        quill).andThen(OperationLock.releasing(locks))
+        quill)
     )
 
-  val startLayer: ZLayer[QuillSqlite & OperatorContext & OperationQueue, Nothing, Start] = ZLayer
-    .fromFunction(start)
+  val startLayer
+      : ZLayer[QuillSqlite & OperatorContext & OperationQueue & DistributedLock, Nothing, Start] =
+    ZLayer.fromFunction(start)
 
   val completeLayer: ZLayer[QuillSqlite & OperatorContext & DistributedLock, Nothing, Complete] =
     ZLayer.fromFunction(complete)

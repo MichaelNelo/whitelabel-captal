@@ -70,6 +70,10 @@ import zio.*
   * `unifiProxyUrl` is forwarded the same way, as `UNIFI_PROXY_URL`: the HTTP proxy a location's API
   * reaches its venue's gateway through. `None` means the API calls the gateway directly.
   *
+  * `redisLockAddresses`, as `REDIS_LOCK_ADDRESSES`: the Redis instances this server takes its locks
+  * on, where a location's API takes the migrations' lock as it starts. Its tasks reach them by the
+  * same names this server does.
+  *
   * `cdcFeedAddress` too, as `CDC_FEED_ADDRESS`: the change data capture relay this server follows,
   * which a location's API follows to tell a waiting page its error recurred. Its tasks reach it by
   * the same name this server does.
@@ -96,6 +100,7 @@ final case class DeployTargets(
     taskRoleArn: String,
     image: String,
     dbUrl: String,
+    redisLockAddresses: String,
     region: String,
     /** The port the API listens on, and the port the target group forwards to. */
     containerPort: Int = 8080,
@@ -173,6 +178,7 @@ object DeployTargets:
               .env("TASK_DB_URL")
               .orDie
               .flatMap(_.map(_.trim).filter(_.nonEmpty).fold(required("DB_URL"))(ZIO.succeed(_)))
+            locks  <- required("REDIS_LOCK_ADDRESSES")
             region <- System.env("AWS_REGION").orDie.map(_.getOrElse("us-east-1"))
             proxy  <- System.env("UNIFI_PROXY_URL").orDie.map(_.map(_.trim).filter(_.nonEmpty))
             base   <- System.env("PUBLIC_BASE_URL").orDie.map(_.map(_.trim).filter(_.nonEmpty))
@@ -198,6 +204,7 @@ object DeployTargets:
               taskRoleArn = taskRole,
               image = image,
               dbUrl = dbUrl,
+              redisLockAddresses = locks,
               region = region,
               unifiProxyUrl = proxy,
               publicBaseUrl = base,
@@ -373,7 +380,13 @@ final case class InfraStore(
           (
             Seq(
               KeyValuePair.builder().name("LOCATION_SLUG").value(slug).build(),
-              KeyValuePair.builder().name("DB_URL").value(targets.dbUrl).build()) ++
+              KeyValuePair.builder().name("DB_URL").value(targets.dbUrl).build(),
+              KeyValuePair
+                .builder()
+                .name("REDIS_LOCK_ADDRESSES")
+                .value(targets.redisLockAddresses)
+                .build()
+            ) ++
               targets
                 .unifiProxyUrl
                 .map(url => KeyValuePair.builder().name("UNIFI_PROXY_URL").value(url).build()) ++

@@ -29,7 +29,7 @@ import whitelabel.captal.core.operation.Step as CoreStep
 import whitelabel.captal.mcp.access.{Auth, Tokens}
 import whitelabel.captal.mcp.apps.RunRoutes
 import whitelabel.captal.mcp.aws.{DeployTargets, InfraSteps, InfraStore}
-import whitelabel.captal.platform.locks.{DistributedLock, Redlock}
+import whitelabel.captal.platform.locks.Redlock
 import whitelabel.captal.platform.operations.OperationQueue
 import whitelabel.captal.mcp.resources.Readiness
 import whitelabel.captal.mcp.tools.{
@@ -359,7 +359,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
       // at `REDIS_LOCK_ADDRESSES`.
       queue <- OperationQueue.layer.build.map(_.get)
       locks <- Redlock.layer.build.map(_.get)
-      start = OperationFlows.start(env.get[QuillSqlite], operators, queue)
+      start = OperationFlows.start(env.get[QuillSqlite], operators, queue, locks)
       _ <-
         ZIO.foreachDiscard(infra)(store =>
           OperationRunner.start(
@@ -380,11 +380,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
           extensions)
         .statelessRoutes
         .provideEnvironment(
-          env
-            .add(tracing)
-            .add[Operators](operators)
-            .add[OperationFlows.Start](start)
-            .add[DistributedLock](locks) ++
+          env.add(tracing).add[Operators](operators).add[OperationFlows.Start](start) ++
             LocationFlows.environment(env.get[QuillSqlite], operators))
       _ <- TestClient.addRoutes(routes)
       // The run page's stream, which lives beside the protocol rather than inside it.
