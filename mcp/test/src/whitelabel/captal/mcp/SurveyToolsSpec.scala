@@ -2,22 +2,15 @@ package whitelabel.captal.mcp
 
 import java.util.UUID
 
-import com.jamesward.ziohttp.mcp.{CallToolResult, ToolContent}
+import com.jamesward.ziohttp.mcp.{CallToolResult, McpToolHandlerR, ToolContent}
 import io.getquill.*
-import io.getquill.jdbczio.Quill
 import whitelabel.captal.core.survey
 import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.tools.SurveyTools
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.{
-  LocalizedTextRow,
-  LocationRow,
-  QuestionRow,
-  RqliteDataSource,
-  SurveyRow
-}
+import whitelabel.captal.platform.{LocalizedTextRow, LocationRow, QuestionRow, SurveyRow}
 import zio.*
 import zio.test.*
 
@@ -70,6 +63,12 @@ object SurveyToolsSpec extends ZIOSpecDefault:
 
   private def json(fields: (String, zio.json.ast.Json)*) = Some(
     zio.json.ast.Json.Obj(Chunk.fromIterable(fields)))
+
+  extension [R](tool: McpToolHandlerR[R])
+    /** A command's tool, called as the operator its change is recorded under. */
+    private def asOperator(args: Option[zio.json.ast.Json.Obj]) = tool.callWithContext(
+      args,
+      OperatorContext.Default)
   private def str(s: String) = zio.json.ast.Json.Str(s)
   private def arr(items: String*) = zio.json.ast.Json.Arr(Chunk.fromIterable(items.map(str)))
 
@@ -130,9 +129,6 @@ object SurveyToolsSpec extends ZIOSpecDefault:
             "answer"   -> zio.json.ast.Json.Obj(spec))))
   end questionJson
 
-  private val quillLayer =
-    RqliteDataSource.layer >>> Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)
-
   def spec =
     suite("SurveyTools against rqlite")(
       test("get_survey returns questions in display order with their texts"):
@@ -154,7 +150,8 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           target = fixture.questionIds.head
           result <- SurveyTools
             .setIdentificationQuestionActive
-            .call(json("questionId" -> str(target), "active" -> zio.json.ast.Json.Bool(false)))
+            .asOperator(
+              json("questionId" -> str(target), "active" -> zio.json.ast.Json.Bool(false)))
           stored <- questions
         yield assertTrue(
           !result.isError.contains(true),
@@ -170,7 +167,8 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           reversed = fixture.questionIds.reverse
           result <- SurveyTools
             .reorderIdentification
-            .call(json("surveyId" -> str(fixture.surveyId), "orderedQuestionIds" -> arr(reversed*)))
+            .asOperator(
+              json("surveyId" -> str(fixture.surveyId), "orderedQuestionIds" -> arr(reversed*)))
           stored <- questions
           byOrder = stored.sortBy(_.displayOrder).map(_.id.asString)
         yield assertTrue(!result.isError.contains(true), byOrder == reversed)
@@ -181,7 +179,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           before  <- questions
           result  <- SurveyTools
             .reorderIdentification
-            .call(
+            .asOperator(
               json(
                 "surveyId"           -> str(fixture.surveyId),
                 "orderedQuestionIds" -> arr(fixture.questionIds.take(2)*)))
@@ -197,7 +195,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           fixture <- seed
           result  <- SurveyTools
             .reorderIdentification
-            .call(
+            .asOperator(
               json(
                 "surveyId"           -> str(fixture.surveyId),
                 "orderedQuestionIds" ->
@@ -217,7 +215,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           fixture <- seed
           created <- SurveyTools
             .createIdentificationQuestion
-            .call(
+            .asOperator(
               questionJson(
                 fixture.surveyId,
                 "Radio",
@@ -239,7 +237,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           fixture <- seed
           result  <- SurveyTools
             .createIdentificationQuestion
-            .call(
+            .asOperator(
               questionJson(
                 fixture.surveyId,
                 "Input",
@@ -254,7 +252,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           fixture <- seed
           result  <- SurveyTools
             .createIdentificationQuestion
-            .call(
+            .asOperator(
               questionJson(
                 fixture.surveyId,
                 "Input",
@@ -266,7 +264,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           fixture <- seed
           result  <- SurveyTools
             .createIdentificationQuestion
-            .call(questionJson(fixture.surveyId, "Radio"))
+            .asOperator(questionJson(fixture.surveyId, "Radio"))
         yield assertTrue(
           result.isError.contains(true),
           textOf(result).contains("needs at least one option"))
@@ -276,7 +274,8 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           fixture <- seed
           result  <- SurveyTools
             .createIdentificationQuestion
-            .call(questionJson(fixture.surveyId, "Input", options = Chunk(optionJson("nope"))))
+            .asOperator(
+              questionJson(fixture.surveyId, "Input", options = Chunk(optionJson("nope"))))
         yield assertTrue(
           result.isError.contains(true),
           // The input variant has no options field, and extra fields are rejected.
@@ -287,13 +286,13 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           _      <- seed
           result <- SurveyTools
             .createIdentificationSurvey
-            .call(json("category" -> str("profiling")))
+            .asOperator(json("category" -> str("profiling")))
         yield assertTrue(result.isError.contains(true), textOf(result).contains("already exists"))
       ,
       test("an advertiser survey without a video is refused by the schema"):
         for
           _      <- seed
-          result <- SurveyTools.createSurvey.call(json())
+          result <- SurveyTools.createSurvey.asOperator(json())
         yield assertTrue(result.isError.contains(true))
       ,
       // The split tools take no `category`, so the refusal is a schema error.
@@ -302,7 +301,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           _      <- seed
           result <- SurveyTools
             .createIdentificationSurvey
-            .call(json("category" -> str("advertiser")))
+            .asOperator(json("category" -> str("advertiser")))
         yield assertTrue(result.isError.contains(true))
       ,
       test("the identification tool is guarded by a different scope than the location one"):
@@ -314,7 +313,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
         // `surveys` has no foreign key to `advertiser_videos`, so nothing else would catch it.
         for
           _      <- seed
-          result <- SurveyTools.createSurvey.call(json("videoId" -> str("no-such-video")))
+          result <- SurveyTools.createSurvey.asOperator(json("videoId" -> str("no-such-video")))
         yield assertTrue(result.isError.contains(true), textOf(result).contains("No video with id"))
       ,
       test("the listing carries each question's id and wording, so one call finds it"):
@@ -368,7 +367,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
             body.contains("Profiling"),
             // A slug that resolves to nothing is an error, not an empty list that reads as "none".
             unknown.isError.contains(true),
-            textOf(unknown).contains("No location with slug")
+            textOf(unknown).contains("No location has the slug")
           )
           end for
       ,
@@ -376,10 +375,10 @@ object SurveyToolsSpec extends ZIOSpecDefault:
       test("the location-scoped question tools refuse a deployment-wide survey"):
         for
           fixture <- seed
-          created <- SurveyTools.createQuestion.call(questionJson(fixture.surveyId, "Input"))
+          created <- SurveyTools.createQuestion.asOperator(questionJson(fixture.surveyId, "Input"))
           retired <- SurveyTools
             .setQuestionActive
-            .call(
+            .asOperator(
               json(
                 "questionId" -> str(fixture.questionIds.head),
                 "active"     -> zio.json.ast.Json.Bool(false)))
@@ -400,7 +399,7 @@ object SurveyToolsSpec extends ZIOSpecDefault:
           fixture <- seed
           created <- SurveyTools
             .createIdentificationQuestion
-            .call(questionJson(fixture.surveyId, "Input"))
+            .asOperator(questionJson(fixture.surveyId, "Input"))
           stored <- questions
         yield assertTrue(!created.isError.contains(true), stored.size == 4)
       ,
@@ -421,5 +420,5 @@ object SurveyToolsSpec extends ZIOSpecDefault:
         assertTrue(!rendered.contains("rating"), rendered.contains("numeric"))
       // The schema is laid down once by `mcp.test` before forking — see `migratedRqliteUrl` in
       // build.mill.
-    ).provideShared(quillLayer) @@ TestAspect.sequential
+    ).provideLayerShared(ToolsEnvironment.withFlows) @@ TestAspect.sequential
 end SurveyToolsSpec

@@ -2,11 +2,24 @@ package whitelabel.captal.mcp.tools
 
 import whitelabel.captal.core.advertiser.Advertiser
 import whitelabel.captal.core.application.commands.{
+  AddQuestionCommand,
+  AddQuestionHandler,
+  AnswersKept,
   ChangeRecoveryPolicyCommand,
   ChangeRecoveryPolicyHandler,
   CreateAdvertiserCommand,
   CreateAdvertiserHandler,
+  CreateSurveyCommand,
+  CreateSurveyHandler,
   Handler,
+  QuestionActivity,
+  QuestionPlaced,
+  ReorderQuestionsCommand,
+  ReorderQuestionsHandler,
+  SetQuestionActiveCommand,
+  SetQuestionActiveHandler,
+  UpdateQuestionCommand,
+  UpdateQuestionHandler,
   PublishTermsVersionCommand,
   PublishTermsVersionHandler,
   ReinstateAdvertiserCommand,
@@ -26,14 +39,16 @@ import whitelabel.captal.core.application.commands.{
   UpdateAdvertiserHandler
 }
 import whitelabel.captal.core.application.{Event, Flow}
-import whitelabel.captal.core.infrastructure.AdvertiserRepository
+import whitelabel.captal.core.infrastructure.{AdvertiserRepository, SurveyAuthoringRepository}
 import whitelabel.captal.core.recovery.PolicyOverrides
+import whitelabel.captal.core.survey.authoring.SurveyKind
 import whitelabel.captal.platform.OperatorContext
 import whitelabel.captal.platform.eventhandlers.{
   AdvertiserPersistenceHandler,
   DbEventHandler,
   EventLogHandler,
   RecoveryHandler,
+  SurveyAuthoringPersistenceHandler,
   TermsPersistenceHandler,
   TransactionalEventHandler,
   TranslationPersistenceHandler
@@ -42,6 +57,7 @@ import whitelabel.captal.platform.repositories.{
   AdvertiserRepositoryQuill,
   LocationRepositoryQuill,
   RecoveryPolicyRepositoryQuill,
+  SurveyAuthoringRepositoryQuill,
   TermsRepositoryQuill,
   TranslationRepositoryQuill
 }
@@ -64,10 +80,16 @@ object ContentFlows:
   type UpdateAdvertiser = Flow.Aux[Task, UpdateAdvertiserCommand, Advertiser]
   type RetireAdvertiser = Flow.Aux[Task, RetireAdvertiserCommand, Unit]
   type ReinstateAdvertiser = Flow.Aux[Task, ReinstateAdvertiserCommand, Unit]
+  type CreateSurvey = Flow.Aux[Task, CreateSurveyCommand, SurveyKind]
+  type AddQuestion = Flow.Aux[Task, AddQuestionCommand, QuestionPlaced]
+  type UpdateQuestion = Flow.Aux[Task, UpdateQuestionCommand, AnswersKept]
+  type SetQuestionActive = Flow.Aux[Task, SetQuestionActiveCommand, QuestionActivity]
+  type ReorderQuestions = Flow.Aux[Task, ReorderQuestionsCommand, Unit]
+  type Surveys = CreateSurvey & AddQuestion & UpdateQuestion & SetQuestionActive & ReorderQuestions
   type All =
     ChangeRecoveryPolicy & PublishTermsVersion & SetTermsTranslation & RemoveTermsTranslation &
       SetTranslations & RemoveTranslation & CreateAdvertiser & UpdateAdvertiser & RetireAdvertiser &
-      ReinstateAdvertiser
+      ReinstateAdvertiser & Surveys
 
   /** What `writes` persists, then the event log, in one transaction. */
   private def logged(quill: QuillSqlite, operators: OperatorContext)(
@@ -133,7 +155,42 @@ object ContentFlows:
   def reinstateAdvertiser(quill: QuillSqlite, operators: OperatorContext): ReinstateAdvertiser =
     advertiserFlow(quill, operators)(ReinstateAdvertiserHandler[Task](_))
 
+  /** A survey authoring command, through the chain that writes surveys and their questions. */
+  private def surveyFlow[C, R](quill: QuillSqlite, operators: OperatorContext)(
+      handler: SurveyAuthoringRepository[Task] => Handler.Aux[Task, C, R]): Flow.Aux[Task, C, R] =
+    Flow(
+      handler(SurveyAuthoringRepositoryQuill(quill)),
+      logged(quill, operators)(SurveyAuthoringPersistenceHandler()))
+
+  def createSurvey(quill: QuillSqlite, operators: OperatorContext): CreateSurvey =
+    surveyFlow(quill, operators)(CreateSurveyHandler[Task](_))
+
+  def addQuestion(quill: QuillSqlite, operators: OperatorContext): AddQuestion =
+    surveyFlow(quill, operators)(AddQuestionHandler[Task](_))
+
+  def updateQuestion(quill: QuillSqlite, operators: OperatorContext): UpdateQuestion =
+    surveyFlow(quill, operators)(UpdateQuestionHandler[Task](_))
+
+  def setQuestionActive(quill: QuillSqlite, operators: OperatorContext): SetQuestionActive =
+    surveyFlow(quill, operators)(SetQuestionActiveHandler[Task](_))
+
+  def reorderQuestions(quill: QuillSqlite, operators: OperatorContext): ReorderQuestions =
+    surveyFlow(quill, operators)(ReorderQuestionsHandler[Task](_))
+
   private type Needs = QuillSqlite & OperatorContext
+
+  val createSurveyLayer: ZLayer[Needs, Nothing, CreateSurvey] = ZLayer.fromFunction(createSurvey)
+
+  val addQuestionLayer: ZLayer[Needs, Nothing, AddQuestion] = ZLayer.fromFunction(addQuestion)
+
+  val updateQuestionLayer: ZLayer[Needs, Nothing, UpdateQuestion] = ZLayer.fromFunction(
+    updateQuestion)
+
+  val setQuestionActiveLayer: ZLayer[Needs, Nothing, SetQuestionActive] = ZLayer.fromFunction(
+    setQuestionActive)
+
+  val reorderQuestionsLayer: ZLayer[Needs, Nothing, ReorderQuestions] = ZLayer.fromFunction(
+    reorderQuestions)
 
   val createAdvertiserLayer: ZLayer[Needs, Nothing, CreateAdvertiser] = ZLayer.fromFunction(
     createAdvertiser)
@@ -180,4 +237,9 @@ object ContentFlows:
     .add[UpdateAdvertiser](updateAdvertiser(quill, operators))
     .add[RetireAdvertiser](retireAdvertiser(quill, operators))
     .add[ReinstateAdvertiser](reinstateAdvertiser(quill, operators))
+    .add[CreateSurvey](createSurvey(quill, operators))
+    .add[AddQuestion](addQuestion(quill, operators))
+    .add[UpdateQuestion](updateQuestion(quill, operators))
+    .add[SetQuestionActive](setQuestionActive(quill, operators))
+    .add[ReorderQuestions](reorderQuestions(quill, operators))
 end ContentFlows
