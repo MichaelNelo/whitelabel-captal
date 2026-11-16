@@ -7,8 +7,13 @@ import whitelabel.captal.core.application.commands.{
   PublishTermsVersionHandler,
   RemoveTermsTranslationCommand,
   RemoveTermsTranslationHandler,
+  RemoveTranslationCommand,
+  RemoveTranslationHandler,
   SetTermsTranslationCommand,
-  SetTermsTranslationHandler
+  SetTermsTranslationHandler,
+  SetTranslationsCommand,
+  SetTranslationsHandler,
+  TranslationRemoval
 }
 import whitelabel.captal.core.application.{Event, Flow}
 import whitelabel.captal.core.recovery.PolicyOverrides
@@ -18,12 +23,14 @@ import whitelabel.captal.platform.eventhandlers.{
   EventLogHandler,
   RecoveryHandler,
   TermsPersistenceHandler,
-  TransactionalEventHandler
+  TransactionalEventHandler,
+  TranslationPersistenceHandler
 }
 import whitelabel.captal.platform.repositories.{
   LocationRepositoryQuill,
   RecoveryPolicyRepositoryQuill,
-  TermsRepositoryQuill
+  TermsRepositoryQuill,
+  TranslationRepositoryQuill
 }
 import whitelabel.captal.platform.schema.QuillSqlite
 import zio.*
@@ -38,8 +45,11 @@ object ContentFlows:
   type PublishTermsVersion = Flow.Aux[Task, PublishTermsVersionCommand, Int]
   type SetTermsTranslation = Flow.Aux[Task, SetTermsTranslationCommand, Unit]
   type RemoveTermsTranslation = Flow.Aux[Task, RemoveTermsTranslationCommand, Unit]
+  type SetTranslations = Flow.Aux[Task, SetTranslationsCommand, List[String]]
+  type RemoveTranslation = Flow.Aux[Task, RemoveTranslationCommand, TranslationRemoval]
   type All =
-    ChangeRecoveryPolicy & PublishTermsVersion & SetTermsTranslation & RemoveTermsTranslation
+    ChangeRecoveryPolicy & PublishTermsVersion & SetTermsTranslation & RemoveTermsTranslation &
+      SetTranslations & RemoveTranslation
 
   /** What `writes` persists, then the event log, in one transaction. */
   private def logged(quill: QuillSqlite, operators: OperatorContext)(
@@ -75,7 +85,25 @@ object ContentFlows:
     logged(quill, operators)(TermsPersistenceHandler())
   )
 
+  def setTranslations(quill: QuillSqlite, operators: OperatorContext): SetTranslations = Flow(
+    SetTranslationsHandler[Task](LocationRepositoryQuill(quill), TranslationRepositoryQuill(quill)),
+    logged(quill, operators)(TranslationPersistenceHandler())
+  )
+
+  def removeTranslation(quill: QuillSqlite, operators: OperatorContext): RemoveTranslation = Flow(
+    RemoveTranslationHandler[Task](
+      LocationRepositoryQuill(quill),
+      TranslationRepositoryQuill(quill)),
+    logged(quill, operators)(TranslationPersistenceHandler())
+  )
+
   private type Needs = QuillSqlite & OperatorContext
+
+  val setTranslationsLayer: ZLayer[Needs, Nothing, SetTranslations] = ZLayer.fromFunction(
+    setTranslations)
+
+  val removeTranslationLayer: ZLayer[Needs, Nothing, RemoveTranslation] = ZLayer.fromFunction(
+    removeTranslation)
 
   val changeRecoveryPolicyLayer: ZLayer[Needs, Nothing, ChangeRecoveryPolicy] = ZLayer.fromFunction(
     changeRecoveryPolicy)
@@ -98,4 +126,6 @@ object ContentFlows:
     .add[PublishTermsVersion](publishTermsVersion(quill, operators))
     .add[SetTermsTranslation](setTermsTranslation(quill, operators))
     .add[RemoveTermsTranslation](removeTermsTranslation(quill, operators))
+    .add[SetTranslations](setTranslations(quill, operators))
+    .add[RemoveTranslation](removeTranslation(quill, operators))
 end ContentFlows

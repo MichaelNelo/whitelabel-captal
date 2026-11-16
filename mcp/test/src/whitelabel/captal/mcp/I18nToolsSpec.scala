@@ -4,11 +4,10 @@ import java.util.UUID
 
 import com.jamesward.ziohttp.mcp.ToolContent
 import io.getquill.*
-import io.getquill.jdbczio.Quill
 import whitelabel.captal.mcp.tools.I18nTools
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.{LocalizedTextRow, LocationRow, RqliteDataSource}
+import whitelabel.captal.platform.{LocalizedTextRow, LocationRow}
 import zio.*
 import zio.test.*
 
@@ -49,7 +48,7 @@ object I18nToolsSpec extends ZIOSpecDefault:
 
   private def set(key: String, value: String) = I18nTools
     .setTranslations
-    .call(
+    .callWithContext(
       Some(
         zio
           .json
@@ -74,7 +73,9 @@ object I18nToolsSpec extends ZIOSpecDefault:
                           Chunk(
                             "key"   -> zio.json.ast.Json.Str(key),
                             "value" -> zio.json.ast.Json.Str(value)))))
-            ))))
+            ))),
+      OperatorContext.Default
+    )
 
   /** Blind insert with a caller-chosen id, bypassing the natural-key lookup the tools do. Exists
     * only to characterise what the driver does on a constraint violation.
@@ -89,8 +90,6 @@ object I18nToolsSpec extends ZIOSpecDefault:
     quill.run(
       query[LocalizedTextRow].insertValue(
         lift(LocalizedTextRow(id, key, Locale, value, "frontend", now, now, Some(locationId), 1))))
-  private val quillLayer =
-    RqliteDataSource.layer >>> Quill.Sqlite.fromNamingStrategy(io.getquill.SnakeCase)
 
   def spec =
     suite("I18nTools against rqlite")(
@@ -113,7 +112,7 @@ object I18nToolsSpec extends ZIOSpecDefault:
           _          <- set(SomeKey, "Bienvenido")
           removed    <- I18nTools
             .removeTranslation
-            .call(
+            .callWithContext(
               Some(
                 zio
                   .json
@@ -123,7 +122,9 @@ object I18nToolsSpec extends ZIOSpecDefault:
                     Chunk(
                       "slug"   -> zio.json.ast.Json.Str(Slug),
                       "locale" -> zio.json.ast.Json.Str(Locale),
-                      "key"    -> zio.json.ast.Json.Str(SomeKey)))))
+                      "key"    -> zio.json.ast.Json.Str(SomeKey)))),
+              OperatorContext.Default
+            )
           afterRemove <- rowsFor(locationId)
           _           <- set(SomeKey, "De nuevo")
           afterRevive <- rowsFor(locationId)
@@ -202,5 +203,5 @@ object I18nToolsSpec extends ZIOSpecDefault:
         )
       // The schema is laid down once by `mcp.test` before forking — see `migratedRqliteUrl` in
       // build.mill.
-    ).provideShared(quillLayer) @@ TestAspect.sequential
+    ).provideLayerShared(ToolsEnvironment.withFlows) @@ TestAspect.sequential
 end I18nToolsSpec

@@ -266,6 +266,8 @@ object Main extends ZIOAppDefault:
     ContentFlows.publishTermsVersionLayer,
     ContentFlows.setTermsTranslationLayer,
     ContentFlows.removeTermsTranslationLayer,
+    ContentFlows.setTranslationsLayer,
+    ContentFlows.removeTranslationLayer,
     OperationQueue.layer,
     OperationFlows.startLayer,
     OperationFlows.completeLayer,

@@ -1,33 +1,36 @@
 package whitelabel.captal.mcp.tools
 
-import java.util.UUID
+import java.time.Instant
 
+import cats.syntax.foldable.*
 import com.jamesward.ziohttp.mcp.*
-import io.getquill.*
-import whitelabel.captal.core.i18n.{I18n, I18nSchema}
+import whitelabel.captal.core.application.commands.{
+  RemoveTranslationCommand,
+  SetTranslationsCommand
+}
+import whitelabel.captal.core.application.queries.TranslationCoverageQuery
+import whitelabel.captal.core.application.{Error as AppError, Flow}
+import whitelabel.captal.core.i18n.{Error as I18nError, I18n, I18nSchema, TranslationEntry}
+import whitelabel.captal.core.location.Slug
 import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
-import whitelabel.captal.mcp.{QuillArrow, Writes}
+import whitelabel.captal.platform.queries.TranslationCoverage
 import whitelabel.captal.platform.schema.QuillSqlite
-import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.{LocalizedTextRow, LocationRow}
+import whitelabel.captal.platform.{Operator, OperatorContext}
 import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
 import McpSchema.given
-import QuillArrow.->
 import ToolSchema.readOnly
 
-/** Translation tools: the first mutations the backoffice exposes.
+/** Translation tools: a location's portal texts, through `core`'s `SetTranslationsCommand`,
+  * `RemoveTranslationCommand` and `TranslationCoverageQuery`.
   *
-  * i18n goes first deliberately. `localized_texts` is a leaf table with no nested children, the
-  * required key set is derived from the type so writes can be validated instead of trusted, and the
-  * failure it addresses is real: a missing key renders `[welcome.title]` to a guest with no error
-  * anywhere.
+  * The required key set is derived from the type, so writes are validated instead of trusted: a
+  * missing key renders `[welcome.title]` to a guest with no error anywhere.
   */
 object I18nTools:
-  private val Category = "frontend"
 
   final case class LocaleStatus(
       @description("BCP 47 tag, as stored — 'es', 'en'.")
@@ -115,84 +118,31 @@ object I18nTools:
   given Schema[RemoveTranslationRequest] = DeriveSchema.gen
   given Schema[RemoveTranslationResponse] = DeriveSchema.gen
 
-  private inline def locationBySlugQuery = quote: (slugParam: String) =>
-    query[LocationRow].filter(_.slug == slugParam).take(1)
+  /** What the operator reads for each refusal of these tools. */
+  private val describe: PartialFunction[AppError, List[String]] =
+    case AppError.Location(found) =>
+      found.toList.map(LocationCommands.describe)
+    case AppError.I18n(found) =>
+      found
+        .toList
+        .map:
+          case I18nError.UnknownKeys(keys) =>
+            s"Not part of the i18n schema: ${keys.mkString(
+                ", ")}. Call get_i18n_schema for the keys that are."
+          case I18nError.NoEntries =>
+            "No entries given."
 
-  private inline def activeTextsQuery = quote: (locationIdParam: Option[String]) =>
-    query[LocalizedTextRow].filter(r =>
-      r.locationId == locationIdParam && r.category == "frontend" && r.isActive == 1)
+  private def slugOf(raw: String): IO[String, Slug] = ZIO
+    .fromEither(Slug.parse(raw.trim))
+    .mapError(LocationCommands.describe)
 
-  /** Deliberately ignores `is_active`: a write has to find a previously retired row so it can bring
-    * it back, rather than inserting a duplicate that the natural-key unique index would reject.
-    */
-  private inline def byNaturalKeyQuery = quote:
-    (entityIdParam: String, localeParam: String, locationIdParam: Option[String]) =>
-      query[LocalizedTextRow].filter(r =>
-        r.entityId == entityIdParam && r.locale == localeParam && r.locationId == locationIdParam)
-
-  private def resolveSlug(slug: String): ZIO[QuillSqlite, String, String] = ZIO.serviceWithZIO[
-    QuillSqlite]: quill =>
-    import quill.*
-    run(locationBySlugQuery(lift(slug)))
-      .orDie
-      .map(_.headOption)
-      .someOrFail(s"No location with slug '$slug'. Check `resources/list` for what exists.")
-      .map(_.id)
-
-  private def storedFor(locationId: String): ZIO[QuillSqlite, Nothing, List[LocalizedTextRow]] = ZIO
-    .serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      run(activeTextsQuery(lift(Option(locationId)))).orDie
-
-  private def missingFor(
-      locationId: String,
-      locale: String): ZIO[QuillSqlite, Nothing, List[String]] = storedFor(locationId).map: rows =>
-    val present = rows.filter(_.locale == locale).map(r => r.entityId -> r.value).toMap
-    I18nSchema.missing[I18n](present)
-
-  /** Writes one row, upserting on the NATURAL key `(entity_id, locale, location_id)`.
-    *
-    * Not `onConflictUpdate(_.id)`, which is what `EntityWriter` does: that resolves conflicts on
-    * the primary key and only ever worked because `IdGenerator` derived the id from these same
-    * three fields. With surrogate ids a blind insert collides with the unique index from V12 and
-    * fails outright instead of updating.
-    */
-  private def upsert(
-      locationId: String,
-      locale: String,
-      key: String,
-      value: String): ZIO[QuillSqlite, String, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
-    import quill.*
+  /** Runs `command` through `flow` as the calling operator. */
+  private def changed[C, R](ctx: McpToolContext, command: C)(
+      flow: Flow.Aux[Task, C, R]): ZIO[OperatorContext, String, R] =
     for
-      now      <- Clock.instant.map(_.toString)
-      existing <- run(byNaturalKeyQuery(lift(key), lift(locale), lift(Option(locationId))))
-        .orDie
-        .map(_.headOption)
-      affected <-
-        existing match
-          case Some(row) =>
-            run(
-              query[LocalizedTextRow]
-                .filter(_.id == lift(row.id))
-                // isActive -> 1 so writing a translation undoes an earlier removal.
-                .update(_.value -> lift(value), _.updatedAt -> lift(now), _.isActive -> 1)).orDie
-          case None =>
-            val row = LocalizedTextRow(
-              id = UUID.randomUUID.toString,
-              entityId = key,
-              locale = locale,
-              value = value,
-              category = Category,
-              createdAt = now,
-              updatedAt = now,
-              locationId = Some(locationId),
-              isActive = 1
-            )
-            run(query[LocalizedTextRow].insertValue(lift(row))).orDie
-      // The guard lives in Writes because it applies to every write in this server, not just here.
-      _ <- Writes.expectOne(affected, s"Write for '$key' ($locale)")
-    yield ()
-    end for
+      caller <- Commands.callerOf(ctx)
+      result <- Commands.run(Operator(caller, None), command)(flow)(describe)
+    yield result
 
   /** The key set itself, which `get_i18n_status` reports coverage against.
     *
@@ -214,69 +164,50 @@ object I18nTools:
     .readOnly
     .handle: (in: I18nStatusIn) =>
       for
-        locationId <- resolveSlug(in.slug)
-        rows       <- storedFor(locationId)
-        required    = I18nSchema.keys[I18n]
-        requiredSet = required.toSet
-        locales     = rows
-          .groupBy(_.locale)
-          .toList
-          .sortBy(_._1)
-          .map: (locale, localeRows) =>
-            val present = localeRows.map(r => r.entityId -> r.value).toMap
-            LocaleStatus(
-              locale = locale,
-              present = present.size,
-              missing = I18nSchema.missing[I18n](present),
-              // Keys stored but no longer in the schema: renamed or removed upstream, dead weight.
-              unknown = present.keys.filterNot(requiredSet.contains).toList.sorted
-            )
-      yield I18nStatusOut(in.slug, required.size, locales)
+        slug   <- slugOf(in.slug)
+        quill  <- ZIO.service[QuillSqlite]
+        report <- Commands.ask(TranslationCoverage(quill), TranslationCoverageQuery(slug))(describe)
+      yield I18nStatusOut(
+        report.slug.asString,
+        report.required,
+        report
+          .locales
+          .map(locale =>
+            LocaleStatus(locale.locale, locale.present, locale.missing, locale.unknown)))
 
-  val setTranslations: McpToolHandlerR[QuillSqlite] = McpTool("set_translations")
+  val setTranslations: McpToolHandlerR[OperatorContext & ContentFlows.SetTranslations] = McpTool(
+    "set_translations")
     .description(
       "Create or update translations for one locale of a location. Keys must belong to the i18n schema; call get_i18n_schema for the list and read_skill('edit-i18n') for the procedure. Reports which keys are still missing afterwards.")
     .requireScopes(Auth.I18nWrite)
-    .handle: (in: SetTranslationsRequest) =>
-      val requiredSet = I18nSchema.keys[I18n].toSet
-      val unknown = in.entries.map(_.key).filterNot(requiredSet.contains).distinct.sorted
+    .handleWithContext: (in: SetTranslationsRequest, ctx: McpToolContext) =>
       for
-        // Rejected as a whole rather than partially applied: a typo'd key would otherwise be
-        // written and silently never rendered.
-        _ <-
-          ZIO.when(unknown.nonEmpty)(
-            ZIO.fail(
-              s"Not part of the i18n schema: ${unknown.mkString(
-                  ", ")}. Call get_i18n_schema for the keys that are."))
-        _          <- ZIO.when(in.entries.isEmpty)(ZIO.fail("No entries given."))
-        locationId <- resolveSlug(in.slug)
-        _ <- ZIO.foreachDiscard(in.entries)(e => upsert(locationId, in.locale, e.key, e.value))
-        missing <- missingFor(locationId, in.locale)
+        slug    <- slugOf(in.slug)
+        flow    <- ZIO.service[ContentFlows.SetTranslations]
+        missing <-
+          changed(
+            ctx,
+            SetTranslationsCommand(
+              slug,
+              in.locale,
+              in.entries.map(e => TranslationEntry(e.key, e.value)),
+              Instant.now))(flow)
       yield SetTranslationsResponse(in.entries.size, missing)
 
-  val removeTranslation: McpToolHandlerR[QuillSqlite] = McpTool("remove_translation")
-    .description(
-      "Retire one translation (soft delete). The portal will render the literal [key] for that locale until it is set again.")
-    .requireScopes(Auth.I18nWrite)
-    .handle: (in: RemoveTranslationRequest) =>
-      ZIO.serviceWithZIO[QuillSqlite]: quill =>
-        import quill.*
+  val removeTranslation: McpToolHandlerR[OperatorContext & ContentFlows.RemoveTranslation] =
+    McpTool("remove_translation")
+      .description(
+        "Retire one translation (soft delete). The portal will render the literal [key] for that locale until it is set again.")
+      .requireScopes(Auth.I18nWrite)
+      .handleWithContext: (in: RemoveTranslationRequest, ctx: McpToolContext) =>
         for
-          locationId <- resolveSlug(in.slug)
-          now        <- Clock.instant.map(_.toString)
-          affected   <-
-            run(
-              query[LocalizedTextRow]
-                .filter(r =>
-                  r.entityId == lift(in.key) && r.locale == lift(in.locale) &&
-                    r.locationId == lift(Option(locationId)) && r.isActive == 1)
-                .update(_.isActive -> 0, _.updatedAt -> lift(now))).orDie
-          missing <- missingFor(locationId, in.locale)
-        yield RemoveTranslationResponse(affected > 0, missing)
+          slug    <- slugOf(in.slug)
+          flow    <- ZIO.service[ContentFlows.RemoveTranslation]
+          removal <-
+            changed(ctx, RemoveTranslationCommand(slug, in.locale, in.key, Instant.now))(flow)
+        yield RemoveTranslationResponse(removal.removed, removal.stillMissing)
 
-  val all: List[McpToolHandlerR[QuillSqlite]] = List(
-    schema,
-    status,
-    setTranslations,
-    removeTranslation)
+  val all: List[McpToolHandlerR[
+    QuillSqlite & OperatorContext & ContentFlows.SetTranslations &
+      ContentFlows.RemoveTranslation]] = List(schema, status, setTranslations, removeTranslation)
 end I18nTools
