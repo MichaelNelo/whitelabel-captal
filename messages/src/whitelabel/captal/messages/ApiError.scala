@@ -125,8 +125,10 @@ object ApiError:
         ApiError.UnknownAccessPoint(apMac.show)
       case AppError.LocationNotDeployed(location) =>
         ApiError.LocationNotDeployed(location.asString)
-      // The backoffice's: no guest-facing route runs a location command.
+      // The backoffice's: no guest-facing route runs a location or a terms command.
       case AppError.Location(errors) =>
+        ApiError.InternalError(errors.head.toString)
+      case AppError.Terms(errors) =>
         ApiError.InternalError(errors.head.toString)
 
   /** The header each field of UniFi's redirect reaches the API as. */
@@ -145,6 +147,12 @@ object ApiError:
         ApiError.RecoveryAlreadyUsed(errorId.asString)
       case recovery.Error.NotYet(availableAt) =>
         ApiError.RecoveryNotYet(availableAt.toString)
+      // The backoffice's: no guest-facing route changes a location's recovery settings.
+      case other @ (
+            recovery.Error.NothingToChange | _: recovery.Error.SetAndReset |
+            _: recovery.Error.Negative | _: recovery.Error.CeilingBelowMaximum
+          ) =>
+        ApiError.InternalError(other.toString)
 
   private def fromSurveyError(err: survey.Error): ApiError =
     err match
