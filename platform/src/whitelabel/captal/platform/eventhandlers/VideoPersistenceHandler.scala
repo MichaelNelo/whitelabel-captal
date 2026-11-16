@@ -84,21 +84,17 @@ object VideoPersistenceHandler:
                   minWatchSeconds,
                   standing,
                   occurredAt)) =>
+            // The switch itself: from here the video plays this file. Only an unconfirmed one
+            // switches. No count is checked: inside the transaction the driver defers the write to
+            // the commit and reports no row affected; that this is the file the video waits for is
+            // what the command read before deciding.
             for
-              // The switch itself: from here the video plays this file. Only an unconfirmed one
-              // switches, and finding none undoes the change, since the decision was made on it.
-              confirmed <- run(
+              _ <- run(
                 query[VideoFileRow]
                   .filter(f => f.id == lift(file.asString) && f.confirmedAt.isEmpty)
                   .update(
                     _.confirmedAt     -> lift(Option(VideoFiles.stamp(occurredAt))),
                     _.durationSeconds -> lift(Option(durationSeconds))))
-              _ <-
-                ZIO.when(confirmed != 1)(
-                  ZIO.fail(
-                    IllegalStateException(
-                      s"Confirming file '${file.asString}' of video '${video
-                          .asString}' affected $confirmed rows")))
               _ <- run(
                 query[AdvertiserVideoRow]
                   .filter(_.id == lift(video))
