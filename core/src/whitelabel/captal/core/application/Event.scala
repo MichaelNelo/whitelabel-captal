@@ -8,6 +8,7 @@ import whitelabel.captal.core.{
   recovery,
   session,
   survey,
+  terms,
   user,
   video
 }
@@ -22,3 +23,4 @@ enum Event:
   case Location(event: location.Event)
   case Operation(event: operation.Event)
   case Session(event: session.Event)
+  case Terms(event: terms.Event)
