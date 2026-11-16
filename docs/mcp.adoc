@@ -59,7 +59,9 @@ ALB those differ" would otherwise be two settings that have to be kept in sync b
 fails to build would otherwise silently become a server that starts and answers every call
 synchronously, with none of the three extensions actually registered.
 . Logs any skill that `SkillsExtension` could not publish (`logSkipped`).
-. Runs `McpMigrate.run` to completion before serving anything — see <<Migrations>>.
+. Runs `McpMigrate.run` to completion before serving anything — see <<Migrations>> — each set under
+the migrations' lock in Redis at `REDIS_LOCK_ADDRESSES` (required: the server does not start
+without it, and the operations' lock is taken there too, see <<Locks>>).
 . Reads `Option[InfraStore]` from the environment. Absent means `ECS_CLUSTER` was never set, and
 the deploy, pause, resume and destroy tools are simply not registered — not disabled, not erroring,
 absent from the tool list a client sees.
@@ -807,61 +809,59 @@ None of the four is a task. Each waits minutes on AWS, and a host caps how long 
 open — Claude's proxy closes the stream at about five minutes, keepalives or not — so each answers
 at once with a run.
 
-A tool first takes the location's lock in Redis for the new run (`Redlock`, below), then runs
-`StartOperationCommand` (`core`) with who holds it if not this run. The command decides whether the
-operation may start and with which steps; its handlers point the location at the run
-(`locations.current_run`) and write the run to `mcp_deploy_runs`, and after the commit the run is
-queued. A command that starts nothing lets the lock go. `OperationRunner`, started by `Main`, takes
-each run on a fiber of its own: it walks the run's steps in `core`'s order through `InfraSteps` (ECS,
-the load balancer, S3, CloudFront), marking each step and its note on the row as it goes, rewriting
-the heartbeat every ten seconds and extending the lock every ten, then runs
-`CompleteOperationCommand`. Its handlers record where the location stands (`locations.state` and
-`state_run`) — only while `current_run` is still this run — close the run and clear `current_run`;
-after the commit the lock goes. A run that failed leaves the state as it was. That state is what
-`core`'s location commands read and what the location's portal reads before it admits a guest: only
-while it is `deployed`, so while a first deploy or a resume runs, and after one that failed part way,
-the portal turns every guest away (see xref:api.adoc[Guest API]).
+A tool runs `StartOperationCommand` (`core`), which decides whether the operation may start and with
+which steps, reading through `RunRepository` whether an operation is going on the location and
+whether its latest run was left unfinished. When it starts one, the flow takes the location's lock
+for the run (below), writes the run to `mcp_deploy_runs` in one transaction and queues it.
+`OperationRunner`, started by `Main`, takes each run on a fiber of its own, adopting its lock: it
+walks the run's steps in `core`'s order through `InfraSteps` (ECS, the load balancer, S3,
+CloudFront), marking each step and its note on the row as it goes and rewriting the heartbeat every
+ten seconds, then runs `CompleteOperationCommand`, whose handlers record where the location stands
+(`locations.state` and `state_run`) and close the run; then it lets the lock go. A run that failed
+leaves the state as it was. That state is what `core`'s location commands read and what the
+location's portal reads before it admits a guest: only while it is `deployed`, so while a first
+deploy or a resume runs, and after one that failed part way, the portal turns every guest away (see
+xref:api.adoc[Guest API]).
 
-The lock is what says a run is going. An operation asked while another run holds it is refused with
-`OperationInProgress`, and the tool asks whether to follow that one instead. With the lock this
-call's, nobody is at the location's latest run, so one still `running` was left part way, as was one
-that failed: the operation is refused with `PreviousOperationUnfinished`, and the tool asks the
-operator whether to finish that run first; yes runs only the steps it left, each of which can run
-twice with the same result. A destroy goes ahead over an unfinished run, which it removes along with
-the rest. The heartbeat is for whoever follows a run: a `running` row whose heartbeat is more than a
+The lock is what says a run is going: it lasts as long as a runner keeps extending it. An operation
+asked while one is going is refused with `OperationInProgress`, and the tool asks whether to follow
+it instead. With no lock held, a latest run still `running` was left part way, as was one that
+failed: the operation is refused with `PreviousOperationUnfinished`, and the tool asks the operator
+whether to finish that run first; yes runs only the steps it left, each of which can run twice with
+the same result. A destroy goes ahead over an unfinished run, which it removes along with the rest.
+What the command read can be a moment old by the time the flow takes the lock: if another run took
+it in between, the start fails with `TransitionTaken`, naming that run, and the tool asks whether to
+follow it. The heartbeat is for whoever follows a run: a `running` row whose heartbeat is more than a
 minute old is reported as `interrupted`.
-
-A run whose lock can no longer be extended runs no further step: it fails at the next one, saying the
-lock was lost. That happens when this process could not reach Redis for longer than the lock lasts
-(30 seconds), or when the one Redis instance restarted, empty; another operation may have taken the
-location meanwhile, and its run is the one `current_run` names, so the old run's completion moves
-nothing. Each extension also says how long the lock is sure to last, and before each step the runner
-checks that time against its own clock, so a process that froze past it runs no step on waking.
 
 A step and its record are one (`Execution`, under cats-effect's `uncancelable`): once a step is
 recorded as started, nothing from outside stops it before it is recorded as ended, so the run never
-says a step was done, or not, other than as it was. A run stops between two steps only, which is
-also where a lost lock stops it; a step already going when the lock expires runs to its end. When
-the server stops, it waits for each step going to end and be recorded, for as long as ECS gives it
-(30 seconds) before it kills the process; a run killed so is left part way, as one cut off by a
-crash, and is finished later.
+says a step was done, or not, other than as it was. The runner races the walk against the loss of
+the lock (`raceFirst` against the lease's `lost`): once an extension fails — this process could not
+reach Redis for longer than the lock lasts (30 seconds), or the one Redis instance restarted, empty —
+the walk stops between two steps, and the run ends failed, saying the lock was lost. Failed even
+when its last step was done: another operation may have moved the location meanwhile, so a run that
+lost its lock never moves it. A step already going when the lock is lost runs to its end. When the
+server stops, it waits for each step going to end and be recorded, for as long as ECS gives it (30
+seconds) before it kills the process; a run killed so is left part way, as one cut off by a crash,
+and is finished later.
 
 [[Locks]]
 === The operations' lock
 
-`platform`'s `Redlock` takes a lock as Redis describes Redlock, on the instances at
-`REDIS_LOCK_ADDRESSES` (`host:port`, comma separated; `modules/redis-lock` runs them, see
-xref:infrastructure.adoc[Infrastructure]). It sets `captal:location:<id>:operation` to the run's id
-with `SET … NX PX … GET` on every instance at once, each given half a second to answer, and holds it
-when a majority did and some of its time is left, less what taking it took and a margin for clock
-drift; otherwise it lets it go on all of them. An instance that refuses answers in that same command
-which run holds the lock, so the tool names the run going without a second question its holder could
-have let go of in between. Extending and releasing run a script that acts only while
-the instance holds this run's id, so a lock that expired and was taken by another run is never
-extended or deleted by the old one. An instance is connected the first time it is asked, and one
-that cannot be reached is a vote not given. With `REDIS_LOCK_ADDRESSES` unset, no lock can be taken
-and every operation is refused, naming the reason; with too few instances answering, the tool says so
-and starts nothing.
+The key `captal:location:<id>:operation` in Redis, taken through `platform`'s `DistributedLock` (see
+xref:platform.adoc#Locks[Platform]) at `REDIS_LOCK_ADDRESSES`, whose value is the id of the run going:
+
+* *Read* by `RunRepositoryQuill` for `going` and `unfinished`: the run holding it, and whether one is.
+* *Taken* by `OperationLock.taking`, which wraps the start flow's transaction and queue: when the
+  command starts a run, it takes the lock for 30 seconds under the run's id, refuses the start with
+  `TransitionTaken` when another run holds it, and lets it go when what it wraps fails. A command
+  refused takes nothing.
+* *Kept* by the runner with `keep`, which adopts it, extends it every 10 seconds and lets it go when
+  the runner's scope closes, after `CompleteOperationCommand`.
+
+With too few instances answering, the tool says so and starts nothing. The server does not start
+without `REDIS_LOCK_ADDRESSES`, which the migrations take their lock at too.
 
 Inside a run every wait polls AWS every five seconds and gives up after 15 minutes.
 

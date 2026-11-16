@@ -566,7 +566,8 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
   its own, each under `Migrate.Lock`. Rejected: a one-off migration task that `ci.run` would launch
   before the services — the user chose that the backoffice migrate what it needs.
 * **Migration serialisation uses a lock built on rqlite itself (`Migrate.Lock`), not Flyway's own
-  locking, not S3, not EFS, not etcd — for now.** Flyway's lock needs a transaction to hold it and
+  locking, not S3, not EFS, not etcd — for now.** _Superseded on 2026-11-15: the lock is in Redis,
+  as every other lock (the entry on Redlock below); this one is kept for its reasoning._ Flyway's lock needs a transaction to hold it and
   rqlite had none usable for most of this project's life (see `incidents.adoc`); even with
   transactions restored, Flyway's SQLite dialect logs "does not support locking" and does nothing.
   The lock is a single `INSERT` of a fixed primary key, decided by *reading back* who landed, not
@@ -606,12 +607,25 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
   taken by a conditional write, with a run's heartbeat on its row saying whether anyone was at it.
   That could not tell a slow runner from a dead one: a dead run stayed `running` until someone asked,
   and a live runner whose heartbeat went stale could be taken over and still apply its completion
-  afterwards. Now the tool takes `captal:location:<id>:operation` for the new run before the command,
-  which reads who holds it as data (`holder`); the runner extends it every 10 seconds of its 30 and
-  stops at the next step once it cannot; it goes after the commit that ends the run. `current_run`
-  stays, as the fencing token for the database: a run's completion moves the location only while
-  `current_run` still names it. The heartbeat is only what a run page shows. *What was weighed,
-  with the reasoning kept:*
+  afterwards. Now `captal:location:<id>:operation` says it: the command reads through
+  `RunRepository` whether a run holds it (`going`) and, when none does, whether the latest run did
+  not complete (`unfinished`); the start flow takes it for the run around its transaction
+  (`OperationLock.taking`), refusing with `TransitionTaken` when another took it since the read; the
+  runner adopts it as a scoped resource (`keep`, `acquireRelease`), races the walk against its loss
+  (`raceFirst`) and lets it go when its scope closes, after the run is ended. The heartbeat is only
+  what a run page shows. *What was weighed, with the reasoning kept:*
+** *The lock taken in the tool, its outcome passed to the command as data* (`holder`) — the first
+   cut, by analogy with the instant and the new id. Set aside at the user's direction: who holds the
+   lock is state, read through a repository like the latest run, and taking it is a write, which
+   belongs with the event handlers. Taking it before deciding was weighed too, and set aside since
+   a lock held already means an operation going: "si no hay lock y la operación no está completa"
+   is a question for a repository.
+** *Every lock in the database replaced by Redis* (at the user's direction): `current_run` was kept
+   for a while as the database's fencing token, a run's completion moving the location only while
+   it still named the run. It went, and so did `supersedes`, which existed only for its
+   compare-and-set: a run that lost its lock ends failed, even past its last step, so it never moves
+   the location. The column stays in the database, unused, as `migration_lock` does, until no
+   release that used them can still start.
 ** *A lock that belongs to a connection, with no TTL* — what the user wanted, since a TTL also
    frees a holder that is merely frozen or starved, not only one cut off. Postgres's advisory locks
    behave so, but would bring a Postgres only for them. lockd is NFS's lock manager, not a service
@@ -625,12 +639,20 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
    direction): a step and its records are one `uncancelable` region in `Execution`, which takes
    cats-effect's kernel into `core` for `MonadCancel`. Interrupting the waits as soon as the lock is
    lost was weighed, since they are read-only and last up to 15 minutes, and set aside for a run
-   whose record always says what was done. The lock is checked before each step instead, against
-   the time the last extension said it would last.
+   whose record always says what was done. The race against the lock's loss lands between steps.
+   A check before each step against the time the last extension said the lock would last, which
+   covered a process frozen past it, went with it, for the simpler race: with one backoffice, a
+   frozen process runs no tool that could take the lock meanwhile.
 ** *zio-redis 1.2.1, not 1.3.x*: `platform` compiles with Scala 3.8 and 1.3.x was built with 3.9.
 ** *One instance by default* (`redis_lock_instances`): a restart, in memory only, frees every lock,
-   and each runner holding one fails at its next step. Three instances survive one down.
-** The migrations' lock (`Migrate.Lock`) is to move onto the same mechanism next.
+   and each runner holding one ends failed between two steps. Three instances survive one down.
+** *The migrations' lock moved too* (`captal:migrations`): taken waiting every 2 seconds for up to
+   10 minutes, as before, and kept while the migration runs. With a TTL a migrator that dies frees
+   it within 30 seconds, where the rqlite lock stayed until its row was deleted by hand — the "no
+   takeover" above, reversed: the next migrator meets the half-applied schema in Flyway's own
+   refusal, which names it, rather than a lock nobody would let go. Every migrator needs
+   `REDIS_LOCK_ADDRESSES` — the backoffice, every location's API, which the backoffice hands it and
+   a release sets, `api.dev`, and the suites — and a process without it does not start.
 * **The real OpenTofu configuration is applied against LocalStack for `mcp.test`, replacing a
   219-line hand-built `awslocal` fixture.** The fixture agreed with the deployed topology only for
   as long as someone kept it agreeing, and had already drifted (`modules/alb` had grown rules the

@@ -112,6 +112,20 @@ its type and each operation a run of its own, run by a saga, is xref:admin-core-
 core plan]. Its first two steps are done: the location and its access points as `core`'s commands,
 and `/api/status` as `EnterPortalCommand` on that model.
 
+== The database still carries the locks it no longer holds
+
+Every lock is in Redis since 2026-11-15, and two leftovers of the ones before are still in the
+database: `locations.current_run` (V38), which nothing reads or writes, and the `migration_lock`
+table, which the migrators of a release before that created on demand. Both stay while a release
+that used them can still start — a rollback, or a location's API on that image migrating as it
+comes up. Settling it is one migration that drops both, in a release after the one that stopped
+using them.
+
+The Redlock is the simple version, and two things it does not do yet are known. An instance
+restarted without persistence is not held back from answering for a lock's time, as Redis asks;
+with the one instance there is, that changes nothing, with three it would. And a runner frozen past
+its lock's time can start its next step before the extension that reports the loss answers.
+
 == The backoffice cannot talk to UniFi yet
 
 `mcp` resolves zio-http 3.11.3, which `zio-http-mcp` requires, while `platform`'s `UnifiClient` is

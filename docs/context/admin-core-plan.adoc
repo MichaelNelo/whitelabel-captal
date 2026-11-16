@@ -780,13 +780,14 @@ handler, `RunProgressQuill`, and the queries `RunStatus` and `AssetsOf`; the bac
   brought to the new design but not run here.
 * *The lock moved to Redis*, the same day, after the step: <<Concurrency>> as sketched could not
   tell a slow runner from a dead one, so a dead run stayed `running` and a live one whose heartbeat
-  went stale could be taken over and still complete. The tool takes the location's lock in Redis
-  (`platform`'s `Redlock`, `modules/redis-lock`) before `StartOperation`, which reads who holds it as
-  the command's `holder`: `OperationInProgress` when another run does; with it this run's, a started
-  latest run was left part way, whatever its heartbeat. The runner takes each run on its own fiber,
-  extends the lock while it works and stops at the next step once it cannot; the lock goes after
-  `CompleteOperation`'s commit. `current_run` stays as the database's fencing token: the transitions
-  apply only while it names the run. See `decisions.adoc`.
+  went stale could be taken over and still complete. The lock is in Redis (`platform`'s `Redlock`,
+  `modules/redis-lock`): `StartOperation` reads through `RunRepository` whether a run holds it
+  (`going`, `OperationInProgress`) and, when none does, whether the latest run did not complete
+  (`unfinished`, `PreviousOperationUnfinished`); the start flow takes it around its transaction
+  (`OperationLock.taking`); the runner takes each run on its own fiber, adopts the lock as a scoped
+  resource (`keep`), races the walk against its loss (`raceFirst`) and lets it go when its scope
+  closes, after `CompleteOperation`. `current_run`, `OperationLockHandler` and `supersedes` went,
+  and the migrations' lock moved to Redis with them. See `decisions.adoc`.
 . The dispatcher reads the paused state from the database; remove its S3 endpoint and permission.
 +
 *Done on 2026-11-15*: `dispatcher.py` reads `l.state` in the query that finds the access point's

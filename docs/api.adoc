@@ -63,6 +63,13 @@ the `location_id` used by `SessionService` and `LocaleService`.
 |Read by `platform/src/whitelabel/captal/platform/RqliteDataSource.scala`, not by `ServerSettings`.
 See xref:database.adoc[Database].
 
+|`REDIS_LOCK_ADDRESSES`
+|—
+|none: required
+|The Redis instances, `host:port` comma separated, where the server takes the migrations' lock as it
+starts; it does not start without them. Set by the backoffice on every location it deploys and by a
+release on every location it moves. See xref:platform.adoc#Locks[Platform].
+
 |`SERVER_HOST`
 |`server.host`
 |`0.0.0.0`

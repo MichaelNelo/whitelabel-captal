@@ -71,7 +71,9 @@ second needs no database at all. Keeping `MigrationLockSuite` inside this one sp
 than its own `ZIOSpecDefault` matters structurally — a second spec class in this module would be
 handed to Mill's own claim queue and forked into a *second* JVM racing the first against one shared
 rqlite, when the whole point of the suite is exercising `Migrate.Lock` against a single real
-container.
+container. The lock itself is in the suite's own Redis, `redis-test` (port 6389), which `api.test`
+hands every suite as `REDIS_LOCK_ADDRESSES`: `TestFixtures.migrate` takes it too. Each of the racing
+migrators connects to it on its own, as separate processes would.
 
 `TestLayers.scala` wires the production pieces with two substitutions:
 
@@ -212,9 +214,10 @@ of the rows it reads (advertisers, the identification surveys, operator tokens) 
 rather than per-location, so sharing lets `get_location_readiness` count what *other* suites wrote
 during the same run.
 
-`DeployE2ESpec` also takes its locations' operation locks, in its own Redis container,
-`redis-mcp-test` (port 6390), which `mcp.test` hands it as `REDIS_LOCK_ADDRESSES`: one instance, in
-memory, as `modules/redis-lock` runs it. `mcp.test.stopRqlite` stops it with the databases.
+The two migrations take their lock, and `DeployE2ESpec` its locations' operation locks, in the
+suite's own Redis container, `redis-mcp-test` (port 6390), which `mcp.test` hands both the migrators
+and the specs as `REDIS_LOCK_ADDRESSES`: one instance, in memory, as `modules/redis-lock` runs it.
+`mcp.test.stopRqlite` stops it with the databases.
 
 Both schemas are migrated through the real `Migrate`/`McpMigrate` binaries as two ordered external
 processes against one URL — the API's schema first, since the backoffice's own tables assume the

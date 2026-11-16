@@ -370,15 +370,19 @@ and how to reach the UI.
 
 === Redis for the locks
 
-`modules/redis-lock` runs the Redis instances the backoffice takes a location's operation lock on
-(xref:mcp.adoc#Locks[the operations' lock]): `redis_lock_instances` of them, one by default, each its
-own Fargate service registered in Cloud Map as `redis-lock-<n>.<namespace>`, since Redlock asks for
-instances that fail apart rather than a replicated cluster. The backoffice gets every address as
-`REDIS_LOCK_ADDRESSES`. The security group admits 6379 from the ECS tasks group alone. The image is
-Redis from the public ECR gallery, run in memory only — no snapshot, no append-only file, nothing
-evicted: a lock is worth nothing past its 30 seconds, and a task takes longer than that to start
-again. A deployment stops the old task before it starts the new one, so two tasks never answer under
-one name.
+`modules/redis-lock` runs the Redis instances every lock is taken on: the migrations', which the
+backoffice and every location's API take as they start (xref:platform.adoc#Locks[Platform]), and
+each location's operation lock, which the backoffice takes (xref:mcp.adoc#Locks[the operations'
+lock]). `redis_lock_instances` of them, one by default, each its own Fargate service registered in
+Cloud Map as `redis-lock-<n>.<namespace>`, since Redlock asks for instances that fail apart rather
+than a replicated cluster, listening on `redis_lock_port` (6379; 6380 locally). The backoffice gets
+every address as `REDIS_LOCK_ADDRESSES` and hands it to every location it deploys, and a release sets
+it on every location it moves; neither starts without it. The security group admits the port from
+the ECS tasks group alone. The image is Redis from the public ECR gallery, run in memory only — no
+snapshot, no append-only file, nothing evicted: a lock is worth nothing past its 30 seconds, and a
+task takes longer than that to start again. A deployment stops the old task before it starts the new
+one, so two tasks never answer under one name. Locally LocalStack publishes the first instance's port
+on the host, as it does rqlite's, which is where `api.dev` takes the migrations' lock.
 
 === CloudFront
 

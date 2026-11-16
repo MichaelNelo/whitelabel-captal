@@ -147,7 +147,7 @@ by the MCP server (`mcp/resources/db/migration-mcp`, `V1` … `V3`).
 | via its session
 
 | `locations`
-| A venue: `slug` (UNIQUE), `name`, `is_active`, `fingerprint_is_required` — the location's whichever access point a guest came through — and where it stands: `state` (`created`, `deployed`, `paused` or `destroyed`, each an operation that succeeded; `created` until a deploy) and `state_run`, the backoffice run that left it so, NULL for `created` (V35, filled for the locations that existed before by the backoffice's V3). The UniFi columns are still there and read by nothing in this release but the portal dispatcher's fallbacks: `unifi_duration_minutes`, `unifi_redirect_url` and `unifi_is_enabled`, which V36 copied to each access point, the dispatcher reading `unifi_redirect_url` on a database V36 has not reached; and `unifi_ap_mac`, `unifi_host`, `unifi_port`, `unifi_site_id` and `unifi_api_token`, which V34 copied to `access_points`, read on a database without that table. They stay for a dispatcher or API still on the previous release, and a later migration drops them.
+| A venue: `slug` (UNIQUE), `name`, `is_active`, `fingerprint_is_required` — the location's whichever access point a guest came through — and where it stands: `state` (`created`, `deployed`, `paused` or `destroyed`, each an operation that succeeded; `created` until a deploy) and `state_run`, the backoffice run that left it so, NULL for `created` (V35, filled for the locations that existed before by the backoffice's V3). The UniFi columns are still there and read by nothing in this release but the portal dispatcher's fallbacks: `unifi_duration_minutes`, `unifi_redirect_url` and `unifi_is_enabled`, which V36 copied to each access point, the dispatcher reading `unifi_redirect_url` on a database V36 has not reached; and `unifi_ap_mac`, `unifi_host`, `unifi_port`, `unifi_site_id` and `unifi_api_token`, which V34 copied to `access_points`, read on a database without that table. They stay for a dispatcher or API still on the previous release, and a later migration drops them. So does `current_run` (V38), the run an operation was going as, which the backoffice of an earlier release used as the location's lock and nothing reads or writes now that the lock is in Redis.
 | is the scope
 
 | `access_points`
@@ -167,7 +167,7 @@ by the MCP server (`mcp/resources/db/migration-mcp`, `V1` … `V3`).
 | via its session
 
 | `migration_lock`
-| One row, `(id INTEGER PRIMARY KEY, holder TEXT NOT NULL)`. Created on demand by `Migrate.Lock`, not by a migration.
+| One row, `(id INTEGER PRIMARY KEY, holder TEXT NOT NULL)`, created on demand by the migration lock of an earlier release, not by a migration. Nothing reads or writes it now that the lock is in Redis; it goes once no release that took it can still start.
 | Global
 
 | `flyway_schema_history`
@@ -308,11 +308,10 @@ no-op, and it logs that it is not even trying: `Unable to lock flyway_schema_his
 not support locking. No concurrent migration supported.` Two processes migrating the same history at
 the same time is therefore an unguarded race.
 
-`Migrate.Lock` is what provides the exclusion — a one-row `migration_lock` table whose primary key is
-the mutex, taken inside `migrateTo` so no caller can forget it. A single statement goes through Raft,
-so of N concurrent inserts of the same key exactly one takes effect and every node agrees which. The
-mechanics, the 2-second poll, the 10-minute timeout and the manual-cleanup caveat for an abandoned
-lock are in xref:platform.adoc[Platform].
+`Migrate.Lock` is what provides the exclusion — a lock in Redis, taken inside `migrateTo` so no
+caller can forget it, and kept while the migration runs. The mechanics, the 2-second wait, the
+10-minute timeout and what a migrator that died mid-migration leaves are in
+xref:platform.adoc[Platform].
 
 The two histories need no lock between them, being different tables; `McpMigrate` runs the API's
 before its own, so the order holds in the one process that runs both.
@@ -356,8 +355,6 @@ The consequence is broader than the helper:
 * **DDL is subject to the same rule.** A migration statement the database refuses does nothing while
   Flyway records it as applied — which is why schema setup goes through `Migrate`/`McpMigrate` and
   their `DataSource` wrapper rather than a Flyway instance assembled ad hoc.
-* `Migrate.Lock` is written around it: the lock insert is treated as a bid whose own result decides
-  nothing, and a follow-up `SELECT` is the answer.
 
 NOTE: Driver `10.5.2.1` does throw for the cases it can identify — its release note is "failed
 statements, batches and commits now throw instead of being silently ignored" — which is why the

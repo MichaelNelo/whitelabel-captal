@@ -621,37 +621,48 @@ two-history arrangement.
 === `Migrate.Lock`
 
 Flyway provides no locking on SQLite — it says so and carries on — so exclusion between concurrent
-migrators is `Migrate.Lock`'s job. It is private and reachable only through `migrateTo`, so a caller
-cannot hold it around anything but a migration.
+migrators — the backoffice and every location's API, each as it starts — is `Migrate.Lock`'s job. It
+is private and reachable only through `migrateTo`, so a caller cannot hold it around anything but a
+migration.
 
-The mutex is the primary key of a one-row table:
+It is the key `captal:migrations` in Redis, taken through `DistributedLock` (see <<Locks>>) at
+`REDIS_LOCK_ADDRESSES`, which every migrator must have: without it the process does not start. Each
+`migrateTo` connects on its own and takes the lock under its holder id, the local hostname plus a
+random UUID:
 
-[source,sql]
-----
-CREATE TABLE IF NOT EXISTS migration_lock (id INTEGER PRIMARY KEY, holder TEXT NOT NULL)
-----
+. Taking it is `acquire` for **30 seconds**. While another migrator holds it, or too few instances
+  answer, it waits **2 seconds** and tries again, for **10 minutes** at most, logging who holds it.
+. Once taken, `keep` extends it every 10 seconds for as long as the migration runs, and lets it go
+  when `migrateTo`'s scope closes, on failure and interruption too. An extension that fails is
+  logged and the migration goes on: Flyway is not stopped part way.
 
-A single statement goes through Raft, so of N concurrent `INSERT`s of `id = 1` exactly one takes
-effect and every node agrees which. The holder id is the local hostname (narrowed to letters, digits,
-`-` and `.`, because the statements are built by interpolation) plus a random UUID.
+A migrator that dies frees the lock within its 30 seconds, as any holder that stops extending it
+does. If it died mid-migration its schema is half applied and Flyway has a failed row for it, which
+the next migrator fails on, naming it: repair that, and the next start migrates.
 
-Acquisition is insert-then-read-back, and the read-back is the answer:
+[[Locks]]
+=== `DistributedLock`
 
-. `INSERT INTO migration_lock (id, holder) VALUES (1, '<holder>')` — a bid, whose own result decides
-  nothing, because rqlite can report a refused statement as zero affected rows inside an HTTP 200.
-. `SELECT holder FROM migration_lock WHERE id = 1`. If it is this holder, the lock is taken. If it is
-  somebody else, wait and retry. If the row is absent *and* the bid did not land, waiting would never
-  end, so it fails immediately with a message pointing at the shape of the table — an older column
-  still present would reject every insert.
+`platform/locks/Redlock.scala` takes a lock on a resource as Redis describes Redlock, on the
+independent Redis instances at `REDIS_LOCK_ADDRESSES` (`host:port`, comma separated), one by default
+(`modules/redis-lock`, see xref:infrastructure.adoc[Infrastructure]):
 
-Timing: the poll interval is **2 seconds** and the overall timeout is **10 minutes**. Release is
-`DELETE FROM migration_lock WHERE id = 1 AND holder = '<holder>'`, attached with `ensuring`, so it
-runs on failure and interruption too.
+* `acquire(resource, token, ttl)` sets the key to the token with `SET … NX PX … GET` on every
+  instance at once, each given half a second to answer, and holds it when a majority did and some of
+  its time is left, less what taking it took and a margin for clock drift (`Held`); otherwise it lets
+  it go on all of them. An instance that refuses answers in that same command which token holds the
+  key (`HeldBy`); too few answering is `Unanswered`.
+* `extend` and `release` run a script that acts only while the instance holds this token, so a lock
+  that expired and was taken by another is never extended or deleted by its old holder. `extend`
+  answers how long the lock is sure to be held from then.
+* `holder(resource)` reads the token a majority holds it under; too few answering fails with
+  `LockUnavailable`.
+* `keep(resource, token, ttl)` is the lock as a scoped resource (`acquireRelease`): it adopts a lock
+  already taken, extends it every third of its time while the scope is open and lets it go when the
+  scope closes; its `Lease.lost` completes once an extension fails.
 
-WARNING: There is no heartbeat and no takeover. A holder that dies without releasing blocks every
-other migrator until its row in `migration_lock` is deleted by hand. If it died mid-migration its
-schema is half applied and Flyway has a failed row for it: repair that first, then delete the lock
-row.
+An instance is connected the first time it is asked, and one that cannot be reached is a vote not
+given. The operations' lock on each location is described in xref:mcp.adoc#Locks[the backoffice].
 
 == The data source
 
