@@ -4,6 +4,7 @@ import java.time.{Duration, Instant}
 import java.util.UUID
 
 import whitelabel.captal.core.application.Phase
+import whitelabel.captal.core.location.LocationId
 import whitelabel.captal.core.user
 
 opaque type ErrorId = UUID
@@ -373,6 +374,10 @@ enum Event:
 
   /** The session left through it: access is granted as at the end of the flow. */
   case RecoveryRedeemed(errorId: ErrorId, sessionId: user.SessionId, occurredAt: Instant)
+
+  /** The location's recovery settings are now `policy`, whole: what it sets, the rest its default.
+    */
+  case PolicyChanged(location: LocationId, policy: PolicyOverrides, occurredAt: Instant)
 end Event
 
 enum Error:
@@ -380,3 +385,15 @@ enum Error:
   case UnknownError(errorId: ErrorId)
   case AlreadyRedeemed(errorId: ErrorId)
   case NotYet(availableAt: Instant)
+
+  /** A change of the recovery settings that names nothing to set or to reset. */
+  case NothingToChange
+
+  /** A change that both sets and resets `settings`. */
+  case SetAndReset(settings: List[PolicySetting])
+
+  /** A change that sets `settings` below zero. */
+  case Negative(settings: List[PolicySetting])
+
+  /** A change after which no wait could reach the maximum, the ceiling being below it. */
+  case CeilingBelowMaximum(ceiling: Duration, maximum: Duration)
