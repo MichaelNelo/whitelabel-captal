@@ -145,6 +145,29 @@ object VideoStatus:
     */
   inline val Retired = "retired"
 
+  /** The word stored for `status`. */
+  def stored(status: video.authoring.VideoStatus): String =
+    status match
+      case video.authoring.VideoStatus.Pending =>
+        Pending
+      case video.authoring.VideoStatus.Active =>
+        Active
+      case video.authoring.VideoStatus.Retired =>
+        Retired
+
+  /** The status a stored word is, if it is one. */
+  def of(stored: String): Option[video.authoring.VideoStatus] =
+    stored match
+      case Pending =>
+        Some(video.authoring.VideoStatus.Pending)
+      case Active =>
+        Some(video.authoring.VideoStatus.Active)
+      case Retired =>
+        Some(video.authoring.VideoStatus.Retired)
+      case _ =>
+        None
+end VideoStatus
+
 final case class AdvertiserVideoRow(
     id: video.Id,
     advertiserId: Option[String],

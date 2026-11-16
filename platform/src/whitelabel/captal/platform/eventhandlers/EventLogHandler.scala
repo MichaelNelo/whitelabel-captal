@@ -22,8 +22,9 @@ import whitelabel.captal.core.survey.Event as SurveyEvent
 import whitelabel.captal.core.survey.question.Event as QuestionEvent
 import whitelabel.captal.core.survey.question.codecs.given
 import whitelabel.captal.core.user.Event as UserEvent
-import whitelabel.captal.core.video.{Event as VideoEvent, VideoType}
-import whitelabel.captal.platform.{Errors, EventLogRow, OperatorContext}
+import whitelabel.captal.core.video.authoring.{Event as VideoAuthoringEvent, FileId, VideoKind}
+import whitelabel.captal.core.video.{Event as VideoEvent, Id as VideoId, VideoType}
+import whitelabel.captal.platform.{Errors, EventLogRow, OperatorContext, VideoStatus}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.session.SessionContext
@@ -252,6 +253,8 @@ object EventLogHandler:
         Some(extractAdvertiserEvent(e))
       case Event.SurveyAuthoring(e) =>
         Some(extractAuthoringEvent(e))
+      case Event.VideoAuthoring(e) =>
+        Some(extractVideoAuthoringEvent(e))
       // Which keys, not their texts, which are in their own table.
       case Event.I18n(I18nEvent.TranslationsSet(location, locale, entries, occurredAt)) =>
         Some(
@@ -276,6 +279,78 @@ object EventLogHandler:
         Some(extractLocationEvent(e))
       case Event.Operation(e) =>
         Some(extractOperationEvent(e))
+
+  /** What changed in the videos, by id: the texts are in their own table. */
+  private def extractVideoAuthoringEvent(event: VideoAuthoringEvent): (String, Json, Instant) =
+    def video(id: VideoId) = Json.obj("videoId" -> Json.fromString(id.asString))
+    def file(id: VideoId, fileId: FileId) = video(id).deepMerge(
+      Json.obj("fileId" -> Json.fromString(fileId.asString)))
+    event match
+      case VideoAuthoringEvent.VideoRegistered(
+            id,
+            location,
+            kind,
+            _,
+            _,
+            _,
+            priority,
+            fileId,
+            _,
+            occurredAt) =>
+        val advertiser =
+          kind match
+            case VideoKind.Advertiser(advertiser, _) =>
+              Json.fromString(advertiser.asString)
+            case VideoKind.Promo(_) =>
+              Json.Null
+        (
+          "video.registered",
+          file(id, fileId).deepMerge(
+            Json.obj(
+              "locationId"   -> Json.fromString(location.asString),
+              "videoType"    -> Json.fromString(VideoType.toDbString(kind.videoType)),
+              "advertiserId" -> advertiser,
+              "priority"     -> Json.fromInt(priority)
+            )),
+          occurredAt)
+      case VideoAuthoringEvent.FileReserved(id, fileId, _, occurredAt) =>
+        ("video.file_reserved", file(id, fileId), occurredAt)
+      case VideoAuthoringEvent.FileConfirmed(id, fileId, duration, _, status, occurredAt) =>
+        (
+          "video.file_confirmed",
+          file(id, fileId).deepMerge(
+            Json.obj(
+              "durationSeconds" -> Json.fromInt(duration),
+              "status"          -> Json.fromString(VideoStatus.stored(status)))),
+          occurredAt)
+      case VideoAuthoringEvent.VideoUpdated(
+            id,
+            title,
+            description,
+            minWatchSeconds,
+            priority,
+            noRepeatSeconds,
+            productCampaignId,
+            occurredAt) =>
+        val fields =
+          List(
+            title.map(_ => "title"),
+            description.map(_ => "description"),
+            minWatchSeconds.map(_ => "minWatchSeconds"),
+            priority.map(_ => "priority"),
+            noRepeatSeconds.map(_ => "noRepeatSeconds"),
+            productCampaignId.map(_ => "productCampaignId")
+          ).flatten
+        (
+          "video.updated",
+          video(id).deepMerge(Json.obj("fields" -> Json.fromValues(fields.map(Json.fromString)))),
+          occurredAt)
+      case VideoAuthoringEvent.VideoRetired(id, occurredAt) =>
+        ("video.retired", video(id), occurredAt)
+      case VideoAuthoringEvent.VideoReinstated(id, occurredAt) =>
+        ("video.reinstated", video(id), occurredAt)
+    end match
+  end extractVideoAuthoringEvent
 
   /** What changed in the surveys, by id: the wording is in its own table. */
   private def extractAuthoringEvent(event: AuthoringEvent): (String, Json, Instant) =
