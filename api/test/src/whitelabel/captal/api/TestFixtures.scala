@@ -41,14 +41,18 @@ object TestFixtures:
   /** Through [[Migrate]], so the tests migrate the way the deployed images do — same config, same
     * lock, same history table.
     *
+    * With the live `System`: the lock's instances are read from `REDIS_LOCK_ADDRESSES`, and
+    * `ZIOSpecDefault` swaps in `TestSystem`, whose environment is empty.
+    *
     * No `cleanOnValidationError`: a checksum mismatch fails the run with Flyway's own message, and
     * the fix is to remove the container deliberately.
     */
   def migrate: ZIO[Any, Throwable, Unit] =
-    ZIO
-      .attempt(testConfig.getString("database.jdbcUrl"))
-      .flatMap(url => Migrate.migrateTo(url, "db/migration", Migrate.ApiHistoryTable))
-      .unit
+    ZIO.withSystem(System.SystemLive):
+      ZIO
+        .attempt(testConfig.getString("database.jdbcUrl"))
+        .flatMap(url => Migrate.migrateTo(url, "db/migration", Migrate.ApiHistoryTable))
+        .unit
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Survey Fixtures

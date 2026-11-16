@@ -51,8 +51,8 @@ object MigrationLockSuite:
     finally
       statement.close()
 
-  /** Back to never-migrated — this suite's two tables and nothing else. The lock needs no reset: one
-    * a previous run died holding expires on its own within its time.
+  /** Back to never-migrated — this suite's two tables and nothing else. The lock needs no reset:
+    * one a previous run died holding expires on its own within its time.
     */
   private val reset =
     execute(s"DROP TABLE IF EXISTS $MarkerTable") *> execute(s"DROP TABLE IF EXISTS $HistoryTable")
@@ -65,7 +65,8 @@ object MigrationLockSuite:
   // from ZIO's default services — and ZIO Test replaces that with `TestClock`, which only advances
   // when a test advances it. Without this the losing migrators sleep on a clock nobody moves, and
   // `Lock`'s own ten-minute timeout cannot fire either because it reads the same clock: the suite
-  // hangs rather than failing.
+  // hangs rather than failing. `withLiveSystem` likewise: the lock's instances are read from
+  // `REDIS_LOCK_ADDRESSES`, which `TestSystem`'s empty environment does not have.
   //
   // `zio.test.suite` qualified, like every other suite here: the `val suite` being defined is
   // itself in scope and shadows the imported one.
@@ -94,5 +95,5 @@ object MigrationLockSuite:
             executed <- race
             marks    <- count(s"SELECT COUNT(*) FROM $MarkerTable")
           yield assertTrue(executed.sum == 0) && assertTrue(marks == 1)
-      ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
+      ) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.withLiveSystem
 end MigrationLockSuite
