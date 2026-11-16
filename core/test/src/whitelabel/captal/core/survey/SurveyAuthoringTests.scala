@@ -149,16 +149,24 @@ object SurveyAuthoringTests extends TestSuite:
               Error.OptionWithoutText(1),
               Error.RepeatedLocales(TextField.OptionText(2), List("es"))))
 
-    test("SetQuestionActive"):
-      test("answers the active questions left after it"):
+    test("RetireQuestion and ReinstateQuestion"):
+      test("answer the active questions left after them"):
         assert(
           outcome(
-            SetQuestionActiveHandler[Same](stored).handle(
-              SetQuestionActiveCommand(First.id, identification = false, active = false, Now))) ==
+            RetireQuestionHandler[Same](stored).handle(
+              RetireQuestionCommand(First.id, identification = false, Now))) ==
             Right(
               (
                 List(AppEvent.SurveyAuthoring(Event.QuestionRetired(First.id, Now))),
-                QuestionActivity(answers = 7, remainingActive = 1))))
+                QuestionActivity(answers = 7, remainingActive = 1))),
+          outcome(
+            ReinstateQuestionHandler[Same](stored).handle(
+              ReinstateQuestionCommand(Retired.id, identification = false, Now))) ==
+            Right(
+              (
+                List(AppEvent.SurveyAuthoring(Event.QuestionReinstated(Retired.id, Now))),
+                QuestionActivity(answers = 7, remainingActive = 3)))
+        )
 
     test("ReorderQuestions"):
       test("refuses an order that is not every active question once"):

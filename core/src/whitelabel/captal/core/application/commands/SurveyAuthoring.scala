@@ -173,11 +173,16 @@ object UpdateQuestionHandler:
               )
 end UpdateQuestionHandler
 
-/** Takes the question `question` out of its survey, or brings it back; its answers are kept. */
-final case class SetQuestionActiveCommand(
+/** Takes the question `question` out of its survey; its answers are kept. */
+final case class RetireQuestionCommand(
     question: QuestionId,
     identification: Boolean,
-    active: Boolean,
+    occurredAt: Instant)
+
+/** Brings the question `question` back into its survey. */
+final case class ReinstateQuestionCommand(
+    question: QuestionId,
+    identification: Boolean,
     occurredAt: Instant)
 
 /** The answers the question keeps, and how many of its survey's questions are active after: none
@@ -185,37 +190,49 @@ final case class SetQuestionActiveCommand(
   */
 final case class QuestionActivity(answers: Int, remainingActive: Int)
 
-/** A command each way, as an event names what happened: retired or reinstated. */
-object SetQuestionActiveHandler:
+object RetireQuestionHandler:
   def apply[F[_]: Monad](surveys: SurveyAuthoringRepository[F])
-      : Handler.Aux[F, SetQuestionActiveCommand, QuestionActivity] =
-    new Handler[F, SetQuestionActiveCommand]:
+      : Handler.Aux[F, RetireQuestionCommand, QuestionActivity] =
+    new Handler[F, RetireQuestionCommand]:
       type Result = QuestionActivity
 
-      def handle(cmd: SetQuestionActiveCommand) =
-        questionOf(surveys, cmd.question, cmd.identification): question =>
-          for
-            answers  <- surveys.answersTo(question.id)
-            siblings <- surveys.questionsOf(question.survey)
-          yield
-            val others = siblings.count(q => q.active && q.id != question.id)
-            authored(
-              Nil,
-              List(
-                if cmd.active then
-                  AuthoringEvent.QuestionReinstated(question.id, cmd.occurredAt)
-                else
-                  AuthoringEvent.QuestionRetired(question.id, cmd.occurredAt)),
-              QuestionActivity(
-                answers,
-                others + (
-                  if cmd.active then
-                    1
-                  else
-                    0
-                ))
-            )
-end SetQuestionActiveHandler
+      def handle(cmd: RetireQuestionCommand) =
+        activity(surveys, cmd.question, cmd.identification, active = false)(
+          AuthoringEvent.QuestionRetired(_, cmd.occurredAt))
+
+object ReinstateQuestionHandler:
+  def apply[F[_]: Monad](surveys: SurveyAuthoringRepository[F])
+      : Handler.Aux[F, ReinstateQuestionCommand, QuestionActivity] =
+    new Handler[F, ReinstateQuestionCommand]:
+      type Result = QuestionActivity
+
+      def handle(cmd: ReinstateQuestionCommand) =
+        activity(surveys, cmd.question, cmd.identification, active = true)(
+          AuthoringEvent.QuestionReinstated(_, cmd.occurredAt))
+
+/** The question `id` left `active`, as `event` says, with what that leaves its survey. */
+private def activity[F[_]: Monad](
+    surveys: SurveyAuthoringRepository[F],
+    id: QuestionId,
+    identification: Boolean,
+    active: Boolean)(event: QuestionId => AuthoringEvent): F[Op[QuestionActivity]] =
+  questionOf(surveys, id, identification): question =>
+    for
+      answers  <- surveys.answersTo(question.id)
+      siblings <- surveys.questionsOf(question.survey)
+    yield
+      val others = siblings.count(q => q.active && q.id != question.id)
+      authored(
+        Nil,
+        List(event(question.id)),
+        QuestionActivity(
+          answers,
+          others + (
+            if active then
+              1
+            else
+              0
+          )))
 
 /** Asks the active questions of the survey `survey` in `order`. */
 final case class ReorderQuestionsCommand(
