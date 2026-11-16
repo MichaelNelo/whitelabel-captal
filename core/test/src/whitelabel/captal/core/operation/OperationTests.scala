@@ -6,6 +6,8 @@ import scala.collection.mutable.ListBuffer
 
 import cats.Id
 import cats.data.NonEmptyList
+import cats.effect.IO
+import cats.effect.unsafe.implicits.global
 import cats.syntax.foldable.*
 import utest.*
 import whitelabel.captal.core.Op
@@ -319,33 +321,64 @@ object OperationTests extends TestSuite:
         val recorded = ListBuffer.empty[(Step, Either[StepFailure, Option[String]])]
         val failure = StepFailure.TimedOut("still stopping")
         val steps =
-          new OperationSteps[Id]:
-            def run(slug: Slug, step: Step) =
-              ran += step
-              if step == Step.ScaleToZero then
-                Left(failure)
-              else
-                Right(None)
-        val progress =
-          new RunProgress[Id]:
-            def started(run: RunId, step: Step) = ()
-            def finished(run: RunId, step: Step, result: Either[StepFailure, Option[String]]) =
-              recorded += step -> result
-            def heartbeat(run: RunId, at: Instant) = ()
-        // `new`, since a case's `apply` answers the enum's type rather than the case's.
-        val going = Run(
-          RunId("run-1"),
-          Id,
-          Here,
-          Operation.Pause,
-          List(Step.AnswerPaused, Step.ScaleToZero, Step.AwaitDrained),
-          Operator,
-          new RunState.Started(Now))
-        val ended = Execution.run[Id](going, steps, progress)
+          stepsInto(ran):
+            case Step.ScaleToZero =>
+              IO.pure(Left(failure))
+            case _ =>
+              IO.pure(Right(None))
+        val ended = Execution.run(pausing, steps, progressInto(recorded)).unsafeRunSync()
         assert(
           ended == Outcome.Failed(Step.ScaleToZero, failure),
           ran.toList == List(Step.AnswerPaused, Step.ScaleToZero),
           recorded.toList ==
             List(Step.AnswerPaused -> Right(None), Step.ScaleToZero -> Left(failure))
         )
+
+      // `IO.canceled` asks, from inside the first step, to stop the fiber running the execution.
+      test(
+        "a step stopped from outside while it runs still ends recorded, and none after it starts"):
+        val ran = ListBuffer.empty[Step]
+        val recorded = ListBuffer.empty[(Step, Either[StepFailure, Option[String]])]
+        val steps =
+          stepsInto(ran):
+            case Step.AnswerPaused =>
+              IO.canceled.as(Right(Some("answering")))
+            case _ =>
+              IO.pure(Right(None))
+        val stopped = Execution
+          .run(pausing, steps, progressInto(recorded))
+          .start
+          .flatMap(_.join)
+          .unsafeRunSync()
+        assert(
+          stopped.isCanceled,
+          ran.toList == List(Step.AnswerPaused),
+          recorded.toList == List(Step.AnswerPaused -> Right(Some("answering"))))
+
+  /** A pause going, three steps left. `new`, since a case's `apply` answers the enum's type rather
+    * than the case's.
+    */
+  private val pausing = Run(
+    RunId("run-1"),
+    Id,
+    Here,
+    Operation.Pause,
+    List(Step.AnswerPaused, Step.ScaleToZero, Step.AwaitDrained),
+    Operator,
+    new RunState.Started(Now))
+
+  /** Steps that note in `ran` each one they are asked, and answer it with `answer`. */
+  private def stepsInto(ran: ListBuffer[Step])(
+      answer: Step => IO[Either[StepFailure, Option[String]]]): OperationSteps[IO] =
+    new OperationSteps[IO]:
+      def run(slug: Slug, step: Step) = IO(ran += step) *> answer(step)
+
+  /** Progress that notes in `recorded` each step that ended, with its result. */
+  private def progressInto(
+      recorded: ListBuffer[(Step, Either[StepFailure, Option[String]])]): RunProgress[IO] =
+    new RunProgress[IO]:
+      def started(run: RunId, step: Step) = IO.unit
+      def finished(run: RunId, step: Step, result: Either[StepFailure, Option[String]]) =
+        IO(recorded += step -> result).void
+      def heartbeat(run: RunId, at: Instant) = IO.unit
 end OperationTests

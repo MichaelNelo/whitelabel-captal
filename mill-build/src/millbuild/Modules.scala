@@ -84,9 +84,12 @@ trait Released extends JavaModule:
 // Core: JVM + JS (shared sources)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// cats-effect's kernel for `MonadCancel` alone, which keeps an operation's step and its record whole
+// (`Execution`): typeclasses, no runtime, at the version zio-interop-cats brings the services.
 trait CoreDepsJVM extends ScalaModule:
   def mvnDeps = Seq(
     mvn"org.typelevel::cats-core:2.12.0",
+    mvn"org.typelevel::cats-effect-kernel:3.5.4",
     mvn"io.circe::circe-core:0.14.10",
     mvn"io.circe::circe-generic:0.14.10",
     mvn"io.circe::circe-parser:0.14.10",
@@ -98,6 +101,7 @@ trait CoreDepsJVM extends ScalaModule:
 trait CoreDepsJS extends ScalaJSModule:
   def mvnDeps = Seq(
     mvn"org.typelevel::cats-core::2.12.0",
+    mvn"org.typelevel::cats-effect-kernel::3.5.4",
     mvn"io.circe::circe-core::0.14.10",
     mvn"io.circe::circe-generic::0.14.10",
     mvn"io.circe::circe-parser::0.14.10",

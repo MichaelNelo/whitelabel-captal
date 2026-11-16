@@ -6,4 +6,8 @@ import millbuild.*
 
 object `package` extends BaseModule with CoreDepsJVM:
   object test extends ScalaTests with TestModule.Utest with ScalafmtModule with ScalafixModule:
-    def mvnDeps = Seq(mvn"com.lihaoyi::utest:0.8.9", mvn"org.scalacheck::scalacheck:1.18.0")
+    // cats-effect's `IO`, to stop an operation's execution part way in `OperationTests`.
+    def mvnDeps = Seq(
+      mvn"com.lihaoyi::utest:0.8.9",
+      mvn"org.scalacheck::scalacheck:1.18.0",
+      mvn"org.typelevel::cats-effect:3.5.4")
