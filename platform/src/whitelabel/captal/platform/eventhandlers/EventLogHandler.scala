@@ -11,6 +11,7 @@ import whitelabel.captal.core.application.Event
 import whitelabel.captal.core.device.Event as DeviceEvent
 import whitelabel.captal.core.location.{AccessPoint, Event as LocationEvent, LocationId}
 import whitelabel.captal.core.operation.{Event as OperationEvent, RunId}
+import whitelabel.captal.core.i18n.Event as I18nEvent
 import whitelabel.captal.core.terms.Event as TermsEvent
 import whitelabel.captal.core.recovery.Event as RecoveryEvent
 import whitelabel.captal.core.session.Event as SessionEvent
@@ -244,6 +245,26 @@ object EventLogHandler:
             occurredAt))
       case Event.Terms(e) =>
         Some(extractTermsEvent(e))
+      // Which keys, not their texts, which are in their own table.
+      case Event.I18n(I18nEvent.TranslationsSet(location, locale, entries, occurredAt)) =>
+        Some(
+          (
+            "i18n.translations_set",
+            Json.obj(
+              "locationId" -> Json.fromString(location.asString),
+              "locale"     -> Json.fromString(locale),
+              "keys"       -> Json.fromValues(entries.map(entry => Json.fromString(entry.key)))
+            ),
+            occurredAt))
+      case Event.I18n(I18nEvent.TranslationRemoved(location, locale, key, occurredAt)) =>
+        Some(
+          (
+            "i18n.translation_removed",
+            Json.obj(
+              "locationId" -> Json.fromString(location.asString),
+              "locale"     -> Json.fromString(locale),
+              "key"        -> Json.fromString(key)),
+            occurredAt))
       case Event.Location(e) =>
         Some(extractLocationEvent(e))
       case Event.Operation(e) =>
