@@ -11,6 +11,7 @@ import whitelabel.captal.core.application.Event
 import whitelabel.captal.core.device.Event as DeviceEvent
 import whitelabel.captal.core.location.{AccessPoint, Event as LocationEvent, LocationId}
 import whitelabel.captal.core.operation.{Event as OperationEvent, RunId}
+import whitelabel.captal.core.advertiser.Event as AdvertiserEvent
 import whitelabel.captal.core.i18n.Event as I18nEvent
 import whitelabel.captal.core.terms.Event as TermsEvent
 import whitelabel.captal.core.recovery.Event as RecoveryEvent
@@ -245,6 +246,8 @@ object EventLogHandler:
             occurredAt))
       case Event.Terms(e) =>
         Some(extractTermsEvent(e))
+      case Event.Advertiser(e) =>
+        Some(extractAdvertiserEvent(e))
       // Which keys, not their texts, which are in their own table.
       case Event.I18n(I18nEvent.TranslationsSet(location, locale, entries, occurredAt)) =>
         Some(
@@ -269,6 +272,32 @@ object EventLogHandler:
         Some(extractLocationEvent(e))
       case Event.Operation(e) =>
         Some(extractOperationEvent(e))
+
+  private def extractAdvertiserEvent(event: AdvertiserEvent): (String, Json, Instant) =
+    event match
+      case AdvertiserEvent.AdvertiserCreated(advertiser, occurredAt) =>
+        (
+          "advertiser.created",
+          Json.obj(
+            "advertiserId" -> Json.fromString(advertiser.id.asString),
+            "name"         -> Json.fromString(advertiser.name),
+            "priority"     -> Json.fromInt(advertiser.priority)),
+          occurredAt)
+      case AdvertiserEvent.AdvertiserUpdated(id, name, priority, occurredAt) =>
+        (
+          "advertiser.updated",
+          Json.obj(
+            "advertiserId" -> Json.fromString(id.asString),
+            "name"         -> Json.fromString(name),
+            "priority"     -> Json.fromInt(priority)),
+          occurredAt)
+      case AdvertiserEvent.AdvertiserRetired(id, occurredAt) =>
+        ("advertiser.retired", Json.obj("advertiserId" -> Json.fromString(id.asString)), occurredAt)
+      case AdvertiserEvent.AdvertiserReinstated(id, occurredAt) =>
+        (
+          "advertiser.reinstated",
+          Json.obj("advertiserId" -> Json.fromString(id.asString)),
+          occurredAt)
 
   /** The terms' events, which locales they touch: the texts are in their own table. */
   private def extractTermsEvent(event: TermsEvent): (String, Json, Instant) =
