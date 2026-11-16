@@ -1,22 +1,22 @@
 package whitelabel.captal.mcp.tools
 
-import java.time.Instant
-
 import com.jamesward.ziohttp.mcp.*
 import whitelabel.captal.core.application.commands.{
   RemoveAccessPointCommand,
   UpdateAccessPointCommand
 }
-import whitelabel.captal.core.location.{SettingsChange, Slug}
+import whitelabel.captal.core.application.queries.{AccessPointsOfQuery, AccessPointsReport}
+import whitelabel.captal.core.location.{AccessPoint, SettingsChange}
 import whitelabel.captal.mcp.access.{Auth, Tokens}
 import whitelabel.captal.mcp.apps.{UiRoutes, UiTicket, UnifiUi}
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
-import whitelabel.captal.platform.{Operator, OperatorContext}
+import whitelabel.captal.platform.OperatorContext
 import whitelabel.captal.platform.schema.QuillSqlite
 import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
+import Adapters.{reads, runs}
 import McpSchema.given
 import ToolSchema.{readOnly, withUi}
 
@@ -176,81 +176,77 @@ object UnifiTools:
       )
     .withUi(UnifiUi.AppUri)
 
-  def status(): McpToolHandlerR[QuillSqlite] = McpTool("get_unifi_config")
-    .description(
-      "A location's UniFi: each of its access points with its controller, without the tokens, and its access duration, redirect URL and switch. Worth checking before a deploy: a guest is admitted only through one of its access points, so a location without any turns every guest away.")
-    .readOnly
-    .handle: (in: StatusRequest) =>
-      UiRoutes.currentFor(in.slug.trim).map(statusOf)
+  def status(): McpToolHandlerR[Queries.AccessPointsOf] =
+    McpTool("get_unifi_config")
+      .description(
+        "A location's UniFi: each of its access points with its controller, without the tokens, and its access duration, redirect URL and switch. Worth checking before a deploy: a guest is admitted only through one of its access points, so a location without any turns every guest away.")
+      .readOnly
+      .reads((in: StatusRequest) => Refusals.slugOf(in.slug).map(AccessPointsOfQuery(_)))(
+        (_, report: AccessPointsReport) => ZIO.succeed(statusOf(report)))
 
-  def updateAccessPoint()
-      : McpToolHandlerR[QuillSqlite & OperatorContext & LocationFlows.UpdateAccessPoint] = McpTool(
-    "update_access_point")
-    .description(
-      "Change one of a location's access points without opening the form: its MAC, for an AP that was replaced; its controller's host, port and site id; and the access duration, redirect URL and UniFi switch of the guests who join through it. Each field given replaces the stored one; every field left out stays as it is. The token is set only through configure_unifi. A new MAC already in another deployed location is refused. Read when a guest arrives or is authorized, so it applies with no redeploy.")
-    .requireScopes(Auth.ContentWrite)
-    .handleWithContext: (in: UpdateAccessPointRequest, ctx: McpToolContext) =>
-      for
-        slug   <- ZIO.fromEither(Slug.parse(in.slug)).mapError(LocationCommands.describe)
-        mac    <- ZIO.fromEither(UiRoutes.parsedMac(in.apMac))
-        newMac <- ZIO.foreach(in.newApMac)(raw => ZIO.fromEither(UiRoutes.parsedMac(raw)))
-        _      <-
-          ZIO.when(
-            in.newApMac.isEmpty && in.host.isEmpty && in.port.isEmpty && in.siteId.isEmpty &&
-              in.durationMinutes.isEmpty && in.redirectUrl.isEmpty && in.unifiEnabled.isEmpty)(
-            ZIO.fail(
-              "No hay nada que cambiar: indicá newApMac, host, port, siteId, durationMinutes, redirectUrl o unifiEnabled."))
-        caller <- callerOf(ctx)
-        flow   <- ZIO.service[LocationFlows.UpdateAccessPoint]
-        _      <-
-          LocationCommands.run(
-            Operator(caller, None),
-            UpdateAccessPointCommand(
-              slug,
-              mac,
-              newMac,
-              in.host,
-              in.port,
-              in.siteId,
-              SettingsChange(
-                durationMinutes = in.durationMinutes.map(Some(_)),
-                // An empty string removes it.
-                redirectUrl = in.redirectUrl.map(url => Option(url.trim).filter(_.nonEmpty)),
-                unifiEnabled = in.unifiEnabled
-              ),
-              Instant.now
-            )
-          )(flow)
-        stored <- UiRoutes.currentFor(slug.asString)
-      yield statusOf(stored)
+  /** The access points as they stand after a change, as `get_unifi_config` answers them. */
+  private def stored(slug: String): ZIO[Queries.AccessPointsOf, String, StatusResponse] =
+    for
+      parsed <- Refusals.slugOf(slug)
+      report <- ZIO.serviceWithZIO[Queries.AccessPointsOf](
+        Commands.ask(_, AccessPointsOfQuery(parsed))())
+    yield statusOf(report)
 
-  def removeAccessPoint()
-      : McpToolHandlerR[QuillSqlite & OperatorContext & LocationFlows.RemoveAccessPoint] = McpTool(
-    "remove_access_point")
-    .description(
-      "Take an access point off a location, with its controller's settings and token. A guest who comes through it afterwards is turned away with an error; one already admitted keeps their access until it runs out, and its revoke is skipped. A deployed location's last access point is refused: without it every guest would be turned away, so pause the location first.")
-    .requireScopes(Auth.ContentWrite)
-    .handleWithContext: (in: RemoveAccessPointRequest, ctx: McpToolContext) =>
-      for
-        slug   <- ZIO.fromEither(Slug.parse(in.slug)).mapError(LocationCommands.describe)
-        mac    <- ZIO.fromEither(UiRoutes.parsedMac(in.apMac))
-        caller <- callerOf(ctx)
-        flow   <- ZIO.service[LocationFlows.RemoveAccessPoint]
-        _      <-
-          LocationCommands.run(
-            Operator(caller, None),
-            RemoveAccessPointCommand(slug, mac, Instant.now))(flow)
-        stored <- UiRoutes.currentFor(slug.asString)
-      yield statusOf(stored)
+  def updateAccessPoint(): McpToolHandlerR[
+    Queries.AccessPointsOf & OperatorContext & LocationFlows.UpdateAccessPoint] =
+    McpTool("update_access_point")
+      .description(
+        "Change one of a location's access points without opening the form: its MAC, for an AP that was replaced; its controller's host, port and site id; and the access duration, redirect URL and UniFi switch of the guests who join through it. Each field given replaces the stored one; every field left out stays as it is. The token is set only through configure_unifi. A new MAC already in another deployed location is refused. Read when a guest arrives or is authorized, so it applies with no redeploy.")
+      .requireScopes(Auth.ContentWrite)
+      .runs((in: UpdateAccessPointRequest) =>
+        for
+          slug   <- Refusals.slugOf(in.slug)
+          mac    <- ZIO.fromEither(UiRoutes.parsedMac(in.apMac))
+          newMac <- ZIO.foreach(in.newApMac)(raw => ZIO.fromEither(UiRoutes.parsedMac(raw)))
+          _      <-
+            ZIO.when(
+              in.newApMac.isEmpty && in.host.isEmpty && in.port.isEmpty && in.siteId.isEmpty &&
+                in.durationMinutes.isEmpty && in.redirectUrl.isEmpty && in.unifiEnabled.isEmpty)(
+              ZIO.fail(
+                "No hay nada que cambiar: indicá newApMac, host, port, siteId, durationMinutes, redirectUrl o unifiEnabled."))
+          now <- Clock.instant
+        yield UpdateAccessPointCommand(
+          slug,
+          mac,
+          newMac,
+          in.host,
+          in.port,
+          in.siteId,
+          SettingsChange(
+            durationMinutes = in.durationMinutes.map(Some(_)),
+            // An empty string removes it.
+            redirectUrl = in.redirectUrl.map(url => Option(url.trim).filter(_.nonEmpty)),
+            unifiEnabled = in.unifiEnabled
+          ),
+          now
+        ))((in, _: AccessPoint) => stored(in.slug))
+
+  def removeAccessPoint(): McpToolHandlerR[
+    Queries.AccessPointsOf & OperatorContext & LocationFlows.RemoveAccessPoint] =
+    McpTool("remove_access_point")
+      .description(
+        "Take an access point off a location, with its controller's settings and token. A guest who comes through it afterwards is turned away with an error; one already admitted keeps their access until it runs out, and its revoke is skipped. A deployed location's last access point is refused: without it every guest would be turned away, so pause the location first.")
+      .requireScopes(Auth.ContentWrite)
+      .runs((in: RemoveAccessPointRequest) =>
+        for
+          slug <- Refusals.slugOf(in.slug)
+          mac  <- ZIO.fromEither(UiRoutes.parsedMac(in.apMac))
+          now  <- Clock.instant
+        yield RemoveAccessPointCommand(slug, mac, now))((in, _: Unit) => stored(in.slug))
 
   private def callerOf(ctx: McpToolContext): IO[String, String] = ZIO
     .fromOption(Auth.callerId(ctx.principal))
     .orElseFail("No pude identificar el token que hizo la llamada.")
 
-  private def statusOf(current: UiRoutes.UnifiSettings): StatusResponse = StatusResponse(
-    slug = current.slug,
-    configured = current.accessPoints.nonEmpty,
-    accessPoints = current
+  private def statusOf(report: AccessPointsReport): StatusResponse = StatusResponse(
+    slug = report.slug,
+    configured = report.accessPoints.nonEmpty,
+    accessPoints = report
       .accessPoints
       .map(point =>
         AccessPointView(
@@ -265,7 +261,7 @@ object UnifiTools:
   )
 
   def all(origin: String): List[McpToolHandlerR[
-    QuillSqlite & OperatorContext & LocationFlows.UpdateAccessPoint &
+    QuillSqlite & Queries.AccessPointsOf & OperatorContext & LocationFlows.UpdateAccessPoint &
       LocationFlows.RemoveAccessPoint]] = List(
     configure(origin),
     status(),

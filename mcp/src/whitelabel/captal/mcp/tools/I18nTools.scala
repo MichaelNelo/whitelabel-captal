@@ -1,26 +1,24 @@
 package whitelabel.captal.mcp.tools
 
-import java.time.Instant
-
-import cats.syntax.foldable.*
 import com.jamesward.ziohttp.mcp.*
 import whitelabel.captal.core.application.commands.{
   RemoveTranslationCommand,
-  SetTranslationsCommand
+  SetTranslationsCommand,
+  TranslationRemoval
 }
-import whitelabel.captal.core.application.queries.TranslationCoverageQuery
-import whitelabel.captal.core.application.{Error as AppError, Flow}
-import whitelabel.captal.core.i18n.{Error as I18nError, I18n, I18nSchema, TranslationEntry}
-import whitelabel.captal.core.location.Slug
+import whitelabel.captal.core.application.queries.{
+  TranslationCoverageQuery,
+  TranslationCoverageReport
+}
+import whitelabel.captal.core.i18n.{I18n, I18nSchema, TranslationEntry}
 import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
-import whitelabel.captal.platform.queries.TranslationCoverage
-import whitelabel.captal.platform.schema.QuillSqlite
-import whitelabel.captal.platform.{Operator, OperatorContext}
+import whitelabel.captal.platform.OperatorContext
 import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
+import Adapters.{reads, runs}
 import McpSchema.given
 import ToolSchema.readOnly
 
@@ -118,32 +116,6 @@ object I18nTools:
   given Schema[RemoveTranslationRequest] = DeriveSchema.gen
   given Schema[RemoveTranslationResponse] = DeriveSchema.gen
 
-  /** What the operator reads for each refusal of these tools. */
-  private val describe: PartialFunction[AppError, List[String]] =
-    case AppError.Location(found) =>
-      found.toList.map(LocationCommands.describe)
-    case AppError.I18n(found) =>
-      found
-        .toList
-        .map:
-          case I18nError.UnknownKeys(keys) =>
-            s"Not part of the i18n schema: ${keys.mkString(
-                ", ")}. Call get_i18n_schema for the keys that are."
-          case I18nError.NoEntries =>
-            "No entries given."
-
-  private def slugOf(raw: String): IO[String, Slug] = ZIO
-    .fromEither(Slug.parse(raw.trim))
-    .mapError(LocationCommands.describe)
-
-  /** Runs `command` through `flow` as the calling operator. */
-  private def changed[C, R](ctx: McpToolContext, command: C)(
-      flow: Flow.Aux[Task, C, R]): ZIO[OperatorContext, String, R] =
-    for
-      caller <- Commands.callerOf(ctx)
-      result <- Commands.run(Operator(caller, None), command)(flow)(describe)
-    yield result
-
   /** The key set itself, which `get_i18n_status` reports coverage against.
     *
     * Derived from the `I18n` type and from an instance the compiler forces to be total, so neither
@@ -158,56 +130,52 @@ object I18nTools:
       val keys = I18nSchema.keys[I18n].map(key => RequiredKey(key, described.getOrElse(key, "")))
       ZIO.succeed(SchemaResponse(keys, keys.size))
 
-  val status: McpToolHandlerR[QuillSqlite] = McpTool("get_i18n_status")
-    .description(
-      "Translation coverage for a location: which required keys each locale is missing, and which stored keys are not part of the schema. Covers the portal interface only, not survey question wording. Call read_skill('edit-i18n') first.")
-    .readOnly
-    .handle: (in: I18nStatusIn) =>
-      for
-        slug   <- slugOf(in.slug)
-        quill  <- ZIO.service[QuillSqlite]
-        report <- Commands.ask(TranslationCoverage(quill), TranslationCoverageQuery(slug))(describe)
-      yield I18nStatusOut(
-        report.slug.asString,
-        report.required,
-        report
-          .locales
-          .map(locale =>
-            LocaleStatus(locale.locale, locale.present, locale.missing, locale.unknown)))
+  val status: McpToolHandlerR[Queries.TranslationCoverage] =
+    McpTool("get_i18n_status")
+      .description(
+        "Translation coverage for a location: which required keys each locale is missing, and which stored keys are not part of the schema. Covers the portal interface only, not survey question wording. Call read_skill('edit-i18n') first.")
+      .readOnly
+      .reads((in: I18nStatusIn) => Refusals.slugOf(in.slug).map(TranslationCoverageQuery(_))):
+        (_, report: TranslationCoverageReport) =>
+          ZIO.succeed(
+            I18nStatusOut(
+              report.slug.asString,
+              report.required,
+              report
+                .locales
+                .map(locale =>
+                  LocaleStatus(locale.locale, locale.present, locale.missing, locale.unknown))))
 
-  val setTranslations: McpToolHandlerR[OperatorContext & ContentFlows.SetTranslations] = McpTool(
-    "set_translations")
-    .description(
-      "Create or update translations for one locale of a location. Keys must belong to the i18n schema; call get_i18n_schema for the list and read_skill('edit-i18n') for the procedure. Reports which keys are still missing afterwards.")
-    .requireScopes(Auth.I18nWrite)
-    .handleWithContext: (in: SetTranslationsRequest, ctx: McpToolContext) =>
-      for
-        slug    <- slugOf(in.slug)
-        flow    <- ZIO.service[ContentFlows.SetTranslations]
-        missing <-
-          changed(
-            ctx,
-            SetTranslationsCommand(
-              slug,
-              in.locale,
-              in.entries.map(e => TranslationEntry(e.key, e.value)),
-              Instant.now))(flow)
-      yield SetTranslationsResponse(in.entries.size, missing)
+  val setTranslations: McpToolHandlerR[OperatorContext & ContentFlows.SetTranslations] =
+    McpTool("set_translations")
+      .description(
+        "Create or update translations for one locale of a location. Keys must belong to the i18n schema; call get_i18n_schema for the list and read_skill('edit-i18n') for the procedure. Reports which keys are still missing afterwards.")
+      .requireScopes(Auth.I18nWrite)
+      .runs((in: SetTranslationsRequest) =>
+        for
+          slug <- Refusals.slugOf(in.slug)
+          now  <- Clock.instant
+        yield SetTranslationsCommand(
+          slug,
+          in.locale,
+          in.entries.map(e => TranslationEntry(e.key, e.value)),
+          now)): (in, missing: List[String]) =>
+        ZIO.succeed(SetTranslationsResponse(in.entries.size, missing))
 
   val removeTranslation: McpToolHandlerR[OperatorContext & ContentFlows.RemoveTranslation] =
     McpTool("remove_translation")
       .description(
         "Retire one translation (soft delete). The portal will render the literal [key] for that locale until it is set again.")
       .requireScopes(Auth.I18nWrite)
-      .handleWithContext: (in: RemoveTranslationRequest, ctx: McpToolContext) =>
+      .runs((in: RemoveTranslationRequest) =>
         for
-          slug    <- slugOf(in.slug)
-          flow    <- ZIO.service[ContentFlows.RemoveTranslation]
-          removal <-
-            changed(ctx, RemoveTranslationCommand(slug, in.locale, in.key, Instant.now))(flow)
-        yield RemoveTranslationResponse(removal.removed, removal.stillMissing)
+          slug <- Refusals.slugOf(in.slug)
+          now  <- Clock.instant
+        yield RemoveTranslationCommand(slug, in.locale, in.key, now)):
+        (_, removal: TranslationRemoval) =>
+          ZIO.succeed(RemoveTranslationResponse(removal.removed, removal.stillMissing))
 
   val all: List[McpToolHandlerR[
-    QuillSqlite & OperatorContext & ContentFlows.SetTranslations &
+    Queries.TranslationCoverage & OperatorContext & ContentFlows.SetTranslations &
       ContentFlows.RemoveTranslation]] = List(schema, status, setTranslations, removeTranslation)
 end I18nTools

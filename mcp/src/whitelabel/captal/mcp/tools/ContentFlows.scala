@@ -7,6 +7,7 @@ import whitelabel.captal.core.application.commands.{
   AnswersKept,
   ChangeRecoveryPolicyCommand,
   ChangeRecoveryPolicyHandler,
+  CreatedSurvey,
   CreateAdvertiserCommand,
   CreateAdvertiserHandler,
   CreateSurveyCommand,
@@ -43,7 +44,6 @@ import whitelabel.captal.core.application.commands.{
 import whitelabel.captal.core.application.{Event, Flow}
 import whitelabel.captal.core.infrastructure.{AdvertiserRepository, SurveyAuthoringRepository}
 import whitelabel.captal.core.recovery.PolicyOverrides
-import whitelabel.captal.core.survey.authoring.SurveyKind
 import whitelabel.captal.platform.OperatorContext
 import whitelabel.captal.platform.eventhandlers.{
   AdvertiserPersistenceHandler,
@@ -82,7 +82,7 @@ object ContentFlows:
   type UpdateAdvertiser = Flow.Aux[Task, UpdateAdvertiserCommand, Advertiser]
   type RetireAdvertiser = Flow.Aux[Task, RetireAdvertiserCommand, Unit]
   type ReinstateAdvertiser = Flow.Aux[Task, ReinstateAdvertiserCommand, Unit]
-  type CreateSurvey = Flow.Aux[Task, CreateSurveyCommand, SurveyKind]
+  type CreateSurvey = Flow.Aux[Task, CreateSurveyCommand, CreatedSurvey]
   type AddQuestion = Flow.Aux[Task, AddQuestionCommand, QuestionPlaced]
   type UpdateQuestion = Flow.Aux[Task, UpdateQuestionCommand, AnswersKept]
   type RetireQuestion = Flow.Aux[Task, RetireQuestionCommand, QuestionActivity]

@@ -1,23 +1,16 @@
 package whitelabel.captal.mcp.tools
 
-import java.time.Instant
-
-import cats.syntax.foldable.*
 import com.jamesward.ziohttp.mcp.*
 import whitelabel.captal.core.application.commands.{ChangeIconCommand, ChangeStylesCommand}
-import whitelabel.captal.core.application.queries.{IconOfQuery, StylesOfQuery}
-import whitelabel.captal.core.application.{Error as AppError, Flow}
-import whitelabel.captal.core.location.Slug
+import whitelabel.captal.core.application.queries.{IconOfQuery, PublishedDocument, StylesOfQuery}
 import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.protocol.{CssSchema, McpSchema, ToolSchema}
-import whitelabel.captal.platform.aws.AssetStore
-import whitelabel.captal.platform.queries.PublishedDocuments
-import whitelabel.captal.platform.schema.QuillSqlite
-import whitelabel.captal.platform.{Operator, OperatorContext}
+import whitelabel.captal.platform.OperatorContext
 import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
+import Adapters.{reads, runs}
 import McpSchema.given
 import ToolSchema.readOnly
 
@@ -100,22 +93,9 @@ object AssetTools:
   given Schema[SetIconRequest] = DeriveSchema.gen
   given Schema[SetResponse] = DeriveSchema.gen
 
-  /** What the operator reads for each refusal of these tools. */
-  private val describe: PartialFunction[AppError, List[String]] =
-    case AppError.Location(found) =>
-      found.toList.map(LocationCommands.describe)
-
-  private def slugOf(raw: String): IO[String, Slug] = ZIO
-    .fromEither(Slug.parse(raw.trim))
-    .mapError(LocationCommands.describe)
-
-  /** Runs `command` through `flow` as the calling operator: recorded, then published. */
-  private def changed[C](ctx: McpToolContext, slug: Slug, content: String, command: C)(
-      flow: Flow.Aux[Task, C, Unit]): ZIO[OperatorContext, String, SetResponse] =
-    for
-      caller <- Commands.callerOf(ctx)
-      _      <- Commands.run(Operator(caller, None), command)(flow)(describe)
-    yield SetResponse(slug.asString, content.getBytes("UTF-8").length)
+  /** What a change answers: how much was published for the location. */
+  private def published(slug: String, content: String) = ZIO.succeed(
+    SetResponse(slug.trim, content.getBytes("UTF-8").length))
 
   /** Refuses SVG with scripts or event handlers. Served from portal origin so direct access runs
     * scripts.
@@ -154,56 +134,54 @@ object AssetTools:
               CssGroup(g.group, g.variables.map(v => CssVariable(v.name, v.default, v.purpose)))),
           total = CssSchema.all.size))
 
-  val getStyles: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("get_location_styles")
-    .description(
-      "The location's custom stylesheet, or nothing when it has none and is using the base theme.")
-    .readOnly
-    .handle: (in: GetRequest) =>
-      for
-        slug     <- slugOf(in.slug)
-        quill    <- ZIO.service[QuillSqlite]
-        store    <- ZIO.service[AssetStore]
-        document <-
-          Commands.ask(PublishedDocuments.styles(quill, store), StylesOfQuery(slug))(describe)
-      yield GetStylesResponse(slug.asString, document.content.isDefined, document.content)
+  val getStyles: McpToolHandlerR[Queries.StylesOf] =
+    McpTool("get_location_styles")
+      .description(
+        "The location's custom stylesheet, or nothing when it has none and is using the base theme.")
+      .readOnly
+      .reads((in: GetRequest) => Refusals.slugOf(in.slug).map(StylesOfQuery(_))):
+        (_, document: PublishedDocument) =>
+          ZIO.succeed(
+            GetStylesResponse(document.slug.asString, document.content.isDefined, document.content))
 
-  val setStyles: McpToolHandlerR[OperatorContext & AssetFlows.ChangeStyles] = McpTool(
-    "set_location_styles")
-    .description(
-      "Replace the location's custom stylesheet and invalidate the CDN so the change is visible immediately. Sends the whole file, not a patch — call get_location_styles first when editing rather than rewriting.")
-    .requireScopes(Auth.ContentWrite)
-    .handleWithContext: (in: SetStylesRequest, ctx: McpToolContext) =>
-      for
-        slug <- slugOf(in.slug)
-        flow <- ZIO.service[AssetFlows.ChangeStyles]
-        out  <- changed(ctx, slug, in.css, ChangeStylesCommand(slug, in.css, Instant.now))(flow)
-      yield out
+  val setStyles: McpToolHandlerR[OperatorContext & AssetFlows.ChangeStyles] =
+    McpTool("set_location_styles")
+      .description(
+        "Replace the location's custom stylesheet and invalidate the CDN so the change is visible immediately. Sends the whole file, not a patch — call get_location_styles first when editing rather than rewriting.")
+      .requireScopes(Auth.ContentWrite)
+      .runs((in: SetStylesRequest) =>
+        for
+          slug <- Refusals.slugOf(in.slug)
+          now  <- Clock.instant
+        yield ChangeStylesCommand(slug, in.css, now))((in, _: Unit) => published(in.slug, in.css))
 
-  val getIcon: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("get_location_icon")
-    .description(
-      "The location's brand icon as SVG source, or nothing when it has none and is using the default.")
-    .readOnly
-    .handle: (in: GetRequest) =>
-      for
-        slug     <- slugOf(in.slug)
-        quill    <- ZIO.service[QuillSqlite]
-        store    <- ZIO.service[AssetStore]
-        document <- Commands.ask(PublishedDocuments.icon(quill, store), IconOfQuery(slug))(describe)
-      yield GetIconResponse(slug.asString, document.content.isDefined, document.content)
+  val getIcon: McpToolHandlerR[Queries.IconOf] =
+    McpTool("get_location_icon")
+      .description(
+        "The location's brand icon as SVG source, or nothing when it has none and is using the default.")
+      .readOnly
+      .reads((in: GetRequest) => Refusals.slugOf(in.slug).map(IconOfQuery(_))):
+        (_, document: PublishedDocument) =>
+          ZIO.succeed(
+            GetIconResponse(document.slug.asString, document.content.isDefined, document.content))
 
-  val setIcon: McpToolHandlerR[OperatorContext & AssetFlows.ChangeIcon] = McpTool(
-    "set_location_icon")
-    .description(
-      "Replace the location's brand icon and invalidate the CDN. The icon appears on every screen, including the loader shown before anything else renders, so a broken one is visible everywhere at once.")
-    .requireScopes(Auth.ContentWrite)
-    .handleWithContext: (in: SetIconRequest, ctx: McpToolContext) =>
-      for
-        _    <- validateSvg(in.svg)
-        slug <- slugOf(in.slug)
-        flow <- ZIO.service[AssetFlows.ChangeIcon]
-        out  <- changed(ctx, slug, in.svg, ChangeIconCommand(slug, in.svg, Instant.now))(flow)
-      yield out
+  val setIcon: McpToolHandlerR[OperatorContext & AssetFlows.ChangeIcon] =
+    McpTool("set_location_icon")
+      .description(
+        "Replace the location's brand icon and invalidate the CDN. The icon appears on every screen, including the loader shown before anything else renders, so a broken one is visible everywhere at once.")
+      .requireScopes(Auth.ContentWrite)
+      .runs((in: SetIconRequest) =>
+        for
+          _    <- validateSvg(in.svg)
+          slug <- Refusals.slugOf(in.slug)
+          now  <- Clock.instant
+        yield ChangeIconCommand(slug, in.svg, now))((in, _: Unit) => published(in.slug, in.svg))
 
-  val all: List[McpToolHandlerR[QuillSqlite & AssetStore & OperatorContext & AssetFlows.All]] =
-    List(cssSchema, getStyles, setStyles, getIcon, setIcon)
+  val all: List[
+    McpToolHandlerR[Queries.StylesOf & Queries.IconOf & OperatorContext & AssetFlows.All]] = List(
+    cssSchema,
+    getStyles,
+    setStyles,
+    getIcon,
+    setIcon)
 end AssetTools

@@ -1,43 +1,48 @@
 package whitelabel.captal.mcp.tools
 
-import java.time.Instant
-
-import cats.syntax.foldable.*
+import cats.data.NonEmptyChain
 import cats.syntax.traverse.*
 import com.jamesward.ziohttp.mcp.*
+import whitelabel.captal.core.application.Error as AppError
 import whitelabel.captal.core.application.commands.{
+  AwaitedFile,
   ConfirmVideoFileCommand,
+  FileConfirmation,
   RegisterVideoCommand,
+  RegisteredVideo,
   ReinstateVideoCommand,
   RetireVideoCommand,
   StartFileReplacementCommand,
-  UpdateVideoCommand
+  UpdateVideoCommand,
+  VideoCorrection,
+  VideosInRotation
 }
 import whitelabel.captal.core.application.queries.{
+  PendingUploadReport,
   PendingUploadsQuery,
   UploadUrlQuery,
   VideoReport,
   VideosOfQuery,
   WaitingUpload
 }
-import whitelabel.captal.core.application.{Error as AppError, Flow}
 import whitelabel.captal.core.location.Slug
 import whitelabel.captal.core.survey.authoring.QuestionSpec
 import whitelabel.captal.core.survey.{AdvertiserId, Id as SurveyId}
 import whitelabel.captal.core.video
 import whitelabel.captal.core.video.VideoType
-import whitelabel.captal.core.video.authoring.{Error as VideoError, FileId, VideoKind, VideoText}
+import whitelabel.captal.core.video.authoring.{Error as VideoError, FileId, VideoKind}
 import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.apps.UploadUi
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
 import whitelabel.captal.platform.aws.AssetStore
 import whitelabel.captal.platform.queries.Videos
 import whitelabel.captal.platform.schema.QuillSqlite
-import whitelabel.captal.platform.{Operator, OperatorContext, VideoStatus}
+import whitelabel.captal.platform.{OperatorContext, VideoStatus}
 import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
+import Adapters.{reads, runs, runsEither}
 import McpSchema.given
 import ToolSchema.{readOnly, withUi}
 
@@ -328,66 +333,10 @@ object VideoTools:
   given Schema[ConfirmUploadRequest] = DeriveSchema.gen
   given Schema[ConfirmUploadResponse] = DeriveSchema.gen
 
-  /** What the operator reads for each refusal of these tools. */
-  private val describe: PartialFunction[AppError, List[String]] =
-    case AppError.VideoAuthoring(found) =>
-      found.toList.map(message)
-    case AppError.Location(found) =>
-      found.toList.map(LocationCommands.describe)
-
-  private def message(error: VideoError): String =
-    def field(text: VideoText) =
-      text match
-        case VideoText.Title =>
-          "title"
-        case VideoText.Description =>
-          "description"
-    error match
-      case VideoError.VideoNotFound(id) =>
-        s"No video with id '$id'. Call list_videos to see what exists."
-      case VideoError.AdvertiserNotFound(id) =>
-        s"No advertiser with id '${id.asString}'. Call list_advertisers."
-      case VideoError.AdvertiserRetired(name) =>
-        s"Advertiser '$name' is retired, so its videos would never be drawn. Reactivate it first."
-      case VideoError.NoTitle =>
-        "The video needs a title in at least one locale."
-      case VideoError.BlankText(text) =>
-        s"${field(text)} has an entry with a blank locale or value."
-      case VideoError.RepeatedLocales(text, locales) =>
-        s"${field(text)} repeats the locale(s) ${locales.mkString(", ")}."
-      case VideoError.NoQuestions =>
-        "A video needs at least one question. The rotation only serves a video whose survey still has something to ask, so one without any is never shown."
-      case VideoError.QuestionRefused(index, refusal) =>
-        s"Question $index: ${SurveyTools.refusal(refusal)}"
-      case VideoError.MinWatchNotPositive(seconds) =>
-        s"minWatchSeconds must be at least 1, got $seconds. Omit it for the whole video."
-      case VideoError.NegativePriority(priority) =>
-        s"priority must be zero or greater, got $priority."
-      case VideoError.NegativeNoRepeat(seconds) =>
-        s"noRepeatSeconds cannot be negative, got $seconds. Omit it for no limit."
-      case VideoError.DurationNotPositive(seconds) =>
-        s"durationSeconds must be at least 1, got $seconds. The upload page reads it from the file; if it could not, ask the operator and pass it here."
-      case VideoError.NoFileWaiting(id) =>
-        s"Video '${id
-            .asString}' has no file waiting: it plays the one it has. replace_video_file starts a new one."
-      case VideoError.FileNoLongerWaiting(id, _) =>
-        s"Video '${id
-            .asString}' no longer waits for that file: another replaced it meanwhile. Call resume_video_upload for the one it waits for."
-      case VideoError.StillPending(id) =>
-        s"Video '${id
-            .asString}' is still waiting for its first file. Upload it and call confirm_video_upload, or call resume_video_upload for a fresh signed URL."
-      case VideoError.NoLocation(id) =>
-        s"Video '${id.asString}' belongs to no location, so its file has no key."
-    end match
-  end message
-
-  private def slugOf(raw: String): IO[String, Slug] = ZIO
-    .fromEither(Slug.parse(raw))
-    .mapError(LocationCommands.describe)
-
   private def videoIdOf(raw: String): IO[String, video.Id] = ZIO
     .fromOption(video.Id.fromString(raw.trim))
-    .orElseFail(message(VideoError.VideoNotFound(raw)))
+    .orElseFail(
+      Refusals.describe(AppError.VideoAuthoring(NonEmptyChain.one(VideoError.VideoNotFound(raw)))))
 
   /** The questions asked after a video, each with its defaults, or why one cannot be read. */
   private def questionsOf(questions: List[VideoQuestion]): IO[String, List[QuestionSpec]] = ZIO
@@ -407,57 +356,65 @@ object VideoTools:
             .left
             .map(refusal => s"Question ${index + 1}: $refusal"))
 
-  /** Runs `command` through `flow` as the calling operator. */
-  private def changed[C, R](ctx: McpToolContext, command: C)(
-      flow: Flow.Aux[Task, C, R]): ZIO[OperatorContext, String, R] =
-    for
-      caller <- Commands.callerOf(ctx)
-      result <- Commands.run(Operator(caller, None), command)(flow)(describe)
-    yield result
-
   private def signed(key: String): ZIO[AssetStore, String, String] = ZIO.serviceWithZIO[AssetStore](
     _.presignPut(key, UploadValidFor))
+
+  /** The command registering a video of `kind` from what every registration is asked. */
+  private def registering(
+      slug: String,
+      kind: VideoKind,
+      title: List[LocalizedText],
+      description: Option[List[LocalizedText]],
+      minWatchSeconds: Option[Int],
+      priority: Option[Int],
+      questions: List[VideoQuestion]): IO[String, RegisterVideoCommand] =
+    for
+      parsed <- Refusals.slugOf(slug)
+      specs  <- questionsOf(questions)
+      now    <- Clock.instant
+    yield RegisterVideoCommand(
+      video.Id.generate,
+      parsed,
+      kind,
+      LocalizedText.toCore(title),
+      LocalizedText.toCore(description.getOrElse(Nil)),
+      minWatchSeconds,
+      priority.getOrElse(10),
+      SurveyId.generate,
+      specs,
+      now
+    )
 
   def create: McpToolHandlerR[OperatorContext & AssetStore & VideoFlows.RegisterVideo] = McpTool(
     "create_advertiser_video")
     .description(
       "Register an advertiser video together with the survey shown after it, and hand back a URL to upload the file to. Does not ask for the video's length: that is read from the file at confirm_video_upload, so do not ask the operator for it. The video stays out of rotation until confirm_video_upload finds the file, so an abandoned upload costs nothing. Call read_skill('add-video') first.")
     .requireScopes(Auth.ContentWrite)
-    .handleWithContext: (in: CreateVideoRequest, ctx: McpToolContext) =>
+    .runs((in: CreateVideoRequest) =>
       for
-        slug       <- slugOf(in.slug)
         advertiser <- ZIO
           .fromOption(AdvertiserId.fromString(in.advertiserId.trim))
           .orElseFail(s"No advertiser with id '${in.advertiserId}'. Call list_advertisers.")
-        questions <- questionsOf(in.questions)
-        id = video.Id.generate
-        flow       <- ZIO.service[VideoFlows.RegisterVideo]
-        registered <-
-          changed(
-            ctx,
-            RegisterVideoCommand(
-              id,
-              slug,
-              VideoKind.Advertiser(advertiser, in.productCampaignId.map(_.trim).filter(_.nonEmpty)),
-              LocalizedText.toCore(in.title),
-              LocalizedText.toCore(in.description.getOrElse(Nil)),
-              in.minWatchSeconds,
-              in.priority.getOrElse(10),
-              SurveyId.generate,
-              questions,
-              Instant.now
-            )
-          )(flow)
-        url <- signed(registered.key)
-      yield CreateVideoResponse(
-        videoId = id.asString,
-        surveyId = registered.survey.fold("")(_.asString),
-        questionIds = registered.questions.map(_.asString),
-        uploadUrl = url,
-        expiresInSeconds = UploadValidFor.toSeconds,
-        uploadPageUri = s"${UploadUi.Uri}/${id.asString}",
-        active = false
-      )
+        command <- registering(
+          in.slug,
+          VideoKind.Advertiser(advertiser, in.productCampaignId.map(_.trim).filter(_.nonEmpty)),
+          in.title,
+          in.description,
+          in.minWatchSeconds,
+          in.priority,
+          in.questions
+        )
+      yield command): (_, registered: RegisteredVideo) =>
+      signed(registered.key).map: url =>
+        CreateVideoResponse(
+          videoId = registered.video.asString,
+          surveyId = registered.survey.fold("")(_.asString),
+          questionIds = registered.questions.map(_.asString),
+          uploadUrl = url,
+          expiresInSeconds = UploadValidFor.toSeconds,
+          uploadPageUri = s"${UploadUi.Uri}/${registered.video.asString}",
+          active = false
+        )
     // The static page, not a per-video template. `_meta.ui.resourceUri` is declared before any call
     // has produced a video, and `CallToolResult` carries no `_meta` to correct it afterwards — a
     // template here is read literally and resolves to nothing. The page learns which video it is
@@ -470,38 +427,25 @@ object VideoTools:
       .description(
         "Register a video of the venue's own — not an advertiser's — and hand back a URL to upload the file to. No advertiser; a survey only if you pass questions, since a promo is served whether or not it has any left to ask. Does not ask for the video's length, which is read from the file at confirm_video_upload. The video stays out of rotation until that call finds the file.")
       .requireScopes(Auth.ContentWrite)
-      .handleWithContext: (in: CreatePromoRequest, ctx: McpToolContext) =>
-        for
-          slug      <- slugOf(in.slug)
-          questions <- questionsOf(in.questions.getOrElse(Nil))
-          id = video.Id.generate
-          flow       <- ZIO.service[VideoFlows.RegisterVideo]
-          registered <-
-            changed(
-              ctx,
-              RegisterVideoCommand(
-                id,
-                slug,
-                VideoKind.Promo(in.noRepeatSeconds),
-                LocalizedText.toCore(in.title),
-                LocalizedText.toCore(in.description.getOrElse(Nil)),
-                in.minWatchSeconds,
-                in.priority.getOrElse(10),
-                SurveyId.generate,
-                questions,
-                Instant.now
-              )
-            )(flow)
-          url <- signed(registered.key)
-        yield CreatePromoResponse(
-          videoId = id.asString,
-          uploadUrl = url,
-          expiresInSeconds = UploadValidFor.toSeconds,
-          uploadPageUri = s"${UploadUi.Uri}/${id.asString}",
-          active = false,
-          surveyId = registered.survey.map(_.asString),
-          questionIds = registered.questions.map(_.asString)
-        )
+      .runs((in: CreatePromoRequest) =>
+        registering(
+          in.slug,
+          VideoKind.Promo(in.noRepeatSeconds),
+          in.title,
+          in.description,
+          in.minWatchSeconds,
+          in.priority,
+          in.questions.getOrElse(Nil))): (_, registered: RegisteredVideo) =>
+        signed(registered.key).map: url =>
+          CreatePromoResponse(
+            videoId = registered.video.asString,
+            uploadUrl = url,
+            expiresInSeconds = UploadValidFor.toSeconds,
+            uploadPageUri = s"${UploadUi.Uri}/${registered.video.asString}",
+            active = false,
+            surveyId = registered.survey.map(_.asString),
+            questionIds = registered.questions.map(_.asString)
+          )
       .withUi(UploadUi.AppUri)
 
   private def viewOf(report: VideoReport): VideoView = VideoView(
@@ -524,89 +468,91 @@ object VideoTools:
     replacing = report.replacing
   )
 
-  val list: McpToolHandlerR[QuillSqlite] = McpTool("list_videos")
-    .description(
-      "Every video a location plays, with its status, length and rotation weight. Promos and advertiser videos alike. Retired ones are left out unless asked for.")
-    .readOnly
-    .handle: (in: ListVideosRequest) =>
-      for
-        quill   <- ZIO.service[QuillSqlite]
-        slug    <- ZIO.foreach(in.slug.map(_.trim).filter(_.nonEmpty))(slugOf)
-        reports <-
-          Commands.ask(Videos.of(quill), VideosOfQuery(slug, in.includeRetired.getOrElse(false)))(
-            describe)
-      yield ListVideosResponse(reports.map(viewOf))
+  private def optionalSlug(raw: Option[String]): IO[String, Option[Slug]] =
+    ZIO.foreach(raw.map(_.trim).filter(_.nonEmpty))(Refusals.slugOf)
 
-  /** The videos waiting for their first file, of the location `slug` or of every one. Shared with
-    * the resources that list them, which name no location: there is no refusal to answer, and a
-    * failure here is a defect.
+  val list: McpToolHandlerR[Queries.VideosOf] =
+    McpTool("list_videos")
+      .description(
+        "Every video a location plays, with its status, length and rotation weight. Promos and advertiser videos alike. Retired ones are left out unless asked for.")
+      .readOnly
+      .reads((in: ListVideosRequest) =>
+        optionalSlug(in.slug).map(VideosOfQuery(_, in.includeRetired.getOrElse(false))))(
+        (_, reports: List[VideoReport]) => ZIO.succeed(ListVideosResponse(reports.map(viewOf))))
+
+  private def pendingOf(upload: PendingUploadReport) = PendingUpload(
+    videoId = upload.id,
+    title = upload.title.getOrElse(upload.id),
+    slug = upload.slug.getOrElse("—"),
+    createdAt = upload.createdAt)
+
+  /** Every video waiting for its first file, for the resources that list them. A listing is not
+    * refused, so a failure here is a defect.
     */
-  private[mcp] def pending(slug: Option[Slug]): ZIO[QuillSqlite, Nothing, List[PendingUpload]] = ZIO
+  private[mcp] def pending: ZIO[QuillSqlite, Nothing, List[PendingUpload]] = ZIO
     .serviceWithZIO[QuillSqlite](quill =>
-      Commands.ask(Videos.pending(quill), PendingUploadsQuery(slug))(describe))
+      Commands.ask(Videos.pending(quill), PendingUploadsQuery(None))())
     .orDieWith(IllegalStateException(_))
-    .map(
-      _.map(upload =>
-        PendingUpload(
-          videoId = upload.id,
-          title = upload.title.getOrElse(upload.id),
-          slug = upload.slug.getOrElse("—"),
-          createdAt = upload.createdAt)))
+    .map(_.map(pendingOf))
 
-  val listPending: McpToolHandlerR[QuillSqlite] = McpTool("list_pending_uploads")
-    .description(
-      "Videos registered but still waiting for their file, oldest first. Each one has a survey and questions already written and is invisible to guests until the file arrives, so finishing one is cheaper than creating another. Pass a videoId to resume_video_upload to open its page.")
-    .readOnly
-    .handle: (in: PendingUploadsRequest) =>
-      for
-        slug    <- ZIO.foreach(in.slug.map(_.trim).filter(_.nonEmpty))(slugOf)
-        waiting <- pending(slug)
-      yield PendingUploadsResponse(waiting)
+  val listPending: McpToolHandlerR[Queries.PendingUploads] =
+    McpTool("list_pending_uploads")
+      .description(
+        "Videos registered but still waiting for their file, oldest first. Each one has a survey and questions already written and is invisible to guests until the file arrives, so finishing one is cheaper than creating another. Pass a videoId to resume_video_upload to open its page.")
+      .readOnly
+      .reads((in: PendingUploadsRequest) => optionalSlug(in.slug).map(PendingUploadsQuery(_)))(
+        (_, waiting: List[PendingUploadReport]) =>
+          ZIO.succeed(PendingUploadsResponse(waiting.map(pendingOf))))
 
-  /** The file the video `videoId` waits for, as `UploadUrl` reads it. Shared with the upload ticket
-    * resource, which signs for the same file.
+  /** The file the video `videoId` waits for, as `UploadUrl` reads it, for the upload ticket
+    * resource, which signs for the same file the tools do.
     */
   private[mcp] def waiting(videoId: String): ZIO[QuillSqlite & AssetStore, String, WaitingUpload] =
     for
       quill  <- ZIO.service[QuillSqlite]
       store  <- ZIO.service[AssetStore]
-      upload <- Commands.ask(Videos.uploadUrl(quill, store), UploadUrlQuery(videoId))(describe)
+      upload <- Commands.ask(Videos.uploadUrl(quill, store), UploadUrlQuery(videoId))()
     yield upload
+
+  private def awaited(videoId: String): ZIO[Queries.UploadUrl, String, WaitingUpload] = ZIO
+    .serviceWithZIO[Queries.UploadUrl](Commands.ask(_, UploadUrlQuery(videoId))())
 
   /** Checks the file arrived, by its key, before it is confirmed: storage stays out of `core`. The
     * file confirmed is the one checked, so one that another replaced meanwhile is refused.
     */
-  val confirm
-      : McpToolHandlerR[QuillSqlite & AssetStore & OperatorContext & VideoFlows.ConfirmVideoFile] =
+  val confirm: McpToolHandlerR[
+    QuillSqlite & AssetStore & Queries.UploadUrl & OperatorContext & VideoFlows.ConfirmVideoFile] =
     McpTool("confirm_video_upload")
       .description(
         "Check the file arrived, record its length, and make it the file the video plays. A pending video enters rotation here; a replaced file takes over from the previous one, which is deleted once nobody is still playing it. Refuses when the object is not there, which is what an abandoned upload looks like. The upload page calls this itself with the duration it read from the file.")
       .requireScopes(Auth.ContentWrite)
-      .handleWithContext: (in: ConfirmUploadRequest, ctx: McpToolContext) =>
+      .runs((in: ConfirmUploadRequest) =>
         for
-          upload  <- waiting(in.videoId)
+          upload  <- awaited(in.videoId)
           present <- ZIO.serviceWithZIO[AssetStore](_.exists(upload.key))
           _       <-
             ZIO.when(!present)(
               ZIO.fail(
                 s"Nothing was uploaded to ${upload
                     .key}. The signed URL may have lapsed — call resume_video_upload for a fresh one."))
-          id        <- videoIdOf(upload.video)
-          flow      <- ZIO.service[VideoFlows.ConfirmVideoFile]
-          confirmed <-
-            changed(ctx, ConfirmVideoFileCommand(id, upload.file, in.durationSeconds, Instant.now))(
-              flow)
-          deleted <- VideoFileCollector.collect(Some(id))
-        yield ConfirmUploadResponse(
-          videoId = upload.video,
-          active = confirmed.active,
-          videoUrl = upload.url,
-          durationSeconds = confirmed.durationSeconds,
-          minWatchSeconds = confirmed.minWatchSeconds,
-          minWatchAdjustedFrom = confirmed.minWatchAdjustedFrom,
-          replaced = confirmed.replaced,
-          filesDeleted = deleted
-        )
+          id  <- videoIdOf(upload.video)
+          now <- Clock.instant
+        yield ConfirmVideoFileCommand(id, upload.file, in.durationSeconds, now)):
+        (in, confirmed: FileConfirmation) =>
+          for
+            id      <- videoIdOf(in.videoId)
+            deleted <- VideoFileCollector.collect(Some(id))
+            url     <- ZIO.serviceWith[AssetStore](_.publicUrl(confirmed.key))
+          yield ConfirmUploadResponse(
+            videoId = id.asString,
+            active = confirmed.active,
+            videoUrl = url,
+            durationSeconds = confirmed.durationSeconds,
+            minWatchSeconds = confirmed.minWatchSeconds,
+            minWatchAdjustedFrom = confirmed.minWatchAdjustedFrom,
+            replaced = confirmed.replaced,
+            filesDeleted = deleted
+          )
 
   private def reopened(upload: WaitingUpload): ZIO[AssetStore, String, ResumeUploadResponse] =
     signed(upload.key).map(url =>
@@ -618,52 +564,49 @@ object VideoTools:
         expiresInSeconds = UploadValidFor.toSeconds
       ))
 
-  def resume: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("resume_video_upload")
+  def resume: McpToolHandlerR[AssetStore & Queries.UploadUrl] = McpTool("resume_video_upload")
     .description(
       "Open the upload page again for a file that never arrived: a new video's first file, or a replacement started with replace_video_file. Signs a fresh URL; the previous one having expired does not matter. Does not create anything.")
     .requireScopes(Auth.ContentWrite)
-    .handle((in: ResumeUploadRequest) => waiting(in.videoId).flatMap(reopened))
+    .reads((in: ResumeUploadRequest) => ZIO.succeed(UploadUrlQuery(in.videoId)))(
+      (_, upload: WaitingUpload) => reopened(upload))
     .withUi(UploadUi.AppUri)
 
   def replace: McpToolHandlerR[
-    QuillSqlite & AssetStore & OperatorContext & VideoFlows.StartFileReplacement] = McpTool(
+    AssetStore & Queries.UploadUrl & OperatorContext & VideoFlows.StartFileReplacement] = McpTool(
     "replace_video_file")
     .description(
       "Give a video a new file — a lighter encoding, a corrected cut — keeping its id, survey and answers. Opens the upload page for a new file; the video keeps playing its current one, and stays in or out of rotation as it is, until the page confirms the new one by itself. Guests already playing the old file finish it; its object is deleted once the last of them does. Abandoned, nothing changes. Calling it again reopens the same new file. A pending video, still waiting for its first file, is resume_video_upload's.")
     .requireScopes(Auth.ContentWrite)
-    .handleWithContext: (in: ReplaceFileRequest, ctx: McpToolContext) =>
+    .runs((in: ReplaceFileRequest) =>
       for
-        id     <- videoIdOf(in.videoId)
-        flow   <- ZIO.service[VideoFlows.StartFileReplacement]
-        _      <- changed(ctx, StartFileReplacementCommand(id, FileId.generate, Instant.now))(flow)
-        upload <- waiting(id.asString)
-        page   <- reopened(upload)
-      yield page
+        id  <- videoIdOf(in.videoId)
+        now <- Clock.instant
+      yield StartFileReplacementCommand(id, FileId.generate, now)):
+      // Read back for the title and the location the page shows.
+      (in, _: AwaitedFile) => awaited(in.videoId).flatMap(reopened)
     .withUi(UploadUi.AppUri)
 
-  val update: McpToolHandlerR[OperatorContext & VideoFlows.UpdateVideo] = McpTool("update_video")
-    .description(
-      "Correct a video after it exists: its title, blurb, minWatchSeconds, priority, noRepeatSeconds or the client's campaign id. Omitted fields are left alone. The file is replaced with replace_video_file. Cannot move the video to another location — the location is in the file's key and the survey hangs off it, so that means a new video.")
-    .requireScopes(Auth.ContentWrite)
-    .handleWithContext: (in: UpdateVideoRequest, ctx: McpToolContext) =>
-      for
-        id        <- videoIdOf(in.videoId)
-        flow      <- ZIO.service[VideoFlows.UpdateVideo]
-        corrected <-
-          changed(
-            ctx,
-            UpdateVideoCommand(
-              id,
-              in.title.map(LocalizedText.toCore),
-              in.description.map(LocalizedText.toCore),
-              in.minWatchSeconds,
-              in.priority,
-              in.noRepeatSeconds,
-              in.productCampaignId,
-              Instant.now
-            )
-          )(flow)
-        written =
+  val update: McpToolHandlerR[OperatorContext & VideoFlows.UpdateVideo] =
+    McpTool("update_video")
+      .description(
+        "Correct a video after it exists: its title, blurb, minWatchSeconds, priority, noRepeatSeconds or the client's campaign id. Omitted fields are left alone. The file is replaced with replace_video_file. Cannot move the video to another location — the location is in the file's key and the survey hangs off it, so that means a new video.")
+      .requireScopes(Auth.ContentWrite)
+      .runs((in: UpdateVideoRequest) =>
+        for
+          id  <- videoIdOf(in.videoId)
+          now <- Clock.instant
+        yield UpdateVideoCommand(
+          id,
+          in.title.map(LocalizedText.toCore),
+          in.description.map(LocalizedText.toCore),
+          in.minWatchSeconds,
+          in.priority,
+          in.noRepeatSeconds,
+          in.productCampaignId,
+          now
+        )): (in, corrected: VideoCorrection) =>
+        val written =
           List(
             in.title.map(_ => "title"),
             in.description.map(_ => "description"),
@@ -672,7 +615,8 @@ object VideoTools:
             in.noRepeatSeconds.map(_ => "noRepeatSeconds"),
             in.productCampaignId.map(_ => "productCampaignId")
           ).flatten
-      yield UpdateVideoResponse(id.asString, written, corrected.minWatchAdjustedFrom)
+        videoIdOf(in.videoId).map(id =>
+          UpdateVideoResponse(id.asString, written, corrected.minWatchAdjustedFrom))
 
   val setActive
       : McpToolHandlerR[OperatorContext & VideoFlows.RetireVideo & VideoFlows.ReinstateVideo] =
@@ -680,26 +624,35 @@ object VideoTools:
       .description(
         "Retire a video from rotation, or bring it back. The file and the answers to its survey are kept either way — this is the only removal there is. Refuses a video still waiting for its file: that one becomes active through confirm_video_upload, which is what checks the file is actually there.")
       .requireScopes(Auth.ContentWrite)
-      .handleWithContext: (in: SetVideoActiveRequest, ctx: McpToolContext) =>
+      .runsEither((in: SetVideoActiveRequest) =>
         for
-          id <- videoIdOf(in.videoId)
-          now = Instant.now
-          rotation <-
-            if in.active then
-              ZIO.serviceWithZIO[VideoFlows.ReinstateVideo](
-                changed(ctx, ReinstateVideoCommand(id, now))(_))
-            else
-              ZIO.serviceWithZIO[VideoFlows.RetireVideo](
-                changed(ctx, RetireVideoCommand(id, now))(_))
-        yield SetVideoActiveResponse(
-          id.asString,
+          id  <- videoIdOf(in.videoId)
+          now <- Clock.instant
+        yield
           if in.active then
-            VideoStatus.Active
+            Right(ReinstateVideoCommand(id, now))
           else
-            VideoStatus.Retired
-          ,
-          rotation.atLocation)
+            Left(RetireVideoCommand(id, now))): (in, rotation: VideosInRotation) =>
+        videoIdOf(in.videoId).map(id =>
+          SetVideoActiveResponse(
+            id.asString,
+            if in.active then
+              VideoStatus.Active
+            else
+              VideoStatus.Retired
+            ,
+            rotation.atLocation))
 
-  val all: List[McpToolHandlerR[QuillSqlite & AssetStore & OperatorContext & VideoFlows.All]] =
-    List(create, createPromo, resume, replace, confirm, list, listPending, update, setActive)
+  val all: List[McpToolHandlerR[
+    QuillSqlite & AssetStore & OperatorContext & VideoFlows.All & Queries.VideosOf &
+      Queries.PendingUploads & Queries.UploadUrl]] = List(
+    create,
+    createPromo,
+    resume,
+    replace,
+    confirm,
+    list,
+    listPending,
+    update,
+    setActive)
 end VideoTools

@@ -1,23 +1,20 @@
 package whitelabel.captal.mcp.tools
 
-import java.time.{Duration, Instant}
+import java.time.Duration
 
-import cats.syntax.foldable.*
 import com.jamesward.ziohttp.mcp.*
-import whitelabel.captal.core.application.Error as AppError
 import whitelabel.captal.core.application.commands.ChangeRecoveryPolicyCommand
 import whitelabel.captal.core.application.queries.{RecoveryPolicyOfQuery, RecoveryPolicyReport}
 import whitelabel.captal.core.location.Slug
-import whitelabel.captal.core.recovery.{Error as RecoveryError, PolicyOverrides, PolicySetting}
+import whitelabel.captal.core.recovery.{PolicyOverrides, PolicySetting}
 import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
-import whitelabel.captal.platform.queries.RecoveryPolicyOf
-import whitelabel.captal.platform.schema.QuillSqlite
-import whitelabel.captal.platform.{Operator, OperatorContext}
+import whitelabel.captal.platform.OperatorContext
 import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
+import Adapters.{reads, runs}
 import McpSchema.given
 import ToolSchema.readOnly
 
@@ -149,7 +146,9 @@ object RecoveryTools:
     }
     .getOrElse(setting.toString)
 
-  private def names(settings: List[PolicySetting]): String = settings.map(nameOf).mkString(", ")
+  private[mcp] def names(settings: List[PolicySetting]): String = settings
+    .map(nameOf)
+    .mkString(", ")
 
   /** The settings `reset` names, or which of its names no setting has. */
   private def resetOf(reset: List[String]): IO[String, Set[PolicySetting]] =
@@ -206,65 +205,39 @@ object RecoveryTools:
     )
   end viewOf
 
-  /** What the operator reads for each refusal of these tools. */
-  private val describe: PartialFunction[AppError, List[String]] =
-    case AppError.Location(found) =>
-      found.toList.map(LocationCommands.describe)
-    case AppError.Recovery(found) =>
-      found
-        .toList
-        .map:
-          case RecoveryError.NothingToChange =>
-            "Name at least one setting to change, or one to reset."
-          case RecoveryError.SetAndReset(settings) =>
-            s"${names(settings)} cannot be both set and reset in one call."
-          case RecoveryError.Negative(settings) =>
-            s"${names(settings)} cannot be negative."
-          case RecoveryError.CeilingBelowMaximum(ceiling, maximum) =>
-            s"ceilingSeconds would be ${ceiling.getSeconds}, below maximumSeconds at ${maximum
-                .getSeconds}: no wait could reach the maximum. Set both."
-          case other =>
-            other.toString
+  val status: McpToolHandlerR[Queries.RecoveryPolicyOf] =
+    McpTool("get_recovery_policy")
+      .description(
+        "How a location's portal treats errors: how long its guests wait for a way out of an error in the portal's own code, what shortens or lengthens that wait, and how long a playback whose page never ended stays open. Every value is the one in force, whether the location set it or takes the default; `defaults` names the ones it takes.")
+      .readOnly
+      .reads((in: StatusRequest) => Refusals.slugOf(in.slug).map(RecoveryPolicyOfQuery(_))):
+        (_, report: RecoveryPolicyReport) => ZIO.succeed(viewOf(report.slug, report))
 
-  private def slugOf(raw: String): IO[String, Slug] = ZIO
-    .fromEither(Slug.parse(raw.trim))
-    .mapError(LocationCommands.describe)
+  val set: McpToolHandlerR[OperatorContext & ContentFlows.ChangeRecoveryPolicy] =
+    McpTool("set_recovery_policy")
+      .description(
+        "Change how a location's portal treats errors: any of the settings get_recovery_policy reports, each in its own field, and `reset` to return some to their default. Settings not named are kept. Applies to the next guest who asks for a way out and the next playback that starts, with no redeploy; a wait already offered keeps its length. A server error always opens at once and is not affected.")
+      .requireScopes(Auth.ContentWrite)
+      .runs((in: SetRequest) =>
+        for
+          slug  <- Refusals.slugOf(in.slug)
+          reset <- resetOf(in.reset)
+          now   <- Clock.instant
+        yield ChangeRecoveryPolicyCommand(slug, requested(in), reset, now)):
+        (in, overrides: PolicyOverrides) =>
+          Refusals
+            .slugOf(in.slug)
+            .map(slug =>
+              viewOf(
+                slug,
+                RecoveryPolicyReport(
+                  slug,
+                  overrides.policy,
+                  overrides.grace,
+                  PolicySetting.values.toList.filterNot(overrides.set.contains))))
 
-  val status: McpToolHandlerR[QuillSqlite] = McpTool("get_recovery_policy")
-    .description(
-      "How a location's portal treats errors: how long its guests wait for a way out of an error in the portal's own code, what shortens or lengthens that wait, and how long a playback whose page never ended stays open. Every value is the one in force, whether the location set it or takes the default; `defaults` names the ones it takes.")
-    .readOnly
-    .handle: (in: StatusRequest) =>
-      for
-        slug   <- slugOf(in.slug)
-        quill  <- ZIO.service[QuillSqlite]
-        report <- Commands.ask(RecoveryPolicyOf(quill), RecoveryPolicyOfQuery(slug))(describe)
-      yield viewOf(slug, report)
-
-  val set: McpToolHandlerR[OperatorContext & ContentFlows.ChangeRecoveryPolicy] = McpTool(
-    "set_recovery_policy")
-    .description(
-      "Change how a location's portal treats errors: any of the settings get_recovery_policy reports, each in its own field, and `reset` to return some to their default. Settings not named are kept. Applies to the next guest who asks for a way out and the next playback that starts, with no redeploy; a wait already offered keeps its length. A server error always opens at once and is not affected.")
-    .requireScopes(Auth.ContentWrite)
-    .handleWithContext: (in: SetRequest, ctx: McpToolContext) =>
-      for
-        slug      <- slugOf(in.slug)
-        reset     <- resetOf(in.reset)
-        caller    <- Commands.callerOf(ctx)
-        flow      <- ZIO.service[ContentFlows.ChangeRecoveryPolicy]
-        overrides <-
-          Commands.run(
-            Operator(caller, None),
-            ChangeRecoveryPolicyCommand(slug, requested(in), reset, Instant.now))(flow)(describe)
-      yield viewOf(
-        slug,
-        RecoveryPolicyReport(
-          slug,
-          overrides.policy,
-          overrides.grace,
-          PolicySetting.values.toList.filterNot(overrides.set.contains)))
-
-  val all
-      : List[McpToolHandlerR[QuillSqlite & OperatorContext & ContentFlows.ChangeRecoveryPolicy]] =
-    List(status, set)
+  val all: List[McpToolHandlerR[
+    Queries.RecoveryPolicyOf & OperatorContext & ContentFlows.ChangeRecoveryPolicy]] = List(
+    status,
+    set)
 end RecoveryTools

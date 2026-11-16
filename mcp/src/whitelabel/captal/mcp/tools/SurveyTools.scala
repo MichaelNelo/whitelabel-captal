@@ -1,13 +1,18 @@
 package whitelabel.captal.mcp.tools
 
-import java.time.{Instant, LocalDate}
+import java.time.LocalDate
 
-import cats.syntax.foldable.*
+import cats.data.NonEmptyChain
 import cats.syntax.traverse.*
 import com.jamesward.ziohttp.mcp.*
+import whitelabel.captal.core.application.Error as AppError
 import whitelabel.captal.core.application.commands.{
   AddQuestionCommand,
+  AnswersKept,
   CreateSurveyCommand,
+  CreatedSurvey,
+  QuestionActivity as QuestionActivityResult,
+  QuestionPlaced,
   ReinstateQuestionCommand,
   ReorderQuestionsCommand,
   RetireQuestionCommand,
@@ -18,18 +23,16 @@ import whitelabel.captal.core.application.queries.{
   ListSurveysQuery,
   QuestionReport,
   SurveyOfQuery,
-  SurveyReport
+  SurveyReport,
+  SurveySummaryReport
 }
-import whitelabel.captal.core.application.{Error as AppError, Flow}
-import whitelabel.captal.core.location.Slug
 import whitelabel.captal.core.survey
 import whitelabel.captal.core.survey.authoring.{
   AnswerSpec,
   Error as AuthoringError,
   OptionSpec,
   QuestionSpec,
-  SurveyKind,
-  TextField
+  SurveyKind
 }
 import whitelabel.captal.core.survey.question
 import whitelabel.captal.mcp.access.Auth
@@ -37,12 +40,14 @@ import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
 import whitelabel.captal.platform.queries.Surveys
 import whitelabel.captal.platform.repositories.SurveyAuthoringRepositoryQuill
 import whitelabel.captal.platform.schema.QuillSqlite
-import whitelabel.captal.platform.{Operator, OperatorContext, SurveyCategory as StoredCategory}
+import whitelabel.captal.platform.{OperatorContext, SurveyCategory as StoredCategory}
 import zio.*
 import zio.schema.annotation.{description, discriminatorName, rejectExtraFields}
 import zio.schema.{DeriveSchema, Schema}
 
+import Adapters.{reads, runs, runsEither}
 import McpSchema.given
+import Refusals.SurveySide
 import ToolSchema.readOnly
 
 // The case names are the wire values, lowercase and underscored, which is why they break Scala
@@ -419,127 +424,48 @@ object SurveyTools:
   given Schema[ReorderRequest] = DeriveSchema.gen
   given Schema[ReorderResponse] = DeriveSchema.gen
 
-  /** Which of a pair of question tools a call came through — the deployment-wide identification
-    * surveys' or a location's — and the tool of the other pair, which takes what this one refuses.
-    */
-  final private case class Side(identification: Boolean, otherTool: String)
-
-  /** What the operator reads for each refusal; `side` names the tool to use instead for a survey on
-    * the other side, and is absent for the reads, which take either.
-    */
-  private def describe(side: Option[Side]): PartialFunction[AppError, List[String]] =
-    case AppError.SurveyAuthoring(found) =>
-      found.toList.map(message(side))
-    case AppError.Location(found) =>
-      found.toList.map(LocationCommands.describe)
-
-  /** What the operator reads for `error` where no pair of tools is in play: a question asked after
-    * a video, written with the video.
-    */
-  private[mcp] def refusal(error: AuthoringError): String = message(None)(error)
-
-  private def message(side: Option[Side])(error: AuthoringError): String =
-    def field(text: TextField) =
-      text match
-        case TextField.Text =>
-          "text"
-        case TextField.Description =>
-          "description"
-        case TextField.Placeholder =>
-          "placeholder"
-        case TextField.OptionText(index) =>
-          s"option $index"
-    error match
-      case AuthoringError.SurveyNotFound(id) =>
-        s"No survey with id '$id'. Call list_surveys to see what exists."
-      case AuthoringError.QuestionNotFound(id) =>
-        s"No question with id '$id'. Call get_survey to see what a survey contains."
-      case AuthoringError.VideoNotFound(id) =>
-        s"No video with id '$id'."
-      case AuthoringError.IdentificationSurveyExists(kind, existing) =>
-        s"An active '${SurveyAuthoringRepositoryQuill.categoryOf(
-            kind)}' survey already exists (id ${existing
-            .asString}). Identification surveys are global and picked by category, so two would be ambiguous."
-      case AuthoringError.OtherSide(kind) =>
-        val category = SurveyAuthoringRepositoryQuill.categoryOf(kind)
-        side match
-          case Some(Side(true, other)) =>
-            s"That question belongs to a '$category' survey, which is scoped to a location. Use $other."
-          case Some(Side(false, other)) =>
-            s"That question belongs to the deployment-wide '$category' survey, asked of every guest of every location. Use $other, which requires identity:write."
-          case None =>
-            s"That question belongs to a '$category' survey, which this tool does not take."
-      case AuthoringError.NoText =>
-        "A question needs text in at least one locale, or it cannot be rendered."
-      case AuthoringError.BlankText(text) =>
-        s"${field(text)} has an entry with a blank locale or value."
-      case AuthoringError.RepeatedLocales(text, locales) =>
-        s"${field(text)} repeats the locale(s) ${locales.mkString(", ")}."
-      case AuthoringError.NoOptions =>
-        "A radio, dropdown or checkbox question needs at least one option."
-      case AuthoringError.OptionWithoutText(index) =>
-        s"Option $index has no text."
-      case AuthoringError.HierarchyOutsideLocation =>
-        "hierarchyLevel only applies to questions in a location survey."
-      case AuthoringError.NegativePoints(points) =>
-        s"Points must be zero or greater, got $points."
-      case AuthoringError.NotEveryQuestion(missing, extra) =>
-        s"The list must name every active question exactly once. Missing: ${missing.mkString(
-            ", ")}. Not in this survey or not active: ${extra.mkString(", ")}."
-      case AuthoringError.RepeatedQuestion =>
-        "The list repeats a question."
-      case AuthoringError.NoQuestions(id) =>
-        s"No survey with id '$id', or it has no questions."
-    end match
-  end message
+  private def refused(error: AuthoringError): String = Refusals.describe(
+    AppError.SurveyAuthoring(NonEmptyChain.one(error)))
 
   private def surveyIdOf(raw: String): IO[String, survey.Id] = ZIO
     .fromOption(survey.Id.fromString(raw.trim))
-    .orElseFail(message(None)(AuthoringError.SurveyNotFound(raw)))
+    .orElseFail(refused(AuthoringError.SurveyNotFound(raw)))
 
   private def questionIdOf(raw: String): IO[String, question.Id] = ZIO
     .fromOption(question.Id.fromString(raw.trim))
-    .orElseFail(message(None)(AuthoringError.QuestionNotFound(raw)))
+    .orElseFail(refused(AuthoringError.QuestionNotFound(raw)))
 
-  /** Runs `command` through `flow` as the calling operator. */
-  private def changed[C, R](ctx: McpToolContext, command: C, side: Option[Side])(
-      flow: Flow.Aux[Task, C, R]): ZIO[OperatorContext, String, R] =
-    for
-      caller <- Commands.callerOf(ctx)
-      result <- Commands.run(Operator(caller, None), command)(flow)(describe(side))
-    yield result
+  /** How a refusal of one of a pair reads: naming, for a survey on the other side, the other tool.
+    */
+  private def describedFor(side: SurveySide): AppError => String = Refusals.describing(Some(side))
 
-  val list: McpToolHandlerR[QuillSqlite] = McpTool("list_surveys")
-    .description(
-      "Every survey with the questions in it, enough of each to find one and act on it. Categories are email, profiling, location and advertiser; only advertiser surveys belong to a location, through their video. Call get_survey for a question's options, rules and answer count.")
-    .readOnly
-    .handle: (in: ListRequest) =>
-      for
-        quill <- ZIO.service[QuillSqlite]
-        slug  <-
-          ZIO.foreach(in.slug)(raw =>
-            ZIO.fromEither(Slug.parse(raw)).mapError(LocationCommands.describe))
-        reports <-
-          Commands.ask(Surveys.list(quill), ListSurveysQuery(slug, in.includeInactive))(
-            describe(None))
-      yield ListResponse(
-        reports.map: s =>
-          SurveySummary(
-            id = s.id,
-            category = s.category,
-            name = s.name,
-            videoId = s.videoId,
-            locationSlug = s.locationSlug,
-            active = s.active,
-            questions = s
-              .questions
-              .map(q => QuestionSummary(q.id, q.active, LocalizedText.fromCore(q.text)))
-          ))
+  val list: McpToolHandlerR[Queries.ListSurveys] =
+    McpTool("list_surveys")
+      .description(
+        "Every survey with the questions in it, enough of each to find one and act on it. Categories are email, profiling, location and advertiser; only advertiser surveys belong to a location, through their video. Call get_survey for a question's options, rules and answer count.")
+      .readOnly
+      .reads((in: ListRequest) =>
+        ZIO.foreach(in.slug)(Refusals.slugOf).map(ListSurveysQuery(_, in.includeInactive))):
+        (_, reports: List[SurveySummaryReport]) =>
+          ZIO.succeed(
+            ListResponse(
+              reports.map: s =>
+                SurveySummary(
+                  id = s.id,
+                  category = s.category,
+                  name = s.name,
+                  videoId = s.videoId,
+                  locationSlug = s.locationSlug,
+                  active = s.active,
+                  questions = s
+                    .questions
+                    .map(q => QuestionSummary(q.id, q.active, LocalizedText.fromCore(q.text)))
+                )))
 
-  /** The read behind `get_survey`, shared with the `captal://surveys/{id}` resource. */
+  /** The read behind the `captal://surveys/{id}` resource, which `get_survey` answers too. */
   private[mcp] def viewOf(surveyId: String): ZIO[QuillSqlite, String, SurveyView] = ZIO
     .serviceWithZIO[QuillSqlite](quill =>
-      Commands.ask(Surveys.of(quill), SurveyOfQuery(surveyId))(describe(None)))
+      Commands.ask(Surveys.of(quill), SurveyOfQuery(surveyId))())
     .map(viewOfReport)
 
   private def viewOfReport(report: SurveyReport): SurveyView =
@@ -564,11 +490,13 @@ object SurveyTools:
       report.questions.map(questionView))
   end viewOfReport
 
-  val get: McpToolHandlerR[QuillSqlite] = McpTool("get_survey")
-    .description(
-      "The full contents of a survey: every question in display order with its texts, options, validation rules and how many answers reference it. Retired questions and options are included, marked inactive.")
-    .readOnly
-    .handle((in: GetRequest) => viewOf(in.surveyId))
+  val get: McpToolHandlerR[Queries.SurveyOf] =
+    McpTool("get_survey")
+      .description(
+        "The full contents of a survey: every question in display order with its texts, options, validation rules and how many answers reference it. Retired questions and options are included, marked inactive.")
+      .readOnly
+      .reads((in: GetRequest) => ZIO.succeed(SurveyOfQuery(in.surveyId)))(
+        (_, report: SurveyReport) => ZIO.succeed(viewOfReport(report)))
 
   /** Corrects a question that is already being asked, in place, so `answers.question_id` keeps
     * pointing at it. Answers recorded before the edit were given to the old wording, which the
@@ -577,7 +505,8 @@ object SurveyTools:
     * Paired by scope like the rest: `identity:write` for the deployment-wide surveys,
     * `content:write` for a video's.
     */
-  private def update(side: Side): McpToolHandlerR[OperatorContext & ContentFlows.UpdateQuestion] =
+  private def update(
+      side: SurveySide): McpToolHandlerR[OperatorContext & ContentFlows.UpdateQuestion] =
     McpTool(
       if side.identification then
         "update_identification_question"
@@ -593,112 +522,114 @@ object SurveyTools:
           Auth.IdentityWrite
         else
           Auth.ContentWrite)
-      .handleWithContext: (in: UpdateQuestionRequest, ctx: McpToolContext) =>
-        for
-          id   <- questionIdOf(in.questionId)
-          flow <- ZIO.service[ContentFlows.UpdateQuestion]
-          kept <-
-            changed(
-              ctx,
-              UpdateQuestionCommand(
-                id,
-                side.identification,
-                in.text.map(LocalizedText.toCore),
-                in.description.map(LocalizedText.toCore),
-                in.placeholder.map(LocalizedText.toCore),
-                in.required,
-                in.points,
-                Instant.now
-              ),
-              Some(side)
-            )(flow)
-          written =
-            List(
-              in.text.map(_ => "text"),
-              in.description.map(_ => "description"),
-              in.placeholder.map(_ => "placeholder"),
-              in.required.map(_ => "required"),
-              in.points.map(_ => "points")
-            ).flatten
-        yield UpdateQuestionResponse(id.asString, written, kept.answers)
+      .runs(
+        (in: UpdateQuestionRequest) =>
+          for
+            id  <- questionIdOf(in.questionId)
+            now <- Clock.instant
+          yield UpdateQuestionCommand(
+            id,
+            side.identification,
+            in.text.map(LocalizedText.toCore),
+            in.description.map(LocalizedText.toCore),
+            in.placeholder.map(LocalizedText.toCore),
+            in.required,
+            in.points,
+            now
+          ),
+        describedFor(side)
+      ): (in, kept: AnswersKept) =>
+        val written =
+          List(
+            in.text.map(_ => "text"),
+            in.description.map(_ => "description"),
+            in.placeholder.map(_ => "placeholder"),
+            in.required.map(_ => "required"),
+            in.points.map(_ => "points")
+          ).flatten
+        questionIdOf(in.questionId).map(id =>
+          UpdateQuestionResponse(id.asString, written, kept.answers))
 
-  private val identification = Side(identification = true, otherTool = "")
+  private val identification = SurveySide(identification = true, otherTool = "")
 
   val updateQuestion: McpToolHandlerR[OperatorContext & ContentFlows.UpdateQuestion] = update(
-    Side(identification = false, otherTool = "update_identification_question"))
+    SurveySide(identification = false, otherTool = "update_identification_question"))
 
   val updateIdentificationQuestion: McpToolHandlerR[OperatorContext & ContentFlows.UpdateQuestion] =
     update(identification.copy(otherTool = "update_question"))
 
   private type QuestionActivity = ContentFlows.RetireQuestion & ContentFlows.ReinstateQuestion
 
-  private def setActive(side: Side): McpToolHandlerR[OperatorContext & QuestionActivity] = McpTool(
-    if side.identification then
-      "set_identification_question_active"
-    else
-      "set_question_active")
-    .description(
+  private def setActive(side: SurveySide): McpToolHandlerR[OperatorContext & QuestionActivity] =
+    McpTool(
       if side.identification then
-        "Retire a question from one of the three deployment-wide identification surveys, or bring it back. Every guest of every location is asked these, so this is not a per-location change. Never deletes: answers reference questions, so a retired one keeps resolving for everything already recorded."
+        "set_identification_question_active"
       else
-        "Retire a question from an advertiser's survey, or bring it back. Never deletes: answers reference questions, so a retired question keeps resolving for everything already recorded. Reports how many answers that is.")
-    .requireScopes(
-      if side.identification then
-        Auth.IdentityWrite
-      else
-        Auth.ContentWrite)
-    .handleWithContext: (in: SetQuestionActiveRequest, ctx: McpToolContext) =>
-      for
-        id <- questionIdOf(in.questionId)
-        now = Instant.now
-        activity <-
-          if in.active then
-            ZIO.serviceWithZIO[ContentFlows.ReinstateQuestion](
-              changed(ctx, ReinstateQuestionCommand(id, side.identification, now), Some(side))(_))
-          else
-            ZIO.serviceWithZIO[ContentFlows.RetireQuestion](
-              changed(ctx, RetireQuestionCommand(id, side.identification, now), Some(side))(_))
-      yield SetQuestionActiveResponse(
-        id.asString,
-        in.active,
-        activity.answers,
-        activity.remainingActive)
+        "set_question_active")
+      .description(
+        if side.identification then
+          "Retire a question from one of the three deployment-wide identification surveys, or bring it back. Every guest of every location is asked these, so this is not a per-location change. Never deletes: answers reference questions, so a retired one keeps resolving for everything already recorded."
+        else
+          "Retire a question from an advertiser's survey, or bring it back. Never deletes: answers reference questions, so a retired question keeps resolving for everything already recorded. Reports how many answers that is.")
+      .requireScopes(
+        if side.identification then
+          Auth.IdentityWrite
+        else
+          Auth.ContentWrite)
+      .runsEither(
+        (in: SetQuestionActiveRequest) =>
+          for
+            id  <- questionIdOf(in.questionId)
+            now <- Clock.instant
+          yield
+            if in.active then
+              Right(ReinstateQuestionCommand(id, side.identification, now))
+            else
+              Left(RetireQuestionCommand(id, side.identification, now))
+        ,
+        describedFor(side)
+      ): (in, activity: QuestionActivityResult) =>
+        questionIdOf(in.questionId).map(id =>
+          SetQuestionActiveResponse(
+            id.asString,
+            in.active,
+            activity.answers,
+            activity.remainingActive))
 
   val setQuestionActive: McpToolHandlerR[OperatorContext & QuestionActivity] = setActive(
-    Side(identification = false, otherTool = "set_identification_question_active"))
+    SurveySide(identification = false, otherTool = "set_identification_question_active"))
 
   val setIdentificationQuestionActive: McpToolHandlerR[OperatorContext & QuestionActivity] =
     setActive(identification.copy(otherTool = "set_question_active"))
 
   private def reorderQuestions(
-      side: Side): McpToolHandlerR[OperatorContext & ContentFlows.ReorderQuestions] = McpTool(
-    if side.identification then
-      "reorder_identification_questions"
-    else
-      "reorder_questions")
-    .description(
+      side: SurveySide): McpToolHandlerR[OperatorContext & ContentFlows.ReorderQuestions] =
+    McpTool(
       if side.identification then
-        "Set the order the questions of a deployment-wide identification survey are asked in. Give every active question of the survey exactly once; display_order is rewritten to match. This is the order every guest of every location sees."
+        "reorder_identification_questions"
       else
-        "Set the order an advertiser survey's questions are asked in. Give every active question of the survey exactly once; display_order is rewritten to match the list.")
-    .requireScopes(
-      if side.identification then
-        Auth.IdentityWrite
-      else
-        Auth.ContentWrite)
-    .handleWithContext: (in: ReorderRequest, ctx: McpToolContext) =>
-      for
-        id   <- surveyIdOf(in.surveyId)
-        flow <- ZIO.service[ContentFlows.ReorderQuestions]
-        _    <-
-          changed(
-            ctx,
-            ReorderQuestionsCommand(id, side.identification, in.orderedQuestionIds, Instant.now),
-            Some(side))(flow)
-      yield ReorderResponse(in.surveyId, in.orderedQuestionIds)
+        "reorder_questions")
+      .description(
+        if side.identification then
+          "Set the order the questions of a deployment-wide identification survey are asked in. Give every active question of the survey exactly once; display_order is rewritten to match. This is the order every guest of every location sees."
+        else
+          "Set the order an advertiser survey's questions are asked in. Give every active question of the survey exactly once; display_order is rewritten to match the list.")
+      .requireScopes(
+        if side.identification then
+          Auth.IdentityWrite
+        else
+          Auth.ContentWrite)
+      .runs(
+        (in: ReorderRequest) =>
+          for
+            id  <- surveyIdOf(in.surveyId)
+            now <- Clock.instant
+          yield ReorderQuestionsCommand(id, side.identification, in.orderedQuestionIds, now),
+        describedFor(side)
+      )((in, _: Unit) => ZIO.succeed(ReorderResponse(in.surveyId, in.orderedQuestionIds)))
 
   val reorder: McpToolHandlerR[OperatorContext & ContentFlows.ReorderQuestions] = reorderQuestions(
-    Side(identification = false, otherTool = "reorder_identification_questions"))
+    SurveySide(identification = false, otherTool = "reorder_identification_questions"))
 
   val reorderIdentification: McpToolHandlerR[OperatorContext & ContentFlows.ReorderQuestions] =
     reorderQuestions(identification.copy(otherTool = "reorder_questions"))
@@ -866,13 +797,13 @@ object SurveyTools:
     * it takes the video's location and advertiser, a promo's having none. Identification surveys go
     * through [[createIdentificationSurvey]], behind a different scope.
     */
-  val createSurvey: McpToolHandlerR[OperatorContext & ContentFlows.CreateSurvey] = McpTool(
-    "create_survey")
-    .description(
-      "Create the survey shown after a video — an advertiser's or one of the venue's own promos. It inherits the video's location and advertiser, so there is nothing to say about where it belongs or whose it is. Call read_skill('add-survey') first.")
-    .requireScopes(Auth.ContentWrite)
-    .handleWithContext: (in: CreateSurveyRequest, ctx: McpToolContext) =>
-      created(ctx, SurveyOwner.Video(in.videoId), in.name)
+  val createSurvey: McpToolHandlerR[OperatorContext & ContentFlows.CreateSurvey] =
+    McpTool("create_survey")
+      .description(
+        "Create the survey shown after a video — an advertiser's or one of the venue's own promos. It inherits the video's location and advertiser, so there is nothing to say about where it belongs or whose it is. Call read_skill('add-survey') first.")
+      .requireScopes(Auth.ContentWrite)
+      .runs((in: CreateSurveyRequest) => creating(SurveyOwner.Video(in.videoId), in.name))(
+        (_, survey: CreatedSurvey) => ZIO.succeed(createdView(survey)))
 
   /** Behind [[Auth.IdentityWrite]] rather than `content:write`: these three are asked of every
     * guest of every location, so creating one changes the identification flow for the whole
@@ -883,18 +814,20 @@ object SurveyTools:
       .description(
         "Create one of the three deployment-wide surveys asked before a guest is identified: email, profiling or location. Not scoped to any location — there is one of each for every portal at once, and creating a second of the same kind is refused. Call read_skill('add-survey') first.")
       .requireScopes(Auth.IdentityWrite)
-      .handleWithContext: (in: CreateIdentificationSurveyRequest, ctx: McpToolContext) =>
-        created(ctx, SurveyOwner.Identification(in.category.kind), in.name)
+      .runs((in: CreateIdentificationSurveyRequest) =>
+        creating(SurveyOwner.Identification(in.category.kind), in.name))(
+        (_, survey: CreatedSurvey) => ZIO.succeed(createdView(survey)))
 
-  private def created(ctx: McpToolContext, owner: SurveyOwner, name: Option[String])
-      : ZIO[OperatorContext & ContentFlows.CreateSurvey, String, CreateSurveyResponse] =
-    val id = survey.Id.generate
-    for
-      flow <- ZIO.service[ContentFlows.CreateSurvey]
-      kind <- changed(ctx, CreateSurveyCommand(id, owner, name, Instant.now), None)(flow)
-    yield CreateSurveyResponse(id.asString, SurveyAuthoringRepositoryQuill.categoryOf(kind))
+  private def creating(owner: SurveyOwner, name: Option[String]): UIO[CreateSurveyCommand] = Clock
+    .instant
+    .map(CreateSurveyCommand(survey.Id.generate, owner, name, _))
 
-  private def addQuestion(side: Side): McpToolHandlerR[OperatorContext & ContentFlows.AddQuestion] =
+  private def createdView(created: CreatedSurvey) = CreateSurveyResponse(
+    created.id.asString,
+    SurveyAuthoringRepositoryQuill.categoryOf(created.kind))
+
+  private def addQuestion(
+      side: SurveySide): McpToolHandlerR[OperatorContext & ContentFlows.AddQuestion] =
     McpTool(
       if side.identification then
         "create_identification_question"
@@ -910,31 +843,31 @@ object SurveyTools:
           Auth.IdentityWrite
         else
           Auth.ContentWrite)
-      .handleWithContext: (in: CreateQuestionRequest, ctx: McpToolContext) =>
-        for
-          id      <- surveyIdOf(in.surveyId)
-          written <- ZIO.fromEither(
-            specOf(
-              in.text,
-              in.answer,
-              in.description.getOrElse(Nil),
-              in.placeholder.getOrElse(Nil),
-              in.required.getOrElse(true),
-              in.points.getOrElse(10),
-              in.hierarchyLevel))
-          flow   <- ZIO.service[ContentFlows.AddQuestion]
-          placed <-
-            changed(
-              ctx,
-              AddQuestionCommand(id, side.identification, written, Instant.now),
-              Some(side))(flow)
-        yield CreateQuestionResponse(
-          placed.id.asString,
-          placed.displayOrder,
-          written.answer.choices.map(_.id.asString))
+      .runs(
+        (in: CreateQuestionRequest) =>
+          for
+            id      <- surveyIdOf(in.surveyId)
+            written <- ZIO.fromEither(
+              specOf(
+                in.text,
+                in.answer,
+                in.description.getOrElse(Nil),
+                in.placeholder.getOrElse(Nil),
+                in.required.getOrElse(true),
+                in.points.getOrElse(10),
+                in.hierarchyLevel))
+            now <- Clock.instant
+          yield AddQuestionCommand(id, side.identification, written, now),
+        describedFor(side)
+      ): (_, placed: QuestionPlaced) =>
+        ZIO.succeed(
+          CreateQuestionResponse(
+            placed.id.asString,
+            placed.displayOrder,
+            placed.options.map(_.asString)))
 
   val createQuestion: McpToolHandlerR[OperatorContext & ContentFlows.AddQuestion] = addQuestion(
-    Side(identification = false, otherTool = "create_identification_question"))
+    SurveySide(identification = false, otherTool = "create_identification_question"))
 
   val createIdentificationQuestion: McpToolHandlerR[OperatorContext & ContentFlows.AddQuestion] =
     addQuestion(identification.copy(otherTool = "create_question"))
@@ -942,7 +875,8 @@ object SurveyTools:
   /** The question tools come in pairs that differ only in which surveys they accept and which scope
     * they require, so `tools/list` publishes the requirement each one actually enforces.
     */
-  val all: List[McpToolHandlerR[QuillSqlite & OperatorContext & ContentFlows.Surveys]] = List(
+  val all: List[McpToolHandlerR[
+    Queries.ListSurveys & Queries.SurveyOf & OperatorContext & ContentFlows.Surveys]] = List(
     list,
     get,
     setQuestionActive,

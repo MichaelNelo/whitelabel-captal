@@ -24,6 +24,7 @@ import zio.json.ast.Json
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
+import Adapters.reads
 import McpSchema.given
 import ToolSchema.{readOnly, withUi}
 
@@ -37,7 +38,7 @@ import ToolSchema.{readOnly, withUi}
   */
 object DeployTools:
   /** What the operation tools need from the runtime. */
-  type Env = QuillSqlite & AssetStore & OperatorContext & OperationFlows.Start
+  type Env = QuillSqlite & AssetStore & OperatorContext & OperationFlows.Start & Queries.RunStatus
 
   final case class DeployRequest(
       @description(
@@ -112,9 +113,7 @@ object DeployTools:
     .fromOption(Auth.callerId(ctx.principal))
     .orElseFail("Could not tell which token made this call.")
 
-  private def slugOf(raw: String): IO[String, Slug] = ZIO
-    .fromEither(Slug.parse(raw))
-    .mapError(LocationCommands.describe)
+  private def slugOf(raw: String): IO[String, Slug] = Refusals.slugOf(raw)
 
   private def toolFor(operation: String): String = s"${operation}_location"
 
@@ -185,7 +184,7 @@ object DeployTools:
       cmd: StartOperationCommand,
       ctx: McpToolContext,
       uiOrigin: String): ZIO[Env, String, RunView] =
-    lazy val described = errors.map(LocationCommands.describe).mkString(" ")
+    lazy val described = errors.map(Refusals.location).mkString(" ")
     errors.collectFirst {
       case unfinished: LocationError.PreviousOperationUnfinished =>
         unfinished
@@ -358,13 +357,7 @@ object DeployTools:
         found <- ZIO
           .serviceWithZIO[AssetStore](AssetsOf(_).execute(AssetsOfQuery(in.slug)))
           .mapError(e => s"Could not count the location's S3 objects: ${e.getMessage}")
-        assets <- ZIO
-          .fromEither(found)
-          .mapError:
-            case AppError.Location(errors) =>
-              errors.toList.map(LocationCommands.describe).mkString(" ")
-            case other =>
-              other.toString
+        assets <- ZIO.fromEither(found).mapError(Refusals.describe)
         wanted <-
           if assets.objects == 0 then
             ZIO.succeed(false)
@@ -404,29 +397,20 @@ object DeployTools:
         answered.action == "accept" &&
           !answered.content.flatMap(_.get("deleteAssets")).flatMap(_.asBoolean).contains(false)))
 
-  private val status: McpToolHandlerR[QuillSqlite] = McpTool("get_deploy_status")
-    .description(
-      "Where a deploy, pause, resume or destroy of a location's portal stands: every step, its state and what it found, and what is left once it ended. Those four answer at once and leave the work running in the background, so call this about every 30 seconds until status is no longer running. Pass the runId they answered with, or a slug for that location's latest run. Call read_skill('deploy-location') first.")
-    .readOnly
-    .handle: (in: StatusRequest) =>
-      for
-        query <-
-          (in.runId, in.slug) match
-            case (Some(id), _) =>
-              ZIO.succeed(RunStatusQuery.ById(id))
-            case (None, Some(slug)) =>
-              ZIO.succeed(RunStatusQuery.LatestOf(slug))
-            case (None, None) =>
-              ZIO.fail("Pass a runId, or a slug for its latest run.")
-        found  <- ZIO.serviceWithZIO[QuillSqlite](RunStatus(_).execute(query)).orDie
-        report <- ZIO
-          .fromEither(found)
-          .mapError:
-            case AppError.Location(errors) =>
-              errors.toList.map(LocationCommands.describe).mkString(" ")
-            case other =>
-              other.toString
-      yield viewOf(report, alreadyGoing = false)
+  private val status: McpToolHandlerR[Queries.RunStatus] =
+    McpTool("get_deploy_status")
+      .description(
+        "Where a deploy, pause, resume or destroy of a location's portal stands: every step, its state and what it found, and what is left once it ended. Those four answer at once and leave the work running in the background, so call this about every 30 seconds until status is no longer running. Pass the runId they answered with, or a slug for that location's latest run. Call read_skill('deploy-location') first.")
+      .readOnly
+      .reads((in: StatusRequest) =>
+        (in.runId, in.slug) match
+          case (Some(id), _) =>
+            ZIO.succeed(RunStatusQuery.ById(id))
+          case (None, Some(slug)) =>
+            ZIO.succeed(RunStatusQuery.LatestOf(slug))
+          case (None, None) =>
+            ZIO.fail("Pass a runId, or a slug for its latest run."))((_, report: RunReport) =>
+        ZIO.succeed(viewOf(report, alreadyGoing = false)))
 
   /** All five tools, or none: registered only when the deploy configuration exists, which is also
     * what the runner that takes their runs needs.

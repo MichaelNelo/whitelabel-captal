@@ -1,21 +1,21 @@
 package whitelabel.captal.mcp.resources
 
-import cats.syntax.foldable.*
 import com.jamesward.ziohttp.mcp.*
-import whitelabel.captal.core.application.Error as AppError
 import whitelabel.captal.core.application.queries.{
   LocationReadinessQuery,
   ReadinessReport,
   ReadinessStep
 }
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
-import whitelabel.captal.mcp.tools.LocationCommands
+import whitelabel.captal.mcp.tools.{Queries, Refusals}
 import whitelabel.captal.platform.aws.AssetStore
 import whitelabel.captal.platform.queries.LocationReadiness as ReadinessQuery
 import whitelabel.captal.platform.schema.QuillSqlite
 import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
+
+import whitelabel.captal.mcp.tools.Adapters.reads
 
 import McpSchema.given
 import ToolSchema.readOnly
@@ -170,13 +170,9 @@ object Readiness:
     nextSteps = r.nextSteps.map(render)
   )
 
-  private def refusal(error: AppError): String =
-    error match
-      case AppError.Location(found) =>
-        found.toList.map(LocationCommands.describe).mkString(" ")
-      case other =>
-        other.toString
-
+  /** The readiness of the location `slug`, for the resource and the prompt that show it outside a
+    * tool call.
+    */
   def of(slug: String): ZIO[QuillSqlite & AssetStore, String, LocationReadiness] =
     for
       quill  <- ZIO.service[QuillSqlite]
@@ -184,15 +180,16 @@ object Readiness:
       found  <- ReadinessQuery(quill, assets)
         .execute(LocationReadinessQuery(slug.trim))
         .mapError(e => s"Could not read the location's readiness: ${e.getMessage}")
-      report <- ZIO.fromEither(found).mapError(refusal)
+      report <- ZIO.fromEither(found).mapError(Refusals.describe)
     yield fromReport(report)
 
-  val tool: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("get_location_readiness")
-    .description(
-      "What a location still needs before it is worth deploying: translation gaps per locale, branding, videos, and the advertisers available to draw from. Ends with the next steps in the order worth doing them. Read it between steps rather than tracking the state yourself — every tool writes immediately, so there is no commit step and stopping part way leaves nothing broken.")
-    .readOnly
-    .handle: (in: ReadinessRequest) =>
-      of(in.slug)
+  val tool: McpToolHandlerR[Queries.LocationReadiness] =
+    McpTool("get_location_readiness")
+      .description(
+        "What a location still needs before it is worth deploying: translation gaps per locale, branding, videos, and the advertisers available to draw from. Ends with the next steps in the order worth doing them. Read it between steps rather than tracking the state yourself — every tool writes immediately, so there is no commit step and stopping part way leaves nothing broken.")
+      .readOnly
+      .reads((in: ReadinessRequest) => ZIO.succeed(LocationReadinessQuery(in.slug.trim)))(
+        (_, report: ReadinessReport) => ZIO.succeed(fromReport(report)))
 
-  val all: List[McpToolHandlerR[QuillSqlite & AssetStore]] = List(tool)
+  val all: List[McpToolHandlerR[Queries.LocationReadiness]] = List(tool)
 end Readiness

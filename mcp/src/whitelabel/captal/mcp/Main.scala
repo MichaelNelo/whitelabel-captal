@@ -19,6 +19,7 @@ import whitelabel.captal.mcp.tools.{
   OperationFlows,
   OperationRunner,
   PreviewTools,
+  Queries,
   RecoveryTools,
   SkillTools,
   SurveyTools,
@@ -257,6 +258,8 @@ object Main extends ZIOAppDefault:
     InfraStore.layer,
     Telemetry.layer("captal-mcp"),
     TracedSqlite.layer,
+    // The queries, built once.
+    Queries.layer,
     // The flows, composed once; each call publishes who it runs for.
     OperatorContext.make,
     LocationFlows.create,

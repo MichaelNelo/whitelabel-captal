@@ -6,13 +6,7 @@ import whitelabel.captal.core.application.commands.RegisterAccessPointCommand
 import whitelabel.captal.core.device.Mac
 import whitelabel.captal.core.location.{Secret, SettingsChange, Slug}
 import whitelabel.captal.mcp.aws.DeployTargets
-import whitelabel.captal.mcp.tools.{
-  I18nTools,
-  LocationCommands,
-  LocationFlows,
-  LocationTools,
-  UnifiTools
-}
+import whitelabel.captal.mcp.tools.{Commands, I18nTools, LocationFlows, LocationTools, UnifiTools}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.{AccessPointRow, LocationRow, Operator}
@@ -201,7 +195,7 @@ object LocationToolsSpec extends ZIOSpecDefault:
           _    <- clear
           _    <- create(slug, "UniFi")
           flow <- ZIO.service[LocationFlows.RegisterAccessPoint]
-          _    <- LocationCommands
+          _    <- Commands
             .run(
               Operator("spec-operator", None),
               RegisterAccessPointCommand(
@@ -213,7 +207,7 @@ object LocationToolsSpec extends ZIOSpecDefault:
                 Secret.parse("token"),
                 SettingsChange(),
                 java.time.Instant.now)
-            )(flow)
+            )(flow)()
             .mapError(IllegalStateException(_))
           initial <- UnifiTools.status().call(json("slug" -> str(slug)))
           off     <- set(slug, false)

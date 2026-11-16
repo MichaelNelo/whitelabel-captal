@@ -117,7 +117,7 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
     * cannot hand out a signed URL for another.
     */
   private def pendingPages: ZIO[QuillSqlite, Nothing, Chunk[ResourceDefinition]] = VideoTools
-    .pending(None)
+    .pending
     .map: waiting =>
       Chunk.fromIterable(
         waiting
@@ -290,7 +290,7 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
   /** Pending videos, matching `list_pending_uploads`. */
   private def pendingVideos(uri: String): ZIO[QuillSqlite, String, Chunk[ResourceContents]] =
     VideoTools
-      .pending(None)
+      .pending
       .map: waiting =>
         contents(
           uri,

@@ -2,14 +2,12 @@ package whitelabel.captal.mcp.apps
 
 import java.time.Instant
 
-import cats.syntax.foldable.*
-import whitelabel.captal.core.application.Error as AppError
 import whitelabel.captal.core.application.commands.RegisterAccessPointCommand
 import whitelabel.captal.core.application.queries.AccessPointsOfQuery
 import whitelabel.captal.core.device.Mac
-import whitelabel.captal.core.location.{Secret, SettingsChange, Slug}
+import whitelabel.captal.core.location.{Secret, SettingsChange}
 import whitelabel.captal.mcp.access.Tokens
-import whitelabel.captal.mcp.tools.{Commands, LocationCommands, LocationFlows}
+import whitelabel.captal.mcp.tools.{Commands, LocationFlows, Refusals}
 import whitelabel.captal.platform.aws.AssetStore
 import whitelabel.captal.platform.queries.Locations
 import whitelabel.captal.platform.schema.QuillSqlite
@@ -90,13 +88,9 @@ object UiRoutes:
     */
   private[mcp] def currentFor(slug: String): ZIO[QuillSqlite, String, UnifiSettings] =
     for
-      parsed <- ZIO.fromEither(Slug.parse(slug)).mapError(LocationCommands.describe)
+      parsed <- Refusals.slugOf(slug)
       quill  <- ZIO.service[QuillSqlite]
-      report <-
-        Commands.ask(Locations.accessPoints(quill), AccessPointsOfQuery(parsed)) {
-          case AppError.Location(found) =>
-            found.toList.map(LocationCommands.describe)
-        }
+      report <- Commands.ask(Locations.accessPoints(quill), AccessPointsOfQuery(parsed))()
     yield UnifiSettings(
       slug = report.slug,
       name = report.name,
@@ -125,7 +119,7 @@ object UiRoutes:
       form: Form,
       actor: String): ZIO[OperatorContext & LocationFlows.RegisterAccessPoint, String, String] =
     for
-      place    <- ZIO.fromEither(Slug.parse(slug)).mapError(LocationCommands.describe)
+      place    <- Refusals.slugOf(slug)
       rawMac   <- ZIO.fromOption(field(form, "apMac")).orElseFail("Falta la MAC del AP.")
       mac      <- ZIO.fromEither(parsedMac(rawMac))
       host     <- ZIO.fromOption(field(form, "host")).orElseFail("Falta el host.")
@@ -135,7 +129,7 @@ object UiRoutes:
       flow     <- ZIO.service[LocationFlows.RegisterAccessPoint]
       _        <-
         // The page's post, with no MCP call behind it to ask anything through.
-        LocationCommands.run(
+        Commands.run(
           Operator(actor, None),
           RegisterAccessPointCommand(
             place,
@@ -149,7 +143,7 @@ object UiRoutes:
               redirectUrl = Some(field(form, "redirectUrl"))),
             Instant.now
           )
-        )(flow)
+        )(flow)()
     // Says what changed without saying what it changed to: this body is shown on the page.
     yield s"Listo. El AP ${mac.show} de '$slug' queda configurado contra $host."
 
