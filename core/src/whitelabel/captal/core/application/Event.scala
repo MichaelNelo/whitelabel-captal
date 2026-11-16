@@ -2,6 +2,7 @@ package whitelabel.captal.core.application
 
 import whitelabel.captal.core.{
   access,
+  advertiser,
   device,
   i18n,
   location,
@@ -26,3 +27,4 @@ enum Event:
   case Session(event: session.Event)
   case Terms(event: terms.Event)
   case I18n(event: i18n.Event)
+  case Advertiser(event: advertiser.Event)

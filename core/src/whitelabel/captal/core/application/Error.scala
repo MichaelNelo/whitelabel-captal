@@ -1,7 +1,17 @@
 package whitelabel.captal.core.application
 
 import cats.data.NonEmptyChain
-import whitelabel.captal.core.{device, i18n, location, recovery, survey, terms, user, video}
+import whitelabel.captal.core.{
+  advertiser,
+  device,
+  i18n,
+  location,
+  recovery,
+  survey,
+  terms,
+  user,
+  video
+}
 
 enum Error:
   case NoSurveyAssigned
@@ -20,6 +30,7 @@ enum Error:
   case Location(errors: NonEmptyChain[location.Error])
   case Terms(errors: NonEmptyChain[terms.Error])
   case I18n(errors: NonEmptyChain[i18n.Error])
+  case Advertiser(errors: NonEmptyChain[advertiser.Error])
 
   /** The page was not reached through the network's redirect: what UniFi always sends — the
     * device's MAC, the access point's — is `missing` or unreadable, so there is no device to grant
