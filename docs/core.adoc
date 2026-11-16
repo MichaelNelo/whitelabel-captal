@@ -410,7 +410,7 @@ The five location commands (`application/commands/Location.scala`) are the backo
 
 == Queries
 
-`application/queries/` declares a `Query[F, Q]` trait (`execute(query: Q): F[Either[Error, Result]]` with the same `Aux` pattern) plus `GetIdentificationSurvey` and an `IdentificationSurveyResponse` enum (`Email`, `Profiling`, `Location`, `Completed`). Nothing outside the package references either: the read side of the portal goes through the repositories and the `Provide*` commands.
+`application/queries/` declares a `Query[F, Q]` trait (`execute(query: Q): F[Either[Error, Result]]` with the same `Aux` pattern) and the backoffice's queries: each one's input and output, kept anemic — plain data, no entities, no methods — and implemented in `platform`. Where an output needs a rule, the rule is a pure function here that the implementation calls, as `LocationReadinessQuery.nextSteps` is. The portal's read side does not go through them: it goes through the repositories and the `Provide*` commands.
 
 == Aggregates
 
