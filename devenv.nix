@@ -21,6 +21,7 @@ let
     "rqlite-mcp-test"
     "rqlite-mcp-e2e"
     "redis-mcp-test"
+    "redis-test"
   ];
 
   launch = name: ''

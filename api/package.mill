@@ -98,7 +98,10 @@ object `package` extends BaseModule with Released:
       build.client.fastLinkJS()
     val cp = runClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
     val mc = "whitelabel.captal.api.Main"
-    val env = forkEnv() ++ Map("LOCATION_SLUG" -> slug, "DB_URL" -> dbUrl)
+    // The migrations' lock, where the backoffice and the locations in LocalStack take it.
+    val locks = localRedisAddress(terraformDir(Task.env, moduleDir / os.up))
+    val env =
+      forkEnv() ++ Map("LOCATION_SLUG" -> slug, "DB_URL" -> dbUrl, "REDIS_LOCK_ADDRESSES" -> locks)
     val port = env.get("SERVER_PORT").flatMap(_.toIntOption).getOrElse(devPort)
     // Always restarted: the classpath is the same paths whether or not the code under them changed.
     val _ = Processes.start(
@@ -131,16 +134,24 @@ object `package` extends BaseModule with Released:
     private val rqliteTestPort = 4011
     private val rqliteContainerName = "rqlite-test"
 
+    // Where the suites' migrations take their lock, `MigrationLockSuite`'s racing migrators included.
+    private val redisTestPort = 6389
+    private val redisContainerName = "redis-test"
+
     // `Task.Input`, not `Task`: re-checks on every run that the container is alive, and starts it if not.
     def rqliteTestUrl: T[String] = Task.Input:
       ensureRqlite(rqliteContainerName, rqliteTestPort, Task.env)
 
-    override def forkEnv: T[Map[String, String]] = Task:
-      super.forkEnv() ++ Map("TEST_DB_URL" -> rqliteTestUrl())
+    def redisTestAddress: T[String] = Task.Input:
+      ensureRedis(redisContainerName, redisTestPort, Task.env)
 
-    /** Stops the suite's database. Its data goes with it. */
+    override def forkEnv: T[Map[String, String]] = Task:
+      super.forkEnv() ++
+        Map("TEST_DB_URL" -> rqliteTestUrl(), "REDIS_LOCK_ADDRESSES" -> redisTestAddress())
+
+    /** Stops the suite's database and its Redis. Their data goes with them. */
     def stopRqlite() = Task.Command:
-      Processes.stop(rqliteContainerName)
+      Seq(rqliteContainerName, redisContainerName).foreach(Processes.stop)
   end test
 
   /** Builds the image and pushes it; the registry needs a `docker login` first. Usage:

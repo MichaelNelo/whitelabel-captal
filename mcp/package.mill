@@ -90,7 +90,8 @@ object `package` extends BaseModule with Released:
       "rqlite-test",
       "rqlite-mcp-test",
       "rqlite-mcp-e2e",
-      "redis-mcp-test")
+      "redis-mcp-test",
+      "redis-test")
       .flatMap(name => docker("ps", "-aq", "-f", s"name=$name").linesIterator) ++
       // Task containers LocalStack starts for ECS services; named by cluster, so not matched above.
       docker("ps", "-aq", "-f", "name=ls-ecs-").linesIterator
@@ -301,7 +302,7 @@ object `package` extends BaseModule with Released:
     private val e2ePort = 4013
     private val e2eContainer = "rqlite-mcp-e2e"
 
-    // Where the end-to-end spec takes its locations' operation locks.
+    // Where the migrations take their lock, and the end-to-end spec its locations' operation locks.
     private val redisPort = 6390
     private val redisContainer = "redis-mcp-test"
 
@@ -324,17 +325,23 @@ object `package` extends BaseModule with Released:
       */
     def migratedRqliteUrl: T[String] = Task:
       // The stamp, not `rqliteUrl`, so a recreated container invalidates this.
-      migrateSchema(rqliteStamp().split(" ").last, build.platform.runClasspath(), runClasspath())
+      migrateSchema(
+        rqliteStamp().split(" ").last,
+        redisAddress(),
+        build.platform.runClasspath(),
+        runClasspath())
 
-    /** Migrates both schemas against one URL, as two processes: the API's first, then the backoffice's.
+    /** Migrates both schemas against one URL, as two processes: the API's first, then the backoffice's,
+      * each taking the migrations' lock in the suite's Redis at `redis`.
       * Only `Migrate` and `McpMigrate` may run DDL here: outside `Migrate`'s DataSource wrapper a statement
       * is a silent no-op that Flyway records as applied.
       */
     private def migrateSchema(
         url: String,
+        redis: String,
         apiClassPath: Seq[PathRef],
         mcpClassPath: Seq[PathRef]): String =
-      val env = Map("DB_URL" -> url)
+      val env = Map("DB_URL" -> url, "REDIS_LOCK_ADDRESSES" -> redis)
       def migrate(label: String, classPath: Seq[PathRef], mainClass: String): Unit =
         println(s"[migrate] $label ($url) ...")
         val result = os
@@ -355,7 +362,11 @@ object `package` extends BaseModule with Released:
       s"$id $url"
 
     def migratedE2eUrl: T[String] = Task:
-      migrateSchema(e2eStamp().split(" ").last, build.platform.runClasspath(), runClasspath())
+      migrateSchema(
+        e2eStamp().split(" ").last,
+        redisAddress(),
+        build.platform.runClasspath(),
+        runClasspath())
 
     /** LocalStack's container id, endpoint and licence state, as one `Task.Input`. The licence is part
       * of the key: a cached read of `Task.env` would replay the first run's value.

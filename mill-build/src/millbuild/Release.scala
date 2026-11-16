@@ -223,6 +223,7 @@ def release(
     output("api_image"),
     outputs.get("cdc_feed_address"),
     outputs.get("otlp_endpoint"),
+    outputs.get("redis_lock_addresses"),
     await = awaitLocations)
 
   // Published once per version: skipped when the bucket holds it already. Locally it is always published.
@@ -458,9 +459,10 @@ val RegisterableFields = Seq(
   "runtimePlatform"
 )
 
-/** Moves every location onto `api`, the API image by digest, following the relay at `feed` and sending
-  * its traces to `otlp`: a new task definition revision that differs only in the image,
-  * `CDC_FEED_ADDRESS` and the `OTEL_*` variables `deploy_location` sets, and its service pointed at it.
+/** Moves every location onto `api`, the API image by digest, following the relay at `feed`, sending
+  * its traces to `otlp` and taking the migrations' lock on the Redis instances at `locks`: a new task
+  * definition revision that differs only in the image, `CDC_FEED_ADDRESS`, `REDIS_LOCK_ADDRESSES`
+  * and the `OTEL_*` variables `deploy_location` sets, and its service pointed at it.
   * The service keeps its task count, so a paused location stays paused and runs the new image on resume. A
   * location already on all of them is left as it is.
   *
@@ -473,6 +475,7 @@ def rollLocations(
     api: String,
     feed: Option[String],
     otlp: Option[String],
+    locks: Option[String],
     await: Boolean): Unit =
   def pairs(environment: Seq[ujson.Value]) =
     environment.map(variable => variable("name").str -> variable("value").str).toSet
@@ -483,7 +486,8 @@ def rollLocations(
       .get("environment")
       .map(_.arr.toSeq)
       .getOrElse(Nil)
-    val set = feed.map("CDC_FEED_ADDRESS" -> _).toList ++ otlp.toList.flatMap(endpoint =>
+    val set = feed.map("CDC_FEED_ADDRESS" -> _).toList ++
+      locks.map("REDIS_LOCK_ADDRESSES" -> _).toList ++ otlp.toList.flatMap(endpoint =>
       List(
         "OTEL_EXPORTER_OTLP_ENDPOINT" -> endpoint,
         "OTEL_SERVICE_NAME" -> "captal-api",
