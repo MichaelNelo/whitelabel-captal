@@ -36,6 +36,7 @@ import whitelabel.captal.mcp.tools.{
   AdvertiserTools,
   AnswerFormat,
   AssetTools,
+  ContentFlows,
   DeployTools,
   I18nTools,
   IdentificationCategory,
@@ -381,7 +382,8 @@ object DeployE2ESpec extends ZIOSpecDefault:
         .statelessRoutes
         .provideEnvironment(
           env.add(tracing).add[Operators](operators).add[OperationFlows.Start](start) ++
-            LocationFlows.environment(env.get[QuillSqlite], operators))
+            LocationFlows.environment(env.get[QuillSqlite], operators) ++
+            ContentFlows.environment(env.get[QuillSqlite], operators))
       _ <- TestClient.addRoutes(routes)
       // The run page's stream, which lives beside the protocol rather than inside it.
       _        <- TestClient.addRoutes(RunRoutes.routes.provideEnvironment(env))

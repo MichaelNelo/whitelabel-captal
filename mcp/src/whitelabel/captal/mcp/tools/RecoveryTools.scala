@@ -1,15 +1,19 @@
 package whitelabel.captal.mcp.tools
 
-import java.time.Instant
+import java.time.{Duration, Instant}
 
+import cats.syntax.foldable.*
 import com.jamesward.ziohttp.mcp.*
-import io.getquill.*
-import whitelabel.captal.mcp.Writes
+import whitelabel.captal.core.application.Error as AppError
+import whitelabel.captal.core.application.commands.ChangeRecoveryPolicyCommand
+import whitelabel.captal.core.application.queries.{RecoveryPolicyOfQuery, RecoveryPolicyReport}
+import whitelabel.captal.core.location.Slug
+import whitelabel.captal.core.recovery.{Error as RecoveryError, PolicyOverrides, PolicySetting}
 import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
+import whitelabel.captal.platform.queries.RecoveryPolicyOf
 import whitelabel.captal.platform.schema.QuillSqlite
-import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.{LocationRecovery, LocationRecoveryRow, LocationRow}
+import whitelabel.captal.platform.{Operator, OperatorContext}
 import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
@@ -18,9 +22,10 @@ import McpSchema.given
 import ToolSchema.readOnly
 
 /** A location's recovery settings: how long its guests wait for a way out of an error in the
-  * portal's own code, and how long a playback its page never ended stays open. Stored per location
-  * in [[LocationRecovery]], read by the portal and the backoffice as they need them, so a change
-  * applies to the next guest with no redeploy.
+  * portal's own code, and how long a playback its page never ended stays open. Read through
+  * `core`'s `RecoveryPolicyOfQuery` and changed by `ChangeRecoveryPolicyCommand`; the portal and
+  * the backoffice read them as they need them, so a change applies to the next guest with no
+  * redeploy.
   */
 object RecoveryTools:
 
@@ -119,39 +124,51 @@ object RecoveryTools:
   given Schema[PolicyView] = DeriveSchema.gen
   given Schema[SetRequest] = DeriveSchema.gen
 
-  /** Each setting by its name in these tools: what a row holds for it, and the row without it. */
-  final private case class Setting(
-      name: String,
-      of: LocationRecoveryRow => Option[Any],
-      cleared: LocationRecoveryRow => LocationRecoveryRow)
-
-  private val Settings: List[Setting] = List(
-    Setting("maximumSeconds", _.maximumSeconds, _.copy(maximumSeconds = None)),
-    Setting("ceilingSeconds", _.ceilingSeconds, _.copy(ceilingSeconds = None)),
-    Setting("zeroBelowSeconds", _.zeroBelowSeconds, _.copy(zeroBelowSeconds = None)),
-    Setting("videoWeight", _.videoWeight, _.copy(videoWeight = None)),
-    Setting("videoAnswerWeight", _.videoAnswerWeight, _.copy(videoAnswerWeight = None)),
-    Setting("identificationWeight", _.identificationWeight, _.copy(identificationWeight = None)),
-    Setting("emailWeight", _.emailWeight, _.copy(emailWeight = None)),
-    Setting("identifiedFactor", _.identifiedFactor, _.copy(identifiedFactor = None)),
-    Setting("watchedFactor", _.watchedFactor, _.copy(watchedFactor = None)),
-    Setting("recoveryExponent", _.recoveryExponent, _.copy(recoveryExponent = None)),
-    Setting("fabricatedFactor", _.fabricatedFactor, _.copy(fabricatedFactor = None)),
-    Setting("recurrentFactor", _.recurrentFactor, _.copy(recurrentFactor = None)),
-    Setting("recoveryWindowSeconds", _.recoveryWindowSeconds, _.copy(recoveryWindowSeconds = None)),
-    Setting(
-      "recurrenceWindowSeconds",
-      _.recurrenceWindowSeconds,
-      _.copy(recurrenceWindowSeconds = None)),
-    Setting("playbackGraceSeconds", _.playbackGraceSeconds, _.copy(playbackGraceSeconds = None))
+  /** Each setting by its name in these tools. */
+  private val Names: List[(PolicySetting, String)] = List(
+    PolicySetting.Maximum              -> "maximumSeconds",
+    PolicySetting.Ceiling              -> "ceilingSeconds",
+    PolicySetting.ZeroBelow            -> "zeroBelowSeconds",
+    PolicySetting.VideoWeight          -> "videoWeight",
+    PolicySetting.VideoAnswerWeight    -> "videoAnswerWeight",
+    PolicySetting.IdentificationWeight -> "identificationWeight",
+    PolicySetting.EmailWeight          -> "emailWeight",
+    PolicySetting.IdentifiedFactor     -> "identifiedFactor",
+    PolicySetting.WatchedFactor        -> "watchedFactor",
+    PolicySetting.RecoveryExponent     -> "recoveryExponent",
+    PolicySetting.FabricatedFactor     -> "fabricatedFactor",
+    PolicySetting.RecurrentFactor      -> "recurrentFactor",
+    PolicySetting.RecoveryWindow       -> "recoveryWindowSeconds",
+    PolicySetting.RecurrenceWindow     -> "recurrenceWindowSeconds",
+    PolicySetting.PlaybackGrace        -> "playbackGraceSeconds"
   )
 
-  private def requested(locationId: String, in: SetRequest, at: String): LocationRecoveryRow =
-    LocationRecoveryRow(
-      locationId = locationId,
-      maximumSeconds = in.maximumSeconds,
-      ceilingSeconds = in.ceilingSeconds,
-      zeroBelowSeconds = in.zeroBelowSeconds,
+  private def nameOf(setting: PolicySetting): String = Names
+    .collectFirst { case (`setting`, name) =>
+      name
+    }
+    .getOrElse(setting.toString)
+
+  private def names(settings: List[PolicySetting]): String = settings.map(nameOf).mkString(", ")
+
+  /** The settings `reset` names, or which of its names no setting has. */
+  private def resetOf(reset: List[String]): IO[String, Set[PolicySetting]] =
+    val byName = Names.map(_.swap).toMap
+    reset.filterNot(byName.contains) match
+      case Nil =>
+        ZIO.succeed(reset.map(byName).toSet)
+      case unknown =>
+        ZIO.fail(
+          s"No setting is named ${unknown.mkString(", ")}. They are: ${Names
+              .map(_._2)
+              .mkString(", ")}.")
+
+  private def requested(in: SetRequest): PolicyOverrides =
+    def seconds(value: Option[Int]) = value.map(s => Duration.ofSeconds(s.toLong))
+    PolicyOverrides(
+      maximum = seconds(in.maximumSeconds),
+      ceiling = seconds(in.ceilingSeconds),
+      zeroBelow = seconds(in.zeroBelowSeconds),
       videoWeight = in.videoWeight,
       videoAnswerWeight = in.videoAnswerWeight,
       identificationWeight = in.identificationWeight,
@@ -161,39 +178,15 @@ object RecoveryTools:
       recoveryExponent = in.recoveryExponent,
       fabricatedFactor = in.fabricatedFactor,
       recurrentFactor = in.recurrentFactor,
-      recoveryWindowSeconds = in.recoveryWindowSeconds,
-      recurrenceWindowSeconds = in.recurrenceWindowSeconds,
-      playbackGraceSeconds = in.playbackGraceSeconds,
-      updatedAt = at
+      recoveryWindow = seconds(in.recoveryWindowSeconds),
+      recurrenceWindow = seconds(in.recurrenceWindowSeconds),
+      playbackGrace = seconds(in.playbackGraceSeconds)
     )
 
-  /** `stored`, with what `change` sets replacing it and the rest kept. */
-  private def merged(
-      stored: LocationRecoveryRow,
-      change: LocationRecoveryRow): LocationRecoveryRow = LocationRecoveryRow(
-    locationId = stored.locationId,
-    maximumSeconds = change.maximumSeconds.orElse(stored.maximumSeconds),
-    ceilingSeconds = change.ceilingSeconds.orElse(stored.ceilingSeconds),
-    zeroBelowSeconds = change.zeroBelowSeconds.orElse(stored.zeroBelowSeconds),
-    videoWeight = change.videoWeight.orElse(stored.videoWeight),
-    videoAnswerWeight = change.videoAnswerWeight.orElse(stored.videoAnswerWeight),
-    identificationWeight = change.identificationWeight.orElse(stored.identificationWeight),
-    emailWeight = change.emailWeight.orElse(stored.emailWeight),
-    identifiedFactor = change.identifiedFactor.orElse(stored.identifiedFactor),
-    watchedFactor = change.watchedFactor.orElse(stored.watchedFactor),
-    recoveryExponent = change.recoveryExponent.orElse(stored.recoveryExponent),
-    fabricatedFactor = change.fabricatedFactor.orElse(stored.fabricatedFactor),
-    recurrentFactor = change.recurrentFactor.orElse(stored.recurrentFactor),
-    recoveryWindowSeconds = change.recoveryWindowSeconds.orElse(stored.recoveryWindowSeconds),
-    recurrenceWindowSeconds = change.recurrenceWindowSeconds.orElse(stored.recurrenceWindowSeconds),
-    playbackGraceSeconds = change.playbackGraceSeconds.orElse(stored.playbackGraceSeconds),
-    updatedAt = change.updatedAt
-  )
-
-  private def viewOf(slug: String, row: Option[LocationRecoveryRow]): PolicyView =
-    val policy = LocationRecovery.waitPolicy(row)
+  private def viewOf(slug: Slug, report: RecoveryPolicyReport): PolicyView =
+    val policy = report.policy
     PolicyView(
-      slug = slug,
+      slug = slug.asString,
       maximumSeconds = policy.maximum.getSeconds,
       ceilingSeconds = policy.ceiling.getSeconds,
       zeroBelowSeconds = policy.zeroBelow.getSeconds,
@@ -208,92 +201,70 @@ object RecoveryTools:
       recurrentFactor = policy.recurrentFactor,
       recoveryWindowSeconds = policy.recoveryWindow.getSeconds,
       recurrenceWindowSeconds = policy.recurrenceWindow.getSeconds,
-      playbackGraceSeconds = LocationRecovery.grace(row).getSeconds,
-      defaults = Settings.filter(s => row.forall(s.of(_).isEmpty)).map(_.name)
+      playbackGraceSeconds = report.grace.getSeconds,
+      defaults = report.defaults.map(nameOf)
     )
   end viewOf
 
-  /** What is wrong with a change, before anything is written. Every setting is a length, a weight
-    * or a factor, so none is negative; and the ceiling caps the maximum, so it is not below it.
-    */
-  private def problems(
-      change: LocationRecoveryRow,
-      reset: List[String],
-      result: PolicyView): List[String] =
-    val names = Settings.map(_.name)
-    val unknown = reset.filterNot(names.contains)
-    val both = Settings.filter(s => s.of(change).isDefined && reset.contains(s.name))
-    val negative = Settings.filter: s =>
-      s.of(change) match
-        case Some(n: Int) =>
-          n < 0
-        case Some(d: Double) =>
-          d < 0
-        case _ =>
-          false
-    List(
-      Option.when(unknown.nonEmpty)(
-        s"No setting is named ${unknown.mkString(", ")}. They are: ${names.mkString(", ")}."),
-      Option.when(both.nonEmpty)(
-        s"${both.map(_.name).mkString(", ")} cannot be both set and reset in one call."),
-      Option.when(negative.nonEmpty)(s"${negative.map(_.name).mkString(", ")} cannot be negative."),
-      Option.when(result.ceilingSeconds < result.maximumSeconds)(
-        s"ceilingSeconds would be ${result.ceilingSeconds}, below maximumSeconds at ${result
-            .maximumSeconds}: no wait could reach the maximum. Set both.")
-    ).flatten
-  end problems
+  /** What the operator reads for each refusal of these tools. */
+  private val describe: PartialFunction[AppError, List[String]] =
+    case AppError.Location(found) =>
+      found.toList.map(LocationCommands.describe)
+    case AppError.Recovery(found) =>
+      found
+        .toList
+        .map:
+          case RecoveryError.NothingToChange =>
+            "Name at least one setting to change, or one to reset."
+          case RecoveryError.SetAndReset(settings) =>
+            s"${names(settings)} cannot be both set and reset in one call."
+          case RecoveryError.Negative(settings) =>
+            s"${names(settings)} cannot be negative."
+          case RecoveryError.CeilingBelowMaximum(ceiling, maximum) =>
+            s"ceilingSeconds would be ${ceiling.getSeconds}, below maximumSeconds at ${maximum
+                .getSeconds}: no wait could reach the maximum. Set both."
+          case other =>
+            other.toString
 
-  private inline def bySlugQuery = quote: (slugParam: String) =>
-    query[LocationRow].filter(_.slug == slugParam).take(1)
-
-  private def locationOf(slug: String): ZIO[QuillSqlite, String, LocationRow] = ZIO.serviceWithZIO[
-    QuillSqlite]: quill =>
-    import quill.*
-    run(bySlugQuery(lift(slug)))
-      .orDie
-      .map(_.headOption)
-      .someOrFail(s"No location with slug '$slug'. Call list_locations to see what exists.")
+  private def slugOf(raw: String): IO[String, Slug] = ZIO
+    .fromEither(Slug.parse(raw.trim))
+    .mapError(LocationCommands.describe)
 
   val status: McpToolHandlerR[QuillSqlite] = McpTool("get_recovery_policy")
     .description(
       "How a location's portal treats errors: how long its guests wait for a way out of an error in the portal's own code, what shortens or lengthens that wait, and how long a playback whose page never ended stays open. Every value is the one in force, whether the location set it or takes the default; `defaults` names the ones it takes.")
     .readOnly
     .handle: (in: StatusRequest) =>
-      ZIO.serviceWithZIO[QuillSqlite]: quill =>
-        for
-          location <- locationOf(in.slug.trim)
-          row      <- LocationRecovery.find(quill, location.id).orDie
-        yield viewOf(location.slug, row)
+      for
+        slug   <- slugOf(in.slug)
+        quill  <- ZIO.service[QuillSqlite]
+        report <- Commands.ask(RecoveryPolicyOf(quill), RecoveryPolicyOfQuery(slug))(describe)
+      yield viewOf(slug, report)
 
-  val set: McpToolHandlerR[QuillSqlite] = McpTool("set_recovery_policy")
+  val set: McpToolHandlerR[OperatorContext & ContentFlows.ChangeRecoveryPolicy] = McpTool(
+    "set_recovery_policy")
     .description(
       "Change how a location's portal treats errors: any of the settings get_recovery_policy reports, each in its own field, and `reset` to return some to their default. Settings not named are kept. Applies to the next guest who asks for a way out and the next playback that starts, with no redeploy; a wait already offered keeps its length. A server error always opens at once and is not affected.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: SetRequest) =>
-      ZIO.serviceWithZIO[QuillSqlite]: quill =>
-        for
-          location <- locationOf(in.slug.trim)
-          stored   <- LocationRecovery.find(quill, location.id).orDie
-          now    = Instant.now.toString
-          change = requested(location.id, in, now)
-          _ <-
-            ZIO.when(Settings.forall(_.of(change).isEmpty) && in.reset.isEmpty)(
-              ZIO.fail("Name at least one setting to change, or one to reset."))
-          base = stored.getOrElse(LocationRecoveryRow(location.id, updatedAt = now))
-          next =
-            Settings
-              .filter(s => in.reset.contains(s.name))
-              .foldLeft(merged(base, change))((row, setting) => setting.cleared(row))
-          result = viewOf(location.slug, Some(next))
-          _ <-
-            problems(change, in.reset, result) match
-              case Nil =>
-                ZIO.unit
-              case found =>
-                ZIO.fail(found.mkString(" "))
-          affected <- LocationRecovery.save(quill, next).orDie
-          _ <- Writes.expectOne(affected, s"Saving the recovery settings of '${location.slug}'")
-        yield result
+    .handleWithContext: (in: SetRequest, ctx: McpToolContext) =>
+      for
+        slug      <- slugOf(in.slug)
+        reset     <- resetOf(in.reset)
+        caller    <- Commands.callerOf(ctx)
+        flow      <- ZIO.service[ContentFlows.ChangeRecoveryPolicy]
+        overrides <-
+          Commands.run(
+            Operator(caller, None),
+            ChangeRecoveryPolicyCommand(slug, requested(in), reset, Instant.now))(flow)(describe)
+      yield viewOf(
+        slug,
+        RecoveryPolicyReport(
+          slug,
+          overrides.policy,
+          overrides.grace,
+          PolicySetting.values.toList.filterNot(overrides.set.contains)))
 
-  val all: List[McpToolHandlerR[QuillSqlite]] = List(status, set)
+  val all
+      : List[McpToolHandlerR[QuillSqlite & OperatorContext & ContentFlows.ChangeRecoveryPolicy]] =
+    List(status, set)
 end RecoveryTools

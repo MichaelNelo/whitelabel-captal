@@ -60,7 +60,7 @@ object RecoveryToolsSpec extends ZIOSpecDefault:
 
   private def set(slug: String, fields: (String, Json)*) = RecoveryTools
     .set
-    .call(json(("slug" -> str(slug)) +: fields*))
+    .callWithContext(json(("slug" -> str(slug)) +: fields*), OperatorContext.Default)
 
   private def reset(names: String*) = "reset" -> Json.Arr(Chunk.fromIterable(names.map(str)))
 

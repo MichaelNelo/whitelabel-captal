@@ -10,6 +10,7 @@ import whitelabel.captal.mcp.resources.Readiness
 import whitelabel.captal.mcp.tools.{
   AdvertiserTools,
   AssetTools,
+  ContentFlows,
   DeployTools,
   I18nTools,
   LocationFlows,
@@ -261,6 +262,7 @@ object Main extends ZIOAppDefault:
     LocationFlows.registerAccessPoint,
     LocationFlows.updateAccessPoint,
     LocationFlows.removeAccessPoint,
+    ContentFlows.changeRecoveryPolicyLayer,
     OperationQueue.layer,
     OperationFlows.startLayer,
     OperationFlows.completeLayer,
