@@ -30,8 +30,8 @@ final case class Run[S <: RunState](
     startedBy: String,
     state: S)
 
-/** Whether a run is going is whether it holds its location's lock; its heartbeat says only, to
-  * whoever follows it, that it was reporting in a moment ago.
+/** Whether a run is going is the run repository's to say ([[RunRepository.going]]); its heartbeat
+  * says only, to whoever follows it, that it was reporting in a moment ago.
   */
 object Run:
   /** How often a runner refreshes its run's heartbeat. */

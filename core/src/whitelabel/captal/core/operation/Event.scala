@@ -8,10 +8,6 @@ enum Event:
   /** The run `run` of `operation` on the location starts, with `steps` to take — every step of the
     * operation, or only those left by the run it finishes. The location does not change: it changes
     * when the run completes.
-    *
-    * @param supersedes
-    *   the run that may still hold the location's lock: one started whose runner died, which never
-    *   released it. None when the lock is free, as a completed or failed run leaves it.
     */
   case OperationStarted(
       run: RunId,
@@ -20,7 +16,6 @@ enum Event:
       operation: Operation,
       steps: List[Step],
       finishing: Option[RunId],
-      supersedes: Option[RunId],
       by: String,
       occurredAt: Instant)
 

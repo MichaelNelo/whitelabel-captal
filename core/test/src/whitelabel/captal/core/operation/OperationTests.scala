@@ -70,7 +70,9 @@ object OperationTests extends TestSuite:
 
   private def starting(
       location: Option[Location[State]] = Some(at(State.Created)),
-      latest: Option[Run[RunState]] = None,
+      going: Option[RunId] = None,
+      unfinished: Option[Run[RunState]] = None,
+      known: List[Run[RunState]] = Nil,
       points: List[AccessPoint] = List(Point),
       holders: Map[Mac, List[Slug]] = Map.empty,
       terms: Option[TermsVersion] = Some(TermsVersion("terms-1", 1))) = StartOperationHandler[Id](
@@ -83,28 +85,30 @@ object OperationTests extends TestSuite:
       def of(location: LocationId) = points
       def deployedHolders(mac: Mac) = holders.getOrElse(mac, Nil)
     ,
-    runs(latest),
+    runs(going, unfinished, known),
     new TermsRepository[Id]:
       def current = terms
   )
 
-  private def runs(last: Option[Run[RunState]]): RunRepository[Id] =
+  /** Runs as the repository answers them: the one `held` going, the one `left` unfinished, and
+    * every one it has a record of, which `known` adds to.
+    */
+  private def runs(
+      held: Option[RunId] = None,
+      left: Option[Run[RunState]] = None,
+      known: List[Run[RunState]] = Nil): RunRepository[Id] =
     new RunRepository[Id]:
-      def latest(location: LocationId) = last
-      def findStarted(id: RunId) = last.collect:
+      def going(location: LocationId) = held
+      def unfinished(location: LocationId) = left
+      def findStarted(id: RunId) = (known ++ left).collectFirst:
         case found @ Run(_, _, _, _, _, _, started: RunState.Started) if found.id == id =>
           found.copy(state = started)
 
-  /** By default the lock was taken for the new run: nobody else holds it. */
-  private def start(
-      operation: Operation,
-      finishing: Option[RunId] = None,
-      holder: Option[RunId] = None) = StartOperationCommand(
+  private def start(operation: Operation, finishing: Option[RunId] = None) = StartOperationCommand(
     Here,
     operation,
     finishing,
     NewRun,
-    holder,
     Operator,
     Now)
 
@@ -124,23 +128,11 @@ object OperationTests extends TestSuite:
               case _ =>
                 Nil)
 
-  private def started(
-      operation: Operation,
-      steps: List[Step],
-      finishing: Option[RunId] = None,
-      supersedes: Option[RunId] = None) = Right(
-    List(
-      AppEvent.Operation(
-        Event.OperationStarted(
-          NewRun,
-          Id,
-          Here,
-          operation,
-          steps,
-          finishing,
-          supersedes,
-          Operator,
-          Now))))
+  private def started(operation: Operation, steps: List[Step], finishing: Option[RunId] = None) =
+    Right(
+      List(
+        AppEvent.Operation(
+          Event.OperationStarted(NewRun, Id, Here, operation, steps, finishing, Operator, Now))))
 
   val tests = Tests:
     test("StartOperation"):
@@ -181,13 +173,15 @@ object OperationTests extends TestSuite:
           outcome(pausing.handle(start(Operation.Pause))) ==
             started(Operation.Pause, Operation.steps(Operation.Pause).toList))
 
-      test("refuses while another run holds the lock, naming where it is"):
+      test("refuses while an operation is going, naming where it is"):
         val going = run(
           Operation.Pause,
           RunState.Started(Now.minusSeconds(5)),
           List(Step.ScaleToZero, Step.AwaitDrained))
-        val refused = starting(location = Some(at(Deployed)), latest = Some(going)).handle(
-          start(Operation.Pause, holder = Some(going.id)))
+        val refused = starting(
+          location = Some(at(Deployed)),
+          going = Some(going.id),
+          known = List(going)).handle(start(Operation.Pause))
         assert(
           outcome(refused) ==
             Left(
@@ -197,58 +191,40 @@ object OperationTests extends TestSuite:
                   Operation.Pause,
                   Some(Step.ScaleToZero)))))
 
-      test("refuses while a run it has no record of holds the lock"):
+      // Its start not written yet: it took the location a moment before.
+      test("refuses while an operation it has no record of yet is going"):
         val holder = RunId("run-elsewhere")
-        val refused = starting(location = Some(at(Deployed))).handle(
-          start(Operation.Pause, holder = Some(holder)))
+        val refused = starting(location = Some(at(Deployed)), going = Some(holder)).handle(
+          start(Operation.Pause))
         assert(
           outcome(refused) ==
             Left(List(LocationError.OperationInProgress(holder, Operation.Pause, None))))
 
-      // The lock is this command's, so nobody is at that run, whatever its heartbeat says.
-      test("refuses while a run is left part way, naming what it left"):
+      test("refuses while a run is left unfinished, naming what it left"):
         val left = List(Step.ScaleToZero, Step.AwaitDrained)
         val stale = run(Operation.Pause, RunState.Started(Now.minusSeconds(5)), left)
-        val refused = starting(location = Some(at(Deployed)), latest = Some(stale)).handle(
+        val refused = starting(location = Some(at(Deployed)), unfinished = Some(stale)).handle(
           start(Operation.Pause))
         assert(
           outcome(refused) ==
             Left(List(LocationError.PreviousOperationUnfinished(stale.id, Operation.Pause, left))))
 
-      test("a failed run is left part way too"):
-        val failed = run(
-          Operation.Deploy,
-          RunState.Failed(Step.AwaitRevisionRunning, StepFailure.TimedOut("no task")),
-          List(Step.AwaitRevisionRunning, Step.AwaitRevisionSettled)
-        )
-        val refused = starting(latest = Some(failed)).handle(start(Operation.Deploy))
-        assert(
-          outcome(refused) ==
-            Left(
-              List(
-                LocationError.PreviousOperationUnfinished(
-                  failed.id,
-                  Operation.Deploy,
-                  failed.pending))))
-
       test("finishes the run it names, with only the steps it left"):
         val left = List(Step.ScaleToZero, Step.AwaitDrained)
         val stale = run(Operation.Pause, RunState.Started(Now.minus(Duration.ofHours(1))), left)
-        val finishing = starting(location = Some(at(Deployed)), latest = Some(stale)).handle(
+        val finishing = starting(location = Some(at(Deployed)), unfinished = Some(stale)).handle(
           start(Operation.Pause, finishing = Some(stale.id)))
-        // And takes over its lock, which its dead runner never released.
-        assert(outcome(finishing) == started(Operation.Pause, left, Some(stale.id), Some(stale.id)))
+        assert(outcome(finishing) == started(Operation.Pause, left, Some(stale.id)))
 
-      test("a failed run left the lock free, so finishing it supersedes nothing"):
+      test("finishes a failed run as one with nobody at it"):
         val failed = run(
           Operation.Deploy,
           RunState.Failed(Step.AwaitRevisionRunning, StepFailure.TimedOut("no task")),
           List(Step.AwaitRevisionRunning, Step.AwaitRevisionSettled)
         )
-        val finishing = starting(latest = Some(failed)).handle(
+        val finishing = starting(unfinished = Some(failed)).handle(
           start(Operation.Deploy, finishing = Some(failed.id)))
-        assert(
-          outcome(finishing) == started(Operation.Deploy, failed.pending, Some(failed.id), None))
+        assert(outcome(finishing) == started(Operation.Deploy, failed.pending, Some(failed.id)))
 
       // A deploy that failed part way leaves the location created, with resources in AWS.
       test("destroys from any state, a created location included"):
@@ -267,20 +243,19 @@ object OperationTests extends TestSuite:
           Operation.Pause,
           RunState.Started(Now.minus(Duration.ofHours(1))),
           List(Step.ScaleToZero))
-        val destroying = starting(location = Some(at(Deployed)), latest = Some(stale)).handle(
+        val destroying = starting(location = Some(at(Deployed)), unfinished = Some(stale)).handle(
           start(Operation.Destroy(deleteAssets = false)))
         assert(
           outcome(destroying) ==
             started(
               Operation.Destroy(false),
-              List(Step.ScaleToZero, Step.AwaitDrained, Step.Teardown, Step.KeepAssets),
-              supersedes = Some(stale.id)))
+              List(Step.ScaleToZero, Step.AwaitDrained, Step.Teardown, Step.KeepAssets)))
 
     test("CompleteOperation"):
       val going = run(Operation.Pause, RunState.Started(Now), id = RunId("run-1"))
 
       test("moves the location to the state the operation leads to, and completes the run"):
-        val done = CompleteOperationHandler[Id](runs(Some(going))).handle(
+        val done = CompleteOperationHandler[Id](runs(known = List(going))).handle(
           CompleteOperationCommand(going.id, Outcome.Succeeded, Now))
         assert(
           outcome(done) ==
@@ -291,7 +266,7 @@ object OperationTests extends TestSuite:
 
       test("leaves the location where it was when a step failed"):
         val failure = StepFailure.Rejected("no such service")
-        val failed = CompleteOperationHandler[Id](runs(Some(going))).handle(
+        val failed = CompleteOperationHandler[Id](runs(known = List(going))).handle(
           CompleteOperationCommand(going.id, Outcome.Failed(Step.ScaleToZero, failure), Now))
         assert(
           outcome(failed) ==
@@ -301,7 +276,7 @@ object OperationTests extends TestSuite:
                   Event.OperationFailed(going.id, Id, Step.ScaleToZero, failure, Now)))))
 
       test("refuses a run that is not going"):
-        val refused = CompleteOperationHandler[Id](runs(None)).handle(
+        val refused = CompleteOperationHandler[Id](runs()).handle(
           CompleteOperationCommand(going.id, Outcome.Succeeded, Now))
         assert(outcome(refused) == Left(List(LocationError.RunNotStarted(going.id))))
 

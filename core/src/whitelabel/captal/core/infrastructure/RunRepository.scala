@@ -6,8 +6,16 @@ import whitelabel.captal.core.location.{LocationId, Slug}
 import whitelabel.captal.core.operation.{Run, RunId, RunState, Step, StepFailure}
 
 trait RunRepository[F[_]]:
-  /** The location's latest run, in whatever state, which the commands match on. */
-  def latest(location: LocationId): F[Option[Run[RunState]]]
+  /** The run an operation on the location is going as, if one is: whichever holds the location now,
+    * its start written yet or not.
+    */
+  def going(location: LocationId): F[Option[RunId]]
+
+  /** The location's latest run, when no operation is going on it and that run did not complete: one
+    * that failed, or one started that nobody is at any more. What it did stands in the
+    * infrastructure while the location is still recorded where it was.
+    */
+  def unfinished(location: LocationId): F[Option[Run[RunState]]]
 
   /** The run with this id, if it is going. */
   def findStarted(run: RunId): F[Option[Run[RunState.Started]]]
