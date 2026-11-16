@@ -3,24 +3,22 @@ package whitelabel.captal.mcp.tools
 import java.util.UUID
 
 import com.jamesward.ziohttp.mcp.*
-import io.getquill.*
 import whitelabel.captal.core.application.commands.{
   CreateLocationCommand,
   RequireFingerprintCommand
 }
+import whitelabel.captal.core.application.queries.{ListLocationsQuery, LocationSummary}
 import whitelabel.captal.core.location.{LocationId, Slug}
 import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
-import whitelabel.captal.mcp.{QuillArrow, Writes}
-import whitelabel.captal.platform.{AccessPointRow, LocationRow, Operator, OperatorContext}
+import whitelabel.captal.platform.queries.Locations
 import whitelabel.captal.platform.schema.QuillSqlite
-import whitelabel.captal.platform.schema.given
+import whitelabel.captal.platform.{Operator, OperatorContext}
 import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
 
 import McpSchema.given
-import QuillArrow.->
 import ToolSchema.readOnly
 
 /** Location CRUD: entry point for all slug-based tools. Slug immutable (used in URL, S3 keys,
@@ -85,19 +83,20 @@ object LocationTools:
   given Schema[CreateResponse] = DeriveSchema.gen
   given Schema[SetFingerprintRequiredRequest] = DeriveSchema.gen
 
-  private inline def bySlugQuery = quote: (slugParam: String) =>
-    query[LocationRow].filter(_.slug == slugParam).take(1)
+  private def view(location: LocationSummary): LocationView = LocationView(
+    location.slug,
+    location.name,
+    location.active,
+    location.unifiConfigured,
+    location.fingerprintRequired)
 
-  /** @param configured
-    *   whether the location has an access point, which is stored only with its controller's
-    *   settings complete.
-    */
-  private def view(row: LocationRow, configured: Boolean): LocationView = LocationView(
-    row.slug,
-    row.name,
-    row.isActive == 1,
-    configured,
-    row.fingerprintIsRequired == 1)
+  /** The locations, as `ListLocations` reads them: a refusal is not one of its answers. */
+  private def locations(
+      includeInactive: Boolean): ZIO[QuillSqlite, Nothing, List[LocationSummary]] = ZIO
+    .serviceWithZIO[QuillSqlite](quill =>
+      Commands.ask(Locations.list(quill), ListLocationsQuery(includeInactive))(
+        PartialFunction.empty))
+    .orDieWith(IllegalStateException(_))
 
   /** The slug `raw` says, as `core` has it shaped, and not one of the prefixes the bucket and the
     * distribution already give a meaning: that is theirs to say, not the location's.
@@ -118,17 +117,8 @@ object LocationTools:
     .description(
       "Every location, with the slug the other tools take. Inactive locations are hidden unless asked for. `unifiConfigured` false means it has no access point yet, so every guest is turned away.")
     .readOnly
-    .handle: (in: ListRequest) =>
-      ZIO.serviceWithZIO[QuillSqlite]: quill =>
-        import quill.*
-        for
-          rows       <- run(query[LocationRow]).orDie
-          configured <- run(query[AccessPointRow].map(_.locationId)).orDie.map(_.toSet)
-        yield ListResponse(
-          rows
-            .filter(r => in.includeInactive || r.isActive == 1)
-            .sortBy(_.slug)
-            .map(r => view(r, configured.contains(r.id))))
+    .handle((in: ListRequest) =>
+      locations(in.includeInactive).map(found => ListResponse(found.map(view))))
 
   /** Scoped under `content:write` because that is the only write scope this server has. A location
     * is structural rather than content, and when Part 3 adds infrastructure tools it should move to
@@ -169,22 +159,14 @@ object LocationTools:
           LocationCommands.run(
             Operator(caller, None),
             RequireFingerprintCommand(slug, in.required, java.time.Instant.now))(flow)
-        found <- ZIO.serviceWithZIO[QuillSqlite]: quill =>
-          import quill.*
-          for
-            rows <- run(bySlugQuery(lift(slug.asString))).orDie
-            row  <- ZIO
-              .fromOption(rows.headOption)
-              .orDieWith(_ => IllegalStateException(slug.asString))
-            points <- run(query[AccessPointRow].filter(_.locationId == lift(row.id))).orDie
-          yield view(row, points.nonEmpty)
-      yield found
+        found <- locations(includeInactive = true).map(_.find(_.slug == slug.asString))
+        // The command found it a moment ago.
+        location <- ZIO.fromOption(found).orDieWith(_ => IllegalStateException(slug.asString))
+      yield view(location)
 
   /** The slugs, for the prompt's catalogue and for completing the `{slug}` template argument. */
-  private[mcp] def slugs: ZIO[QuillSqlite, Nothing, List[String]] = ZIO.serviceWithZIO[QuillSqlite]:
-    quill =>
-      import quill.*
-      run(query[LocationRow]).orDie.map(_.filter(_.isActive == 1).map(_.slug).sorted)
+  private[mcp] def slugs: ZIO[QuillSqlite, Nothing, List[String]] = locations(includeInactive =
+    false).map(_.map(_.slug))
 
   val all: List[McpToolHandlerR[
     QuillSqlite & OperatorContext & LocationFlows.Create & LocationFlows.RequireFingerprint]] =

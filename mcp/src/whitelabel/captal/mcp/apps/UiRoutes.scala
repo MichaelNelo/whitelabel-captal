@@ -2,22 +2,20 @@ package whitelabel.captal.mcp.apps
 
 import java.time.Instant
 
-import io.getquill.*
+import cats.syntax.foldable.*
+import whitelabel.captal.core.application.Error as AppError
 import whitelabel.captal.core.application.commands.RegisterAccessPointCommand
+import whitelabel.captal.core.application.queries.AccessPointsOfQuery
 import whitelabel.captal.core.device.Mac
-import whitelabel.captal.core.location.{Error as LocationError, Secret, SettingsChange, Slug}
-import whitelabel.captal.mcp.QuillArrow
+import whitelabel.captal.core.location.{Secret, SettingsChange, Slug}
 import whitelabel.captal.mcp.access.Tokens
-import whitelabel.captal.mcp.tools.{LocationCommands, LocationFlows}
+import whitelabel.captal.mcp.tools.{Commands, LocationCommands, LocationFlows}
 import whitelabel.captal.platform.aws.AssetStore
-import whitelabel.captal.platform.{AccessPointRow, LocationRow, Operator, OperatorContext}
+import whitelabel.captal.platform.queries.Locations
 import whitelabel.captal.platform.schema.QuillSqlite
-import whitelabel.captal.platform.schema.given
+import whitelabel.captal.platform.{Operator, OperatorContext}
 import zio.*
 import zio.http.*
-import zio.interop.catz.*
-
-import QuillArrow.->
 
 /** Plain HTTP for the pages this server renders, mounted under `/ui` beside the MCP endpoint so the
   * root stays the protocol's.
@@ -47,15 +45,6 @@ object UiRoutes:
     * is each access point's, since a venue's APs need not share a controller.
     */
   final case class UnifiSettings(slug: String, name: String, accessPoints: List[AccessPoint])
-
-  private inline def bySlug = quote: (slugParam: String) =>
-    query[LocationRow].filter(_.slug == slugParam)
-
-  private inline def pointsOf = quote: (locationParam: String) =>
-    query[AccessPointRow].filter(_.locationId == locationParam)
-
-  private inline def pointOf = quote: (locationParam: String, macParam: String) =>
-    query[AccessPointRow].filter(ap => ap.locationId == locationParam && ap.mac == macParam)
 
   /** Blank means "leave it alone", which is what lets the page render without the token it will
     * never read back. A field the operator clears is not a way to unset a value.
@@ -96,37 +85,35 @@ object UiRoutes:
   /** `raw` as `access_points.mac` stores it — lowercase, with colons — or why it is not a MAC. */
   private[mcp] def macOf(raw: String): Either[String, String] = parsedMac(raw).map(_.show)
 
-  private def locationFor(slug: String): ZIO[QuillSqlite, String, LocationRow] = ZIO.serviceWithZIO[
-    QuillSqlite]: quill =>
-    import quill.*
-    run(bySlug(lift(slug))).orDie.map(_.headOption).someOrFail(s"No existe la location '$slug'.")
-
-  /** Shared with `configure_unifi`, so the page is filled from the same read the tool reports. */
-  private[mcp] def currentFor(slug: String): ZIO[QuillSqlite, String, UnifiSettings] = ZIO
-    .serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      for
-        row    <- locationFor(slug)
-        points <- run(pointsOf(lift(row.id))).orDie
-      yield UnifiSettings(
-        slug = row.slug,
-        name = row.name,
-        accessPoints = points
-          .sortBy(_.mac)
-          .map(point =>
-            AccessPoint(
-              apMac = point.mac,
-              host = point.unifiHost,
-              port = point.unifiPort,
-              siteId = point.unifiSiteId,
-              // Whether, never what. The value leaves this server only towards the controller.
-              tokenSet = point.unifiApiToken.nonEmpty,
-              durationMinutes = point.durationMinutes,
-              redirectUrl = point.redirectUrl,
-              enabled = point.unifiIsEnabled == 1
-            ))
-      )
-      end for
+  /** Shared with `configure_unifi`, so the page is filled from the same read the tool reports:
+    * `AccessPointsOf`.
+    */
+  private[mcp] def currentFor(slug: String): ZIO[QuillSqlite, String, UnifiSettings] =
+    for
+      parsed <- ZIO.fromEither(Slug.parse(slug)).mapError(LocationCommands.describe)
+      quill  <- ZIO.service[QuillSqlite]
+      report <-
+        Commands.ask(Locations.accessPoints(quill), AccessPointsOfQuery(parsed)) {
+          case AppError.Location(found) =>
+            found.toList.map(LocationCommands.describe)
+        }
+    yield UnifiSettings(
+      slug = report.slug,
+      name = report.name,
+      accessPoints = report
+        .accessPoints
+        .map(point =>
+          AccessPoint(
+            apMac = point.apMac,
+            host = point.host,
+            port = point.port,
+            siteId = point.siteId,
+            tokenSet = point.tokenSet,
+            durationMinutes = point.durationMinutes,
+            redirectUrl = point.redirectUrl,
+            enabled = point.enabled
+          ))
+    )
 
   /** Registers the access point the page names, or changes it — its controller, the access duration
     * and the redirect URL — as the operator token `actor`. A blank token keeps the one stored,

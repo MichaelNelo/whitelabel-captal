@@ -1,15 +1,15 @@
 package whitelabel.captal.mcp.tools
 
+import cats.syntax.foldable.*
 import com.jamesward.ziohttp.mcp.*
-import io.getquill.*
-import whitelabel.captal.core.i18n.{I18n, I18nSchema}
+import whitelabel.captal.core.application.Error as AppError
+import whitelabel.captal.core.application.queries.PreviewLocationQuery
+import whitelabel.captal.core.location.Slug
 import whitelabel.captal.mcp.apps.PreviewUi
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
-import whitelabel.captal.platform.aws.{Asset, AssetStore}
+import whitelabel.captal.platform.aws.AssetStore
+import whitelabel.captal.platform.queries.Locations
 import whitelabel.captal.platform.schema.QuillSqlite
-import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.services.LocaleServiceQuill
-import whitelabel.captal.platform.{LocalizedTextRow, LocationRow}
 import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
@@ -72,74 +72,50 @@ object PreviewTools:
 
   private val Locales = Set("es", "en")
 
-  private inline def bySlugQuery = quote: (slugParam: String) =>
-    query[LocationRow].filter(_.slug == slugParam).take(1)
-
-  private inline def textsQuery = quote: (locationIdParam: String, localeParam: String) =>
-    query[LocalizedTextRow]
-      .filter(r =>
-        r.locationId.contains(locationIdParam) && r.locale == localeParam &&
-          r.category == "frontend" && r.isActive == 1)
-      .map(_.entityId)
-
   val preview: McpToolHandlerR[QuillSqlite & AssetStore] = McpTool("preview_location")
     .description(
       "Show how a location's portal looks, before it is deployed or after: one screen a guest goes through (welcome, question, video, survey, ready, access or error), drawn by the portal itself with the location's stylesheet, icon and texts, and sample questions in place of its own. Call it once per screen to see more. Nothing is recorded and no session is made, and the screen is for looking, not for clicking. A stylesheet, icon or translation changed since shows at once.")
     .readOnly
     .handle: (in: PreviewRequest) =>
-      ZIO.serviceWithZIO[QuillSqlite]: quill =>
-        import quill.*
-        val slug = in.slug.trim
-        val screen = in.screen.map(_.trim.toLowerCase).getOrElse("welcome")
-        val locale = in.locale.map(_.trim.toLowerCase).getOrElse("es")
-        for
-          label <- ZIO
-            .fromOption(Screens.toMap.get(screen))
-            .orElseFail(
-              s"No screen '$screen'. The screens are ${Screens.map(_._1).mkString(", ")}.")
-          _ <-
-            ZIO.when(!Locales.contains(locale))(
-              ZIO.fail(s"No preview in '$locale'. The portal is drawn in es or en."))
-          location <- run(bySlugQuery(lift(slug)))
-            .orDie
-            .map(_.headOption)
-            .someOrFail(s"No location with slug '$slug'. Call list_locations to see what exists.")
-          service = LocaleServiceQuill(quill, Some(location.id))
-          i18n       <- service.getI18n(locale).orDie
-          locales    <- service.listAvailable().orDie
-          translated <- run(textsQuery(lift(location.id), lift(locale))).orDie
-          store      <- ZIO.service[AssetStore]
-          styled     <- store.exists(store.key(slug, Asset.Styles))
-          branded    <- store.exists(store.key(slug, Asset.BrandIcon))
-        yield
-          val untranslated = I18nSchema.keys[I18n].filterNot(translated.toSet)
-          PreviewResponse(
-            slug = location.slug,
-            name = location.name,
-            screen = screen,
-            label = label,
-            locale = locale,
-            stylesheet = Option.when(styled)(store.publicUrl(store.key(slug, Asset.Styles))),
-            icon =
-              if branded then
-                store.publicUrl(store.key(slug, Asset.BrandIcon))
-              else
-                store.publicUrl(s"bundle/${Asset.BrandIcon.fileName}")
-            ,
-            texts = I18nSchema.flatten(i18n),
-            locales = (locale :: locales).distinct,
-            notes =
-              List(
-                Option.when(!styled)(
-                  "La location no tiene hoja de estilos propia: la pantalla usa el tema base."),
-                Option.when(untranslated.nonEmpty)(
-                  s"${untranslated
-                      .size} textos sin traducir en '$locale' se muestran como [clave]."),
-                Option.when(screen == "video")(
-                  "El video es uno genérico hecho por la vista previa, no uno de la location.")
-              ).flatten
-          )
-        end for
+      val screen = in.screen.map(_.trim.toLowerCase).getOrElse("welcome")
+      val locale = in.locale.map(_.trim.toLowerCase).getOrElse("es")
+      for
+        label <- ZIO
+          .fromOption(Screens.toMap.get(screen))
+          .orElseFail(s"No screen '$screen'. The screens are ${Screens.map(_._1).mkString(", ")}.")
+        _ <-
+          ZIO.when(!Locales.contains(locale))(
+            ZIO.fail(s"No preview in '$locale'. The portal is drawn in es or en."))
+        slug    <- ZIO.fromEither(Slug.parse(in.slug)).mapError(LocationCommands.describe)
+        quill   <- ZIO.service[QuillSqlite]
+        store   <- ZIO.service[AssetStore]
+        preview <-
+          Commands.ask(Locations.preview(quill, store), PreviewLocationQuery(slug, locale)) {
+            case AppError.Location(found) =>
+              found.toList.map(LocationCommands.describe)
+          }
+      yield PreviewResponse(
+        slug = preview.slug,
+        name = preview.name,
+        screen = screen,
+        label = label,
+        locale = preview.locale,
+        stylesheet = preview.stylesheet,
+        icon = preview.icon,
+        texts = preview.texts,
+        locales = preview.locales,
+        notes =
+          List(
+            Option.when(preview.stylesheet.isEmpty)(
+              "La location no tiene hoja de estilos propia: la pantalla usa el tema base."),
+            Option.when(preview.untranslated > 0)(
+              s"${preview
+                  .untranslated} textos sin traducir en '$locale' se muestran como [clave]."),
+            Option.when(screen == "video")(
+              "El video es uno genérico hecho por la vista previa, no uno de la location.")
+          ).flatten
+      )
+      end for
     .withUi(PreviewUi.AppUri)
 
   val all: List[McpToolHandlerR[QuillSqlite & AssetStore]] = List(preview)
