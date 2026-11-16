@@ -220,6 +220,11 @@ output "jaeger_service_name" {
   value       = module.jaeger.service_name
 }
 
+output "redis_lock_addresses" {
+  description = "Every lock instance as `host:port`, comma separated: the backoffice's and every location's REDIS_LOCK_ADDRESSES. A release sets it on every location it moves."
+  value       = module.redis_lock.addresses
+}
+
 output "redis_lock_service_names" {
   description = "The lock's Redis instances' ECS services, comma separated"
   value       = module.redis_lock.service_names

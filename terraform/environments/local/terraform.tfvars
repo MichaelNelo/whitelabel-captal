@@ -60,6 +60,10 @@ rqlite_image_tag = "1.0.8"
 rqlite_http_port = 5001
 rqlite_raft_port = 5002
 
+# Off 6379, where a Redis of the developer's own may sit, and the suites' 6389 and 6390. Published on
+# the host as rqlite's port is: `mill api.dev` takes the migrations' lock there.
+redis_lock_port = 6380
+
 # Three rqlite tasks on purpose: a real Raft quorum, so leadership, the backup that only the leader
 # takes, and a node coming back to an existing cluster are all exercisable locally instead of only
 # in a deployed environment. LocalStack runs an ECS task as a real container, which is what makes

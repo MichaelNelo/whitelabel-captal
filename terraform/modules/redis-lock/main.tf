@@ -1,5 +1,7 @@
-# Redis, for the locks that keep each location to one operation at a time: the backoffice takes a
-# location's lock as Redis describes Redlock, on a majority of independent instances.
+# Redis, for the locks taken as Redis describes Redlock, on a majority of independent instances: the
+# one that keeps each location to one operation at a time, which the backoffice takes, and the one
+# that keeps the migrations to one migrator, which the backoffice and every location's API take as
+# they start.
 #
 # Each instance is its own service with its own name, `redis-lock-<n>.<namespace>`, since Redlock
 # asks for instances that fail apart, not a replicated cluster. Internal only: its security group
@@ -68,7 +70,9 @@ resource "aws_ecs_task_definition" "redis" {
       "--maxmemory-policy", "noeviction",
     ]
 
-    portMappings = [{ containerPort = var.port, protocol = "tcp" }]
+    # `hostPort` as rqlite's: the same port under awsvpc, and in LocalStack the one the host reaches
+    # the instance on, where `api.dev` takes the migrations' lock.
+    portMappings = [{ containerPort = var.port, hostPort = var.port, protocol = "tcp" }]
 
     logConfiguration = {
       logDriver = "awslogs"

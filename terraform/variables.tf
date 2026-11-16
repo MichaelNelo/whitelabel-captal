@@ -181,6 +181,12 @@ variable "redis_lock_instances" {
   default     = 1
 }
 
+variable "redis_lock_port" {
+  description = "Port the lock's Redis instances listen on. In LocalStack, also the port the host reaches the first one on, where `api.dev` takes the migrations' lock."
+  type        = number
+  default     = 6379
+}
+
 variable "cdc_desired_count" {
   description = "How many relay tasks: one in a deployed environment, since rqlite posts to one address and every subscriber has to follow that same relay. Zero for `local`, where `mill mcp.dev` runs it on the host."
   type        = number

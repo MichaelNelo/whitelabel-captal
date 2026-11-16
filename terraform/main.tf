@@ -259,7 +259,8 @@ module "jaeger" {
   ui_security_group_ids          = var.enable_tailscale ? [module.tailscale_proxy[0].security_group_id] : []
 }
 
-# Redis, where the backoffice takes the lock that keeps a location to one operation at a time.
+# Redis, where the backoffice takes the lock that keeps a location to one operation at a time, and
+# the backoffice and every location's API the migrations' lock.
 module "redis_lock" {
   source = "./modules/redis-lock"
 
@@ -274,6 +275,7 @@ module "redis_lock" {
   execution_role_arn               = module.ecs.execution_role_arn
   caller_security_group_ids        = [aws_security_group.ecs_tasks.id]
   instances                        = var.redis_lock_instances
+  port                             = var.redis_lock_port
 }
 
 # A stand-in for a venue's UniFi controller, which the end-to-end features point their locations at.
