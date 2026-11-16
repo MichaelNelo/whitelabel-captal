@@ -8,7 +8,8 @@ import zio.test.*
 import zio.{Task, ZIO}
 
 /** That `Migrate.Lock` is load-bearing: Flyway wraps each migration in a transaction, and that
-  * transaction is real, but it is not exclusion.
+  * transaction is real, but it is not exclusion. Each migrator takes the lock in the suite's Redis,
+  * at `REDIS_LOCK_ADDRESSES`, through a connection of its own, as separate processes would.
   *
   * A suite under [[whitelabel.captal.api.E2ETests]] rather than its own `ZIOSpecDefault`, and that
   * is not cosmetic: a second spec class in this module makes Mill hand the two classes to a claim
@@ -50,11 +51,8 @@ object MigrationLockSuite:
     finally
       statement.close()
 
-  /** Back to never-migrated — this suite's two tables and nothing else.
-    *
-    * `migration_lock` is deliberately not touched: if a previous run died between acquisition and
-    * release the row is still there and these tests fail on the lock's own timeout message, which
-    * names the table and what to do about it.
+  /** Back to never-migrated — this suite's two tables and nothing else. The lock needs no reset: one
+    * a previous run died holding expires on its own within its time.
     */
   private val reset =
     execute(s"DROP TABLE IF EXISTS $MarkerTable") *> execute(s"DROP TABLE IF EXISTS $HistoryTable")
