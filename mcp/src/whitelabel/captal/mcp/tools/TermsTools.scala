@@ -3,14 +3,21 @@ package whitelabel.captal.mcp.tools
 import java.time.Instant
 import java.util.UUID
 
+import cats.syntax.foldable.*
 import com.jamesward.ziohttp.mcp.*
-import io.getquill.*
-import whitelabel.captal.mcp.Writes
+import whitelabel.captal.core.application.commands.{
+  PublishTermsVersionCommand,
+  RemoveTermsTranslationCommand,
+  SetTermsTranslationCommand
+}
+import whitelabel.captal.core.application.queries.TermsInForceQuery
+import whitelabel.captal.core.application.{Error as AppError, Flow}
+import whitelabel.captal.core.terms.{Error as TermsError, TermsTranslation}
 import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
+import whitelabel.captal.platform.queries.TermsInForce
 import whitelabel.captal.platform.schema.QuillSqlite
-import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.{Terms, TermsRow, TermsTranslationRow}
+import whitelabel.captal.platform.{Operator, OperatorContext}
 import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
@@ -72,125 +79,103 @@ object TermsTools:
   given Schema[SetTranslationRequest] = DeriveSchema.gen
   given Schema[RemoveTranslationRequest] = DeriveSchema.gen
 
-  private def view(quill: QuillSqlite): UIO[TermsView] =
-    import quill.*
+  /** What the operator reads for each refusal of these tools. */
+  private val describe: PartialFunction[AppError, List[String]] =
+    case AppError.Terms(found) =>
+      found
+        .toList
+        .map:
+          case TermsError.NoTermsYet =>
+            "No terms of service exist yet. Create the first version with create_terms_version."
+          case TermsError.NoTranslations =>
+            "Give the new version at least one translation."
+          case TermsError.BlankLocale =>
+            "Every translation needs a locale."
+          case TermsError.BlankText(locales) =>
+            s"The text for ${locales.mkString(", ")} is empty."
+          case TermsError.RepeatedLocales(locales) =>
+            s"${locales.mkString(", ")} appear more than once."
+          case TermsError.DroppedLocales(locales) =>
+            s"The version in force is written in ${locales.mkString(
+                ", ")} too: a new version needs a text in every locale the previous one had."
+          case TermsError.NoSuchTranslation(locale, has) =>
+            s"The version in force has no '$locale' text. It has ${has.mkString(", ")}."
+          case TermsError.LastTranslation(_) =>
+            "That is the version's only text: without one, no portal could show the terms."
+  end describe
+
+  /** The terms as the tools answer them, read after any change. */
+  private val view: ZIO[QuillSqlite, String, TermsView] = ZIO
+    .serviceWithZIO[QuillSqlite](quill =>
+      Commands.ask(TermsInForce(quill), TermsInForceQuery())(describe))
+    .map: report =>
+      TermsView(
+        current = report
+          .current
+          .map(version =>
+            VersionView(
+              version.version,
+              version.createdAt,
+              version.translations.map(t => Translation(t.locale, t.text)))),
+        earlier = report.earlier
+      )
+
+  /** Runs `command` through `flow` as the calling operator, then answers the terms as they stand.
+    */
+  private def changed[C, R](ctx: McpToolContext, command: C)(
+      flow: Flow.Aux[Task, C, R]): ZIO[QuillSqlite & OperatorContext, String, TermsView] =
     for
-      current  <- Terms.current(quill).orDie
-      versions <- run(query[TermsRow].sortBy(_.version)(using Ord.desc).map(_.version)).orDie
-      texts    <- ZIO.foreach(current)(terms => Terms.translations(quill, terms.id).orDie)
-    yield TermsView(
-      current = current.map(terms =>
-        VersionView(
-          terms.version,
-          terms.createdAt,
-          texts.toList.flatten.map(t => Translation(t.locale, t.body)))),
-      earlier = versions.drop(1)
-    )
-
-  private def inForce(quill: QuillSqlite): IO[String, TermsRow] = Terms
-    .current(quill)
-    .orDie
-    .someOrFail(
-      "No terms of service exist yet. Create the first version with create_terms_version.")
-
-  /** What is wrong with a version's texts, before anything is written. */
-  private def problems(translations: List[Translation], previous: List[String]): List[String] =
-    val locales = translations.map(_.locale.trim)
-    val repeated = locales.diff(locales.distinct).distinct
-    val blank = translations.filter(_.text.trim.isEmpty).map(_.locale)
-    val dropped = previous.filterNot(locales.contains)
-    List(
-      Option.when(translations.isEmpty)("Give the new version at least one translation."),
-      Option.when(locales.exists(_.isEmpty))("Every translation needs a locale."),
-      Option.when(repeated.nonEmpty)(s"${repeated.mkString(", ")} appear more than once."),
-      Option.when(blank.nonEmpty)(s"The text for ${blank.mkString(", ")} is empty."),
-      Option.when(dropped.nonEmpty)(
-        s"The version in force is written in ${dropped.mkString(
-            ", ")} too: a new version needs a text in every locale the previous one had.")
-    ).flatten
+      caller <- Commands.callerOf(ctx)
+      _      <- Commands.run(Operator(caller, None), command)(flow)(describe)
+      result <- view
+    yield result
 
   val get: McpToolHandlerR[QuillSqlite] = McpTool("get_terms_of_service")
     .description(
       "The terms of service every portal asks a guest to accept before the flow begins: the version in force with its text in each locale, and the numbers of the ones before it. They are the same for every location.")
     .readOnly
-    .handle: (_: GetRequest) =>
-      ZIO.serviceWithZIO[QuillSqlite](view)
+    .handle((_: GetRequest) => view)
 
-  val create: McpToolHandlerR[QuillSqlite] = McpTool("create_terms_version")
-    .description(
-      "Publish a new version of the terms of service, in force at once for every location: each device is asked to accept it on its next welcome, even one that accepted the previous version. It needs a text in every locale the version in force has, and may add more. To fix or add a single translation without asking anyone again, use set_terms_translation instead.")
-    .requireScopes(Auth.ContentWrite)
-    .handle: (in: CreateRequest) =>
-      ZIO.serviceWithZIO[QuillSqlite]: quill =>
-        import quill.*
-        for
-          current  <- Terms.current(quill).orDie
-          previous <- ZIO.foreach(current)(terms => Terms.translations(quill, terms.id).orDie)
-          _        <-
-            problems(in.translations, previous.toList.flatten.map(_.locale)) match
-              case Nil =>
-                ZIO.unit
-              case found =>
-                ZIO.fail(found.mkString(" "))
-          now   = Instant.now.toString
-          row   = TermsRow(UUID.randomUUID.toString, current.fold(1)(_.version + 1), now)
-          texts = in.translations.map(t => TermsTranslationRow(row.id, t.locale.trim, t.text, now))
-          _ <-
-            transaction(
-              run(query[TermsRow].insertValue(lift(row))) *>
-                run(liftQuery(texts).foreach(text => query[TermsTranslationRow].insertValue(text))))
-              .orDie
-          result <- view(quill)
-        yield result
+  val create: McpToolHandlerR[QuillSqlite & OperatorContext & ContentFlows.PublishTermsVersion] =
+    McpTool("create_terms_version")
+      .description(
+        "Publish a new version of the terms of service, in force at once for every location: each device is asked to accept it on its next welcome, even one that accepted the previous version. It needs a text in every locale the version in force has, and may add more. To fix or add a single translation without asking anyone again, use set_terms_translation instead.")
+      .requireScopes(Auth.ContentWrite)
+      .handleWithContext: (in: CreateRequest, ctx: McpToolContext) =>
+        ZIO.serviceWithZIO[ContentFlows.PublishTermsVersion](
+          changed(
+            ctx,
+            PublishTermsVersionCommand(
+              UUID.randomUUID.toString,
+              in.translations.map(t => TermsTranslation(t.locale, t.text)),
+              Instant.now))(_))
 
-  val setTranslation: McpToolHandlerR[QuillSqlite] = McpTool("set_terms_translation")
+  val setTranslation
+      : McpToolHandlerR[QuillSqlite & OperatorContext & ContentFlows.SetTermsTranslation] = McpTool(
+    "set_terms_translation")
     .description(
       "Add a locale to the version of the terms of service in force, or replace its text in one. Not a new version: nobody who accepted it is asked again, so use it for a translation, not for a change to what the terms say — that is create_terms_version. A locale added here is offered by every portal from its next visit.")
     .requireScopes(Auth.ContentWrite)
-    .handle: (in: SetTranslationRequest) =>
-      ZIO.serviceWithZIO[QuillSqlite]: quill =>
-        import quill.*
-        for
-          terms <- inForce(quill)
-          _     <-
-            ZIO.when(in.locale.trim.isEmpty || in.text.trim.isEmpty)(
-              ZIO.fail("Both the locale and its text are needed."))
-          row = TermsTranslationRow(terms.id, in.locale.trim, in.text, Instant.now.toString)
-          affected <- Terms.saveTranslation(quill, row).orDie
-          _        <- Writes.expectOne(affected, s"Saving the terms' '${row.locale}' translation")
-          result   <- view(quill)
-        yield result
+    .handleWithContext: (in: SetTranslationRequest, ctx: McpToolContext) =>
+      ZIO.serviceWithZIO[ContentFlows.SetTermsTranslation](
+        changed(ctx, SetTermsTranslationCommand(TermsTranslation(in.locale, in.text), Instant.now))(
+          _))
 
-  val removeTranslation: McpToolHandlerR[QuillSqlite] = McpTool("remove_terms_translation")
-    .description(
-      "Take a locale out of the version of the terms of service in force. Not a new version. Portals stop offering that locale from their next visit, and a guest who had picked it reads the terms in another. The last locale cannot be removed.")
-    .requireScopes(Auth.ContentWrite)
-    .handle: (in: RemoveTranslationRequest) =>
-      ZIO.serviceWithZIO[QuillSqlite]: quill =>
-        import quill.*
-        val locale = in.locale.trim
-        for
-          terms <- inForce(quill)
-          texts <- Terms.translations(quill, terms.id).orDie
-          _     <-
-            ZIO.when(!texts.exists(_.locale == locale))(
-              ZIO.fail(
-                s"The version in force has no '$locale' text. It has ${texts
-                    .map(_.locale)
-                    .mkString(", ")}."))
-          _ <-
-            ZIO.when(texts.sizeIs == 1)(
-              ZIO.fail(
-                "That is the version's only text: without one, no portal could show the terms."))
-          affected <-
-            run(
-              query[TermsTranslationRow]
-                .filter(t => t.termsId == lift(terms.id) && t.locale == lift(locale))
-                .delete).orDie
-          _      <- Writes.expectOne(affected, s"Removing the terms' '$locale' translation")
-          result <- view(quill)
-        yield result
-        end for
+  val removeTranslation
+      : McpToolHandlerR[QuillSqlite & OperatorContext & ContentFlows.RemoveTermsTranslation] =
+    McpTool("remove_terms_translation")
+      .description(
+        "Take a locale out of the version of the terms of service in force. Not a new version. Portals stop offering that locale from their next visit, and a guest who had picked it reads the terms in another. The last locale cannot be removed.")
+      .requireScopes(Auth.ContentWrite)
+      .handleWithContext: (in: RemoveTranslationRequest, ctx: McpToolContext) =>
+        ZIO.serviceWithZIO[ContentFlows.RemoveTermsTranslation](
+          changed(ctx, RemoveTermsTranslationCommand(in.locale, Instant.now))(_))
 
-  val all: List[McpToolHandlerR[QuillSqlite]] = List(get, create, setTranslation, removeTranslation)
+  val all: List[McpToolHandlerR[
+    QuillSqlite & OperatorContext & ContentFlows.PublishTermsVersion &
+      ContentFlows.SetTermsTranslation & ContentFlows.RemoveTermsTranslation]] = List(
+    get,
+    create,
+    setTranslation,
+    removeTranslation)
 end TermsTools
