@@ -8,22 +8,36 @@ import zio.redis.{CodecSupplier, Input, Output, Redis, RedisConfig, Update}
   * died; it is also what a holder that froze longer than it loses.
   */
 trait DistributedLock:
-  /** Takes `resource` for `token` for `ttl`: how long it is held for, or who holds it instead —
-    * none when not enough instances answered to tell.
-    */
-  def acquire(resource: String, token: String, ttl: Duration): UIO[Either[Option[String], Duration]]
+  /** Takes `resource` for `token` for `ttl`. */
+  def acquire(resource: String, token: String, ttl: Duration): UIO[Acquired]
 
-  /** Whether `token` still held `resource`, and holds it for `ttl` more. */
-  def extend(resource: String, token: String, ttl: Duration): UIO[Boolean]
+  /** Holds `resource` for `ttl` more, if `token` still held it: for how long it is sure to be held
+    * from the moment this answered, or none once it is lost.
+    */
+  def extend(resource: String, token: String, ttl: Duration): UIO[Option[Duration]]
 
   /** Lets `resource` go, if `token` holds it: a lock someone else took since is left alone. */
   def release(resource: String, token: String): UIO[Unit]
 
+/** What taking a lock came to. */
+enum Acquired:
+  /** Taken, sure to be held for `validity` from the moment it answered. */
+  case Held(validity: Duration)
+
+  /** Held by whoever took it under `token`, which the instances answered as they refused it. */
+  case HeldBy(token: String)
+
+  /** Neither: too few instances answered in time to tell, or taking it took longer than it lasts.
+    */
+  case Unanswered
+
 /** The lock as Redis describes Redlock, on independent Redis instances (`nodes`):
   *
-  *   - taken with `SET resource token NX PX ttl` on every instance at once, each asked for a short
-  *     time; held when a majority took it and some time is left of `ttl`, less what taking it took
-  *     and a margin for the clocks' drift — and, when not, let go on all of them;
+  *   - taken with `SET resource token NX PX ttl GET` on every instance at once, each asked for a
+  *     short time; held when a majority took it and some time is left of `ttl`, less what taking it
+  *     took and a margin for the clocks' drift — and, when not, let go on all of them. With `GET`,
+  *     an instance that refuses answers in the same command who holds it, so the holder cannot have
+  *     let it go between the refusal and the question;
   *   - extended and released by scripts that act only while the instance holds this token, so a
   *     lock that expired and was taken by another is never extended or deleted by its old holder.
   *
@@ -95,38 +109,46 @@ object Redlock:
   def apply(nodes: List[Node]): DistributedLock =
     val quorum = nodes.size / 2 + 1
     new DistributedLock:
-      def acquire(
-          resource: String,
-          token: String,
-          ttl: Duration): UIO[Either[Option[String], Duration]] =
+      def acquire(resource: String, token: String, ttl: Duration): UIO[Acquired] =
         for
           started <- Clock.nanoTime
-          votes   <-
-            ZIO.foreachPar(nodes)(_.within(_.set(resource, token, Some(ttl), Some(Update.SetNew))))
-          ended <- Clock.nanoTime
-          left = ttl.minus(Duration.fromNanos(ended - started)).minus(drift(ttl))
-          held <-
-            if votes.count(_.contains(true)) >= quorum && left.isPositive then
-              ZIO.succeed(Right(left))
+          // Each instance's answer: none when it set the key, which is a vote; otherwise the token
+          // it holds the key under.
+          answered <- ZIO
+            .foreachPar(nodes)(_.within(_.setGet(resource, token, Some(ttl), Some(Update.SetNew))))
+            .map(_.flatten)
+          left     <- validity(started, ttl)
+          acquired <-
+            if answered.count(_.isEmpty) >= quorum && left.isPositive then
+              ZIO.succeed(Acquired.Held(left))
             else
-              release(resource, token) *> holder(resource).map(Left(_))
-        yield held
+              release(resource, token).as(
+                answered.flatten.groupBy(identity).maxByOption(_._2.size) match
+                  case Some((holder, _)) if answered.size >= quorum =>
+                    Acquired.HeldBy(holder)
+                  case _ =>
+                    Acquired.Unanswered)
+        yield acquired
 
-      def extend(resource: String, token: String, ttl: Duration): UIO[Boolean] = ZIO
-        .foreachPar(nodes)(
-          _.within(
-            _.eval(ExtendScript, Chunk(resource), Chunk(token, ttl.toMillis.toString))
-              .returning[Long]))
-        .map(_.count(_.contains(1L)) >= quorum)
+      def extend(resource: String, token: String, ttl: Duration): UIO[Option[Duration]] =
+        for
+          started  <- Clock.nanoTime
+          extended <-
+            ZIO.foreachPar(nodes)(
+              _.within(
+                _.eval(ExtendScript, Chunk(resource), Chunk(token, ttl.toMillis.toString))
+                  .returning[Long]))
+          left <- validity(started, ttl)
+        yield Option.when(extended.count(_.contains(1L)) >= quorum && left.isPositive)(left)
 
       def release(resource: String, token: String): UIO[Unit] =
         ZIO.foreachParDiscard(nodes)(
           _.within(_.eval(ReleaseScript, Chunk(resource), Chunk(token)).returning[Long]))
 
-      /** The token most instances hold the resource under. */
-      private def holder(resource: String): UIO[Option[String]] = ZIO
-        .foreachPar(nodes)(_.within(_.get(resource).returning[String]))
-        .map(_.flatten.flatten.groupBy(identity).maxByOption(_._2.size).map(_._1))
+      /** What is left of `ttl` asked at `started`, less the time since and the clocks' drift. */
+      private def validity(started: Long, ttl: Duration): UIO[Duration] = Clock
+        .nanoTime
+        .map(ended => ttl.minus(Duration.fromNanos(ended - started)).minus(drift(ttl)))
     end new
   end apply
 
