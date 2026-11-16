@@ -19,6 +19,42 @@ trait DistributedLock:
   /** Lets `resource` go, if `token` holds it: a lock someone else took since is left alone. */
   def release(resource: String, token: String): UIO[Unit]
 
+  /** The token `resource` is held under, if it is held; fails when too few instances answered to
+    * tell.
+    */
+  def holder(resource: String): IO[LockUnavailable, Option[String]]
+
+  /** Keeps `resource`, already taken under `token`, for as long as the scope is open: extended
+    * every third of `ttl`, and let go when the scope closes. Fails when it is not `token`'s any
+    * more; once an extension fails, the lease's `lost` completes.
+    */
+  final def keep(resource: String, token: String, ttl: Duration): ZIO[Scope, LockLost, Lease] =
+    for
+      _ <-
+        ZIO.acquireRelease(extend(resource, token, ttl).someOrFail(LockLost(resource, token)))(_ =>
+          release(resource, token))
+      lost <- Promise.make[Nothing, Unit]
+      _    <- (
+        extend(resource, token, ttl).delay(ttl.dividedBy(3)).repeatWhile(_.isDefined) *>
+          lost.succeed(())
+      ).forkScoped
+    yield Lease(lost.await)
+end DistributedLock
+
+/** A lock kept by [[DistributedLock.keep]]: `lost` completes once it could not be extended, and
+  * another may hold it from then on.
+  */
+final case class Lease(lost: UIO[Unit])
+
+/** `token` does not hold `resource`: it expired, or was never taken. */
+final case class LockLost(resource: String, token: String)
+    extends Exception(s"The lock on $resource is not $token's: it expired, or was never taken")
+
+/** Too few of the lock's instances answered in time to take it or to tell who holds it. */
+final case class LockUnavailable(resource: String)
+    extends Exception(
+      s"Not enough of the lock's Redis instances answered in time for $resource. Nothing was changed; try again in a moment.")
+
 /** What taking a lock came to. */
 enum Acquired:
   /** Taken, sure to be held for `validity` from the moment it answered. */
@@ -145,6 +181,24 @@ object Redlock:
         ZIO.foreachParDiscard(nodes)(
           _.within(_.eval(ReleaseScript, Chunk(resource), Chunk(token)).returning[Long]))
 
+      /** The token a majority of the instances hold `resource` under: one only some of them hold,
+        * left by a take that did not get a majority, holds nothing.
+        */
+      def holder(resource: String): IO[LockUnavailable, Option[String]] = ZIO
+        .foreachPar(nodes)(_.within(_.get(resource).returning[String]))
+        .map(_.flatten)
+        .flatMap: answered =>
+          if answered.size < quorum then
+            ZIO.fail(LockUnavailable(resource))
+          else
+            ZIO.succeed(
+              answered
+                .flatten
+                .groupBy(identity)
+                .collectFirst:
+                  case (token, held) if held.size >= quorum =>
+                    token)
+
       /** What is left of `ttl` asked at `started`, less the time since and the clocks' drift. */
       private def validity(started: Long, ttl: Duration): UIO[Duration] = Clock
         .nanoTime
@@ -152,10 +206,11 @@ object Redlock:
     end new
   end apply
 
-  /** The instances at `REDIS_LOCK_ADDRESSES`, `host:port` separated by commas. None configured is a
-    * lock nobody can take, which every operation is then refused for, naming the variable.
+  /** The instances at `REDIS_LOCK_ADDRESSES`, `host:port` separated by commas. Required: the
+    * migrations take their lock here, and so does every operation on a location, so a process with
+    * none configured does not start rather than run unguarded.
     */
-  val layer: ZLayer[Any, Nothing, DistributedLock] = ZLayer.scoped:
+  val layer: ZLayer[Any, IllegalStateException, DistributedLock] = ZLayer.scoped:
     for
       addresses <- System
         .env("REDIS_LOCK_ADDRESSES")
@@ -163,8 +218,9 @@ object Redlock:
         .map(_.toList.flatMap(_.split(',').toList).map(_.trim).filter(_.nonEmpty))
       _ <-
         ZIO.when(addresses.isEmpty)(
-          ZIO.logWarning(
-            "REDIS_LOCK_ADDRESSES is unset: no operation on a location can take its lock, so every one is refused"))
+          ZIO.fail(
+            new IllegalStateException(
+              "REDIS_LOCK_ADDRESSES is unset: the migrations and every operation on a location take their lock in Redis, at these `host:port` addresses, comma separated")))
       scope <- ZIO.scope
       nodes <-
         ZIO.foreach(addresses): address =>

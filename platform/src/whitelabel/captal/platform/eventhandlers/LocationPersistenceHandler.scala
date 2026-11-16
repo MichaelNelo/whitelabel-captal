@@ -99,9 +99,9 @@ object LocationPersistenceHandler:
             ZIO.unit
       end handle
 
-  /** Where the run `by` left the location, as `locations.state` writes it — only while `by` still
-    * holds the location (`current_run`). A run that lost its lock and was taken over completes into
-    * nothing, rather than moving the location its successor now runs.
+  /** Where the run `by` left the location, as `locations.state` writes it. Only a run that kept its
+    * location's lock to its last step ends done (the backoffice's `OperationRunner`), so no other
+    * operation moved the location meanwhile.
     */
   private def record(
       quill: QuillSqlite,
@@ -112,7 +112,7 @@ object LocationPersistenceHandler:
     import quill.*
     run(
       query[LocationRow]
-        .filter(row => row.id == lift(id.asString) && row.currentRun.contains(lift(by.asString)))
+        .filter(_.id == lift(id.asString))
         .update(
           _.state     -> lift(state),
           _.stateRun  -> lift(Option(by.asString)),

@@ -301,7 +301,6 @@ object EventLogHandler:
             operation,
             steps,
             finishing,
-            supersedes,
             _,
             at) =>
         (
@@ -312,8 +311,7 @@ object EventLogHandler:
             "slug"       -> Json.fromString(slug.asString),
             "operation"  -> Json.fromString(operation.name),
             "steps"      -> Json.fromValues(steps.map(step => Json.fromString(step.toString))),
-            "finishing"  -> finishing.fold(Json.Null)(id => Json.fromString(id.asString)),
-            "supersedes" -> supersedes.fold(Json.Null)(id => Json.fromString(id.asString))
+            "finishing"  -> finishing.fold(Json.Null)(id => Json.fromString(id.asString))
           ),
           at)
       case OperationEvent.OperationCompleted(run, location, at) =>

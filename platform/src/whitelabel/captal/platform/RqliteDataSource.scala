@@ -8,7 +8,7 @@ import zio.*
 /** The DataSource everything here goes through. Connections are plain: the driver honours
   * `setAutoCommit(false)`, so `quill.transaction` and a migration really are atomic. Flyway's own
   * lock is still unavailable ("SQLite does not support locking, no concurrent migration supported")
-  * — [[Migrate.Lock]] is what serialises migrators.
+  * — [[Migrate.migrateTo]]'s lock, in Redis, is what serialises migrators.
   */
 object RqliteDataSource:
 

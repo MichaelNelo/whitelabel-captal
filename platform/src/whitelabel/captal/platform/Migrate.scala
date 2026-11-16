@@ -3,6 +3,7 @@ package whitelabel.captal.platform
 import com.typesafe.config.ConfigFactory
 import fly4s.Fly4s
 import fly4s.data.{Fly4sConfig, Location, MigrationVersion}
+import whitelabel.captal.platform.locks.{Acquired, DistributedLock, Redlock}
 import zio.*
 import zio.interop.catz.*
 
@@ -23,117 +24,73 @@ object Migrate extends ZIOAppDefault:
   /** Runs one set of migrations against one history table. Takes [[Lock]] itself, so callers must
     * not.
     */
-  def migrateTo(url: String, location: String, historyTable: String): Task[Int] =
-    Lock(url):
-      Fly4s
+  def migrateTo(url: String, location: String, historyTable: String): Task[Int] = ZIO.scoped:
+    for
+      locks    <- Redlock.layer.build.map(_.get)
+      _        <- Lock.hold(locks)
+      executed <- Fly4s
         .makeFor[Task](
           ZIO.attempt(RqliteDataSource.create(url)),
           config = fly4sConfig.copy(locations = List(Location(location)), table = historyTable))
         .use(_.migrate.map(_.migrationsExecuted))
+    yield executed
 
-  /** A mutex across every process that might migrate at the same time: a single statement goes
-    * through Raft, so of N concurrent `INSERT`s of one primary key exactly one takes effect and
-    * every node agrees which. Must stay reachable only through [[migrateTo]] — holding it around
-    * anything but a migration blocks migrations.
+  /** A mutex across every process that might migrate at the same time — the backoffice and every
+    * location's API — in Redis, at `REDIS_LOCK_ADDRESSES`. Must stay reachable only through
+    * [[migrateTo]]: holding it around anything but a migration blocks migrations.
+    *
+    * It lasts as long as its holder keeps extending it, so a migrator that dies frees it within
+    * [[Ttl]]. One that died mid-migration leaves its schema half applied, which Flyway refuses to
+    * migrate past until it is repaired: the next migrator fails on that, rather than on a lock
+    * nobody would ever let go.
     */
   private object Lock:
 
-    private val Table = "migration_lock"
+    private val Resource = "captal:migrations"
 
-    /** Always 1. The table holds at most one row and the primary key on it is the mutex. */
-    private val Row = 1
+    private val Ttl = 30.seconds
 
     private val PollInterval = 2.seconds
 
     private val Timeout = 10.minutes
 
-    private def withConnection[A](url: String)(use: java.sql.Connection => A): Task[A] = ZIO
-      .attemptBlocking:
-        val connection = RqliteDataSource.create(url).getConnection()
-        try use(connection)
-        finally connection.close()
-
-    private def update(url: String, sql: String): Task[Int] =
-      withConnection(url): connection =>
-        val statement = connection.createStatement()
-        try statement.executeUpdate(sql)
-        finally statement.close()
-
-    private def ensureTable(url: String): Task[Unit] =
-      update(
-        url,
-        s"CREATE TABLE IF NOT EXISTS $Table (id INTEGER PRIMARY KEY, holder TEXT NOT NULL)").unit
-
-    /** Who holds the lock, or None when it is free. */
-    private def holderOf(url: String): Task[Option[String]] =
-      withConnection(url): connection =>
-        val statement = connection.createStatement()
-        try
-          val results = statement.executeQuery(s"SELECT holder FROM $Table WHERE id = $Row")
-          if results.next() then
-            Some(results.getString("holder"))
-          else
-            None
-        finally
-          statement.close()
-
-    /** Insert, then read back who actually holds it: the read-back is the answer and the insert
-      * only a bid. rqlite can report a statement it refused as zero affected rows inside an HTTP
-      * 200, so the insert's own result decides nothing.
+    /** Takes the lock for this process, waiting while another migrator holds it, and keeps it for
+      * as long as the scope is open. A lock that cannot be extended part way through is logged and
+      * the migration goes on: Flyway is not stopped part way.
       */
-    private def tryAcquire(url: String, holder: String): Task[Either[String, Boolean]] =
-      for
-        bid  <- update(url, s"INSERT INTO $Table (id, holder) VALUES ($Row, '$holder')").either
-        held <- holderOf(url)
-      yield
-        if held.contains(holder) then
-          Right(true)
-        else if held.nonEmpty then
-          // Someone else got there first.
-          Right(false)
-        else
-          // Nothing holds it and the bid did not land, so waiting would never end.
-          Left(
-            bid match
-              case Left(e) =>
-                Option(e.getMessage).getOrElse(e.toString)
-              case Right(rows) =>
-                s"the insert affected $rows rows and raised nothing, which is how this driver reports a statement the database refused")
-
-    private def release(url: String, holder: String): Task[Unit] =
-      update(url, s"DELETE FROM $Table WHERE id = $Row AND holder = '$holder'").unit
-
-    /** Runs `effect` with nothing else migrating, or fails. No heartbeat and no takeover: a holder
-      * that dies without releasing blocks every other migrator until its row in `migration_lock` is
-      * deleted by hand.
-      */
-    def apply[A](url: String)(effect: Task[A]): Task[A] =
+    def hold(locks: DistributedLock): ZIO[Scope, Throwable, Unit] =
       val holder = holderId()
 
-      def attempt: Task[A] = tryAcquire(url, holder).flatMap:
-        case Right(true) =>
-          ZIO.logInfo(s"Migration lock taken by $holder") *>
-            effect.ensuring(release(url, holder).orDie)
-        case Right(false) =>
-          holderOf(url).flatMap: other =>
-            ZIO.logInfo(s"Waiting for the migration lock, held by ${other.getOrElse("nobody")}") *>
+      def attempt: Task[Unit] = locks
+        .acquire(Resource, holder, Ttl)
+        .flatMap:
+          case Acquired.Held(_) =>
+            ZIO.logInfo(s"Migration lock taken by $holder")
+          case Acquired.HeldBy(other) =>
+            ZIO.logInfo(s"Waiting for the migration lock, held by $other") *>
               attempt.delay(PollInterval)
-        case Left(error) =>
-          ZIO.fail(
+          case Acquired.Unanswered =>
+            ZIO.logWarning("The migration lock's Redis instances did not answer; trying again") *>
+              attempt.delay(PollInterval)
+
+      for
+        _ <-
+          attempt.timeoutFail(
             new IllegalStateException(
-              s"Could not take the migration lock and nothing holds it, so waiting would never end. The bid failed with: $error. Check the shape of '$Table' — it is created here with (id, holder) and an older column still present would reject every insert."))
+              s"Could not take the migration lock within ${Timeout
+                  .toMinutes} minutes: another migrator held it, or its Redis instances did not answer. Nothing has been changed here."))(
+            Timeout)
+        lease <- locks.keep(Resource, holder, Ttl)
+        _     <- (
+          lease.lost *>
+            ZIO.logWarning(
+              "The migration lock could not be extended while migrating: another migrator may start alongside this one")
+        ).forkScoped
+      yield ()
+      end for
+    end hold
 
-      ensureTable(url) *>
-        attempt.timeoutFail(
-          new IllegalStateException(
-            s"Could not take the migration lock within ${Timeout
-                .toMinutes} minutes. Another migrator is holding it, so nothing has been changed here. If it died mid-migration its schema is half applied and Flyway has a failed row for it: repair that, then delete the row in '$Table'."))(
-          Timeout)
-    end apply
-
-    /** Lock holder id: hostname plus a random UUID. Every statement here is built by interpolation,
-      * so the hostname is narrowed to letters, digits, `-` and `.`.
-      */
+    /** Lock holder id: hostname plus a random UUID, which the waiting migrators log. */
     private def holderId(): String =
       val host =
         try

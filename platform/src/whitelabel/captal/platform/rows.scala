@@ -253,8 +253,7 @@ final case class LocationRow(
     unifiIsEnabled: Int = 1,
     fingerprintIsRequired: Int = 1,
     state: String = LocationStates.Created,
-    stateRun: Option[String] = None,
-    currentRun: Option[String] = None)
+    stateRun: Option[String] = None)
 
 /** One run of a deploy, pause, resume or destroy, in the backoffice's own table. `steps` is every
   * step in order as JSON — name, state (pending, running, done, failed), an optional note — fixed

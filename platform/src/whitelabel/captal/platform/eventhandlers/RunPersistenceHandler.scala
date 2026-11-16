@@ -12,9 +12,9 @@ import zio.*
 /** A run's row in `mcp_deploy_runs`: written when it starts, with every step pending, and closed
   * when it ends. What happens in between — each step, the heartbeat — its runner writes as it goes.
   *
-  * Its start is written only under the location's lock, taken by [[OperationLockHandler]] earlier
-  * in the same transaction: a start that lost the lock leaves no row, so no run appears that
-  * nothing will ever take.
+  * Its start is written with the location's lock already taken for it
+  * ([[whitelabel.captal.platform.operations.OperationLock.taking]]): a start that did not get the
+  * lock writes nothing.
   */
 object RunPersistenceHandler:
   def apply(): DbEventHandler[Event] =
@@ -23,26 +23,21 @@ object RunPersistenceHandler:
         import quill.*
         ZIO.foreachDiscard(events):
           case Event.Operation(started: OperationEvent.OperationStarted) =>
-            val id = started.run.asString
-            val slug = started.slug.asString
-            val operation = started.operation.name
-            val steps = RunRecords.pending(started.steps)
             val at = started.occurredAt.toString
-            val location = started.location.asString
-            quill
-              .run(
-                quote(
-                  sql"""INSERT INTO mcp_deploy_runs
-                          (id, slug, operation, status, steps, result, error, started_by,
-                           started_at, heartbeat_at, finished_at)
-                        SELECT ${lift(id)}, ${lift(slug)}, ${lift(operation)},
-                               ${lift(RunRecords.Running)}, ${lift(steps)}, NULL, NULL,
-                               ${lift(started.by)}, ${lift(at)}, ${lift(at)}, NULL
-                        WHERE EXISTS (
-                          SELECT 1 FROM locations
-                          WHERE id = ${lift(location)} AND current_run = ${lift(id)})""".as[Insert[
-                    RunRow]]))
-              .unit
+            val row = RunRow(
+              id = started.run.asString,
+              slug = started.slug.asString,
+              operation = started.operation.name,
+              status = RunRecords.Running,
+              steps = RunRecords.pending(started.steps),
+              result = None,
+              error = None,
+              startedBy = started.by,
+              startedAt = at,
+              heartbeatAt = at,
+              finishedAt = None
+            )
+            quill.run(query[RunRow].insertValue(lift(row))).unit
           case Event.Operation(OperationEvent.OperationCompleted(run, _, occurredAt)) =>
             val at = occurredAt.toString
             quill
