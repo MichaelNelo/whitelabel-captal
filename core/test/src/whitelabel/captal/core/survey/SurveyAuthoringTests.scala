@@ -104,7 +104,7 @@ object SurveyAuthoringTests extends TestSuite:
                       None,
                       None,
                       Now))),
-                SurveyKind.Advertiser)),
+                CreatedSurvey(id, SurveyKind.Advertiser))),
           outcome(creating.handle(CreateSurveyCommand(id, SurveyOwner.Video("nope"), None, Now))) ==
             Left(List(Error.VideoNotFound("nope")))
         )
@@ -119,7 +119,7 @@ object SurveyAuthoringTests extends TestSuite:
             Right(
               (
                 List(AppEvent.SurveyAuthoring(Event.QuestionAdded(VideoSurvey.id, added, 4, Now))),
-                QuestionPlaced(added.id, 4))))
+                QuestionPlaced(added.id, 4, Nil))))
 
       test("refuses every reason a question cannot be asked, at once"):
         val bad = spec(AnswerSpec.Radio(Nil), hierarchy = true).copy(points = -1)

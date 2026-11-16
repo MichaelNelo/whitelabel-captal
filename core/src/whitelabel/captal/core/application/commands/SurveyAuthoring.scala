@@ -17,7 +17,7 @@ import whitelabel.captal.core.survey.authoring.{
   SurveyKind,
   TextField
 }
-import whitelabel.captal.core.survey.question.{Id as QuestionId, LocalizedText}
+import whitelabel.captal.core.survey.question.{Id as QuestionId, LocalizedText, OptionId}
 
 /** Whose a new survey is: one of the identification surveys, deployment-wide, or the survey asked
   * after the video `video`.
@@ -32,15 +32,18 @@ final case class CreateSurveyCommand(
     name: Option[String],
     occurredAt: Instant)
 
-/** The new survey's kind. An identification survey is refused while another of its kind is active,
-  * since they are picked by kind alone; a video's is refused for a video that does not exist, and
-  * takes its location and advertiser from the video.
+/** The survey created, and its kind. */
+final case class CreatedSurvey(id: SurveyId, kind: SurveyKind)
+
+/** An identification survey is refused while another of its kind is active, since they are picked
+  * by kind alone; a video's is refused for a video that does not exist, and takes its location and
+  * advertiser from the video.
   */
 object CreateSurveyHandler:
   def apply[F[_]: Monad](
-      surveys: SurveyAuthoringRepository[F]): Handler.Aux[F, CreateSurveyCommand, SurveyKind] =
+      surveys: SurveyAuthoringRepository[F]): Handler.Aux[F, CreateSurveyCommand, CreatedSurvey] =
     new Handler[F, CreateSurveyCommand]:
-      type Result = SurveyKind
+      type Result = CreatedSurvey
 
       def handle(cmd: CreateSurveyCommand) =
         cmd.owner match
@@ -59,7 +62,7 @@ object CreateSurveyHandler:
                       None,
                       cmd.name,
                       cmd.occurredAt)),
-                  kind
+                  CreatedSurvey(cmd.id, kind)
                 )
           case SurveyOwner.Video(video) =>
             surveys
@@ -79,7 +82,7 @@ object CreateSurveyHandler:
                         owner.advertiser,
                         cmd.name,
                         cmd.occurredAt)),
-                    SurveyKind.Advertiser
+                    CreatedSurvey(cmd.id, SurveyKind.Advertiser)
                   )
 end CreateSurveyHandler
 
@@ -92,8 +95,8 @@ final case class AddQuestionCommand(
     question: QuestionSpec,
     occurredAt: Instant)
 
-/** Where the new question is asked. */
-final case class QuestionPlaced(id: QuestionId, displayOrder: Int)
+/** The question added, where it is asked, and its options, in the order given. */
+final case class QuestionPlaced(id: QuestionId, displayOrder: Int, options: List[OptionId])
 
 /** Refused for a survey on the other side, and for every reason the question cannot be asked
   * ([[QuestionSpec.problems]]).
@@ -113,7 +116,7 @@ object AddQuestionHandler:
               authored(
                 QuestionSpec.problems(cmd.question, survey.kind),
                 List(AuthoringEvent.QuestionAdded(survey.id, cmd.question, order, cmd.occurredAt)),
-                QuestionPlaced(cmd.question.id, order)
+                QuestionPlaced(cmd.question.id, order, cmd.question.answer.choices.map(_.id))
               )
 end AddQuestionHandler
 

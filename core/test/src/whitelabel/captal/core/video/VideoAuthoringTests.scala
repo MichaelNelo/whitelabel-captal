@@ -148,7 +148,7 @@ object VideoAuthoringTests extends TestSuite:
                   AppEvent.SurveyAuthoring(
                     SurveyEvent.QuestionAdded(command.survey, Question, 1, Now))
                 ),
-                RegisteredVideo(key, Some(command.survey), List(Question.id)))))
+                RegisteredVideo(command.id, key, Some(command.survey), List(Question.id)))))
 
       test("registers a promo with no questions without a survey"):
         val registered = outcome(
@@ -193,6 +193,7 @@ object VideoAuthoringTests extends TestSuite:
                       VideoStatus.Active,
                       Now))),
                 FileConfirmation(
+                  key = "plaza/videos/first",
                   active = true,
                   durationSeconds = 30,
                   minWatchSeconds = 30,

@@ -46,8 +46,14 @@ final case class RegisterVideoCommand(
     questions: List[QuestionSpec],
     occurredAt: Instant)
 
-/** Where its first file is to be uploaded, and its survey and questions when it has them. */
-final case class RegisteredVideo(key: String, survey: Option[SurveyId], questions: List[QuestionId])
+/** The video registered, where its first file is to be uploaded, and its survey and questions when
+  * it has them.
+  */
+final case class RegisteredVideo(
+    video: VideoId,
+    key: String,
+    survey: Option[SurveyId],
+    questions: List[QuestionId])
 
 /** Refused for an unknown or retired advertiser, a video with no title or with a text that cannot
   * be shown, a minimum watch under a second, a negative priority or no-repeat, an advertiser's
@@ -128,7 +134,11 @@ object RegisterVideoHandler:
                 else
                   Nil
               ),
-              RegisteredVideo(key, Option.when(surveyed)(cmd.survey), cmd.questions.map(_.id))
+              RegisteredVideo(
+                cmd.id,
+                key,
+                Option.when(surveyed)(cmd.survey),
+                cmd.questions.map(_.id))
             )
 end RegisterVideoHandler
 
@@ -163,10 +173,11 @@ final case class ConfirmVideoFileCommand(
     occurredAt: Instant)
 
 /** Where the video stands after it: in rotation or not, with the survey unlocking at
-  * `minWatchSeconds`, lowered from `minWatchAdjustedFrom` when that was past the end; and whether
-  * the file took over from one the video was playing.
+  * `minWatchSeconds`, lowered from `minWatchAdjustedFrom` when that was past the end; whether the
+  * file took over from one the video was playing; and the key the file is stored at.
   */
 final case class FileConfirmation(
+    key: String,
     active: Boolean,
     durationSeconds: Int,
     minWatchSeconds: Int,
@@ -212,12 +223,15 @@ object ConfirmVideoFileHandler:
                     minWatch,
                     status,
                     cmd.occurredAt))),
+              // Answered only when accepted, which needs the file waiting.
               FileConfirmation(
+                video.waiting.fold("")(_.key),
                 status == VideoStatus.Active,
                 duration,
                 minWatch,
                 Option.when(video.minWatchSeconds > duration)(video.minWatchSeconds),
-                video.current.isDefined)
+                video.current.isDefined
+              )
             ))
 end ConfirmVideoFileHandler
 
