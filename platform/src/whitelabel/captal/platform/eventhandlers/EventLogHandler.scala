@@ -12,6 +12,8 @@ import whitelabel.captal.core.device.Event as DeviceEvent
 import whitelabel.captal.core.location.{AccessPoint, Event as LocationEvent, LocationId}
 import whitelabel.captal.core.operation.{Event as OperationEvent, RunId}
 import whitelabel.captal.core.advertiser.Event as AdvertiserEvent
+import whitelabel.captal.core.survey.authoring.Event as AuthoringEvent
+import whitelabel.captal.core.survey.question.Id as QuestionId
 import whitelabel.captal.core.i18n.Event as I18nEvent
 import whitelabel.captal.core.terms.Event as TermsEvent
 import whitelabel.captal.core.recovery.Event as RecoveryEvent
@@ -248,6 +250,8 @@ object EventLogHandler:
         Some(extractTermsEvent(e))
       case Event.Advertiser(e) =>
         Some(extractAdvertiserEvent(e))
+      case Event.SurveyAuthoring(e) =>
+        Some(extractAuthoringEvent(e))
       // Which keys, not their texts, which are in their own table.
       case Event.I18n(I18nEvent.TranslationsSet(location, locale, entries, occurredAt)) =>
         Some(
@@ -272,6 +276,62 @@ object EventLogHandler:
         Some(extractLocationEvent(e))
       case Event.Operation(e) =>
         Some(extractOperationEvent(e))
+
+  /** What changed in the surveys, by id: the wording is in its own table. */
+  private def extractAuthoringEvent(event: AuthoringEvent): (String, Json, Instant) =
+    def question(id: QuestionId) = Json.obj("questionId" -> Json.fromString(id.asString))
+    event match
+      case AuthoringEvent.SurveyCreated(id, kind, video, location, _, _, occurredAt) =>
+        (
+          "survey.created",
+          Json.obj(
+            "surveyId" -> Json.fromString(id.asString),
+            "kind"     -> Json.fromString(kind.toString),
+            "videoId"  -> video.fold(Json.Null)(Json.fromString),
+            "location" -> location.fold(Json.Null)(Json.fromString)
+          ),
+          occurredAt)
+      case AuthoringEvent.QuestionAdded(survey, added, displayOrder, occurredAt) =>
+        (
+          "survey.question_added",
+          Json.obj(
+            "surveyId"     -> Json.fromString(survey.asString),
+            "questionId"   -> Json.fromString(added.id.asString),
+            "displayOrder" -> Json.fromInt(displayOrder)),
+          occurredAt)
+      case AuthoringEvent.QuestionUpdated(
+            id,
+            text,
+            description,
+            placeholder,
+            required,
+            points,
+            at) =>
+        val fields =
+          List(
+            text.map(_ => "text"),
+            description.map(_ => "description"),
+            placeholder.map(_ => "placeholder"),
+            required.map(_ => "required"),
+            points.map(_ => "points")).flatten
+        (
+          "survey.question_updated",
+          question(id).deepMerge(
+            Json.obj("fields" -> Json.fromValues(fields.map(Json.fromString)))),
+          at)
+      case AuthoringEvent.QuestionRetired(id, occurredAt) =>
+        ("survey.question_retired", question(id), occurredAt)
+      case AuthoringEvent.QuestionReinstated(id, occurredAt) =>
+        ("survey.question_reinstated", question(id), occurredAt)
+      case AuthoringEvent.QuestionsReordered(survey, order, occurredAt) =>
+        (
+          "survey.questions_reordered",
+          Json.obj(
+            "surveyId" -> Json.fromString(survey.asString),
+            "order"    -> Json.fromValues(order.map(id => Json.fromString(id.asString)))),
+          occurredAt)
+    end match
+  end extractAuthoringEvent
 
   private def extractAdvertiserEvent(event: AdvertiserEvent): (String, Json, Instant) =
     event match
