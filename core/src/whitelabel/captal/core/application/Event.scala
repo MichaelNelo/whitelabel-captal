@@ -28,3 +28,4 @@ enum Event:
   case Terms(event: terms.Event)
   case I18n(event: i18n.Event)
   case Advertiser(event: advertiser.Event)
+  case SurveyAuthoring(event: survey.authoring.Event)
