@@ -18,7 +18,6 @@ import whitelabel.captal.core.survey.authoring.Error as AuthoringError
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.surveySchemas.given
 import whitelabel.captal.platform.{
   AnswerRow,
   BackendTexts,
