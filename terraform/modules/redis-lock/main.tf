@@ -23,7 +23,8 @@ resource "aws_cloudwatch_log_group" "redis" {
 
 resource "aws_security_group" "redis" {
   name        = local.name
-  description = "Redis for the operations' locks: from the services that take them"
+  # AWS takes no apostrophe here: letters, digits, spaces and `._-:/()#,@[]+=&;{}!$*` only.
+  description = "Redis for the locks, from the services that take them"
   vpc_id      = var.vpc_id
 
   ingress {
