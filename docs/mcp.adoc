@@ -835,7 +835,16 @@ A run whose lock can no longer be extended runs no further step: it fails at the
 lock was lost. That happens when this process could not reach Redis for longer than the lock lasts
 (30 seconds), or when the one Redis instance restarted, empty; another operation may have taken the
 location meanwhile, and its run is the one `current_run` names, so the old run's completion moves
-nothing. A step already going when the lock expires is not stopped.
+nothing. Each extension also says how long the lock is sure to last, and before each step the runner
+checks that time against its own clock, so a process that froze past it runs no step on waking.
+
+A step and its record are one (`Execution`, under cats-effect's `uncancelable`): once a step is
+recorded as started, nothing from outside stops it before it is recorded as ended, so the run never
+says a step was done, or not, other than as it was. A run stops between two steps only, which is
+also where a lost lock stops it; a step already going when the lock expires runs to its end. When
+the server stops, it waits for each step going to end and be recorded, for as long as ECS gives it
+(30 seconds) before it kills the process; a run killed so is left part way, as one cut off by a
+crash, and is finished later.
 
 [[Locks]]
 === The operations' lock
@@ -843,9 +852,11 @@ nothing. A step already going when the lock expires is not stopped.
 `platform`'s `Redlock` takes a lock as Redis describes Redlock, on the instances at
 `REDIS_LOCK_ADDRESSES` (`host:port`, comma separated; `modules/redis-lock` runs them, see
 xref:infrastructure.adoc[Infrastructure]). It sets `captal:location:<id>:operation` to the run's id
-with `SET … NX PX` on every instance at once, each given half a second to answer, and holds it when
-a majority did and some of its time is left, less what taking it took and a margin for clock drift;
-otherwise it lets it go on all of them. Extending and releasing run a script that acts only while
+with `SET … NX PX … GET` on every instance at once, each given half a second to answer, and holds it
+when a majority did and some of its time is left, less what taking it took and a margin for clock
+drift; otherwise it lets it go on all of them. An instance that refuses answers in that same command
+which run holds the lock, so the tool names the run going without a second question its holder could
+have let go of in between. Extending and releasing run a script that acts only while
 the instance holds this run's id, so a lock that expired and was taken by another run is never
 extended or deleted by the old one. An instance is connected the first time it is asked, and one
 that cannot be reached is a vote not given. With `REDIS_LOCK_ADDRESSES` unset, no lock can be taken
