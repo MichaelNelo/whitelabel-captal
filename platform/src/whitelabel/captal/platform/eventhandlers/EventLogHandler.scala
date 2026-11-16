@@ -11,6 +11,7 @@ import whitelabel.captal.core.application.Event
 import whitelabel.captal.core.device.Event as DeviceEvent
 import whitelabel.captal.core.location.{AccessPoint, Event as LocationEvent, LocationId}
 import whitelabel.captal.core.operation.{Event as OperationEvent, RunId}
+import whitelabel.captal.core.terms.Event as TermsEvent
 import whitelabel.captal.core.recovery.Event as RecoveryEvent
 import whitelabel.captal.core.session.Event as SessionEvent
 import whitelabel.captal.core.survey.Event as SurveyEvent
@@ -241,10 +242,36 @@ object EventLogHandler:
               "set"        ->
                 Json.fromValues(policy.set.map(setting => Json.fromString(setting.toString)))),
             occurredAt))
+      case Event.Terms(e) =>
+        Some(extractTermsEvent(e))
       case Event.Location(e) =>
         Some(extractLocationEvent(e))
       case Event.Operation(e) =>
         Some(extractOperationEvent(e))
+
+  /** The terms' events, which locales they touch: the texts are in their own table. */
+  private def extractTermsEvent(event: TermsEvent): (String, Json, Instant) =
+    event match
+      case TermsEvent.VersionPublished(id, version, translations, occurredAt) =>
+        (
+          "terms.version_published",
+          Json.obj(
+            "termsId" -> Json.fromString(id),
+            "version" -> Json.fromInt(version),
+            "locales" -> Json.fromValues(translations.map(t => Json.fromString(t.locale)))),
+          occurredAt)
+      case TermsEvent.TranslationSet(terms, translation, occurredAt) =>
+        (
+          "terms.translation_set",
+          Json.obj(
+            "termsId" -> Json.fromString(terms),
+            "locale"  -> Json.fromString(translation.locale)),
+          occurredAt)
+      case TermsEvent.TranslationRemoved(terms, locale, occurredAt) =>
+        (
+          "terms.translation_removed",
+          Json.obj("termsId" -> Json.fromString(terms), "locale" -> Json.fromString(locale)),
+          occurredAt)
 
   /** A location's events, its access points' tokens left out: whether one is set is all the log
     * says of them.
