@@ -231,6 +231,16 @@ object EventLogHandler:
               "deviceId" -> Json.fromString(deviceId.asString),
               "location" -> location.asJson),
             occurredAt))
+      // Which settings the location sets from then on; the values are on its row.
+      case Event.Recovery(RecoveryEvent.PolicyChanged(location, policy, occurredAt)) =>
+        Some(
+          (
+            "recovery.policy_changed",
+            Json.obj(
+              "locationId" -> Json.fromString(location.asString),
+              "set"        ->
+                Json.fromValues(policy.set.map(setting => Json.fromString(setting.toString)))),
+            occurredAt))
       case Event.Location(e) =>
         Some(extractLocationEvent(e))
       case Event.Operation(e) =>

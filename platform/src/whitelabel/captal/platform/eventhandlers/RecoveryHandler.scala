@@ -6,12 +6,12 @@ import whitelabel.captal.core.recovery.{Event as RecoveryEvent, Verdict}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.{ErrorRow, Errors, VideoFiles}
+import whitelabel.captal.platform.{ErrorRow, Errors, LocationRecovery, VideoFiles}
 import zio.*
 
 /** A client error as the page reported it, a redirect that lacked the fingerprint its location
-  * requires, and where each way out stands. Other server errors are recorded where the API catches
-  * them, outside any event.
+  * requires, and where each way out stands; and a location's recovery settings, as an operator
+  * changed them. Other server errors are recorded where the API catches them, outside any event.
   */
 object RecoveryHandler:
   def apply(): DbEventHandler[Event] =
@@ -83,6 +83,10 @@ object RecoveryHandler:
               query[ErrorRow]
                 .filter(_.id == lift(errorId.asString))
                 .update(_.redeemedAt -> lift(Option(VideoFiles.stamp(occurredAt))))).unit
+          case Event.Recovery(RecoveryEvent.PolicyChanged(location, policy, occurredAt)) =>
+            LocationRecovery
+              .save(quill, LocationRecovery.rowOf(location.asString, policy, occurredAt.toString))
+              .unit
           case _ =>
             ZIO.unit
       end handle
