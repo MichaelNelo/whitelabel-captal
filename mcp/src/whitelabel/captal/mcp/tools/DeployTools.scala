@@ -14,7 +14,7 @@ import whitelabel.captal.mcp.apps.{RunRoutes, RunTicket, RunUi}
 import whitelabel.captal.mcp.aws.InfraStore
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
 import whitelabel.captal.platform.aws.AssetStore
-import whitelabel.captal.platform.locks.DistributedLock
+import whitelabel.captal.platform.locks.{Acquired, DistributedLock}
 import whitelabel.captal.platform.operations.{OperationLock, RunRecords, TransitionTaken}
 import whitelabel.captal.platform.queries.{AssetsOf, RunStatus}
 import whitelabel.captal.platform.repositories.LocationRepositoryQuill
@@ -156,15 +156,15 @@ object DeployTools:
       taken  <- ZIO.foreach(location)(locks.acquire(_, cmd.newRun.asString, OperationLock.Ttl))
       holder <-
         taken match
-          case None | Some(Right(_)) =>
+          case None | Some(Acquired.Held(_)) =>
             ZIO.none
-          case Some(Left(Some(other))) =>
+          case Some(Acquired.HeldBy(other)) =>
             ZIO.some(RunId(other))
-          case Some(Left(None)) =>
+          case Some(Acquired.Unanswered) =>
             ZIO.fail(
               s"Could not take the lock of '${cmd
                   .slug
-                  .asString}': not enough of the lock's instances answered. Nothing was started; try again in a moment.")
+                  .asString}': not enough of the lock's instances answered in time. Nothing was started; try again in a moment.")
     yield (
       holder,
       ZIO.foreachDiscard(location.filter(_ => holder.isEmpty))(

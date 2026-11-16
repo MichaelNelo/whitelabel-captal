@@ -26,9 +26,12 @@ import zio.interop.catz.*
   * through [[OperationFlows.complete]] as the operator who started it.
   *
   * The lock is the run's from the call that started it ([[OperationLock]]). Once it cannot be
-  * extended — it expired while this process could not reach Redis, and another operation may have
-  * taken it — no further step runs: the run fails at the next one rather than act on AWS for a
-  * location it no longer holds.
+  * extended, or its time ran out before an extension answered — it expired while this process could
+  * not reach Redis or was frozen, and another operation may have taken it — no further step runs:
+  * the run fails at the next one rather than act on AWS for a location it no longer holds.
+  *
+  * A step and its record are never cut part way ([[Execution.run]]): the server stopping waits for
+  * the step going to end and be recorded, for as long as ECS gives it before it kills the process.
   *
   * A run interrupted by a restart is not taken up again on startup: its lock expires, and the next
   * operation asked of the location offers to finish it.
@@ -71,22 +74,31 @@ object OperationRunner:
           .repeat(Schedule.spaced(Duration.fromJava(Run.HeartbeatEvery)))
         val resource = OperationLock.resource(run.location)
         for
-          held <- Ref.make(true)
-          // Lost once is lost: a lock that expired may already be another run's.
-          extending = locks
-            .extend(resource, run.id.asString, OperationLock.Ttl)
-            .tap(extended =>
-              ZIO.unless(extended)(
-                held.set(false) *>
-                  ZIO.logWarning(s"Run ${run.id.asString} lost the lock of ${run.slug.asString}")))
-            .repeat(
-              Schedule.spaced(OperationLock.ExtendEvery) && Schedule.recurWhile[Boolean](identity))
+          // Until when the lock is sure to be this run's, on this process's monotonic clock; none
+          // once it is lost. Lost once is lost: a lock that expired may already be another run's.
+          until <- Ref.make(Option.empty[Long])
+          renew =
+            for
+              extended <- locks.extend(resource, run.id.asString, OperationLock.Ttl)
+              now      <- Clock.nanoTime
+              _        <- until.set(extended.map(now + _.toNanos))
+              _        <-
+                ZIO.when(extended.isEmpty)(
+                  ZIO.logWarning(s"Run ${run.id.asString} lost the lock of ${run.slug.asString}"))
+            yield extended.isDefined
+          // Once before the first step, so that a lock already gone stops the run there.
+          _ <- renew
+          extending = renew.delay(OperationLock.ExtendEvery).repeatWhile(identity)
+          // Checked against the clock, not only against the last extension's answer: a process that
+          // froze past the lock's time runs no step on waking before an extension says so.
           guarded =
             new OperationSteps[Task]:
-              def run(slug: Slug, step: Step): Task[Either[StepFailure, Option[String]]] = held
-                .get
-                .flatMap:
-                  if _ then
+              def run(slug: Slug, step: Step): Task[Either[StepFailure, Option[String]]] = Clock
+                .nanoTime
+                .zip(until.get)
+                .flatMap: (now, held) =>
+                  // `nanoTime`'s values compare by their difference, which wraps as they do.
+                  if held.exists(now - _ < 0) then
                     steps.run(slug, step)
                   else
                     ZIO.succeed(
@@ -95,8 +107,7 @@ object OperationRunner:
                           "The location's lock was lost while this ran, so it stopped here: another operation may have taken over the location.")))
           outcome <- ZIO
             .scoped(
-              heartbeat.forkScoped *> extending.forkScoped *>
-                Execution.run[Task](run, guarded, progress))
+              heartbeat.forkScoped *> extending.forkScoped *> Execution.run(run, guarded, progress))
             // Something the port did not answer for — the database, a defect — ends the run as
             // failed at the step it had reached rather than leaving it going for ever; past its
             // last step, every step was done.
