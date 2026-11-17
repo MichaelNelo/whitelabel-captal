@@ -1,7 +1,7 @@
 ---
 name: add-migration
 description: Use when adding a new Flyway migration to evolve the rqlite schema. Triggers on "add migration", "new migration", "alter table", "schema change", "migración db", "nueva columna".
-version: 1.1.0
+version: 1.2.0
 ---
 
 # Add a Flyway migration
@@ -52,14 +52,17 @@ If you added a column, update the `*Row` case class in `platform/src/whitelabel/
 
 ### 5. Update writers / queries
 
-There is no `EntityWriter` or `ProvisionService` — content is written directly by the MCP
-backoffice's tools, each with its own Quill `insert`/`update` statement:
+There is no `EntityWriter` or `ProvisionService` — content is written by the event handlers of
+`core`'s commands, which the MCP backoffice's tools run; no tool writes a table:
 
-- **The MCP tool that owns this table**: if an operator needs to write the new column, add it to
-  the relevant `insertValue`/`update` call in `mcp/src/whitelabel/captal/mcp/tools/<Group>Tools.scala`
-  (e.g. `VideoTools` for `advertiser_videos`, `LocationTools` for `locations`), guarded by
-  `Writes.expectOne`/`expectAtLeastOne` like every other write in that module — see
-  `docs/database.adoc`'s write-verification rule.
+- **The persistence handler that owns this table**: if an operator needs to write the new column,
+  carry it in the command and its event (`/add-command`), and write it in the handler's
+  `insertValue`/`update` in `platform/src/whitelabel/captal/platform/eventhandlers/` (e.g.
+  `VideoPersistenceHandler` for `advertiser_videos`, `LocationPersistenceHandler` for `locations`).
+  It runs inside the transaction, so it checks no row count — see `docs/database.adoc`'s
+  write-verification rule.
+- **Queries**: if the backoffice reads it, surface it in the query's output in `core` and its
+  implementation in `platform/src/whitelabel/captal/platform/queries/`.
 - **Repositories**: if the column is read on the guest-facing hot path, surface it in the relevant
   `platform/repositories/*RepositoryQuill.scala` query.
 

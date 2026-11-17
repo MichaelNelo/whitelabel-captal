@@ -1,7 +1,7 @@
 ---
 name: bump-rqlite-image
 description: Use when changing the rqlite image — its Dockerfile, its entrypoint, or the engine version. Covers the three versions that move together, the tag the tfvars owns, and the build tasks. Triggers on "rqlite image", "rqlite entrypoint", "bump rqlite", "rqlite version", "subir rqlite".
-version: 1.0.0
+version: 1.0.1
 ---
 
 # Change the rqlite image
@@ -24,8 +24,8 @@ docker/rqlite-entrypoint.sh    IP discovery, state migration, auto-backup/restor
 
 Moving one means moving the others. The driver tracks the server: since rqlite v10.6.0 a failed
 statement carries a structured error code, and only driver 10.5.2.1 can read it. On an older driver a
-statement the database refuses raises **nothing** — which is the whole reason every write goes
-through `Writes.expectOne`.
+statement the database refuses raises **nothing** — which is the whole reason every write outside a
+transaction checks its row count (`Writes.expectOne`, see `docs/database.adoc`).
 
 These drifted once already: the suite ran 8.36.2 while the Dockerfile said `:latest` and had reached
 10.6.1 — two major versions apart, with the tests on the side nothing deployed.

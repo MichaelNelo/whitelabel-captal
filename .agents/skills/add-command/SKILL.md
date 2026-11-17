@@ -1,7 +1,7 @@
 ---
 name: add-command
-description: Use when adding a new command + handler in the application layer (core/application/commands/). Covers the Handler trait, Op monad, event emission, error handling, and wiring as a Flow in api/Flows.scala and api/AppLayers.scala. Triggers on "add command", "new command handler", "command pattern", "nuevo command", "agregar handler".
-version: 1.1.0
+description: Use when adding a new command + handler in the application layer (core/application/commands/), or a query (core/application/queries/). Covers the Handler trait, Op monad, event emission, error handling, wiring as a Flow in api/Flows.scala and api/AppLayers.scala, and how a command or query the backoffice runs is wired in mcp instead. Triggers on "add command", "new command handler", "command pattern", "add query", "nuevo command", "agregar handler".
+version: 1.2.0
 ---
 
 # Add a command + handler
@@ -140,6 +140,34 @@ Two layers:
 
 - **Pure**: `core/test/.../<Name>HandlerSpec.scala` using `cats.Id` as the effect monad. Build mock repos that return `Id[Option[User]]` etc., call `handler.handle(cmd)`, assert on `Op.run` output (events + value, or errors).
 - **E2E**: `api/test/.../suites/<Name>Suite.scala` hits the endpoint via `TestHelpers.testBackend` and asserts on DB state after.
+
+## A command the backoffice runs
+
+The steps above wire a guest's command into the API. One the backoffice runs — a location's, an
+advertiser's, a video's — differs in four places:
+
+- **No session.** It takes no `SessionContext`. Who runs it is published around the flow in the
+  `OperatorContext`, which `EventLogHandler.forOperator` reads to log each event under the operator
+  token. Its ids and its instant come in the command, made by the tool.
+- **Its flow is in `mcp`**, composed once in one of `LocationFlows`, `ContentFlows`, `AssetFlows`,
+  `VideoFlows` or `OperationFlows`: the handler with
+  `TransactionalEventHandler(<persistence>.andThen(EventLogHandler.forOperator(operators)), quill)`,
+  then any post-commit handler. Add its type alias, its constructor, its layer and its line in
+  `environment` there, and the layer to `mcp`'s `Main`.
+- **A tool runs it**, through `Adapters.runs` (skill `add-mcp-tool`).
+- **Its errors are described in `mcp`'s `Refusals`**, not in the tool. A new domain gets a case in
+  `application.Error` and `application.Event`, and one in `ApiError.fromAppError`, which maps it to
+  an internal error: no guest route runs it.
+
+A command that creates something answers what it made — its id, the ids of its parts — since the
+tool's answer receives only its input and the result. One that finds nothing to do is no refusal:
+it emits no event and says so in its result (`CollectReplacedFilesCommand` answers how many files it
+deleted, `ExpirePlaybackCommand` whether it closed the playback).
+
+A query the backoffice reads has its input and its output in `core/application/queries/`, kept
+anemic — plain data, no methods; a rule the output needs is a pure function in `core`. Its
+implementation is in `platform/queries/`, an object whose `apply` (or a named factory) answers the
+`Query.Aux`, and it is built once in `mcp`'s `Queries`.
 
 ## Patterns to follow
 

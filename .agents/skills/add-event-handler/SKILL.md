@@ -1,7 +1,7 @@
 ---
 name: add-event-handler
 description: Use when adding a new domain event + handler in the event-sourcing pipeline (DB persistence, session updates, side effects). Triggers on "add event", "new event handler", "domain event", "event sourcing", "agregar evento".
-version: 1.1.0
+version: 1.2.0
 ---
 
 # Add a domain event + handler
@@ -104,6 +104,17 @@ Order matters: the chain runs sequentially; if your handler depends on rows anot
 
 **Also** add the same `.andThen` in `api/test/src/whitelabel/captal/api/TestLayers.scala` `eventHandlerLayer` — otherwise tests don't exercise your handler.
 
+**A command the backoffice runs** has its chain in `mcp`, in the flow object that composes it
+(`ContentFlows`, `VideoFlows`, …), not in `Flows.eventHandlerLayer`: the persistence handler, then
+`EventLogHandler.forOperator(operators)`, in one `TransactionalEventHandler`, then any post-commit
+handler. `VideoFlows.registerVideo` chains two persistence handlers, the video's before the
+survey's, since the survey's row points at the video's.
+
+Every event goes to `event_log` through `EventLogHandler`, whose match on a domain's events is
+exhaustive: a new event is a compile warning until it has an entry there, or is left out on purpose
+with a comment saying where its record is instead (as the playbacks are, recorded in
+`video_playbacks`).
+
 ### 5. Update SessionContext if needed
 
 If your handler needs to read or mutate the current session (e.g., set `userId` after `UserCreated`), update `SessionContext` accordingly and call `ctx.set(updatedSession)` at the end of `handle`. Pattern in `UserPersistenceHandler`'s own `ctx.set(sessionData.copy(userId = Some(resolvedUserId)))` call.
@@ -121,6 +132,7 @@ Two layers of test:
 - **Reading from DB inside handler**: prefer reading from `SessionContext` if the value was already loaded. Each query inside the transaction adds rqlite roundtrip cost.
 - **Order dependencies**: if handler A needs a row B created, register B's handler first. The chain runs left-to-right.
 - **Non-idempotent updates**: a row update that depends on previous state must be guarded against re-application (events can be replayed in theory). For now we don't replay, but write idempotent SQL where natural.
+- **No row count inside the transaction**: the rqlite driver defers every write to the commit and reports none of them affecting a row (`docs/database.adoc`). A transactional handler that checks `affected == 1` fails every time. What a count would catch is checked by the command, reading before it decides. A post-commit side effect that must happen only if a conditional write did reads the row back after the commit (`ReplacedFileDeletionHandler`).
 
 ## Anti-patterns
 
