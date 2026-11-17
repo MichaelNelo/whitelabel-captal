@@ -16,7 +16,6 @@ import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
 import whitelabel.captal.platform.aws.AssetStore
 import whitelabel.captal.platform.locks.LockUnavailable
 import whitelabel.captal.platform.operations.{RunRecords, TransitionTaken}
-import whitelabel.captal.platform.queries.{AssetsOf, RunStatus}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.{Operator, OperatorContext}
 import zio.*
@@ -38,7 +37,9 @@ import ToolSchema.{readOnly, withUi}
   */
 object DeployTools:
   /** What the operation tools need from the runtime. */
-  type Env = QuillSqlite & AssetStore & OperatorContext & OperationFlows.Start & Queries.RunStatus
+  type Env =
+    QuillSqlite & AssetStore & OperatorContext & OperationFlows.Start & Queries.RunStatus &
+      Queries.AssetsOf
 
   final case class DeployRequest(
       @description(
@@ -233,12 +234,10 @@ object DeployTools:
       run: RunId,
       caller: String,
       uiOrigin: String,
-      alreadyGoing: Boolean): ZIO[QuillSqlite, String, RunView] =
+      alreadyGoing: Boolean): ZIO[QuillSqlite & Queries.RunStatus, String, RunView] =
     for
       found <-
-        ZIO
-          .serviceWithZIO[QuillSqlite](RunStatus(_).execute(RunStatusQuery.ById(run.asString)))
-          .orDie
+        ZIO.serviceWithZIO[Queries.RunStatus](_.execute(RunStatusQuery.ById(run.asString))).orDie
       report <- ZIO.fromEither(found).mapError(_ => s"Run ${run.asString} is not recorded.")
       token  <- Tokens
         .byIdentifier(caller)
@@ -355,7 +354,7 @@ object DeployTools:
               s"Refused: `confirm` has to be '${in.slug}' exactly, and it was '${in
                   .confirm}'. This removes the service, the rule, the target group and every task definition revision for the location.")
         found <- ZIO
-          .serviceWithZIO[AssetStore](AssetsOf(_).execute(AssetsOfQuery(in.slug)))
+          .serviceWithZIO[Queries.AssetsOf](_.execute(AssetsOfQuery(in.slug)))
           .mapError(e => s"Could not count the location's S3 objects: ${e.getMessage}")
         assets <- ZIO.fromEither(found).mapError(Refusals.describe)
         wanted <-

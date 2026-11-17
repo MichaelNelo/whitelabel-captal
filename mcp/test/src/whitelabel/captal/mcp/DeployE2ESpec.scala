@@ -395,7 +395,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
             VideoFlows.environment(env.get[QuillSqlite], operators, env.get[AssetStore]) ++ queries)
       _ <- TestClient.addRoutes(routes)
       // The run page's stream, which lives beside the protocol rather than inside it.
-      _        <- TestClient.addRoutes(RunRoutes.routes.provideEnvironment(env))
+      _        <- TestClient.addRoutes(RunRoutes.routes.provideEnvironment(env ++ queries))
       declared <- ZIO
         .fromEither(McpClientExtensions(McpApps.clientExtension(McpAppsClientSettings.Html)))
         .mapError(error => new IllegalStateException(s"Client extensions: $error"))

@@ -2,10 +2,9 @@ package whitelabel.captal.mcp.apps
 
 import whitelabel.captal.core.application.queries.RunStatusQuery
 import whitelabel.captal.mcp.access.Tokens
-import whitelabel.captal.mcp.tools.DeployTools
 import whitelabel.captal.mcp.tools.DeployTools.given
+import whitelabel.captal.mcp.tools.{DeployTools, Queries}
 import whitelabel.captal.platform.operations.RunRecords
-import whitelabel.captal.platform.queries.RunStatus
 import whitelabel.captal.platform.schema.QuillSqlite
 import zio.*
 import zio.http.*
@@ -54,10 +53,10 @@ object RunRoutes:
             case _ =>
               ZIO.fail(UiTicket.Rejected.UnknownToken)
 
-  private def events(runId: String): ZStream[QuillSqlite, Nothing, String] = ZStream
+  private def events(runId: String): ZStream[Queries.RunStatus, Nothing, String] = ZStream
     .repeatZIOWithSchedule(
       ZIO
-        .serviceWithZIO[QuillSqlite](RunStatus(_).execute(RunStatusQuery.ById(runId)))
+        .serviceWithZIO[Queries.RunStatus](_.execute(RunStatusQuery.ById(runId)))
         .orDie
         .map(_.toOption.map(DeployTools.viewOf(_, alreadyGoing = false))),
       Schedule.spaced(PollEvery)
@@ -67,8 +66,8 @@ object RunRoutes:
     .takeUntil(_.status != RunRecords.Running)
     .map(view => s"data: ${encoder.encodeJson(view, None)}\n\n")
 
-  private def stream(runId: String): ZIO[QuillSqlite, Nothing, Response] = ZIO
-    .environment[QuillSqlite]
+  private def stream(runId: String): ZIO[Queries.RunStatus, Nothing, Response] = ZIO
+    .environment[Queries.RunStatus]
     .map: env =>
       Response(
         status = Status.Ok,
@@ -81,7 +80,7 @@ object RunRoutes:
         body = Body.fromCharSequenceStreamChunked(events(runId).provideEnvironment(env))
       )
 
-  def routes: Routes[QuillSqlite, Response] = Routes(
+  def routes: Routes[QuillSqlite & Queries.RunStatus, Response] = Routes(
     Method.POST / "ui" / "runs" / "events" ->
       handler: (request: Request) =>
         request
@@ -97,7 +96,7 @@ object RunRoutes:
                   _ => ZIO.succeed(text(Status.Forbidden, "Este ticket no es válido.")),
                   runId =>
                     ZIO
-                      .serviceWithZIO[QuillSqlite](RunStatus(_).execute(RunStatusQuery.ById(runId)))
+                      .serviceWithZIO[Queries.RunStatus](_.execute(RunStatusQuery.ById(runId)))
                       .orDie
                       .flatMap:
                         case Left(_) =>

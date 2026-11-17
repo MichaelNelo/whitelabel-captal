@@ -138,7 +138,8 @@ object UnifiTools:
     *   [[EntityResources]]; the host reads it from the resource and ignores anything the tool says
     *   about it.
     */
-  def configure(origin: String): McpToolHandlerR[QuillSqlite] = McpTool("configure_unifi")
+  def configure(origin: String): McpToolHandlerR[QuillSqlite & Queries.AccessPointsOf] = McpTool(
+    "configure_unifi")
     .description(
       "Open the form that registers one of a location's access points with the UniFi controller that grants access through it — host, port, site id and API token — and the access duration and redirect URL of the guests who join through it, or changes one. Takes no token on purpose: it must not travel through the conversation, so the operator types it into the page and the browser sends it straight to the server. A guest is admitted only through one of the location's access points, so a location without any turns every guest away. An access point already in another deployed location is refused: pause that one first.")
     .requireScopes(Auth.ContentWrite)

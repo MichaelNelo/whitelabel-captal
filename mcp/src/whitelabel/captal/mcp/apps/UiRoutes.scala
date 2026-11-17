@@ -7,9 +7,8 @@ import whitelabel.captal.core.application.queries.AccessPointsOfQuery
 import whitelabel.captal.core.device.Mac
 import whitelabel.captal.core.location.{Secret, SettingsChange}
 import whitelabel.captal.mcp.access.Tokens
-import whitelabel.captal.mcp.tools.{Commands, LocationFlows, Refusals}
+import whitelabel.captal.mcp.tools.{Commands, LocationFlows, Queries, Refusals}
 import whitelabel.captal.platform.aws.AssetStore
-import whitelabel.captal.platform.queries.Locations
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.{Operator, OperatorContext}
 import zio.*
@@ -86,11 +85,11 @@ object UiRoutes:
   /** Shared with `configure_unifi`, so the page is filled from the same read the tool reports:
     * `AccessPointsOf`.
     */
-  private[mcp] def currentFor(slug: String): ZIO[QuillSqlite, String, UnifiSettings] =
+  private[mcp] def currentFor(slug: String): ZIO[Queries.AccessPointsOf, String, UnifiSettings] =
     for
       parsed <- Refusals.slugOf(slug)
-      quill  <- ZIO.service[QuillSqlite]
-      report <- Commands.ask(Locations.accessPoints(quill), AccessPointsOfQuery(parsed))()
+      report <- ZIO.serviceWithZIO[Queries.AccessPointsOf](
+        Commands.ask(_, AccessPointsOfQuery(parsed))())
     yield UnifiSettings(
       slug = report.slug,
       name = report.name,
