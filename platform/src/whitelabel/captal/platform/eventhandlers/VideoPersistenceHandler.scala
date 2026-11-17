@@ -146,6 +146,10 @@ object VideoPersistenceHandler:
             status(video, VideoStatus.Retired, occurredAt.toString)
           case Event.VideoAuthoring(VideoEvent.VideoReinstated(video, occurredAt)) =>
             status(video, VideoStatus.Active, occurredAt.toString)
+          // Marked only while it is still not current and nobody plays it, in one statement: its
+          // object goes after the commit, if it was ([[ReplacedFileDeletionHandler]]).
+          case Event.VideoAuthoring(VideoEvent.FileDeleted(_, file, _, occurredAt)) =>
+            VideoFiles.condemn(quill, file.asString, occurredAt).unit
           case _ =>
             ZIO.unit
       end handle

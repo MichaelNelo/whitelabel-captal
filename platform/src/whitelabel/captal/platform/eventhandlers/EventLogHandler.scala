@@ -349,6 +349,8 @@ object EventLogHandler:
         ("video.retired", video(id), occurredAt)
       case VideoAuthoringEvent.VideoReinstated(id, occurredAt) =>
         ("video.reinstated", video(id), occurredAt)
+      case VideoAuthoringEvent.FileDeleted(id, fileId, _, occurredAt) =>
+        ("video.file_deleted", file(id, fileId), occurredAt)
     end match
   end extractVideoAuthoringEvent
 
@@ -770,7 +772,8 @@ object EventLogHandler:
               "occurredAt"      -> Json.fromString(occurredAt.toString)
             ),
             occurredAt))
-      // `video_playbacks` is their record; see `PlaybackHandler`.
-      case _: VideoEvent.PlaybackStarted | _: VideoEvent.PlaybackEnded =>
+      // `video_playbacks` is their record; see `PlaybackHandler` and `PlaybackExpiryHandler`.
+      case _: VideoEvent.PlaybackStarted | _: VideoEvent.PlaybackEnded |
+          _: VideoEvent.PlaybackExpired =>
         None
 end EventLogHandler

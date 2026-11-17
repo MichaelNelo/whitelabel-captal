@@ -3,6 +3,7 @@ package whitelabel.captal.platform.repositories
 import io.getquill.*
 import whitelabel.captal.core.infrastructure.{
   CurrentFile,
+  StoredFile,
   VideoAuthoringRepository,
   VideoInfo,
   WaitingFile
@@ -14,7 +15,13 @@ import whitelabel.captal.platform.aws.AssetStore
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.{AdvertiserVideoRow, LocationRow, VideoFileRow, VideoStatus}
+import whitelabel.captal.platform.{
+  AdvertiserVideoRow,
+  LocationRow,
+  VideoFileRow,
+  VideoPlaybackRow,
+  VideoStatus
+}
 import zio.*
 
 /** The videos as their authoring reads them: the file each plays — the newest confirmed — and the
@@ -58,6 +65,29 @@ object VideoAuthoringRepositoryQuill:
       def activeAt(location: Option[LocationId]): Task[List[Id]] = run(
         query[AdvertiserVideoRow].filter(_.status == lift(VideoStatus.Active))).map(
         _.filter(_.locationId == location.map(_.asString)).map(_.id))
+
+      def files(video: Option[Id]): Task[List[StoredFile]] =
+        for
+          stored <- run(
+            query[VideoFileRow].filter(f => f.deletedAt.isEmpty && f.confirmedAt.isDefined))
+          open <- run(query[VideoPlaybackRow].filter(_.endedAt.isEmpty).map(_.fileId))
+        yield
+          val watching = open.groupMapReduce(identity)(_ => 1)(_ + _)
+          stored
+            .filter(file => video.forall(_ == file.videoId))
+            .groupBy(_.videoId)
+            .values
+            .toList
+            .flatMap: versions =>
+              val current = versions.maxBy(_.confirmedAt)
+              versions.map(file =>
+                StoredFile(
+                  file.videoId,
+                  FileId(file.id),
+                  file.url,
+                  store.keyOf(file.url),
+                  file.id == current.id,
+                  watching.getOrElse(file.id, 0)))
     end new
   end apply
 end VideoAuthoringRepositoryQuill

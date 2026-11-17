@@ -8,6 +8,7 @@ import whitelabel.captal.core.application.queries.{
   PendingUploadsQuery,
   Query,
   UploadUrlQuery,
+  VideoOfQuery,
   VideoReport,
   VideosOfQuery,
   WaitingUpload
@@ -85,6 +86,20 @@ object Videos:
               .sortBy(v => (rank(v.status), -v.priority, v.title.getOrElse(v.id))))
         end for
       end execute
+
+  /** As [[of]] reports it, read with the rest: a page that opens on one video is no listing to
+    * optimise.
+    */
+  def one(quill: QuillSqlite): Query.Aux[Task, VideoOfQuery, VideoReport] =
+    new Query[Task, VideoOfQuery]:
+      type Result = VideoReport
+
+      def execute(q: VideoOfQuery): Task[Either[Error, VideoReport]] = of(quill)
+        .execute(VideosOfQuery(None, includeRetired = true))
+        .map(
+          _.flatMap(
+            _.find(_.id == q.video.trim)
+              .toRight(Error.VideoAuthoring(NonEmptyChain.one(VideoError.VideoNotFound(q.video))))))
 
   def pending(quill: QuillSqlite): Query.Aux[Task, PendingUploadsQuery, List[PendingUploadReport]] =
     new Query[Task, PendingUploadsQuery]:
