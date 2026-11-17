@@ -1,13 +1,10 @@
 package whitelabel.captal.mcp.apps
 
 import com.jamesward.ziohttp.mcp.*
-import io.getquill.*
+import whitelabel.captal.core.application.queries.VideoOfQuery
 import whitelabel.captal.mcp.protocol.ToolSchema
+import whitelabel.captal.mcp.tools.{Commands, Queries}
 import whitelabel.captal.platform.aws.AssetStore
-import whitelabel.captal.platform.schema.QuillSqlite
-import whitelabel.captal.platform.schema.core.given
-import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.{AdvertiserVideoRow, LocalizedTextRow, LocationRow}
 import zio.*
 
 /** Serves the upload page, one URI per video.
@@ -29,7 +26,7 @@ import zio.*
   *   `listResources` runs with no environment to ask.
   */
 final class UploadUiSource(uploadOrigin: String, scriptOrigin: String)
-    extends McpResourceSource[QuillSqlite & AssetStore]:
+    extends McpResourceSource[AssetStore & Queries.VideoOf]:
   private val Prefix = s"${UploadUi.Uri}/"
 
   /** What the page may reach, declared on the page rather than on the tool that opens it.
@@ -68,12 +65,6 @@ final class UploadUiSource(uploadOrigin: String, scriptOrigin: String)
   def pageDefinition(videoId: String, name: String, description: String): ResourceDefinition =
     McpApps.resource(ToolSchema.uiUri(s"$Prefix$videoId"), name, appMeta, Some(description))
 
-  private inline def videoByIdQuery = quote: (idParam: String) =>
-    query[AdvertiserVideoRow].filter(v => sql"${v.id}".as[String] == idParam)
-
-  private inline def locationByIdQuery = quote: (idParam: String) =>
-    query[LocationRow].filter(_.id == idParam).take(1)
-
   /** The bare page, listed because it is what `_meta.ui.resourceUri` names. */
   val bareDefinition: ResourceDefinition = McpApps.resource(
     UploadUi.AppUri,
@@ -92,7 +83,7 @@ final class UploadUiSource(uploadOrigin: String, scriptOrigin: String)
 
   override def readResource(
       uri: String,
-      ctx: McpToolContext): ZIO[QuillSqlite & AssetStore, ToolError, Chunk[ResourceContents]] =
+      ctx: McpToolContext): ZIO[AssetStore & Queries.VideoOf, ToolError, Chunk[ResourceContents]] =
     if uri == UploadUi.Uri then
       ZIO.serviceWithZIO[AssetStore](store =>
         store
@@ -110,32 +101,20 @@ final class UploadUiSource(uploadOrigin: String, scriptOrigin: String)
     */
   private def pageFor(
       uri: String,
-      videoId: String): ZIO[QuillSqlite & AssetStore, String, Chunk[ResourceContents]] = ZIO
-    .serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      for
-        videos    <- run(videoByIdQuery(lift(videoId))).orDie
-        video     <- ZIO.succeed(videos.headOption).someOrFail(s"No video with id '$videoId'.")
-        locations <- run(query[LocationRow]).orDie
-        titles    <- run(query[LocalizedTextRow].filter(_.entityId == lift(videoId))).orDie
-        pending = UploadUi.PendingVideo(
-          videoId = videoId,
-          title = titles.map(_.value).minOption.getOrElse(videoId),
-          slug = video
-            .locationId
-            .flatMap(id => locations.find(_.id == id))
-            .map(_.slug)
-            .getOrElse("—")
-        )
-        store    <- ZIO.service[AssetStore]
-        preloads <- store.scriptPreloads(UploadUi.EntryScript)
-      yield page(uri, UploadUi.app(store.scriptUrl, Some(pending), store.scriptOrigin, preloads))
-      end for
+      videoId: String): ZIO[AssetStore & Queries.VideoOf, String, Chunk[ResourceContents]] =
+    for
+      video <- ZIO.serviceWithZIO[Queries.VideoOf](Commands.ask(_, VideoOfQuery(videoId))())
+      pending = UploadUi.PendingVideo(
+        videoId = video.id,
+        title = video.title.getOrElse(video.id),
+        slug = video.slug.getOrElse("—"))
+      store    <- ZIO.service[AssetStore]
+      preloads <- store.scriptPreloads(UploadUi.EntryScript)
+    yield page(uri, UploadUi.app(store.scriptUrl, Some(pending), store.scriptOrigin, preloads))
 
-  override def readDirectory(
-      uri: String,
-      ctx: McpToolContext): ZIO[QuillSqlite & AssetStore, ToolError, Chunk[ResourceDefinition]] =
-    ZIO.succeed(Chunk.empty)
+  override def readDirectory(uri: String, ctx: McpToolContext)
+      : ZIO[AssetStore & Queries.VideoOf, ToolError, Chunk[ResourceDefinition]] = ZIO.succeed(
+    Chunk.empty)
 
   override def complete(
       ref: CompletionRef,

@@ -2,8 +2,12 @@ package whitelabel.captal.mcp.tools
 
 import whitelabel.captal.core.application.commands.{
   AwaitedFile,
+  CollectReplacedFilesCommand,
+  CollectReplacedFilesHandler,
   ConfirmVideoFileCommand,
   ConfirmVideoFileHandler,
+  ExpirePlaybackCommand,
+  ExpirePlaybackHandler,
   FileConfirmation,
   Handler,
   RegisterVideoCommand,
@@ -26,6 +30,8 @@ import whitelabel.captal.platform.OperatorContext
 import whitelabel.captal.platform.aws.AssetStore
 import whitelabel.captal.platform.eventhandlers.{
   EventLogHandler,
+  PlaybackExpiryHandler,
+  ReplacedFileDeletionHandler,
   SurveyAuthoringPersistenceHandler,
   TransactionalEventHandler,
   VideoPersistenceHandler
@@ -33,6 +39,7 @@ import whitelabel.captal.platform.eventhandlers.{
 import whitelabel.captal.platform.repositories.{
   AdvertiserRepositoryQuill,
   LocationRepositoryQuill,
+  PlaybackRepositoryQuill,
   VideoAuthoringRepositoryQuill
 }
 import whitelabel.captal.platform.schema.QuillSqlite
@@ -50,9 +57,16 @@ object VideoFlows:
   type UpdateVideo = Flow.Aux[Task, UpdateVideoCommand, VideoCorrection]
   type RetireVideo = Flow.Aux[Task, RetireVideoCommand, VideosInRotation]
   type ReinstateVideo = Flow.Aux[Task, ReinstateVideoCommand, VideosInRotation]
+  type CollectReplacedFiles = Flow.Aux[Task, CollectReplacedFilesCommand, Int]
+  type ExpirePlayback = Flow.Aux[Task, ExpirePlaybackCommand, Boolean]
+
+  /** The background jobs': the files nobody plays any more, and the playbacks their pages never
+    * ended.
+    */
+  type Upkeep = CollectReplacedFiles & ExpirePlayback
   type All =
     RegisterVideo & ConfirmVideoFile & StartFileReplacement & UpdateVideo & RetireVideo &
-      ReinstateVideo
+      ReinstateVideo & Upkeep
 
   private def written(quill: QuillSqlite, operators: OperatorContext, store: AssetStore) =
     TransactionalEventHandler(
@@ -97,6 +111,26 @@ object VideoFlows:
       store: AssetStore): ReinstateVideo =
     videoFlow(quill, operators, store)(ReinstateVideoHandler[Task](_))
 
+  /** A pass deleting the files nobody plays: marked deleted in the transaction, their objects gone
+    * after the commit.
+    */
+  def collectReplacedFiles(
+      quill: QuillSqlite,
+      operators: OperatorContext,
+      store: AssetStore): CollectReplacedFiles = Flow(
+    CollectReplacedFilesHandler[Task](VideoAuthoringRepositoryQuill(quill, store)),
+    TransactionalEventHandler(
+      VideoPersistenceHandler(store).andThen(EventLogHandler.forOperator(operators)),
+      quill).andThen(ReplacedFileDeletionHandler(quill, store))
+  )
+
+  def expirePlayback(quill: QuillSqlite, operators: OperatorContext): ExpirePlayback = Flow(
+    ExpirePlaybackHandler[Task](PlaybackRepositoryQuill(quill)),
+    TransactionalEventHandler(
+      PlaybackExpiryHandler().andThen(EventLogHandler.forOperator(operators)),
+      quill)
+  )
+
   private type Needs = QuillSqlite & OperatorContext & AssetStore
 
   val registerVideoLayer: ZLayer[Needs, Nothing, RegisterVideo] = ZLayer.fromFunction(registerVideo)
@@ -114,6 +148,12 @@ object VideoFlows:
   val reinstateVideoLayer: ZLayer[Needs, Nothing, ReinstateVideo] = ZLayer.fromFunction(
     reinstateVideo)
 
+  val collectReplacedFilesLayer: ZLayer[Needs, Nothing, CollectReplacedFiles] = ZLayer.fromFunction(
+    collectReplacedFiles)
+
+  val expirePlaybackLayer: ZLayer[QuillSqlite & OperatorContext, Nothing, ExpirePlayback] = ZLayer
+    .fromFunction(expirePlayback)
+
   /** Every one, for a caller that builds its environment by hand. */
   def environment(
       quill: QuillSqlite,
@@ -126,4 +166,6 @@ object VideoFlows:
     .add[UpdateVideo](updateVideo(quill, operators, store))
     .add[RetireVideo](retireVideo(quill, operators, store))
     .add[ReinstateVideo](reinstateVideo(quill, operators, store))
+    .add[CollectReplacedFiles](collectReplacedFiles(quill, operators, store))
+    .add[ExpirePlayback](expirePlayback(quill, operators))
 end VideoFlows

@@ -10,8 +10,6 @@ import whitelabel.captal.core.location.{Location, LocationId, Slug, State}
 import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
 import whitelabel.captal.platform.OperatorContext
-import whitelabel.captal.platform.queries.Locations
-import whitelabel.captal.platform.schema.QuillSqlite
 import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
@@ -150,9 +148,9 @@ object LocationTools:
   /** The slugs, for the prompt's catalogue and for completing the `{slug}` template argument. A
     * listing is not refused, so a failure here is a defect.
     */
-  private[mcp] def slugs: ZIO[QuillSqlite, Nothing, List[String]] = ZIO
-    .serviceWithZIO[QuillSqlite](quill =>
-      Commands.ask(Locations.list(quill), ListLocationsQuery(includeInactive = false))())
+  private[mcp] def slugs: ZIO[Queries.ListLocations, Nothing, List[String]] = ZIO
+    .serviceWithZIO[Queries.ListLocations](
+      Commands.ask(_, ListLocationsQuery(includeInactive = false))())
     .orDieWith(IllegalStateException(_))
     .map(_.map(_.slug))
 

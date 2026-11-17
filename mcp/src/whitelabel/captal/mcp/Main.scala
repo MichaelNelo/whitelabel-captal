@@ -148,7 +148,7 @@ object Main extends ZIOAppDefault:
       _ <- ZIO
         // `Option[InfraStore]`: a deployment that only edits content has no cluster configured and
         // no clients to build, so the layer answers `None` and the deploy tools are not registered.
-        .environment[QuillSqlite & AssetStore & Option[InfraStore] & Tracing]
+        .environment[QuillSqlite & AssetStore & Option[InfraStore] & Tracing & Queries.All]
         .flatMap: env =>
           val infra = env.get[Option[InfraStore]]
           // A warning and not a failure: the published script belongs to `client.publish`, and a
@@ -291,6 +291,8 @@ object Main extends ZIOAppDefault:
     VideoFlows.updateVideoLayer,
     VideoFlows.retireVideoLayer,
     VideoFlows.reinstateVideoLayer,
+    VideoFlows.collectReplacedFilesLayer,
+    VideoFlows.expirePlaybackLayer,
     OperationQueue.layer,
     OperationFlows.startLayer,
     OperationFlows.completeLayer,

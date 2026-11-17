@@ -13,6 +13,8 @@ import whitelabel.captal.core.application.queries.{
   LocationPreview,
   LocationReadinessQuery,
   LocationSummary,
+  OpenPlaybackReport,
+  OpenPlaybacksQuery,
   PendingUploadReport,
   PendingUploadsQuery,
   PreviewLocationQuery,
@@ -32,6 +34,7 @@ import whitelabel.captal.core.application.queries.{
   TranslationCoverageQuery,
   TranslationCoverageReport,
   UploadUrlQuery,
+  VideoOfQuery,
   VideoReport,
   VideosOfQuery,
   WaitingUpload
@@ -42,6 +45,7 @@ import whitelabel.captal.platform.queries.{
   ListAdvertisers as ListAdvertisersQuill,
   LocationReadiness as LocationReadinessQuill,
   Locations,
+  Playbacks,
   PublishedDocuments,
   RecoveryPolicyOf as RecoveryPolicyOfQuill,
   RunStatus as RunStatusQuill,
@@ -69,6 +73,8 @@ object Queries:
   type VideosOf = Query.Aux[Task, VideosOfQuery, List[VideoReport]]
   type PendingUploads = Query.Aux[Task, PendingUploadsQuery, List[PendingUploadReport]]
   type RunStatus = Query.Aux[Task, RunStatusQuery, RunReport]
+  type VideoOf = Query.Aux[Task, VideoOfQuery, VideoReport]
+  type OpenPlaybacks = Query.Aux[Task, OpenPlaybacksQuery, List[OpenPlaybackReport]]
 
   type PreviewLocation = Query.Aux[Task, PreviewLocationQuery, LocationPreview]
   type StylesOf = Query.Aux[Task, StylesOfQuery, PublishedDocument]
@@ -80,7 +86,8 @@ object Queries:
   /** The ones that read the database alone. */
   type Database =
     ListLocations & AccessPointsOf & ListAdvertisers & RecoveryPolicyOf & TermsInForce &
-      TranslationCoverage & ListSurveys & SurveyOf & VideosOf & PendingUploads & RunStatus
+      TranslationCoverage & ListSurveys & SurveyOf & VideosOf & PendingUploads & RunStatus &
+      VideoOf & OpenPlaybacks
 
   /** The ones that read the assets bucket too. */
   type Assets = PreviewLocation & StylesOf & IconOf & UploadUrl & LocationReadiness & AssetsOf
@@ -100,6 +107,8 @@ object Queries:
     .add[VideosOf](Videos.of(quill))
     .add[PendingUploads](Videos.pending(quill))
     .add[RunStatus](RunStatusQuill(quill))
+    .add[VideoOf](Videos.one(quill))
+    .add[OpenPlaybacks](Playbacks.open(quill))
 
   def assets(quill: QuillSqlite, store: AssetStore): ZEnvironment[Assets] = ZEnvironment
     .empty

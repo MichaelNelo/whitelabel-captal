@@ -35,7 +35,6 @@ import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.apps.UploadUi
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
 import whitelabel.captal.platform.aws.AssetStore
-import whitelabel.captal.platform.queries.Videos
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.{OperatorContext, VideoStatus}
 import zio.*
@@ -489,9 +488,8 @@ object VideoTools:
   /** Every video waiting for its first file, for the resources that list them. A listing is not
     * refused, so a failure here is a defect.
     */
-  private[mcp] def pending: ZIO[QuillSqlite, Nothing, List[PendingUpload]] = ZIO
-    .serviceWithZIO[QuillSqlite](quill =>
-      Commands.ask(Videos.pending(quill), PendingUploadsQuery(None))())
+  private[mcp] def pending: ZIO[Queries.PendingUploads, Nothing, List[PendingUpload]] = ZIO
+    .serviceWithZIO[Queries.PendingUploads](Commands.ask(_, PendingUploadsQuery(None))())
     .orDieWith(IllegalStateException(_))
     .map(_.map(pendingOf))
 
@@ -504,24 +502,18 @@ object VideoTools:
         (_, waiting: List[PendingUploadReport]) =>
           ZIO.succeed(PendingUploadsResponse(waiting.map(pendingOf))))
 
-  /** The file the video `videoId` waits for, as `UploadUrl` reads it, for the upload ticket
-    * resource, which signs for the same file the tools do.
+  /** The file the video `videoId` waits for, as `UploadUrl` reads it; the upload ticket resource
+    * signs for the same file the tools do.
     */
-  private[mcp] def waiting(videoId: String): ZIO[QuillSqlite & AssetStore, String, WaitingUpload] =
-    for
-      quill  <- ZIO.service[QuillSqlite]
-      store  <- ZIO.service[AssetStore]
-      upload <- Commands.ask(Videos.uploadUrl(quill, store), UploadUrlQuery(videoId))()
-    yield upload
-
-  private def awaited(videoId: String): ZIO[Queries.UploadUrl, String, WaitingUpload] = ZIO
+  private[mcp] def awaited(videoId: String): ZIO[Queries.UploadUrl, String, WaitingUpload] = ZIO
     .serviceWithZIO[Queries.UploadUrl](Commands.ask(_, UploadUrlQuery(videoId))())
 
   /** Checks the file arrived, by its key, before it is confirmed: storage stays out of `core`. The
     * file confirmed is the one checked, so one that another replaced meanwhile is refused.
     */
   val confirm: McpToolHandlerR[
-    QuillSqlite & AssetStore & Queries.UploadUrl & OperatorContext & VideoFlows.ConfirmVideoFile] =
+    AssetStore & Queries.UploadUrl & OperatorContext & VideoFlows.ConfirmVideoFile &
+      VideoFlows.CollectReplacedFiles] =
     McpTool("confirm_video_upload")
       .description(
         "Check the file arrived, record its length, and make it the file the video plays. A pending video enters rotation here; a replaced file takes over from the previous one, which is deleted once nobody is still playing it. Refuses when the object is not there, which is what an abandoned upload looks like. The upload page calls this itself with the duration it read from the file.")

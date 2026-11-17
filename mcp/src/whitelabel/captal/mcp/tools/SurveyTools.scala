@@ -37,9 +37,7 @@ import whitelabel.captal.core.survey.authoring.{
 import whitelabel.captal.core.survey.question
 import whitelabel.captal.mcp.access.Auth
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
-import whitelabel.captal.platform.queries.Surveys
 import whitelabel.captal.platform.repositories.SurveyAuthoringRepositoryQuill
-import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.{OperatorContext, SurveyCategory as StoredCategory}
 import zio.*
 import zio.schema.annotation.{description, discriminatorName, rejectExtraFields}
@@ -463,9 +461,8 @@ object SurveyTools:
                 )))
 
   /** The read behind the `captal://surveys/{id}` resource, which `get_survey` answers too. */
-  private[mcp] def viewOf(surveyId: String): ZIO[QuillSqlite, String, SurveyView] = ZIO
-    .serviceWithZIO[QuillSqlite](quill =>
-      Commands.ask(Surveys.of(quill), SurveyOfQuery(surveyId))())
+  private[mcp] def viewOf(surveyId: String): ZIO[Queries.SurveyOf, String, SurveyView] = ZIO
+    .serviceWithZIO[Queries.SurveyOf](Commands.ask(_, SurveyOfQuery(surveyId))())
     .map(viewOfReport)
 
   private def viewOfReport(report: SurveyReport): SurveyView =

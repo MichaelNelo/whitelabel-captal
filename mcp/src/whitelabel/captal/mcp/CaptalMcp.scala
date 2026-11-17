@@ -151,7 +151,7 @@ object CaptalMcp:
       auth: McpAuth[QuillSqlite],
       // Prompts alone need the services in hand: `McpPromptHandler.get` returns `ZIO[Any, ...]`, so
       // it has no environment to ask a database for. Everything else is resolved by the runtime.
-      promptEnv: ZEnvironment[QuillSqlite & AssetStore],
+      promptEnv: ZEnvironment[AssetStore & Queries.ListLocations & Queries.LocationReadiness],
       // The origin the upload page PUTs to, declared in that page's CSP. Resolved from the same
       // store that signs the URLs, so the policy and the URL cannot disagree.
       uploadOrigin: String,

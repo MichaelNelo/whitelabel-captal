@@ -31,6 +31,7 @@ import whitelabel.captal.mcp.apps.RunRoutes
 import whitelabel.captal.mcp.aws.{DeployTargets, InfraSteps, InfraStore}
 import whitelabel.captal.platform.locks.Redlock
 import whitelabel.captal.platform.operations.OperationQueue
+import whitelabel.captal.platform.queries.Playbacks
 import whitelabel.captal.mcp.resources.Readiness
 import whitelabel.captal.mcp.tools.{
   AdvertiserTools,
@@ -373,10 +374,13 @@ object DeployE2ESpec extends ZIOSpecDefault:
             OperationFlows.complete(env.get[QuillSqlite], operators, locks),
             operators,
             locks))
+      queries =
+        Queries.database(env.get[QuillSqlite]) ++
+          Queries.assets(env.get[QuillSqlite], env.get[AssetStore])
       routes = CaptalMcp
         .server(
           Auth.mcpAuth(resource),
-          env,
+          env ++ queries,
           "https://bucket.e2e.test",
           "https://cdn.e2e.test",
           resource.toString.stripSuffix("/mcp"),
@@ -388,9 +392,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
             LocationFlows.environment(env.get[QuillSqlite], operators) ++
             ContentFlows.environment(env.get[QuillSqlite], operators) ++
             AssetFlows.environment(env.get[QuillSqlite], operators, env.get[AssetStore]) ++
-            VideoFlows.environment(env.get[QuillSqlite], operators, env.get[AssetStore]) ++
-            Queries.database(env.get[QuillSqlite]) ++
-            Queries.assets(env.get[QuillSqlite], env.get[AssetStore]))
+            VideoFlows.environment(env.get[QuillSqlite], operators, env.get[AssetStore]) ++ queries)
       _ <- TestClient.addRoutes(routes)
       // The run page's stream, which lives beside the protocol rather than inside it.
       _        <- TestClient.addRoutes(RunRoutes.routes.provideEnvironment(env))
@@ -563,28 +565,43 @@ object DeployE2ESpec extends ZIOSpecDefault:
       timedBeforeCancel: Set[String],
       timedAfterCancel: Set[String])
 
+  /** What the background jobs run with, composed as `Main` composes it. */
+  private def upkeep: ZIO[QuillSqlite & AssetStore & Scope, Nothing, ZEnvironment[
+    Operators & VideoFlows.Upkeep & Queries.OpenPlaybacks]] =
+    for
+      quill     <- ZIO.service[QuillSqlite]
+      store     <- ZIO.service[AssetStore]
+      operators <- Operators.make.build.map(_.get)
+    yield ZEnvironment[Operators](operators)
+      .add[VideoFlows.CollectReplacedFiles](
+        VideoFlows.collectReplacedFiles(quill, operators, store))
+      .add[VideoFlows.ExpirePlayback](VideoFlows.expirePlayback(quill, operators))
+      .add[Queries.OpenPlaybacks](Playbacks.open(quill))
+
   /** Starts the timers as the server does at startup, waits for `abandoned`'s to close it, then
     * cancels `live`'s as an ended playback does.
     */
-  private def timers(abandoned: String, live: String): ZIO[QuillSqlite, Throwable, TimerOutcome] =
-    ZIO.scoped:
-      for
-        asked  <- Queue.sliding[Unit](1)
-        timers <- PlaybackExpiry.make(asked)
-        row    <- playback(abandoned)
-          .repeat(
-            Schedule.recurUntil[Option[VideoPlaybackRow]](_.exists(_.endedAt.isDefined)) &&
-              Schedule.spaced(200.millis) && Schedule.recurs(50))
-          .map(_._1)
-        before <- timers.pending
-        _      <- timers.cancel(live)
-        after  <- timers
-          .pending
-          .repeat(
-            Schedule.recurUntil[Set[String]](_.isEmpty) && Schedule.spaced(100.millis) &&
-              Schedule.recurs(20))
-          .map(_._1)
-      yield TimerOutcome(row, before, after)
+  private def timers(
+      abandoned: String,
+      live: String): ZIO[QuillSqlite & AssetStore, Throwable, TimerOutcome] = ZIO.scoped:
+    for
+      jobs   <- upkeep
+      asked  <- Queue.sliding[Unit](1)
+      timers <- PlaybackExpiry.make(asked).provideSomeEnvironment[Scope](_ ++ jobs)
+      row    <- playback(abandoned)
+        .repeat(
+          Schedule.recurUntil[Option[VideoPlaybackRow]](_.exists(_.endedAt.isDefined)) &&
+            Schedule.spaced(200.millis) && Schedule.recurs(50))
+        .map(_._1)
+      before <- timers.pending
+      _      <- timers.cancel(live)
+      after  <- timers
+        .pending
+        .repeat(
+          Schedule.recurUntil[Set[String]](_.isEmpty) && Schedule.spaced(100.millis) &&
+            Schedule.recurs(20))
+        .map(_._1)
+    yield TimerOutcome(row, before, after)
 
   private def endPlayback(id: String): ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[
     QuillSqlite]: quill =>
@@ -632,8 +649,9 @@ object DeployE2ESpec extends ZIOSpecDefault:
       current   <- playback(watching)
       stillKept <- objectText(oldKey)
       _         <- endPlayback(watching)
-      collected <- VideoFileCollector.collect(None)
-      gone      <- objectText(oldKey)
+      collected <- ZIO.scoped(
+        upkeep.flatMap(VideoFileCollector.collect(None).provideEnvironment(_)))
+      gone <- objectText(oldKey)
     yield assertTrue(
       opened.videoId == videoId,
       during.contains(VideoStatus.Active),

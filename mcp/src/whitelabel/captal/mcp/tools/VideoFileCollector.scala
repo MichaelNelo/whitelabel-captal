@@ -1,20 +1,17 @@
 package whitelabel.captal.mcp.tools
 
-import io.getquill.*
 import io.opentelemetry.api.common.{AttributeKey, Attributes}
 import io.opentelemetry.api.trace.SpanKind
 import whitelabel.captal.cdc.protocol.ChangeFeedFollower
+import whitelabel.captal.core.application.commands.CollectReplacedFilesCommand
 import whitelabel.captal.core.video
-import whitelabel.captal.platform.aws.AssetStore
-import whitelabel.captal.platform.schema.QuillSqlite
-import whitelabel.captal.platform.schema.core.given
-import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.{VideoFileRow, VideoFiles, VideoPlaybackRow}
+import whitelabel.captal.platform.{Operator, OperatorContext}
 import whitelabel.captal.telemetry.{Telemetry, Tracing}
 import zio.*
 import zio.stream.ZStream
 
-/** Deletes the objects of replaced video files once nobody is playing them.
+/** Deletes the replaced video files nobody is playing any more, through `core`'s
+  * `CollectReplacedFilesCommand`: a pass, recorded in `event_log` under [[Actor]].
   *
   * Run when a replacement is confirmed, since the previous file may have no playback left already;
   * on every change set the change feed relays, since a playback ending can be what frees one; when
@@ -22,48 +19,21 @@ import zio.stream.ZStream
   * changed while this server was not there to hear it.
   */
 object VideoFileCollector:
+  /** Who the jobs' changes are recorded under: no operator asked for them. */
+  private[mcp] val Actor = Operator("job:video-upkeep", None)
 
-  /** The objects deleted, for `videoId` alone or for every video. */
-  def collect(videoId: Option[video.Id]): ZIO[QuillSqlite & AssetStore, Nothing, Int] = ZIO
-    .serviceWithZIO[QuillSqlite]: quill =>
-      import quill.*
-      for
-        files <-
-          run(query[VideoFileRow].filter(f => f.deletedAt.isEmpty && f.confirmedAt.isDefined)).orDie
-        open <- run(query[VideoPlaybackRow].filter(_.endedAt.isEmpty).map(_.fileId)).orDie
-        watching   = open.groupMapReduce(identity)(_ => 1)(_ + _)
-        candidates =
-          files
-            .filter(f => videoId.forall(_ == f.videoId))
-            .groupBy(_.videoId)
-            .values
-            .flatMap: versions =>
-              val current = versions.maxBy(_.confirmedAt)
-              versions.filter: f =>
-                video
-                  .VideoFile(f.url, current = f.id == current.id, watching.getOrElse(f.id, 0))
-                  .collectable
-            .toList
-        deleted <- ZIO.foreach(candidates)(delete(quill, _))
-      yield deleted.count(identity)
-
-  /** Marks it first, in the one statement that also checks nobody started playing it since it was
-    * read; only a file that statement marked has its object deleted.
+  /** The files deleted, of `videoId` alone or of every video. A pass is not refused, so a failure
+    * here is a defect.
     */
-  private def delete(quill: QuillSqlite, file: VideoFileRow): ZIO[AssetStore, Nothing, Boolean] =
+  def collect(videoId: Option[video.Id])
+      : ZIO[OperatorContext & VideoFlows.CollectReplacedFiles, Nothing, Int] =
     for
-      now    <- Clock.instant
-      marked <- VideoFiles.condemn(quill, file.id, now).orDie
-      store  <- ZIO.service[AssetStore]
-      _      <-
-        ZIO.when(marked)(
-          store
-            .deleteIfPresent(store.keyOf(file.url))
-            .tapError(why =>
-              ZIO.logWarning(
-                s"Video file ${file.id} is marked deleted but its object is still there: $why"))
-            .ignore)
-    yield marked
+      now     <- Clock.instant
+      deleted <- ZIO
+        .serviceWithZIO[VideoFlows.CollectReplacedFiles](
+          Commands.run(Actor, CollectReplacedFilesCommand(videoId, now))(_)())
+        .orDieWith(IllegalStateException(_))
+    yield deleted
 
   /** What the change feed drives: a collection pass, and a timer per playback that started. */
   final case class Running(asked: Queue[Unit], timers: PlaybackExpiry.Timers)
@@ -76,7 +46,8 @@ object VideoFileCollector:
   /** A pass whenever asked, one at a time: posts that arrive during a pass are folded into the one
     * after it, so a burst of playbacks ending costs two passes, not one each.
     */
-  def runner: ZIO[QuillSqlite & AssetStore & Scope, Nothing, Running] =
+  def runner
+      : ZIO[PlaybackExpiry.Needs & VideoFlows.CollectReplacedFiles & Scope, Nothing, Running] =
     for
       asked <- Queue.sliding[Unit](1)
       _     <-

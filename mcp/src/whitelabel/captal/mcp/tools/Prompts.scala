@@ -2,8 +2,6 @@ package whitelabel.captal.mcp.tools
 
 import com.jamesward.ziohttp.mcp.*
 import whitelabel.captal.mcp.resources.Readiness
-import whitelabel.captal.platform.aws.AssetStore
-import whitelabel.captal.platform.schema.QuillSqlite
 import zio.*
 
 /** Onboarding as an MCP prompt: user-initiated, and stateful.
@@ -66,28 +64,29 @@ object Prompts:
          |characters, because it becomes the URL prefix, the S3 prefix and the AWS resource names."""
         .stripMargin
 
-  /** Takes the services rather than reaching for them: `McpPromptHandler.get` returns
-    * `ZIO[Any, ...]`, so a prompt has no environment to ask for a database.
+  /** Takes the queries rather than reaching for them: `McpPromptHandler.get` returns
+    * `ZIO[Any, ...]`, so a prompt has no environment to ask them of.
     */
-  def onboardLocation(env: ZEnvironment[QuillSqlite & AssetStore]): McpPromptHandler = McpPrompt(
-    "onboard-location")
-    .description(
-      "Walk a location from empty to ready: translations, advertisers, videos and the questions that follow them. Reads the current state and says which step is next, so it is worth re-running part way through.")
-    .argument("slug", "Which location. Omit to list the ones that exist.", required = false)
-    .get: args =>
-      args.get("slug").map(_.trim).filter(_.nonEmpty) match
-        case Some(slug) =>
-          Readiness
-            .of(slug)
-            .map(r => PromptGetResult(messages = Chunk(message(render(r)))))
-            .mapError(ToolError.apply)
-            .provideEnvironment(env)
-        case None =>
-          LocationTools
-            .slugs
-            .map(slugs => PromptGetResult(messages = Chunk(message(catalogue(slugs)))))
-            .provideEnvironment(env)
+  def onboardLocation(
+      env: ZEnvironment[Queries.ListLocations & Queries.LocationReadiness]): McpPromptHandler =
+    McpPrompt("onboard-location")
+      .description(
+        "Walk a location from empty to ready: translations, advertisers, videos and the questions that follow them. Reads the current state and says which step is next, so it is worth re-running part way through.")
+      .argument("slug", "Which location. Omit to list the ones that exist.", required = false)
+      .get: args =>
+        args.get("slug").map(_.trim).filter(_.nonEmpty) match
+          case Some(slug) =>
+            Readiness
+              .of(slug)
+              .map(r => PromptGetResult(messages = Chunk(message(render(r)))))
+              .mapError(ToolError.apply)
+              .provideEnvironment(env)
+          case None =>
+            LocationTools
+              .slugs
+              .map(slugs => PromptGetResult(messages = Chunk(message(catalogue(slugs)))))
+              .provideEnvironment(env)
 
-  def all(env: ZEnvironment[QuillSqlite & AssetStore]): List[McpPromptHandler] = List(
-    onboardLocation(env))
+  def all(env: ZEnvironment[Queries.ListLocations & Queries.LocationReadiness])
+      : List[McpPromptHandler] = List(onboardLocation(env))
 end Prompts

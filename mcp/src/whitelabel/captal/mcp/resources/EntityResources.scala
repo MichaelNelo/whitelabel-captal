@@ -1,14 +1,18 @@
 package whitelabel.captal.mcp.resources
 
 import com.jamesward.ziohttp.mcp.*
-import io.getquill.*
+import whitelabel.captal.core.application.queries.{
+  AdvertiserReport,
+  ListAdvertisersQuery,
+  ListLocationsQuery,
+  ListSurveysQuery,
+  LocationSummary,
+  Query,
+  SurveySummaryReport
+}
 import whitelabel.captal.mcp.apps.{PreviewUi, RunUi, UnifiUi, UploadUi, UploadUiSource}
-import whitelabel.captal.mcp.tools.{AdvertiserTools, SurveyTools, VideoTools}
+import whitelabel.captal.mcp.tools.{AdvertiserTools, Commands, Queries, SurveyTools, VideoTools}
 import whitelabel.captal.platform.aws.{Asset, AssetStore}
-import whitelabel.captal.platform.schema.QuillSqlite
-import whitelabel.captal.platform.schema.core.given
-import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.{AdvertiserRow, AdvertiserVideoRow, LocationRow, SurveyRow}
 import zio.*
 import zio.schema.codec.JsonCodec as SchemaJsonCodec
 
@@ -31,7 +35,7 @@ import zio.schema.codec.JsonCodec as SchemaJsonCodec
   * served from here too rather than from a second source that could not be installed.
   */
 final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrigin: String)
-    extends McpResourceSource[QuillSqlite & AssetStore]:
+    extends McpResourceSource[AssetStore & Queries.All]:
 
   /** The UniFi page posts the credentials to this server, so this server's origin is the one thing
     * it has to be allowed to *reach*. Declared on the page: the host reads the policy from the
@@ -96,9 +100,6 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
   given zio.schema.Schema[DirectoryEntry] = zio.schema.DeriveSchema.gen
   given zio.schema.Schema[DirectoryListing] = zio.schema.DeriveSchema.gen
 
-  private inline def locationBySlug = quote: (slugParam: String) =>
-    query[LocationRow].filter(_.slug == slugParam).take(1)
-
   private def encode[A](value: A)(using schema: zio.schema.Schema[A]): String =
     SchemaJsonCodec.jsonEncoder(schema).encodeJson(value, None).toString
 
@@ -116,23 +117,24 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
     * listing is where "which are pending" belongs, and a resource that addresses exactly one video
     * cannot hand out a signed URL for another.
     */
-  private def pendingPages: ZIO[QuillSqlite, Nothing, Chunk[ResourceDefinition]] = VideoTools
-    .pending
-    .map: waiting =>
-      Chunk.fromIterable(
-        waiting
-          .map: video =>
-            upload.pageDefinition(
-              videoId = video.videoId,
-              name = video.title,
-              description =
-                s"Upload the file for this video at ${video
-                    .slug}. It stays out of rotation until the file arrives."
-            )
-          .sortBy(_.name))
+  private def pendingPages: ZIO[Queries.PendingUploads, Nothing, Chunk[ResourceDefinition]] =
+    VideoTools
+      .pending
+      .map: waiting =>
+        Chunk.fromIterable(
+          waiting
+            .map: video =>
+              upload.pageDefinition(
+                videoId = video.videoId,
+                name = video.title,
+                description =
+                  s"Upload the file for this video at ${video
+                      .slug}. It stays out of rotation until the file arrives."
+              )
+            .sortBy(_.name))
 
   override def listResources(
-      ctx: McpToolContext): ZIO[QuillSqlite & AssetStore, Nothing, Chunk[ResourceDefinition]] =
+      ctx: McpToolContext): ZIO[AssetStore & Queries.All, Nothing, Chunk[ResourceDefinition]] =
     pendingPages
       .zipWith(upload.listResources(ctx))(_ ++ _)
       .zipWith(ZIO.serviceWith[AssetStore](previewMeta))((listed, meta) =>
@@ -201,7 +203,7 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
 
   override def readResource(
       uri: String,
-      ctx: McpToolContext): ZIO[QuillSqlite & AssetStore, ToolError, Chunk[ResourceContents]] =
+      ctx: McpToolContext): ZIO[AssetStore & Queries.All, ToolError, Chunk[ResourceContents]] =
     if uri == UnifiUi.Uri then
       // Static in its data — it carries none, because the ticket and the location arrive with the
       // result of the call that opened it — but the resource hints still come from the published
@@ -263,47 +265,61 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
         case _ =>
           ZIO.fail(ToolError(s"No resource at $uri"))
 
-  /** Reads advertiser by id. */
-  private def advertiser(uri: String, id: String)
-      : ZIO[QuillSqlite, ToolError, Chunk[ResourceContents]] = ZIO.serviceWithZIO[QuillSqlite]:
-    quill =>
-      import quill.*
-      for
-        rows <- run(query[AdvertiserRow].filter(_.id == lift(id))).orDie
-        row  <- ZIO.succeed(rows.headOption).someOrFail(ToolError(s"No advertiser with id '$id'."))
-        videos <- run(query[AdvertiserVideoRow]).orDie
-        view = AdvertiserTools.AdvertiserView(
-          row.id,
-          row.name,
-          row.priority,
-          row.isActive == 1,
-          videos.count(v => v.advertiserId.contains(row.id) && v.status == "active"))
-      yield contents(uri, encode(view))
+  /** The advertiser `id`, as `list_advertisers` reports each. */
+  private def advertiser(
+      uri: String,
+      id: String): ZIO[Queries.ListAdvertisers, ToolError, Chunk[ResourceContents]] =
+    for
+      reports <- advertisers(includeInactive = true)
+      found   <- ZIO
+        .fromOption(reports.find(_.id == id))
+        .orElseFail(ToolError(s"No advertiser with id '$id'."))
+      view = AdvertiserTools.AdvertiserView(
+        found.id,
+        found.name,
+        found.priority,
+        found.active,
+        found.activeVideos)
+    yield contents(uri, encode(view))
+
+  /** The listings these resources are read from, which are not refused: a failure is a defect. */
+  private def listed[Q: Tag, R: Tag](q: Q): URIO[Query.Aux[Task, Q, R], R] = ZIO
+    .serviceWithZIO[Query.Aux[Task, Q, R]](Commands.ask(_, q)())
+    .orDieWith(IllegalStateException(_))
+
+  private def locations(includeInactive: Boolean) =
+    listed[ListLocationsQuery, List[LocationSummary]](ListLocationsQuery(includeInactive))
+
+  private def advertisers(includeInactive: Boolean) =
+    listed[ListAdvertisersQuery, List[AdvertiserReport]](ListAdvertisersQuery(includeInactive))
+
+  private def surveys(includeInactive: Boolean) =
+    listed[ListSurveysQuery, List[SurveySummaryReport]](ListSurveysQuery(None, includeInactive))
 
   private def survey(
       uri: String,
-      id: String): ZIO[QuillSqlite, ToolError, Chunk[ResourceContents]] = SurveyTools
+      id: String): ZIO[Queries.SurveyOf, ToolError, Chunk[ResourceContents]] = SurveyTools
     .viewOf(id)
     .map(v => contents(uri, encode(v)))
     .mapError(ToolError.apply)
 
   /** Pending videos, matching `list_pending_uploads`. */
-  private def pendingVideos(uri: String): ZIO[QuillSqlite, String, Chunk[ResourceContents]] =
-    VideoTools
-      .pending
-      .map: waiting =>
-        contents(
-          uri,
-          encode(
-            PendingVideos(
-              waiting.map(v => PendingVideo(v.videoId, v.title, v.slug)).sortBy(_.title))))
+  private def pendingVideos(
+      uri: String): ZIO[Queries.PendingUploads, String, Chunk[ResourceContents]] = VideoTools
+    .pending
+    .map: waiting =>
+      contents(
+        uri,
+        encode(
+          PendingVideos(
+            waiting.map(v => PendingVideo(v.videoId, v.title, v.slug)).sortBy(_.title))))
 
   /** Signed upload URL for one video. One signature per read. */
   private def uploadTicket(
       uri: String,
-      videoId: String): ZIO[QuillSqlite & AssetStore, String, Chunk[ResourceContents]] =
+      videoId: String): ZIO[AssetStore & Queries.All, String, Chunk[ResourceContents]] =
     for
-      upload <- VideoTools.waiting(videoId)
+      upload <- VideoTools.awaited(videoId)
       store  <- ZIO.service[AssetStore]
       url    <- store.presignPut(upload.key, VideoTools.UploadValidFor)
       styles <- ZIO.foreach(upload.slug)(store.get(_, Asset.Styles)).map(_.flatten)
@@ -323,55 +339,37 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
     */
   override def readDirectory(
       uri: String,
-      ctx: McpToolContext): ZIO[QuillSqlite & AssetStore, ToolError, Chunk[ResourceDefinition]] =
+      ctx: McpToolContext): ZIO[AssetStore & Queries.All, ToolError, Chunk[ResourceDefinition]] =
     uri.stripPrefix(Root).split('/').toList match
       case "locations" :: Nil =>
-        ZIO.serviceWithZIO[QuillSqlite]: quill =>
-          import quill.*
-          run(query[LocationRow])
-            .orDie
-            .map(
-              _.filter(_.isActive == 1)
-                .sortBy(_.slug)
-                .map(l =>
-                  ResourceDefinition(
-                    s"${Root}locations/${l.slug}",
-                    l.name,
-                    Some(s"What '${l.slug}' still needs."),
-                    Some(JsonMime)))
-                .pipe(Chunk.fromIterable))
+        locations(includeInactive = false).map(found =>
+          Chunk.fromIterable(
+            found.map(l =>
+              ResourceDefinition(
+                s"${Root}locations/${l.slug}",
+                l.name,
+                Some(s"What '${l.slug}' still needs."),
+                Some(JsonMime)))))
 
       case "advertisers" :: Nil =>
-        ZIO.serviceWithZIO[QuillSqlite]: quill =>
-          import quill.*
-          run(query[AdvertiserRow])
-            .orDie
-            .map(
-              _.filter(_.isActive == 1)
-                .sortBy(_.name)
-                .map(a =>
-                  ResourceDefinition(
-                    s"${Root}advertisers/${a.id}",
-                    a.name,
-                    Some(s"Rotation priority ${a.priority}."),
-                    Some(JsonMime)))
-                .pipe(Chunk.fromIterable))
+        advertisers(includeInactive = false).map(found =>
+          Chunk.fromIterable(
+            found.map(a =>
+              ResourceDefinition(
+                s"${Root}advertisers/${a.id}",
+                a.name,
+                Some(s"Rotation priority ${a.priority}."),
+                Some(JsonMime)))))
 
       case "surveys" :: Nil =>
-        ZIO.serviceWithZIO[QuillSqlite]: quill =>
-          import quill.*
-          run(query[SurveyRow])
-            .orDie
-            .map(
-              _.filter(_.isActive == 1)
-                .sortBy(s => (s.category, s.name.getOrElse("")))
-                .map(s =>
-                  ResourceDefinition(
-                    s"${Root}surveys/${s.id.asString}",
-                    s.name.getOrElse(s.category),
-                    Some(s"${s.category} survey."),
-                    Some(JsonMime)))
-                .pipe(Chunk.fromIterable))
+        surveys(includeInactive = false).map(found =>
+          Chunk.fromIterable(
+            found.map(s =>
+              ResourceDefinition(
+                s"${Root}surveys/${s.id}",
+                s.name.getOrElse(s.category),
+                Some(s"${s.category} survey."),
+                Some(JsonMime)))))
 
       case _ =>
         ZIO.fail(ToolError(s"Not a directory: $uri"))
@@ -383,22 +381,16 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
   override def complete(
       ref: CompletionRef,
       argument: CompletionArgument,
-      ctx: McpToolContext): ZIO[QuillSqlite & AssetStore, Nothing, CompletionResult] =
+      ctx: McpToolContext): ZIO[AssetStore & Queries.All, Nothing, CompletionResult] =
     val prefix = argument.value
-    val values: ZIO[QuillSqlite, Nothing, Chunk[String]] =
+    val values: ZIO[Queries.All, Nothing, Chunk[String]] =
       argument.name match
         case "slug" =>
-          ZIO.serviceWithZIO[QuillSqlite]: quill =>
-            import quill.*
-            run(query[LocationRow]).orDie.map(rows => Chunk.fromIterable(rows.map(_.slug).sorted))
+          locations(includeInactive = true).map(found => Chunk.fromIterable(found.map(_.slug)))
         case "advertiserId" =>
-          ZIO.serviceWithZIO[QuillSqlite]: quill =>
-            import quill.*
-            run(query[AdvertiserRow]).orDie.map(rows => Chunk.fromIterable(rows.map(_.id)))
+          advertisers(includeInactive = true).map(found => Chunk.fromIterable(found.map(_.id)))
         case "surveyId" =>
-          ZIO.serviceWithZIO[QuillSqlite]: quill =>
-            import quill.*
-            run(query[SurveyRow]).orDie.map(rows => Chunk.fromIterable(rows.map(_.id.asString)))
+          surveys(includeInactive = true).map(found => Chunk.fromIterable(found.map(_.id)))
         case _ =>
           ZIO.succeed(Chunk.empty)
     values.map(all =>
@@ -406,6 +398,3 @@ final class EntityResources(upload: UploadUiSource, uiOrigin: String, scriptOrig
   end complete
 
 end EntityResources
-
-extension [A](self: A)
-  private def pipe[B](f: A => B): B = f(self)

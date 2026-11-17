@@ -7,10 +7,7 @@ import whitelabel.captal.core.application.queries.{
   ReadinessStep
 }
 import whitelabel.captal.mcp.protocol.{McpSchema, ToolSchema}
-import whitelabel.captal.mcp.tools.{Queries, Refusals}
-import whitelabel.captal.platform.aws.AssetStore
-import whitelabel.captal.platform.queries.LocationReadiness as ReadinessQuery
-import whitelabel.captal.platform.schema.QuillSqlite
+import whitelabel.captal.mcp.tools.{Commands, Queries}
 import zio.*
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema}
@@ -173,15 +170,9 @@ object Readiness:
   /** The readiness of the location `slug`, for the resource and the prompt that show it outside a
     * tool call.
     */
-  def of(slug: String): ZIO[QuillSqlite & AssetStore, String, LocationReadiness] =
-    for
-      quill  <- ZIO.service[QuillSqlite]
-      assets <- ZIO.service[AssetStore]
-      found  <- ReadinessQuery(quill, assets)
-        .execute(LocationReadinessQuery(slug.trim))
-        .mapError(e => s"Could not read the location's readiness: ${e.getMessage}")
-      report <- ZIO.fromEither(found).mapError(Refusals.describe)
-    yield fromReport(report)
+  def of(slug: String): ZIO[Queries.LocationReadiness, String, LocationReadiness] = ZIO
+    .serviceWithZIO[Queries.LocationReadiness](Commands.ask(_, LocationReadinessQuery(slug.trim))())
+    .map(fromReport)
 
   val tool: McpToolHandlerR[Queries.LocationReadiness] =
     McpTool("get_location_readiness")
