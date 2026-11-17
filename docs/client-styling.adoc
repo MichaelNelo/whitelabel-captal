@@ -28,7 +28,9 @@ location with no customisation correct: the object does not exist, the link fail
 tag removes itself rather than sitting there as a stylesheet reference to nothing.
 
 `custom-styles.css` is stored as written, `text/css`, by the MCP backoffice's
-`AssetTools.setStyles` → `AssetStore.put` (`platform/src/whitelabel/captal/platform/aws/Assets.scala`), with
+`set_location_styles`: its `ChangeStylesCommand` is logged, and after the commit
+`AssetPublishingHandler` puts the file through `AssetStore.put`
+(`platform/src/whitelabel/captal/platform/aws/Assets.scala`), with
 the same `Cache-Control: public, max-age=86400` the portal bundle carries; the distribution
 compresses it for a browser that accepts it, as it does the bundle (`compress` on its cache
 behaviours). The write invalidates the one CloudFront key it touched, so the change is visible

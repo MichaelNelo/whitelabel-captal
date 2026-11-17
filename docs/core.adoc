@@ -190,8 +190,16 @@ enum Event:
   case Recovery(event: recovery.Event)
   case Access(event: access.Event)
   case Location(event: location.Event)
+  case Operation(event: operation.Event)
   case Session(event: session.Event)
+  case Terms(event: terms.Event)
+  case I18n(event: i18n.Event)
+  case Advertiser(event: advertiser.Event)
+  case SurveyAuthoring(event: survey.authoring.Event)
+  case VideoAuthoring(event: video.authoring.Event)
 ----
+
+The last five are the backoffice's: what an operator does to the content, which no guest command emits.
 
 `application/Error.scala` mirrors the aggregates that can refuse, plus the errors that belong to none — among them the three refusals of entering the portal:
 
@@ -208,6 +216,11 @@ enum Error:
   case Video(errors: NonEmptyChain[video.Error])
   case Recovery(errors: NonEmptyChain[recovery.Error])
   case Location(errors: NonEmptyChain[location.Error])
+  case Terms(errors: NonEmptyChain[terms.Error])
+  case I18n(errors: NonEmptyChain[i18n.Error])
+  case Advertiser(errors: NonEmptyChain[advertiser.Error])
+  case SurveyAuthoring(errors: NonEmptyChain[survey.authoring.Error])
+  case VideoAuthoring(errors: NonEmptyChain[video.authoring.Error])
   case InvalidClient(missing: List[RedirectField])
   case UnknownAccessPoint(apMac: device.Mac)
   case LocationNotDeployed(id: location.LocationId)
@@ -408,9 +421,141 @@ The other three `Answer*` handlers follow one shape: find the user in the state 
 
 The five location commands (`application/commands/Location.scala`) are the backoffice's, not the guest's: what an operator does to a location that is not an operation on its infrastructure. They take no `SessionContext`. Each reads the location by slug (`NotFound` without one, save `CreateLocation`, which refuses a slug another location has, `SlugTaken`, and a blank name) and answers its event or every reason it is refused, as `Error.Location`. `RegisterAccessPointHandler` registers the access point `mac` or changes the one the location has: the token may be left out for one that has a token stored, which it keeps (`TokenRequired` otherwise); `Controller.of` refuses a blank host or site id and a port outside 1–65535; and `settings` applies to the access point's own, or to `Settings.Default` for a new one. `UpdateAccessPointHandler` changes the MAC, the controller's host, port or site and the settings, each `None` keeping what it has, and always keeps the token; a new MAC the location already has is `AccessPointExists`. Both refuse an access point another deployed location takes its guests through (`AccessPointHeld`, from `AccessPointRepository.deployedHolders`), whatever state this location is in: one access point leads to one deployed location, which the portal dispatcher counts on. `RemoveAccessPointHandler` refuses an access point the location does not have (`NoSuchAccessPoint`) and the last one of a `Deployed` location (`LastAccessPoint`), which would turn every guest away. None of them changes the location's `State`: it changes only when an operation on its infrastructure succeeds, which the backoffice records itself (see xref:platform.adoc[Platform]).
 
+=== The backoffice's commands
+
+The content's commands are the backoffice's too, run by a tool as the operator its token names, with no `SessionContext`. Each takes the ids it creates and its instant from the caller; each answers its events or every reason it refuses, in its domain's error, at once. A command that creates something answers what it made — the ids the tool reports — and one that finds nothing to do emits nothing rather than refusing. The operations on a location's infrastructure, `StartOperation` and `CompleteOperation`, are in xref:mcp.adoc[MCP backoffice].
+
+[cols="3,2,3,3"]
+|===
+| Command | Result | Events | Refused with
+
+| `ChangeRecoveryPolicyCommand(slug, change, reset, occurredAt)`
+| `PolicyOverrides`
+| `recovery.PolicyChanged`
+| `NothingToChange`, `SetAndReset`, `Negative`, `CeilingBelowMaximum`
+
+| `PublishTermsVersionCommand(id, translations, occurredAt)`
+| the version's number
+| `terms.VersionPublished`
+| `NoTranslations`, `BlankLocale`, `BlankText`, `RepeatedLocales`, `DroppedLocales`
+
+| `SetTermsTranslationCommand(translation, occurredAt)` / `RemoveTermsTranslationCommand(locale, occurredAt)`
+| `Unit`
+| `terms.TranslationSet` / `TranslationRemoved`
+| `NoTermsYet`, and on removal `NoSuchTranslation`, `LastTranslation`
+
+| `SetTranslationsCommand(slug, locale, entries, occurredAt)`
+| the required keys still missing
+| `i18n.TranslationsSet`
+| `NoEntries`, `UnknownKeys`
+
+| `RemoveTranslationCommand(slug, locale, key, occurredAt)`
+| `TranslationRemoval`
+| `i18n.TranslationRemoved`, none for a text the location does not have
+|
+
+| `ChangeStylesCommand(slug, css, occurredAt)` / `ChangeIconCommand(slug, svg, occurredAt)`
+| `Unit`
+| `location.StylesChanged` / `IconChanged`
+| `BlankStylesheet` / `BlankIcon`; whether it is CSS or safe SVG is the caller's to check
+
+| `CreateAdvertiserCommand(id, name, priority, occurredAt)` / `UpdateAdvertiserCommand(id, name, priority, occurredAt)`
+| `Advertiser`
+| `advertiser.AdvertiserCreated` / `AdvertiserUpdated`
+| `BlankName`, `NegativePriority`, `NameTaken`; on update `NotFound`, `NothingToUpdate`
+
+| `RetireAdvertiserCommand(id, occurredAt)` / `ReinstateAdvertiserCommand(id, occurredAt)`
+| `Unit`
+| `AdvertiserRetired` / `AdvertiserReinstated`
+| `NotFound`
+
+| `CreateSurveyCommand(id, owner, name, occurredAt)`
+| `CreatedSurvey(id, kind)`
+| `survey.authoring.SurveyCreated`
+| `IdentificationSurveyExists` for an identification kind already active; `VideoNotFound` for a video's
+
+| `AddQuestionCommand(survey, identification, question, occurredAt)`
+| `QuestionPlaced(id, displayOrder, options)`
+| `QuestionAdded`, last in the survey
+| `SurveyNotFound`, `OtherSide`, and every reason of `QuestionSpec.problems`
+
+| `UpdateQuestionCommand(question, identification, text, description, placeholder, required, points, occurredAt)`
+| `AnswersKept(answers)`
+| `QuestionUpdated`, none when nothing is asked
+| `QuestionNotFound`, `OtherSide`, `NegativePoints`, `BlankText`, `RepeatedLocales`
+
+| `RetireQuestionCommand(question, identification, occurredAt)` / `ReinstateQuestionCommand(…)`
+| `QuestionActivity(answers, remainingActive)`
+| `QuestionRetired` / `QuestionReinstated`
+| `QuestionNotFound`, `OtherSide`
+
+| `ReorderQuestionsCommand(survey, identification, order, occurredAt)`
+| `Unit`
+| `QuestionsReordered`
+| `SurveyNotFound`, `OtherSide`, `NoQuestions`, `NotEveryQuestion`, `RepeatedQuestion`
+
+| `RegisterVideoCommand(id, slug, kind, title, description, minWatchSeconds, priority, survey, questions, occurredAt)`
+| `RegisteredVideo(video, key, survey, questions)`
+| `video.authoring.VideoRegistered`, then the survey's `SurveyCreated` and each `QuestionAdded`
+| `AdvertiserNotFound`, `AdvertiserRetired`, `NoTitle`, `BlankText`, `RepeatedLocales`, `NoQuestions`, `MinWatchNotPositive`, `NegativePriority`, `NegativeNoRepeat`, `QuestionRefused(index, error)`
+
+| `ConfirmVideoFileCommand(video, file, durationSeconds, occurredAt)`
+| `FileConfirmation(key, active, durationSeconds, minWatchSeconds, minWatchAdjustedFrom, replaced)`
+| `FileConfirmed`
+| `VideoNotFound`, `DurationNotPositive`, `NoFileWaiting`, `FileNoLongerWaiting`
+
+| `StartFileReplacementCommand(video, file, occurredAt)`
+| `AwaitedFile(file, key)`
+| `FileReserved`, none when a new file already waits
+| `VideoNotFound`, `StillPending`, `NoLocation`
+
+| `UpdateVideoCommand(video, title, description, minWatchSeconds, priority, noRepeatSeconds, productCampaignId, occurredAt)`
+| `VideoCorrection(minWatchAdjustedFrom)`
+| `VideoUpdated`, none when nothing is asked
+| `VideoNotFound`, `MinWatchNotPositive`, `NegativePriority`, `NegativeNoRepeat`, `BlankText`, `RepeatedLocales`
+
+| `RetireVideoCommand(video, occurredAt)` / `ReinstateVideoCommand(video, occurredAt)`
+| `VideosInRotation(atLocation)`
+| `VideoRetired` / `VideoReinstated`
+| `VideoNotFound`, `StillPending`
+
+| `CollectReplacedFilesCommand(video: Option, occurredAt)`
+| how many files it deleted, of the video or of every video
+| a `FileDeleted` per file no longer played: replaced, and nobody playing it (`video.VideoFile.collectable`)
+|
+
+| `ExpirePlaybackCommand(playback, occurredAt)`
+| whether it closed it
+| `video.PlaybackExpired`, for a playback still open and past `Playback.expiresAt`
+|
+|===
+
+The commands reading a location by slug refuse an unknown one with `location.Error.NotFound`. The survey question commands take `identification`, the side the caller is on — the deployment-wide identification surveys or a location's — and refuse a question of the other side with `OtherSide`, since each side has its own tools and scope. `QuestionSpec.problems` is every reason a question cannot be asked: no wording, a text with a blank entry or a repeated locale, a choice question with no options or an option with no text, a hierarchy level outside a location survey, negative points. `RegisterVideo` writes its survey with it, named after whose video it is and the video's Spanish title (`VideoRules.titleOf`); an advertiser's video needs a question, a promo's survey exists only when it is given some. `ConfirmVideoFile` takes the file the caller found uploaded, so one another replaced meanwhile is refused, and lowers the minimum watch to the file's length (`VideoRules.minWatch`), as `UpdateVideo` does against the file a video plays. A file's key is `VideoFile.keyOf(slug, file)`: under the location's prefix, which is why a video cannot move.
+
 == Queries
 
 `application/queries/` declares a `Query[F, Q]` trait (`execute(query: Q): F[Either[Error, Result]]` with the same `Aux` pattern) and the backoffice's queries: each one's input and output, kept anemic — plain data, no entities, no methods — and implemented in `platform`. Where an output needs a rule, the rule is a pure function here that the implementation calls, as `LocationReadinessQuery.nextSteps` is. The portal's read side does not go through them: it goes through the repositories and the `Provide*` commands.
+
+[cols="2,3"]
+|===
+| Query | Answers
+
+| `ListLocationsQuery(includeInactive)` | `LocationSummary` each: slug, name, whether it has an access point and requires a fingerprint
+| `AccessPointsOfQuery(slug)` | `AccessPointsReport`: each access point with its controller, whether a token is stored, never the token
+| `PreviewLocationQuery(slug, locale)` | `LocationPreview`: what the portal draws with — stylesheet, icon, texts, locales, how many keys are untranslated
+| `LocationReadinessQuery(slug)` | `ReadinessReport`, with its next steps
+| `RunStatusQuery`, `AssetsOfQuery(slug)` | a run of an operation; how many objects a location has in the bucket
+| `RecoveryPolicyOfQuery(slug)` | `RecoveryPolicyReport`: the policy in force, and which settings take the default
+| `TermsInForceQuery()` | `TermsReport`: the version in force with its texts, and the earlier ones' numbers
+| `TranslationCoverageQuery(slug)` | `TranslationCoverageReport`: each locale's required keys present and missing, and the unknown ones
+| `StylesOfQuery(slug)`, `IconOfQuery(slug)` | `PublishedDocument`: the stylesheet or icon the location published, none for the default
+| `ListAdvertisersQuery(includeInactive)` | `AdvertiserReport` each, with its videos in rotation
+| `ListSurveysQuery(slug, includeInactive)`, `SurveyOfQuery(id)` | the surveys with their questions' wording; one survey whole, with each question's options, stored rules and answers
+| `VideosOfQuery(slug, includeRetired)`, `VideoOfQuery(video)` | `VideoReport`: title, location, kind, status, the length of the file it plays, whether a new file waits
+| `PendingUploadsQuery(slug)` | the videos waiting for their first file, oldest first
+| `UploadUrlQuery(video)` | `WaitingUpload`: the file the video waits for, with its key; signing a URL for it is the caller's
+| `OpenPlaybacksQuery(playback)` | each open playback with when it is due to be closed (`Playback.expiresAt`)
+|===
 
 == Aggregates
 
@@ -765,6 +910,24 @@ A location as the backoffice administers it: its slug, its name, whether its por
 | `DeviceLookup.matching(seen)` | `Device[State]` — the known device `seen` matches under the deployment's policy; none when none does, or when `seen` lacks what the policy compares
 | `DeviceLookup.byId(id)` | `Device[State]`
 | `UserDirectory.exists(id)` | `Boolean` — whether the user a cookie names is still known
+|===
+
+The backoffice's commands read through their own, none of which takes a session either:
+
+[cols="2,3"]
+|===
+| Trait / method | Returns
+
+| `AdvertiserRepository.find(id)`, `.named(name)` | `Advertiser`; the advertisers called `name`, retired ones included
+| `RecoveryPolicyRepository.of(location)` | `PolicyOverrides` — what the location changed of the defaults
+| `TermsRepository.current` / `TermsTextRepository.translations(version)` | the version in force; its texts
+| `TranslationRepository.of(location, locale)` | the location's texts in that locale, by key
+| `SurveyAuthoringRepository.survey(id)`, `.question(id)`, `.questionsOf(survey)` | `SurveyInfo`, `QuestionInfo` — a survey's kind and whether it is active, a question's survey and place
+| `SurveyAuthoringRepository.answersTo(question)`, `.activeSurveyOf(kind)`, `.videoOwner(video)` | how many answers a question has; the active identification survey of a kind; where a video belongs
+| `VideoAuthoringRepository.video(id)` | `VideoInfo` — its kind, status, location, minimum watch, the file it plays and the one it waits for
+| `VideoAuthoringRepository.activeAt(location)`, `.files(video)` | the videos in rotation there; the confirmed files not deleted, each with whether it is current and how many playbacks of it are open
+| `PlaybackRepository.open(id)` | `OpenPlayback` — a playback not ended, with what its deadline is reckoned from
+| `RunRepository.going(location)`, `.unfinished(location)`, `.findStarted(run)` | the run holding the location's lock; the latest run, when none holds it and it did not complete; a run started
 |===
 
 The location's two are implemented together by `LocationRepositoryQuill`, which takes no `SessionContext`: the location commands run with no guest session, and entering the portal reads the served location before it has one. `SessionRepository`, `UserDirectory` (`infrastructure/SessionRepository.scala`) and `DeviceLookup` (`infrastructure/DeviceRepository.scala`) are what entering the portal reads outside any session, and take none either; `EntryRepositoriesQuill` implements the three together. Each device either lookup answers comes with where it stands with the terms of service in force.

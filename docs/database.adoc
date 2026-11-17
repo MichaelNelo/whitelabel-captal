@@ -338,10 +338,13 @@ is a write that may not have happened.
 
 The exception is a write inside a transaction. There the driver defers every write to the commit and
 reports none of them affecting a row, so the count says nothing: the event handlers that write
-inside `TransactionalEventHandler` — `LocationPersistenceHandler`, which writes what the
-backoffice's location commands decided, among them — check none. What a count would catch is
-checked before, by the command reading what it decides on (the slug free, the access point there),
-and a statement rqlite refuses fails the commit.
+inside `TransactionalEventHandler` — every command's, the guest's and the backoffice's alike — check
+none. What a count would catch is checked before, by the command reading what it decides on (the
+slug free, the access point there, the file still awaited), and a statement rqlite refuses fails the
+commit. A handler that has to know what a write did runs after the commit instead: `PlaybackHandler`
+reads the count of a playback's insert, and `ReplacedFileDeletionHandler` reads a file's mark back
+before deleting its object. In the backoffice, the tokens are the one write outside `core`'s
+commands, and `Writes` checks them.
 
 The consequence is broader than the helper:
 

@@ -2,8 +2,8 @@
 :toc:
 :toclevels: 2
 
-A plan agreed in conversation on 2026-11-15 and not started: it waits until
-xref:admin-core-plan.adoc[the admin core plan] is done. Every backoffice tool and every API route that
+A plan agreed in conversation on 2026-11-15. Its tools are done (<<done-tools>>); its endpoints wait
+for the next rework of the API's routes. Every backoffice tool and every API route that
 runs one command or one query does the same few things around it; this turns them into one extension
 for tools and one for typed endpoints, so a tool or a route says only how its input becomes the
 command and how the result becomes its answer.
@@ -85,3 +85,35 @@ cookie names into `SessionContext`, the phase check of `SessionEndpoint.authoris
   location tools first.
 . The endpoints' extension, the next time the API's routes are reworked: there are few of them, and
   each has more of its own around the command than a tool does.
+
+[[done-tools]]
+== Done on 2026-11-17: the tools
+
+`Adapters` in `mcp/tools/` has `runs`, `runsEither` and `reads`, and every tool that runs one
+command or one query is built with them; compiled, and not yet run through `mcp.test` or the E2E,
+which wait on LocalStack's license. What it became, against the sketch above, each change agreed in
+conversation:
+
+* *No `Fresh`.* The factory is an effect: it reads the instant from `Clock` and makes its ids with
+  each type's own `generate`, so there is nothing to hand it.
+* *No `Describe[E]`.* What a refusal reads as is one exhaustive function, `Refusals.describe`,
+  matching every case of `AppError` and describing each domain once. The typeclass's one advantage,
+  overriding by scope, is a parameter instead (`runs(command, describe)`), which only the survey
+  question pairs pass, to name the other tool. `cats.Show` and ZIO Prelude's `Debug` were weighed
+  and left: what is described is one type, `AppError`, for one audience, and a `Show` instance would
+  claim to be every audience's textual form.
+* *The error type is `AppError`*, since flows and queries already fix it in `core`. What fails while
+  the input is read — a MAC, a rule's value — is the tool's and fails with its text.
+* *`runsEither`* takes a factory that picks one of two commands answered alike, for the four
+  `set_*_active` tools.
+* *Queries are found in the environment*, built once in `Queries`, as the flows are; `reads` takes
+  its answer as an effect too, since `resume_video_upload` signs a URL in it.
+* *The result's type is named on the answer's parameter*, which is how the flow or the query is
+  found: a generic `Tag` of `Flow.Aux[Task, C, Res]` was checked to match the one a layer registers
+  under a concrete alias.
+* *What the creating commands answer grew*: the answer sees only the input and the result, so a
+  command that makes ids answers them (see the admin core plan's seventh step).
+
+Written by hand still, as the code says why: the four operation tools, whose refusals lead to a
+question and another command; `configure_unifi`, which signs its ticket with the calling token; the
+token tools, outside `core`; and the static ones.

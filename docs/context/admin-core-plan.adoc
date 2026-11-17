@@ -802,6 +802,43 @@ checked against canned rqlite answers and `tofu validate`, and reaches productio
 . Video lifecycle with advertisers; survey and question authoring; recovery policy; terms of service
   versions; i18n keys; styles and icon. Each tool a command or a query, as the table in
   <<decided-2026-11-15>> has it.
++
+*Done on 2026-11-17*, compiled and tested in `core` but not yet run through `mcp.test` or the E2E,
+which wait on LocalStack's license. Each domain has its commands, events and errors in `core`, a
+repository port, a persistence handler and its queries in `platform`, and its tools as commands and
+queries: the recovery policy (`ChangeRecoveryPolicy`, `RecoveryPolicyOf`), the terms
+(`PublishTermsVersion`, `SetTermsTranslation`, `RemoveTermsTranslation`, `TermsInForce`), the
+translations (`SetTranslations`, `RemoveTranslation`, `TranslationCoverage`), the styles and icon
+(`ChangeStyles`, `ChangeIcon`, `StylesOf`, `IconOf`, published after the commit by
+`AssetPublishingHandler`), the advertisers, the surveys (`core/survey/authoring/`) and the videos
+(`core/video/authoring/`); the location's reads became `ListLocations`, `AccessPointsOf` and
+`PreviewLocation`, and `GetIdentificationSurvey` went. What it became, against the table:
++
+* *A question's retirement is two commands*, `RetireQuestion` and `ReinstateQuestion`, as the table
+  has it; it was one, `SetQuestionActive`, until that was caught.
+* *Registering a video writes its survey too.* `RegisterVideo(kind)` emits the video's event, then
+  its survey's and its questions' (`survey.authoring`'s), which `VideoFlows` writes in one
+  transaction: before, the tool wrote them statement by statement, and a failure part way left a
+  video without its survey. The survey's name — the advertiser's, or the venue's for a promo, and
+  the video's Spanish title — is `core`'s.
+* *The length still comes from the upload page*, not from S3. `ConfirmVideoFile(video, file, length)`
+  takes the file the tool found in S3, so one another replaced meanwhile is refused.
+* *`UploadUrl` signs nothing*: it answers the file a video waits for, with its key; the tool signs.
+* *What the creating commands answer* grew for the tools built with the flow adapters plan, whose
+  answer sees only the input and the result: `CreatedSurvey(id, kind)`, the options' ids in
+  `QuestionPlaced`, the video in `RegisteredVideo`, the key in `FileConfirmation`.
+* *The background jobs became commands*, which the table did not list: `CollectReplacedFiles` (a
+  pass deleting the files nobody plays, each `FileDeleted`, its object deleted after the commit and
+  only if its row was marked) and `ExpirePlayback` (`PlaybackExpired`), with `OpenPlaybacks` for the
+  timers' deadlines. Their changes are logged under the actor `job:video-upkeep`.
+* *The resources, the prompt and the upload page read through queries* too (`VideoOf` for the page),
+  and every query is built once, in layers (`Queries`), as the flows are.
+* *Validation moved into the commands*, which answer every reason at once instead of the first. They
+  check more than the tools did — a video's title and description, a question's texts on update, a
+  video's priority at creation — and the messages that differed between tools for one error became
+  one.
+* *No row count inside the transaction.* The persistence handlers check none, since the driver
+  reports none there; the first video handler did, and would have failed every confirmation.
 
 The `deploy-location` skill was rewritten with the fourth step (6.0.0): a newer bundle or image is
 the release's, a deploy is for a location created or destroyed, a step's result is its note, and a

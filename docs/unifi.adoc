@@ -497,10 +497,11 @@ or V34 has not reached (below), and writing them changes nothing. A later migrat
 === Which tool writes them
 
 Every write below is one of `core`'s location commands — `RegisterAccessPointCommand`,
-`UpdateAccessPointCommand`, `RemoveAccessPointCommand` — run through `LocationCommands` as the
-operator token that asked for it, and logged in `event_log` under that token without the
-controller's token (see xref:mcp.adoc[MCP backoffice] and xref:core.adoc[Core]). A refusal writes
-nothing.
+`UpdateAccessPointCommand`, `RemoveAccessPointCommand` — run as the operator token that asked for it
+(`Commands.run`), and logged in `event_log` under that token without the controller's token (see
+xref:mcp.adoc[MCP backoffice] and xref:core.adoc[Core]). A refusal writes nothing. Every read is
+`AccessPointsOfQuery`, which the form, `get_unifi_config` and the two tools that change an access
+point answer with alike.
 
 `configure_unifi` (`UnifiTools.configure`, scope `content:write`) registers an access point, and is
 the only writer of the tokens. It takes a slug and, optionally, `apMac`: no token travels through

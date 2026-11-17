@@ -258,7 +258,48 @@ is ambient, which is what lets the same repository serve a request and a schedul
   `byId`, a device by id; `exists`, whether a `users` row has that id. Each device comes `Accepted`
   when the version it accepted last is the one in force (`Terms.current`), `NotAccepted` otherwise.
   `apply(quill, sessions, policy)`: no `SessionContext`.
+
+| `AdvertiserRepository[Task]`
+| `repositories/AdvertiserRepositoryQuill.scala`
+| `advertisers`, by id and by name; an id that is no UUID is no advertiser
+
+| `RecoveryPolicyRepository[Task]`
+| `repositories/RecoveryPolicyRepositoryQuill.scala`
+| the location's `location_recovery` row, as the overrides it holds
+
+| `TermsRepository[Task]`, `TermsTextRepository[Task]`
+| `repositories/TermsRepositoryQuill.scala`
+| the version in force; its texts (`texts(quill)`)
+
+| `TranslationRepository[Task]`
+| `repositories/TranslationRepositoryQuill.scala`
+| a location's active `frontend` texts in a locale
+
+| `SurveyAuthoringRepository[Task]`
+| `repositories/SurveyAuthoringRepositoryQuill.scala`
+| `surveys`, `questions` and `answers`, for the survey commands; a survey of a category with no kind
+  in `core` is none. `kindOf` and `categoryOf` translate between the stored category and the kind
+
+| `VideoAuthoringRepository[Task]`
+| `repositories/VideoAuthoringRepositoryQuill.scala`
+| `advertiser_videos`, `video_files` and the open `video_playbacks`, for the video commands: a
+  video's current file and the one it waits for, the key `AssetStore.keyOf` reads off its URL; the
+  confirmed files, each with whether it is current and how many playbacks of it are open.
+  `apply(quill, store)`
+
+| `PlaybackRepository[Task]`
+| `repositories/PlaybackRepositoryQuill.scala`
+| an open playback joined to its file and its session, with the grace of the session's location
+
+| `RunRepository[Task]`
+| `repositories/RunRepositoryQuill.scala`
+| `mcp_deploy_runs`, and whether the location's lock is held (`DistributedLock`)
 |===
+
+`BackendTexts` is the content's own wording in `localized_texts` under the `backend` category, keyed
+by the entity's id — a question's description and placeholder with `_desc` and `_placeholder`, a
+video's description with `_desc`: `of` reads it, `write` adds a new entity's, `replace` rewrites the
+locales given and keeps the rest.
 
 `Errors` is the `errors` table's vocabulary. `recordServer` inserts a defect the API caught and
 never fails: an error that cannot be recorded is still answered, only without an id.
@@ -274,6 +315,47 @@ manifest of a server told none.
 `QuestionToAnswer`, including `parseQuestionType`, `parseHierarchyLevel` and
 `unreadableRules`/`warnUnreadableRules`, which log the rules whose stored JSON no longer decodes
 rather than dropping them silently.
+
+== Queries
+
+`queries/` implements `core`'s queries (see xref:core.adoc#_queries[Core]): each an `object` whose
+`apply` — or a factory named for the query, where one object holds several — takes the `quill`, and
+the `AssetStore` when it reads the bucket, and answers the `Query.Aux`. They are built once, in the
+backoffice's layers.
+
+[cols="2,3"]
+|===
+| Implementation | Answers
+
+| `Locations.list`, `.accessPoints`, `.preview(quill, store)`
+| `ListLocationsQuery`, `AccessPointsOfQuery`, `PreviewLocationQuery`; an unknown slug is
+  `location.Error.NotFound`
+
+| `LocationReadiness(quill, store)`, `RunStatus`, `AssetsOf(store)`
+| `LocationReadinessQuery`, `RunStatusQuery`, `AssetsOfQuery`
+
+| `RecoveryPolicyOf`, `TermsInForce`, `TranslationCoverage`
+| `RecoveryPolicyOfQuery`, `TermsInForceQuery`, `TranslationCoverageQuery`
+
+| `PublishedDocuments.styles`, `.icon` (quill, store)
+| `StylesOfQuery`, `IconOfQuery`, read where the location's portal reads them
+
+| `ListAdvertisers`
+| `ListAdvertisersQuery`, each advertiser with its videos in rotation (`activeVideos`)
+
+| `Surveys.list`, `.of`
+| `ListSurveysQuery` — a survey of no location kept whatever the slug, since every location asks
+  it — and `SurveyOfQuery`, each question's rules as stored, since decoding drops one that does not
+  match its type
+
+| `Videos.of`, `.one`, `.pending`, `.uploadUrl(quill, store)`
+| `VideosOfQuery`, `VideoOfQuery`, `PendingUploadsQuery`, `UploadUrlQuery`; a title is the one
+  `VideoRules.titleOf` picks of the video's texts
+
+| `Playbacks.open`
+| `OpenPlaybacksQuery`, each deadline from the file's length and the grace of the session's
+  location, read once per location
+|===
 
 == Services
 
@@ -478,24 +560,68 @@ every handler sees every event.
 
 === The backoffice's chain
 
-The location commands run in the backoffice (`LocationCommands`, see xref:mcp.adoc[MCP backoffice])
-through a chain of their own, with no guest session:
+The backoffice's commands run through chains of their own, with no guest session, each composed once
+in the backoffice (see xref:mcp.adoc[MCP backoffice]) around the handler that writes its domain:
 
 [source,scala]
 ----
 TransactionalEventHandler(
-  LocationPersistenceHandler().andThen(EventLogHandler.forOperator(actor)),
+  LocationPersistenceHandler().andThen(EventLogHandler.forOperator(operators)),
   quill)
 ----
 
-`LocationPersistenceHandler` writes what they decided: `LocationCreated` inserts the `locations` row
-(requiring a fingerprint, `created`); `FingerprintRequirementChanged` sets `fingerprint_is_required`;
-`AccessPointRegistered` inserts an `access_points` row with a random UUID, its controller and its
-settings; `AccessPointUpdated` updates the row with the location and the old MAC, the MAC included;
-`AccessPointRemoved` deletes it. It checks no row count: inside the transaction the driver defers
-every write to the commit and reports none of them affecting a row. What a count would catch is
-checked before — the commands read that the slug is free and that the access point is there before
-deciding — and a statement rqlite refuses fails the commit.
+`EventLogHandler.forOperator` logs each event under the actor the `OperatorContext` publishes when it
+runs: the operator token a tool's call carries, or `job:video-upkeep` for the background jobs.
+
+[cols="2,5"]
+|===
+| Handler | What it writes
+
+| `LocationPersistenceHandler`
+| `LocationCreated` inserts the `locations` row (requiring a fingerprint, `created`);
+  `FingerprintRequirementChanged` sets `fingerprint_is_required`; `AccessPointRegistered` inserts an
+  `access_points` row with a random UUID, its controller and its settings; `AccessPointUpdated`
+  updates the row with the location and the old MAC, the MAC included; `AccessPointRemoved` deletes
+  it
+
+| `RecoveryHandler`
+| on `PolicyChanged`, the location's `location_recovery` row, whole (see <<location-recovery>>)
+
+| `TermsPersistenceHandler`
+| a version and its texts on `VersionPublished`; a text set or removed in the version in force
+
+| `TranslationPersistenceHandler`
+| the location's `frontend` texts in `localized_texts`: upserted on their natural key, reactivating a
+  retired one; retired, never deleted, on `TranslationRemoved`
+
+| `AdvertiserPersistenceHandler`
+| the `advertisers` row: inserted, updated, retired, reinstated
+
+| `SurveyAuthoringPersistenceHandler`
+| the survey; a question with its options and its rules, each rule as the JSON `surveySchemas` reads
+  back, and its wording — text, description, placeholder, each option's — as `backend` texts
+  (`BackendTexts`); a question's corrections, its retirement and its order
+
+| `VideoPersistenceHandler`
+| the video, pending, with its first file and its title and description as `backend` texts; a file
+  reserved, at the URL the `AssetStore` makes of its key; a file confirmed — `confirmed_at` at the
+  fixed width `VideoFiles.stamp` writes, its length, and the video's status and minimum watch; a
+  video's corrections, retirement and reinstatement; a file collected, through `VideoFiles.condemn`
+
+| `PlaybackExpiryHandler`
+| a playback expired, through `VideoFiles.expire`
+|===
+
+A video's registration runs `VideoPersistenceHandler` before `SurveyAuthoringPersistenceHandler`,
+since its survey's row points at the video's.
+
+None checks a row count: inside the transaction the driver defers every write to the commit and
+reports none of them affecting a row. What a count would catch is checked before — each command reads
+what it decides on, the slug free, the access point there, the file still awaited — and a statement
+rqlite refuses fails the commit. Two run after the commit, outside it: `AssetPublishingHandler`, which
+puts a stylesheet or an icon in the assets bucket and invalidates it at the edge, and
+`ReplacedFileDeletionHandler`, which deletes a collected file's object — only when its row reads
+back marked, since the mark is the statement that checks nobody plays the file.
 
 === The entry chain
 
@@ -575,6 +701,12 @@ Whichever runs second sees the first: a start after the condemn finds the file n
 condemn after the start finds the playback. Reading first and writing after would leave a window
 between the two, transaction or not — the driver's transactions batch the writes, not the reads.
 
+The backoffice condemns through `CollectReplacedFilesCommand`: `core` picks the files no longer
+played, `VideoPersistenceHandler` runs `condemn` for each inside the transaction, and after the commit
+`ReplacedFileDeletionHandler` deletes the object of each whose row reads back marked. It closes a
+playback its page never ended through `ExpirePlaybackCommand`, which `PlaybackExpiryHandler` writes
+with `expire`.
+
 `confirmed_at` is compared as text, so `VideoFiles.stamp` writes it at a fixed width:
 `Instant.toString` drops trailing zeros, and `…:41Z` sorts after `…:41.5Z`.
 
@@ -594,8 +726,9 @@ so a location that never set anything follows the defaults as they change.
 
 Both readers read it as they need it, so a change applies to the next guest with no redeploy. The
 portal reads the wait policy on every request for a way out, as it reads the UniFi switch. The
-backoffice's playback timer reads the grace of the session's location when the playback starts, so
-a playback already timed keeps its deadline; one whose session is gone takes the default. The
+backoffice's playback timer reads the deadline when the playback starts, and closing it checks it
+again with the grace in force: a lengthened grace postpones a playback already timed, a shortened one
+takes effect at the deadline it was timed for. One whose session is gone takes the default. The
 backoffice's `set_recovery_policy` is the only writer.
 
 == Migrations

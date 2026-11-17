@@ -119,29 +119,58 @@ and a release can start this server meanwhile — is waited for: a refused conne
 every five seconds for up to five minutes, with a warning each time. Any other failure stops the
 start at once.
 
-== Writing to rqlite
+[[commands-and-queries]]
+== Tools as commands and queries
 
-Two small files underpin every mutation in this module.
-
-`Writes.scala` is the write-verification helper, used after essentially every Quill `update` or
-`insert`:
+Every tool that changes the content runs one of `core`'s commands, and every one that reads it asks
+one of `core`'s queries (see xref:core.adoc[Core]): no tool reads or writes a table. A tool says only
+how its input becomes the command or the query, and how the result becomes its answer — both
+effects, failing with what the operator reads — through the extensions on `McpTool` in `Adapters`:
 
 [source,scala]
 ----
-def expectOne(affected: Long, what: String): ZIO[Any, String, Unit]
-def expectAtLeastOne(affected: Long, what: String): ZIO[Any, String, Unit]
+McpTool("create_advertiser")
+  .requireScopes(Auth.ContentWrite)
+  .runs((in: CreateRequest) =>
+    Clock.instant.map(CreateAdvertiserCommand(AdvertiserId.generate, in.name, in.priority, _))):
+    (_, created: Advertiser) =>
+      ZIO.succeed(CreateResponse(created.id.asString, created.name, created.priority))
 ----
 
-It exists because rqlite reports a rejected statement as an `error` field inside an ordinary HTTP
-200, and the JDBC driver turns that into "0 rows affected" rather than an exception — a `CHECK` or
-`UNIQUE` constraint in this stack is not a safety net a mutation can rely on seeing. See
-xref:database.adoc[Database] for the general rule; this module leans on it constantly because so
-many of its writes are upserts against natural keys rather than surrogate-id lookups.
+* `runs` builds the command, runs its flow as the operator the call's token names, and answers from
+  the result. The result's type is on the answer's parameter, which is how the flow is found: the
+  handler needs `Flow.Aux[Task, C, Res]` from the environment.
+* `runsEither` is `runs` for a tool whose input picks one of two commands — a retirement or a
+  reinstatement — answered alike.
+* `reads` builds the query, asks it, and answers from its result, needing `Query.Aux[Task, Q, Res]`.
 
-The location commands are the exception. They write inside a transaction, where the rqlite driver
-defers every write to the commit and reports none of them affecting a row, so
-`LocationPersistenceHandler` checks no count: what a count would catch, the command reads before it
-decides — the slug free, the access point there — and a statement rqlite refuses fails the commit.
+Building the command reads the clock and makes the ids it creates; it may read first, as
+`confirm_video_upload` checks that the file arrived, and the answer may add what is not state, as a
+signed upload URL. Storage stays out of `core`: what only the bucket knows is checked in the tool.
+
+The flows are composed once, in `Main`'s layers, each through the chain that writes its domain and
+logs it (see xref:platform.adoc[Platform]): `LocationFlows`, `ContentFlows` (recovery, terms,
+translations, advertisers, surveys), `AssetFlows`, `VideoFlows` and `OperationFlows`, each naming
+its flows as type aliases (`ContentFlows.CreateAdvertiser`). `Queries` builds the queries the same
+way, in two groups: `Queries.Database`, those that read only the database, and `Queries.Assets`,
+those that read the bucket too. `CaptalMcp.Env` is all of them, with the `OperatorContext` the flows
+log under.
+
+`Commands` is where the two meet `core`. `run(operator, command)(flow)` publishes the operator for
+the flow's handlers (`OperatorContext.locally`), so `event_log` records it as `actor`; `runAs` runs
+as the call's own token, and a call with none is refused before anything runs; `ask(query, q)`
+answers the query. A refusal writes nothing and is answered as text: `Refusals.describe`, one
+exhaustive function over `core`'s `Error` — every domain's errors described once, each naming the
+tool that does what was refused instead — unless the tool passes its own `describe`, as the survey
+pairs do with `Refusals.describing(side)` to name the other side's tool. A failure that is no
+refusal is a defect, and dies.
+
+Writes inside a transaction check no row count: the rqlite driver defers every write to the commit
+and reports none of them affecting a row. What a count would catch, the command reads before it
+decides, and a statement rqlite refuses fails the commit. The one write outside `core` is the
+tokens' (<<Tokens>>), which `Writes.expectOne` checks: rqlite reports a rejected statement as an
+`error` field inside an ordinary HTTP 200, which the JDBC driver turns into "0 rows affected" rather
+than an exception (see xref:database.adoc[Database]).
 
 `QuillArrow.scala` is the Scala 3.10 compatibility patch described above, under <<What the module
 is>>.
@@ -344,14 +373,13 @@ surface as a page that will not open."
 
 == The tool catalogue
 
-Grouped three ways at once, each real: by business area (the table below, one group per source
-file); by what environment a tool needs (`LocationTools`, `I18nTools`, `AdvertiserTools`,
-`SurveyTools`, `RecoveryTools`, `TokenTools`, `SkillTools` and `UnifiTools` need only
-`QuillSqlite`; `AssetTools`,
-`VideoTools`, `PreviewTools`, `Readiness` and the deploy tools also need `AssetStore`, which is
-why `CaptalMcp` assembles them as two separate groups — `UnifiTools` is registered with the second,
-though whether an access point is free to take is read from the state recorded on each location,
-not from S3); and by visibility, covered above.
+Grouped by business area (the tables below, one group per source file) and by visibility, covered
+above. Each tool needs from the environment only the flows and queries it runs and asks, which its
+type names (`McpToolHandlerR[OperatorContext & ContentFlows.CreateAdvertiser]`); `CaptalMcp`
+registers them in two lists, those that reach the assets bucket — `AssetTools`, `VideoTools`,
+`PreviewTools`, `Readiness`, `UnifiTools` and the deploy tools — and the rest, under one
+environment, `CaptalMcp.Env`. Which command or query each runs is in its row: see
+<<commands-and-queries>>.
 
 === Locations
 
@@ -387,13 +415,10 @@ the location as `list_locations` reports it.
 There is no rename or delete tool for a location itself — only these three.
 
 Every location write — `create_location`, `set_fingerprint_required`, the UniFi form and the access
-point tools below — is one of `core`'s location commands (xref:core.adoc[Core]), run by
-`LocationCommands.run` as the operator token that made the call, through
-`TransactionalEventHandler(LocationPersistenceHandler().andThen(EventLogHandler.forOperator(actor)),
-quill)`: what the command decided is written and logged in `event_log` under that token (`actor`)
-in one transaction, without the controller's token. A call with no operator token is refused before
-anything runs. A refusal writes nothing, and `LocationCommands.describe` turns each of the
-command's errors into what the operator reads.
+point tools below — is one of `core`'s location commands (xref:core.adoc[Core]), run through
+`LocationFlows` as the operator token that made the call: what the command decided is written and
+logged in `event_log` under that token (`actor`) in one transaction, without the controller's token.
+`list_locations` asks `ListLocationsQuery`.
 
 === Translations (`I18nTools`)
 
@@ -408,22 +433,25 @@ the list nor the explanations can drift from what the portal reads."
 
 |`get_i18n_status`
 |read-only
-|Per-locale coverage: `present`, `missing` (a guest literally sees `[welcome.title]` for each of
-these), `unknown` (stored but never read — usually a typo, harmless but worth removing).
+|`TranslationCoverageQuery`. Per-locale coverage: `present`, `missing` (a guest literally sees
+`[welcome.title]` for each of these), `unknown` (stored but never read — usually a typo, harmless
+but worth removing).
 
 |`set_translations`
 |`i18n:write`
-|Rejects the whole call if *any* key is unknown, rather than writing the good ones — "a typo'd key
-would otherwise be written and silently never rendered." A new locale is created by writing to it.
+|`SetTranslationsCommand`. Rejects the whole call if *any* key is unknown, rather than writing the
+good ones — "a typo'd key would otherwise be written and silently never rendered." A new locale is
+created by writing to it.
 
 |`remove_translation`
 |`i18n:write`
-|Soft-deletes one key; the portal falls back to showing `[key]` until it is restored.
+|`RemoveTranslationCommand`. Soft-deletes one key; the portal falls back to showing `[key]` until it
+is restored.
 |===
 
-Writes upsert on the natural key `(entity_id, locale, location_id)` rather than looking up a
-surrogate id first, because with a surrogate id "a blind insert collides with the unique index …
-and fails outright instead of updating."
+`TranslationPersistenceHandler` upserts on the natural key `(entity_id, locale, location_id)` rather
+than looking up a surrogate id first, because with a surrogate id "a blind insert collides with the
+unique index … and fails outright instead of updating."
 
 === Advertisers
 
@@ -433,22 +461,25 @@ and fails outright instead of updating."
 
 |`list_advertisers`
 |read-only
-|Rotation priority and active video count per advertiser; retired ones hidden unless
-`includeInactive`.
+|`ListAdvertisersQuery`. Rotation priority and active video count per advertiser; retired ones
+hidden unless `includeInactive`.
 
 |`create_advertiser`
 |`content:write`
-|Name uniqueness checked by hand (no schema constraint).
+|`CreateAdvertiserCommand`. A name another advertiser has is refused (`NameTaken`) by the command,
+since the schema has no constraint on it.
 
 |`update_advertiser`
 |`content:write`
-|Name and priority; omitted fields are left untouched.
+|`UpdateAdvertiserCommand`. Name and priority; omitted fields are left untouched.
 
 |`set_advertiser_active`
 |`content:write`
-|Retiring an advertiser takes its videos out of rotation too — the video selection query joins on
-the advertiser being active — and the response reports the resulting `activeVideos` count "so the
-operator sees the blast radius rather than discovering it in the portal."
+|`RetireAdvertiserCommand` or `ReinstateAdvertiserCommand` (`runsEither`). Retiring an advertiser
+takes its videos out of rotation too — the video selection query joins on the advertiser being
+active — and the response reports the resulting `activeVideos` count, read with
+`ListAdvertisersQuery`, "so the operator sees the blast radius rather than discovering it in the
+portal."
 |===
 
 `priority` of zero means a video is never drawn.
@@ -466,49 +497,52 @@ former, `content:write` for the latter.
 
 |`list_surveys`
 |read-only
-|
+|`ListSurveysQuery`.
 
 |`get_survey`
 |read-only
-|Returns the stored rule JSON *as stored*, undecoded — the only view that can show a rule which
+|`SurveyOfQuery`. Returns the stored rule JSON *as stored*, undecoded — the only view that can show a rule which
 exists in the table but is dropped, unapplied, every time the portal reads it, because it no longer
 matches its question's type.
 
 |`update_question` / `update_identification_question`
 |`content:write` / `identity:write`
-|Wording, help text, placeholder, required-ness, points. Cannot change a question's type or its
+|`UpdateQuestionCommand`. Wording, help text, placeholder, required-ness, points. Cannot change a question's type or its
 options — the type decides which rules and options are even representable; retire the question and
 create a new one instead.
 
 |`set_question_active` / `set_identification_question_active`
 |`content:write` / `identity:write`
-|Never deletes — `answers.question_id` references `questions`, so retiring through `is_active` is
+|`RetireQuestionCommand` or `ReinstateQuestionCommand`. Never deletes — `answers.question_id` references `questions`, so retiring through `is_active` is
 the only safe removal. Reports `remainingActive`, since retiring the last active question leaves a
 survey that can never be served.
 
 |`reorder_questions` / `reorder_identification_questions`
 |`content:write` / `identity:write`
-|Requires the *complete* active-question set named exactly once; a partial list would leave
+|`ReorderQuestionsCommand`. Requires the *complete* active-question set named exactly once; a partial list would leave
 questions sharing an order with no tie-break.
 
 |`create_survey`
 |`content:write`
-|Attaches to a video and inherits that video's location and advertiser (a promo video has neither,
+|`CreateSurveyCommand`. Attaches to a video and inherits that video's location and advertiser (a promo video has neither,
 and its survey is served and answered all the same).
 
 |`create_identification_survey`
 |`identity:write`
-|One of exactly three global categories; a second active survey in the same category is refused —
+|`CreateSurveyCommand`. One of exactly three global categories; a second active survey in the same category is refused —
 "Identification surveys are global and picked by category, so two would be ambiguous."
 
 |`create_question` / `create_identification_question`
 |`content:write` / `identity:write`
-|Default `required = true`, `points = 10`.
+|`AddQuestionCommand`, last in the survey. Default `required = true`, `points = 10`.
 |===
 
-`surveys.category` and `questions.question_type` both carry a `CHECK` constraint in the schema, but
-a `CHECK` violation is rejected exactly as silently as any other statement under rqlite, so the
-legal values are checked in Scala too. `AnswerFormat` — shared with `VideoTools`' question creation
+Each pair runs the same command, which takes the side the tool is on and refuses a survey or a
+question of the other (`OtherSide`); the pair's refusals are described with
+`Refusals.describing(side)`, which names the other side's tool. `surveys.category` and
+`questions.question_type` both carry a `CHECK` constraint in the schema, but a `CHECK` violation is
+rejected exactly as silently as any other statement under rqlite, so the legal values are `core`'s
+types — `SurveyKind`, `QuestionSpec` — before they are rows. `AnswerFormat` — shared with `VideoTools`' question creation
 — is the discriminated enum behind a question's wire shape: `Radio`, `Dropdown`, `Checkbox`,
 `Input`, `Numeric`, `Date`, discriminator `kind`, each case `@rejectExtraFields`. There is
 deliberately no `rating` case: `QuestionType.Rating` still exists in `core` (the wire contract, so a
@@ -529,34 +563,35 @@ expose, in xref:client-styling.adoc[Client styling].
 
 |`create_advertiser_video`
 |`content:write`, `.withUi(UploadUi.AppUri)`
-|Requires at least one question on its survey — a video whose survey has nothing left to ask would
+|`RegisterVideoCommand`, the answer signing the PUT for its first file. Requires at least one
+question on its survey — a video whose survey has nothing left to ask would
 never be drawn. Duration is never accepted as input; it is read from the uploaded file at
 `confirm_video_upload`. Creates the video row (`Pending`), its survey and its questions in one call.
 
 |`create_promo_video`
 |`content:write`
-|No advertiser. A survey is created only if questions are given — an empty survey would be worse
+|`RegisterVideoCommand`, as a promo. No advertiser. A survey is created only if questions are given — an empty survey would be worse
 than none, since the portal would then ask for a survey whose first question does not exist.
 Promos rotate per guest — each user is served the location's promo they have watched least, by
 ascending priority and creation date among equals — not weighted at random like advertiser videos.
 
 |`list_videos`
 |read-only
-|Active, then pending, then retired; descending priority within a status. `durationSeconds` is the
+|`VideosOfQuery`. Active, then pending, then retired; descending priority within a status. `durationSeconds` is the
 current file's; `replacing` is true while a new file waits to be confirmed.
 
 |`list_pending_uploads`
 |read-only
-|Oldest first — "easiest to miss at the location nobody is looking at."
+|`PendingUploadsQuery`. Oldest first — "easiest to miss at the location nobody is looking at."
 
 |`resume_video_upload`
 |`content:write`, `.withUi`
-|Re-signs the upload URL for the file a video is waiting for: a pending video's first file, or a
+|`UploadUrlQuery`. Re-signs the upload URL for the file a video is waiting for: a pending video's first file, or a
 replacement not yet confirmed. Refuses a video with nothing waiting.
 
 |`replace_video_file`
 |`content:write`, `.withUi`
-|Reserves a new file row under a new key and signs a PUT to it; the id, the survey and its answers
+|`StartFileReplacementCommand`. Reserves a new file row under a new key and signs a PUT to it; the id, the survey and its answers
 stay. The video's status does not change and it keeps playing its current file until the new one
 is confirmed. Called again before then, it reopens the same new file. Refuses a pending video,
 which is `resume_video_upload`'s.
@@ -564,19 +599,21 @@ which is `resume_video_upload`'s.
 |`confirm_video_upload`
 |`content:write`
 |`visibleTo(Model, App)` — the one write an App page may call directly (see <<Default-deny
-visibility>>). HEAD-checks the waiting file's object, marks the file confirmed — which is what makes
-it current — and puts a pending video into rotation; it clamps `minWatchSeconds` to the file's own
+visibility>>). Finds the file the video waits for (`UploadUrlQuery`) and HEAD-checks its object, then
+runs `ConfirmVideoFileCommand` for that file: it marks the file confirmed — which is what makes it
+current — and puts a pending video into rotation; it clamps `minWatchSeconds` to the file's own
 duration — "a survey that unlocks after the video ends never unlocks at all." Then runs the
 <<Replaced files>> pass for the video, reporting `replaced` and `filesDeleted`.
 
 |`update_video`
 |`content:write`
-|Cannot move the location: that means a new video, because the S3 key carries the location's slug
+|`UpdateVideoCommand`. Cannot move the location: that means a new video, because the S3 key carries the location's slug
 and the survey hangs off the video. The file is `replace_video_file`'s.
 
 |`set_video_active`
 |`content:write`
-|Refuses while a video is still `Pending` — it has to go through `confirm_video_upload` first.
+|`RetireVideoCommand` or `ReinstateVideoCommand` (`runsEither`). Refuses while a video is still
+`Pending` — it has to go through `confirm_video_upload` first.
 |===
 
 A video's files are rows of `video_files`, the current one being the newest confirmed. The storage
@@ -593,13 +630,15 @@ lifetime.
 
 A replaced file's object is deleted by `VideoFileCollector` once no playback of it is open — see
 xref:platform.adoc#video-files[Video files and playbacks] for how the portal records them. A pass
-reads every confirmed, undeleted file and the open playbacks, picks the ones `VideoFile.collectable`
-allows (not current, nobody watching), and for each runs `VideoFiles.condemn`: a single `UPDATE`
-that sets `deleted_at` only if the file is still not current and still has no open playback. Only a
-file that statement marked has its object deleted, so a playback that started between the read and
-the delete keeps its file.
+is `CollectReplacedFilesCommand`, of one video or of every one, run as the jobs' own actor,
+`job:video-upkeep`, which `event_log` records the files it deleted under. The command reads every
+confirmed, undeleted file with its open playbacks and picks the ones `VideoFile.collectable` allows
+(not current, nobody watching); for each, `VideoPersistenceHandler` runs `VideoFiles.condemn`: a
+single `UPDATE` that sets `deleted_at` only if the file is still not current and still has no open
+playback. After the commit, `ReplacedFileDeletionHandler` deletes the object only of a file whose row
+reads back marked, so a playback that started between the read and the mark keeps its file.
 
-A pass runs on three occasions:
+A pass runs on four occasions:
 
 * `confirm_video_upload`, for that video: the previous file may have nobody left on it already.
 * Every change set the change feed relays, and every gap in it (see xref:cdc.adoc[Change data
@@ -617,11 +656,12 @@ A page that dies without `pagehide` reaching the server — the captive-portal b
 phone left the WiFi — leaves its playback open, and its file would be kept for ever.
 `PlaybackExpiry` closes those: one fiber per playback, started for each `INSERT` of an open row a
 change set reports (read from the row in `after`) and, at startup, for every playback still open,
-since timers live in memory and a restart would forget them. Each sleeps until
-`Playback.expiresAt` — the start plus the file's length plus the grace of the session's location,
-ten minutes unless it set its own (`set_recovery_policy`), so a long video is not cut short — and
-then sets `ended_at` and `expired = 1` if the playback is still open, and asks for a
-pass. The deadline is read from the database, never from the change set; an id that names no open
+since timers live in memory and a restart would forget them. Each sleeps until the deadline
+`OpenPlaybacksQuery` answers, `Playback.expiresAt` — the start plus the file's length plus the grace
+of the session's location, ten minutes unless it set its own (`set_recovery_policy`), so a long
+video is not cut short — and then runs `ExpirePlaybackCommand` as `job:video-upkeep`, which closes
+the playback only if it is still open and due (`ended_at` and `expired = 1`), and asks for a pass.
+The deadline is read from the database, never from the change set; an id that names no open
 playback schedules nothing, and a repeated one schedules once.
 
 A playback that ends any other way has its timer cancelled when a change set reports it: an
@@ -652,7 +692,7 @@ the first page.
 
 |`get_unifi_config`
 |read-only
-|`configured` (at least one access point) and `accessPoints` — each `apMac`, `host`, `port`,
+|`AccessPointsOfQuery`: `configured` (at least one access point) and `accessPoints` — each `apMac`, `host`, `port`,
 `siteId`, *whether* a token is stored, never its value, and its `durationMinutes`, `redirectUrl`
 and `unifiEnabled`. Port defaults to 443 and duration to 1440 minutes when unset, matching
 `UnifiAccess`'s own defaults — see xref:platform.adoc[Platform] and
@@ -690,14 +730,15 @@ of `WaitPolicy` (xref:core.adoc#_recovery[Core]) by its own name, durations in s
 
 |`get_recovery_policy`
 |read-only
-|Every setting in force, whether the location set it or takes the default, and `defaults`, the
+|`RecoveryPolicyOfQuery`. Every setting in force, whether the location set it or takes the default, and `defaults`, the
 names of the ones it takes. Writes nothing, so a location that never set anything keeps no row.
 
 |`set_recovery_policy`
 |`content:write`
-|Sets the settings it is given and keeps the rest; `reset` names settings to return to their
-default. Refused before any write: a negative value, a ceiling below the maximum once merged, an
-unknown name in `reset`, a setting both set and reset, or nothing to change. Answers what
+|`ChangeRecoveryPolicyCommand`. Sets the settings it is given and keeps the rest; `reset` names
+settings to return to their default. Refused before any write: a negative value, a ceiling below
+the maximum once merged, an unknown name in `reset` (the tool's), a setting both set and reset, or
+nothing to change. Answers what
 `get_recovery_policy` would. The portal reads the policy on every request for a way out, so it
 takes effect without a redeploy; a wait already offered keeps its length, and a playback already
 timed its deadline.
@@ -716,22 +757,24 @@ and `deploy_location` refuses while none exists.
 
 |`get_terms_of_service`
 |read-only
-|The version in force, with its text in each locale, and the numbers of the earlier ones.
+|`TermsInForceQuery`. The version in force, with its text in each locale, and the numbers of the
+earlier ones.
 
 |`create_terms_version`
 |`content:write`
-|A new version, in force at once: every device is asked to accept it on its next welcome. Refused
+|`PublishTermsVersionCommand`. A new version, in force at once: every device is asked to accept it
+on its next welcome. Refused
 before any write without a text in every locale the version in force has, with a locale given twice,
 or with an empty text.
 
 |`set_terms_translation`
 |`content:write`
-|Adds a locale to the version in force or replaces its text in one. Not a new version: nobody is
+|`SetTermsTranslationCommand`. Adds a locale to the version in force or replaces its text in one. Not a new version: nobody is
 asked again.
 
 |`remove_terms_translation`
 |`content:write`
-|Takes a locale out of the version in force. Not a new version. Refused for the version's last
+|`RemoveTermsTranslationCommand`. Takes a locale out of the version in force. Not a new version. Refused for the version's last
 text.
 |===
 
@@ -742,14 +785,16 @@ rather than one tool per skill. See <<Skills>>.
 
 === Readiness
 
-`get_location_readiness`, read-only. See <<Onboarding>> and <<Resources>>. Its `unifiConfigured`
+`get_location_readiness`, read-only, `LocationReadinessQuery`. See <<Onboarding>> and
+<<Resources>>. Its `unifiConfigured`
 is whether the location has at least one access point, `unifiEnabled` whether any of them has its
 UniFi calls on, and its steps ask for an access point whatever `unifiEnabled` says: without one
 every guest is turned away at the first page.
 
 === Preview (`PreviewTools`)
 
-`preview_location`, read-only, `.withUi(PreviewUi.AppUri)`: one screen a guest goes through —
+`preview_location`, read-only, `.withUi(PreviewUi.AppUri)`, `PreviewLocationQuery`: one screen a
+guest goes through —
 `screen` is `welcome` (the default), `question`, `video`, `survey`, `ready`, `access` or `error` —
 drawn by the portal itself with the location's look, deployed or not; one call per screen. It
 answers what the page draws with (xref:client.adoc#preview-mode[Client]): the location's
@@ -795,7 +840,7 @@ the terms of service or an access point, or through one another deployed locatio
 |`infra:destroy`, `destructive = true`, `idempotent = true`
 |From any state — a deploy that failed part way leaves resources a destroy has to remove. Requires
 the slug typed back as confirmation. Elicits whether to also delete the location's S3 objects in the
-call, before the command (declining is the default for any client that cannot ask, or does not
+call, counted with `AssetsOfQuery`, before the command (declining is the default for any client that cannot ask, or does not
 answer): the answer is the command's argument, so nothing waits on a person with the location's lock
 taken. Keeps the log group and the database rows regardless.
 
@@ -877,9 +922,11 @@ nothing, requests no consent, and commits nothing. Because it reads the database
 invocation, what it renders is the step the location is actually on, not a description of the
 sequence in the abstract.
 
-With no `slug` argument it lists existing location slugs (from `LocationTools.slugs`) or, if there
-are none yet, tells the model to call `create_location` first. With a slug, it calls `Readiness.of`
-and renders a full status block — active state, per-locale translation coverage, whether the
+It asks the same queries the tools do, `ListLocationsQuery` and `LocationReadinessQuery`, which
+`CaptalMcp.server` is handed in `promptEnv`: a prompt's handler has no environment of its own to
+find them in. With no `slug` argument it lists existing location slugs (from `LocationTools.slugs`)
+or, if there are none yet, tells the model to call `create_location` first. With a slug, it calls
+`Readiness.of` and renders a full status block — active state, per-locale translation coverage, whether the
 location has its own stylesheet or icon, video counts by status, advertiser-survey coverage, how
 many advertisers are registered deployment-wide, whether UniFi is configured — the location has an
 access point — and whether any access point has its UniFi calls on, the version of the
@@ -925,7 +972,9 @@ see xref:context/decisions.adoc[Decisions].
 read, "since a presigned URL is arithmetic over the key and the clock, not an allocation."
 |===
 
-`readDirectory` backs both the listing and the template reads from the same code, "so a host that
+Every one is read through the queries the tools ask (`Queries`), from the same environment, so a
+resource and the tool it mirrors cannot disagree. `readDirectory` backs both the listing and the
+template reads from the same code, "so a host that
 only knows `resources/read` sees what one that walks the hierarchy sees." One `captal://` hierarchy
 was chosen over a scheme per entity specifically because SEP-2640's `readDirectory` makes a
 hierarchy navigable, where flat per-entity schemes would lose the containment a tool would otherwise
@@ -1054,9 +1103,10 @@ for `UnifiUi`, since its form posts back here) and `resourceDomains` (where the 
 loads from, plus `https://assets.claude.ai` in both cases, for the host's own font).
 
 `UploadUiSource` is a distinct `McpResourceSource`, not the same thing as the `UploadUi` template
-function: a plain `McpResourceTemplate.read` runs with no environment to reach the database or S3
+function: a plain `McpResourceTemplate.read` runs with no environment to reach a query or S3
 with, so this source exists specifically to serve one page per pending video
-(`ui://upload-video/<videoId>`), looking the video up, resolving its title and location, and
+(`ui://upload-video/<videoId>`), looking the video up with `VideoOfQuery` — its title and location —
+and
 rendering `UploadUi.app(...)` with no signed URL embedded — the page fetches that itself, once
 mounted, through `Bridge.readJson` (below) against `captal://videos/<id>/upload`, which is what lets
 the URL be re-signed on every read rather than baked in once and left to expire.

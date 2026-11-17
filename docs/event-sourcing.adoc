@@ -13,7 +13,7 @@ The model is event-*driven* persistence, not an event store that state is replay
 * `event_log` is an append-only audit trail. Nothing in the application reads it, and no projection is rebuilt from it;
 * `core` contains no SQL and no effect type; it produces `List[Event]` and hands them over.
 
-The guest's events come from `user`, `survey` (wrapping `survey.question`), `video`, `device`, `recovery`, `access` and `session`, the backoffice's from `location`. `application.Event` is the sum of them, and every chain is written against it.
+The guest's events come from `user`, `survey` (wrapping `survey.question`), `video`, `device`, `recovery`, `access` and `session`; the backoffice's from `location`, `operation`, `terms`, `i18n`, `advertiser`, `survey.authoring`, `video.authoring` and `recovery`'s `PolicyChanged`. `application.Event` is the sum of them, and every chain is written against it.
 
 == From command to events
 
@@ -204,9 +204,13 @@ Any other server error is not an event: the API records it where it catches the 
 | `PlaybackEnded`
 | `playbackId`, `sessionId`, `occurredAt`
 | not logged
+
+| `PlaybackExpired`
+| `playbackId`, `sessionId`, `occurredAt`
+| not logged
 |===
 
-These carry a session id in their own payload because the commands that emit them are built from the session rather than from an aggregate. The two playback events are recorded in `video_playbacks` by `PlaybackHandler` after the commit, not in `event_log`: a start the handler refuses — the file was replaced in between — would otherwise be logged as having happened.
+These carry a session id in their own payload because the commands that emit them are built from the session rather than from an aggregate. The playback events are recorded in `video_playbacks`, not in `event_log`: a start and an end by `PlaybackHandler` after the commit — a start the handler refuses, the file replaced in between, would otherwise be logged as having happened — and an expiry, which the backoffice's timers emit for a page that never said it ended, by `PlaybackExpiryHandler`, as `expired = 1`.
 
 === Location events
 
@@ -235,9 +239,56 @@ These carry a session id in their own payload because the commands that emit the
 | `AccessPointRemoved`
 | `location`, `mac`, `occurredAt`
 | `location.access_point_removed`
+
+| `LocationDeployed`, `LocationPaused`, `LocationResumed`, `LocationDestroyed`
+| `id`, `by` — the run that did it — `occurredAt`
+| `location.deployed`, `.paused`, `.resumed`, `.destroyed`
+
+| `StylesChanged`, `IconChanged`
+| `id`, `slug`, the stylesheet or the SVG, `occurredAt`
+| `location.styles_changed`, `.icon_changed`, with the document's size, not the document
 |===
 
-The access point's controller token travels in the event as a `Secret`, which prints redacted, and is left out of `event_data`: the log says nothing of it. `LocationPersistenceHandler` writes these to `locations` and `access_points`, in a chain of their own that the backoffice runs (see xref:platform.adoc[Platform]).
+The access point's controller token travels in the event as a `Secret`, which prints redacted, and is left out of `event_data`: the log says nothing of it. `LocationPersistenceHandler` writes these to `locations` and `access_points`, in a chain of their own that the backoffice runs (see xref:platform.adoc[Platform]); a state reached is the outcome of an operation (`operation.Event`'s `OperationStarted`, `OperationCompleted`, `OperationFailed`, logged as `operation.*`); a stylesheet or an icon is published to the assets bucket after the commit by `AssetPublishingHandler`.
+
+=== The backoffice's content events
+
+Emitted by the commands an operator runs on the content, each logged under the operator token (see <<event_log>>), or under `job:video-upkeep` for the background jobs'.
+
+[cols="3,3,3"]
+|===
+| Event | `event_log.event_type` | Written by
+
+| `recovery.PolicyChanged`
+| `recovery.policy_changed`
+| `RecoveryHandler`, to `location_recovery`
+
+| `terms.VersionPublished`, `TranslationSet`, `TranslationRemoved`
+| `terms.version_published`, `.translation_set`, `.translation_removed`
+| `TermsPersistenceHandler`
+
+| `i18n.TranslationsSet`, `TranslationRemoved`
+| `i18n.translations_set`, `.translation_removed`
+| `TranslationPersistenceHandler`, to `localized_texts`
+
+| `advertiser.AdvertiserCreated`, `AdvertiserUpdated`, `AdvertiserRetired`, `AdvertiserReinstated`
+| `advertiser.created`, `.updated`, `.retired`, `.reinstated`
+| `AdvertiserPersistenceHandler`
+
+| `survey.authoring.SurveyCreated`, `QuestionAdded`, `QuestionUpdated`, `QuestionRetired`, `QuestionReinstated`, `QuestionsReordered`
+| `survey.created`, `.question_added`, `.question_updated` (the fields changed), `.question_retired`, `.question_reinstated`, `.questions_reordered`
+| `SurveyAuthoringPersistenceHandler`: the survey, its questions with their options and rules, their wording as backend texts
+
+| `video.authoring.VideoRegistered`, `FileReserved`, `FileConfirmed`, `VideoUpdated`, `VideoRetired`, `VideoReinstated`
+| `video.registered`, `.file_reserved`, `.file_confirmed`, `.updated` (the fields changed), `.retired`, `.reinstated`
+| `VideoPersistenceHandler`: the video, its files, its title and description as backend texts
+
+| `video.authoring.FileDeleted`
+| `video.file_deleted`
+| `VideoPersistenceHandler` marks the file deleted; after the commit, `ReplacedFileDeletionHandler` deletes its object, if the mark took
+|===
+
+A video's registration emits its survey's and its questions' events too, so one transaction writes all of them, the video's first.
 
 == The handler chains
 

@@ -112,6 +112,23 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
 * **`create_location` still sits under `content:write`, and the code says that's wrong**: "a
   translator holding `content:write` should not be able to stand up a portal." Tracked in
   `pending.adoc`.
+* **Every tool is one command or one query, built from its two ends** (2026-11-17). A tool says how
+  its input becomes the command or the query and how the result becomes its answer; `Adapters` does
+  the rest — the flow or the query found in the environment, the operator published, the refusal
+  described. See `flow-adapters-plan.adoc` for what was weighed. Left by hand where the code says
+  why: the operation tools, whose refusals lead to a question; `configure_unifi`; the token tools.
+* **What a refusal reads as is one exhaustive function, not a typeclass and not `toString`**
+  (`Refusals.describe`). Each tool used to carry the domains it expected, and any other fell to
+  `toString` — `Location(Chain(NotFound(plaza)))` for an operator. A typeclass (`Describe[E]`,
+  `cats.Show`) was set aside: only `AppError` is described, for one audience, and a `Show` instance
+  would pass for every audience's text. Overriding `toString` on `core`'s errors was set aside too:
+  the texts name the backoffice's tools, the API maps the same errors otherwise, and tests and logs
+  read the structure.
+* **The background jobs run commands under an actor of their own** (2026-11-17). The file collector
+  and the playback timers run `CollectReplacedFilesCommand` and `ExpirePlaybackCommand`, logged under
+  `job:video-upkeep`: `event_log.actor` names who made a change, and no operator asked for these. A
+  playback's expiry is not logged, as its start and its end are not: `video_playbacks` is their
+  record, `expired = 1` included.
 
 == Wire format and schema rendering
 
@@ -207,7 +224,9 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
   Where rqlite *does* enforce uniqueness (`locations.slug`), the Scala pre-check still "earns its
   place on diagnosis, not integrity": disable it, and the duplicate row still stays out, only the
   error message degrades to "the database rejected it silently" instead of naming the clashing
-  location.
+  location. Since 2026-11-17 every backoffice write goes through a `core` command, which reads what
+  it decides on before deciding; its persistence handler runs inside a transaction, where the driver
+  reports no row affected, so it checks no count, and a statement rqlite refuses fails the commit.
 * **Stylesheets and icons stay on S3, not the database.** Keeps the portal's render path untouched
   and the asset edge-cached; the accepted cost is that a write must also invalidate CloudFront,
   something the old CLI never did for `captal video add`. `s3:ListBucket` was *originally*

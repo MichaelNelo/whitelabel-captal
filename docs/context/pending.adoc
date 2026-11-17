@@ -104,14 +104,17 @@ agreed fix — the relay publishes to SNS, every subscriber reads its own SQS qu
 stateless, deploys overlapped — is xref:relay-sns-sqs-plan.adoc[the relay plan], with the options set
 aside.
 
-== The content tools have no model in core
+== The run page polls, and the API's routes run their flows by hand
 
-The backoffice's content tools — videos and advertisers, surveys and questions, the recovery policy,
-the terms of service, i18n keys, styles and icon — write rows directly. The location, its access
-points, its readiness and its operations are `core`'s already, as commands and queries:
-xref:admin-core-plan.adoc[the admin core plan] has its first five steps done. The content tools are
-its seventh; the sixth, telling the run page of progress through the relay, waits on
-xref:relay-sns-sqs-plan.adoc[the relay plan].
+Every backoffice tool, resource and background job runs a `core` command or query. Two pieces of the
+plans that got it there are left:
+
+* The run page reads a run's progress by polling `RunStatus` (`RunRoutes`, every `PollEvery`). Being
+  told it through the relay is the sixth step of xref:admin-core-plan.adoc[the admin core plan], and
+  waits on xref:relay-sns-sqs-plan.adoc[the relay plan].
+* The API's routes run their flows by hand. The extension the backoffice's tools are built with
+  (`Adapters`) has its counterpart for typed endpoints in xref:flow-adapters-plan.adoc[the flow
+  adapters plan], left for the next time the routes are reworked.
 
 == The Redlock is the simple version
 
