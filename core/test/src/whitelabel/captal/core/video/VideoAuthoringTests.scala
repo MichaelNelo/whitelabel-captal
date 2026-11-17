@@ -15,6 +15,7 @@ import whitelabel.captal.core.infrastructure.{
   AdvertiserRepository,
   CurrentFile,
   LocationRepository,
+  StoredFile,
   VideoAuthoringRepository,
   VideoInfo,
   WaitingFile
@@ -77,6 +78,14 @@ object VideoAuthoringTests extends TestSuite:
       def activeAt(location: Option[LocationId]) = stored
         .filter(v => v.location == location && v.status == VideoStatus.Active)
         .map(_.id)
+      def files(video: Option[Id]) = Files.filter(file => video.forall(_ == file.video))
+
+  /** `Playing`'s current file; one it replaced that a guest still plays; and one nobody does. */
+  private val Files = List(
+    StoredFile(Playing.id, FileId("played"), "url/played", "plaza/videos/played", true, 2),
+    StoredFile(Playing.id, FileId("watched"), "url/watched", "plaza/videos/watched", false, 1),
+    StoredFile(Playing.id, FileId("left"), "url/left", "plaza/videos/left", false, 0)
+  )
 
   private val Es = LocalizedText("Bienvenida", "es")
 
@@ -258,5 +267,22 @@ object VideoAuthoringTests extends TestSuite:
           outcome(
             ReinstateVideoHandler[Same](videos).handle(ReinstateVideoCommand(Pending.id, Now))) ==
             Left(List(Error.StillPending(Pending.id)))
+        )
+
+    test("CollectReplacedFiles"):
+      test("deletes only a replaced file nobody is playing"):
+        assert(
+          outcome(
+            CollectReplacedFilesHandler[Same](videos).handle(
+              CollectReplacedFilesCommand(None, Now))) ==
+            Right(
+              (
+                List(
+                  AppEvent.VideoAuthoring(
+                    Event.FileDeleted(Playing.id, FileId("left"), "plaza/videos/left", Now))),
+                1)),
+          outcome(
+            CollectReplacedFilesHandler[Same](videos).handle(
+              CollectReplacedFilesCommand(Some(Other.id), Now))) == Right((Nil, 0))
         )
 end VideoAuthoringTests

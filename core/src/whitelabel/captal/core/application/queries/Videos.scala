@@ -22,6 +22,9 @@ final case class VideoReport(
     priority: Int,
     replacing: Boolean)
 
+/** The video `video`, as [[VideosOfQuery]] reports each, whatever its status. */
+final case class VideoOfQuery(video: String)
+
 /** The videos registered and still waiting for their first file, of the location `slug` or of every
   * one.
   */

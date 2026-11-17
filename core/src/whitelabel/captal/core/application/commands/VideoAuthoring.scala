@@ -18,7 +18,7 @@ import whitelabel.captal.core.location.Slug
 import whitelabel.captal.core.survey.Id as SurveyId
 import whitelabel.captal.core.survey.authoring.{Event as SurveyEvent, QuestionSpec, SurveyKind}
 import whitelabel.captal.core.survey.question.{Id as QuestionId, LocalizedText}
-import whitelabel.captal.core.video.Id as VideoId
+import whitelabel.captal.core.video.{Id as VideoId, VideoFile as PlayedFile}
 import whitelabel.captal.core.video.authoring.{
   Error as VideoError,
   Event as VideoEvent,
@@ -347,6 +347,36 @@ object UpdateVideoHandler:
                   })
             ))
 end UpdateVideoHandler
+
+/** Deletes the files of the video `video`, or of every one, that are no longer played: replaced,
+  * and with nobody left playing them. A pass over what is stored, run when a replacement is
+  * confirmed and whenever a playback ends.
+  */
+final case class CollectReplacedFilesCommand(video: Option[VideoId], occurredAt: Instant)
+
+/** How many files the pass deleted. None to delete is no refusal: the pass has nothing to do.
+  *
+  * A file stops being played for good: a playback starts only on the file its video plays, so one
+  * replaced gains no new playback between this reading it and the deletion being recorded.
+  */
+object CollectReplacedFilesHandler:
+  def apply[F[_]: Monad](
+      videos: VideoAuthoringRepository[F]): Handler.Aux[F, CollectReplacedFilesCommand, Int] =
+    new Handler[F, CollectReplacedFilesCommand]:
+      type Result = Int
+
+      def handle(cmd: CollectReplacedFilesCommand) = videos
+        .files(cmd.video)
+        .map: stored =>
+          val collected = stored.filter(file =>
+            PlayedFile(file.url, file.current, file.watching).collectable)
+          decidedVideo(
+            Nil,
+            collected.map(file =>
+              Event.VideoAuthoring(
+                VideoEvent.FileDeleted(file.video, file.id, file.key, cmd.occurredAt))),
+            collected.size)
+end CollectReplacedFilesHandler
 
 /** Takes the video `video` out of the rotation, keeping its file and the answers to its survey. */
 final case class RetireVideoCommand(video: VideoId, occurredAt: Instant)

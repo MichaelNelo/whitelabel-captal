@@ -136,6 +136,11 @@ enum Event:
   /** Out of the rotation, with its file and the answers to its survey kept. */
   case VideoRetired(video: Id, occurredAt: Instant)
   case VideoReinstated(video: Id, occurredAt: Instant)
+
+  /** A file the video no longer plays, and nobody is still playing, is gone, its object at `key`
+    * with it.
+    */
+  case FileDeleted(video: Id, file: FileId, key: String, occurredAt: Instant)
 end Event
 
 enum Error:

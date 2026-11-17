@@ -24,3 +24,7 @@ enum Event:
       occurredAt: Instant)
 
   case PlaybackEnded(playbackId: PlaybackId, sessionId: user.SessionId, occurredAt: Instant)
+
+  /** Closed for a page that never said it ended, past its deadline ([[Playback.expiresAt]]). */
+  case PlaybackExpired(playbackId: PlaybackId, sessionId: user.SessionId, occurredAt: Instant)
+end Event
