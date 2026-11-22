@@ -49,7 +49,7 @@ locals {
 
 Everything provider-side is derived from it: a `dynamic "endpoints"` block pointing every emulated
 service (ACM, CloudFront, CloudWatch, EC2, ECR, ECS, EFS, ELBv2, IAM, Lambda, Logs, Route 53, S3,
-Secrets Manager, Cloud Map, STS) at `aws_endpoint_url`, `access_key`/`secret_key` fixed to `"test"`
+Secrets Manager, Cloud Map, SNS, SQS, STS) at `aws_endpoint_url`, `access_key`/`secret_key` fixed to `"test"`
 (LocalStack verifies no signature, but the SDK's signer still needs a pair to exist),
 `skip_credentials_validation`/`skip_requesting_account_id`/`skip_metadata_api_check` all true, and
 `s3_use_path_style` true (the default puts the bucket in the hostname, which resolves against AWS
@@ -163,13 +163,14 @@ that task (`localStackInfra`, `tofuSources`, `resetLocalStack`, IAM soft mode, a
 itself asserts) belong to xref:testing.adoc[Test strategy]; this section covers the three structural
 facts about the configuration and its state that make that task possible at all.
 
-`environments/local/terraform.tfvars` turns off three things, each for its own reason: `enable_dns`
+`environments/local/terraform.tfvars` turns off four things, each for its own reason: `enable_dns`
 (nothing emulates DNS validation, so a certificate would sit in `PENDING_VALIDATION` forever and the
 apply would hang — CloudFront falls back to its own default certificate and generated domain name),
 `enable_tailscale` (the provider would call Tailscale's real API, and reaching into the network from
-a laptop is what `docker exec` already does here), and `enable_global_accelerator` (not emulated,
+a laptop is what `docker exec` already does here), `enable_global_accelerator` (not emulated,
 and it brings the portal-dispatcher Lambda with it, which exists only for real captive-portal
-hardware). Everything else runs as in AWS: three rqlite tasks, the change data capture relay and the
+hardware), and `enable_cloud_map` (LocalStack offers Cloud Map only on its Ultimate licence; see
+<<service-names>>). Everything else runs as in AWS: three rqlite tasks, the change data capture relay and the
 backoffice, released by `mill mcp.dev` (see xref:development.adoc[Local development]). One thing
 runs here alone, `enable_unifi_fake`: `modules/unifi-fake`, a stand-in for a venue's UniFi
 controller that a location can be pointed at, as `unifi.captal.local:8443` — a Python script on the
@@ -256,6 +257,31 @@ The portal-dispatcher Lambda gets a third kind of rule, added conditionally by t
 (`enable_portal_dispatcher_rule`, a plain bool rather than a module attribute, so its `count` can be
 evaluated at plan time): priority 100, path `/guest/s/*`.
 
+[[service-names]]
+=== Service names
+
+The services that are not behind the load balancer reach each other by name, `<name>.captal.local`:
+rqlite, the change data capture relay, Jaeger, each Redis lock instance, the Tailscale proxy and, in
+`local`, the UniFi stand-in. Each name lists the addresses of the service's running tasks, one A
+record per task, TTL 10 — rqlite's nodes find each other through theirs, which is why no load
+balancer can stand in for it.
+
+Where `enable_cloud_map` is on, as in `prod`, the names are Cloud Map's: the root module creates the
+private DNS namespace, each module a Cloud Map service, and ECS registers each task in it as it
+starts. Where it is off, as in `local`, the root module creates instead a private Route 53 zone of
+the same name, `aws_route53_zone.discovery`, gives the modules no namespace, and each module names its
+ECS service by a `DiscoveryName` tag, the name Cloud Map would give it. `modules/local-discovery`
+keeps the zone's records: one task on the AWS CLI's image (`public.ecr.aws/aws-cli/aws-cli:2.34.24`)
+whose command is `registrar.sh`, which every two seconds leaves each tagged service's record listing
+its running tasks' container addresses, deleting a task's as it goes, and logs every name it changes.
+A call that fails changes nothing, so a failed listing never reads as a service with no task. Its
+role reads the cluster's services and tasks and writes that zone alone. The tasks resolve the names
+through LocalStack's DNS, which LocalStack sets in every container it runs and which answers its
+Route 53 zones, private ones included. rqlite's module depends on this one, since each node gives up
+on the cluster after two minutes without the others' addresses. The local release waits for every name
+it needs to list its service's tasks (`resolvesLocally`), reading the zone the root module outputs as
+`discovery_zone_id`.
+
 === ECS
 
 `modules/ecs` creates the cluster (`containerInsights` on, `FARGATE` + `FARGATE_SPOT` capacity
@@ -340,7 +366,7 @@ The root passes `rqlite_cdc_endpoint`, or the relay's `ingest_url`,
 === Change data capture relay
 
 `modules/cdc` runs the relay: one Fargate task with a public address (to pull from ECR) and no load
-balancer, registered in Cloud Map as `cdc.<namespace>`. Its own security group admits rqlite's group
+balancer, named `cdc.<namespace>` (<<service-names>>). Its own security group admits rqlite's group
 on the HTTP port (`container_port`) and the shared `ecs_tasks` group on the gRPC port (`9090`); both
 inline, since neither of those groups names this one. One task, because rqlite posts to one address
 and every subscriber has to follow the relay that receives the posts — and deployed stop-then-start
@@ -380,8 +406,8 @@ rather than as a deployed topology.
 
 === Jaeger
 
-`modules/jaeger` runs Jaeger as one Fargate task with no load balancer, registered in Cloud Map as
-`jaeger.<namespace>`, where every service sends its traces over OTLP (4317). Its security group
+`modules/jaeger` runs Jaeger as one Fargate task with no load balancer, named
+`jaeger.<namespace>` (<<service-names>>), where every service sends its traces over OTLP (4317). Its security group
 admits OTLP from the ECS tasks group and the relay's, and the UI (16686) from the Tailscale proxy's
 alone: the UI has no authentication of its own. The root module names the endpoint itself, as the
 local `otlp_endpoint`, so the services that send to it do not depend on the group that admits them;
@@ -394,8 +420,8 @@ and how to reach the UI.
 `modules/redis-lock` runs the Redis instances every lock is taken on: the migrations', which the
 backoffice and every location's API take as they start (xref:platform.adoc#Locks[Platform]), and
 each location's operation lock, which the backoffice takes (xref:mcp.adoc#Locks[the operations'
-lock]). `redis_lock_instances` of them, one by default, each its own Fargate service registered in
-Cloud Map as `redis-lock-<n>.<namespace>`, since Redlock asks for instances that fail apart rather
+lock]). `redis_lock_instances` of them, one by default, each its own Fargate service named
+`redis-lock-<n>.<namespace>` (<<service-names>>), since Redlock asks for instances that fail apart rather
 than a replicated cluster, listening on `redis_lock_port` (6379; 6380 locally). The backoffice gets
 every address as `REDIS_LOCK_ADDRESSES` and hands it to every location it deploys, and a release sets
 it on every location it moves; neither starts without it. The security group admits the port from
@@ -717,7 +743,7 @@ the API's migrations and then its own, each set with its own history table (`db/
 `db/migration-mcp`). A failed migration ends the process, so the container stops rather than
 serving against a schema it was not written for. Both set a 5-second positive DNS cache TTL with no negative caching
 (`-Dnetworkaddress.cache.ttl=5 -Dnetworkaddress.cache.negative.ttl=0`), because rqlite is reached
-through a Cloud Map service-discovery name whose answer changes whenever its task rotates, and the
+through a name (<<service-names>>) whose answer changes whenever its task rotates, and the
 JDK's 30-second default positive / 10-second negative caching would otherwise pin the JDBC client to
 an address that is gone.
 

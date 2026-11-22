@@ -135,8 +135,8 @@ every node.
 
 == Deployment
 
-`terraform/modules/cdc`: one Fargate task with no load balancer, registered in Cloud Map as
-`cdc.<namespace>`, with its own security group. One task, because rqlite's leader posts to one
+`terraform/modules/cdc`: one Fargate task with no load balancer, named `cdc.<namespace>` (see
+xref:infrastructure.adoc#service-names[Service names]), with its own security group. One task, because rqlite's leader posts to one
 address and every subscriber has to follow the relay that receives those posts. The module outputs
 `ingest_url`, which the root passes to rqlite as its `cdc_endpoint`, and `feed_address`, which it
 passes to the backoffice as `CDC_FEED_ADDRESS`. See xref:infrastructure.adoc[Infrastructure].

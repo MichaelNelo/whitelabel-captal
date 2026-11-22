@@ -398,10 +398,11 @@ every subscriber unfiltered, and each subscriber long polling every 20 s — upp
   read is added with the code that reads it.
 +
 *Done on 2026-11-22*, applied to LocalStack with a Base licence: both topics, both dead-letter
-queues, the relay's role and policy, the locations' policy and the backoffice's created. The rest of
-the local environment did not apply: Base leaves out `servicediscovery` — "not included within your
-LocalStack license, but is available in an upgraded license" — and every service here is found
-through Cloud Map. The policies' conditions were not verified: LocalStack's `SimulatePrincipalPolicy`
+queues, the relay's role and policy, the locations' policy and the backoffice's created. The first
+apply stopped at the Cloud Map namespace — Base leaves out `servicediscovery`, "not included within
+your LocalStack license, but is available in an upgraded license" — so the local environment names
+its services in a Route 53 zone instead, kept by `modules/local-discovery` (see "Locally the
+services' names are kept in a Route 53 zone" in `decisions.adoc`), and then applied whole. The policies' conditions were not verified: LocalStack's `SimulatePrincipalPolicy`
 ignores the context entries, `SimulateCustomPolicy` is not implemented, and its soft enforcement
 logged a first `sns:Subscribe` of a location's own queue to `errors` as not authorized and then no
 denial at all, apparently logging each once. They follow the documented condition keys; AWS's policy

@@ -120,7 +120,8 @@ variables (`OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG`) change it without a
 == Jaeger
 
 `modules/jaeger` runs `cr.jaegertracing.io/jaegertracing/jaeger:2.23.0` as one Fargate task
-(512 CPU, 2048 MiB), registered in Cloud Map as `jaeger.<namespace>`, with its default
+(512 CPU, 2048 MiB), named `jaeger.<namespace>` (see
+xref:infrastructure.adoc#service-names[Service names]), with its default
 configuration: the traces in memory, up to its `max_traces`, lost when the task is replaced.
 `JAEGER_LISTEN_HOST=0.0.0.0`, since that configuration listens on `localhost` otherwise.
 

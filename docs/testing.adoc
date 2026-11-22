@@ -188,10 +188,11 @@ test runs under `zio.test`.
 
 Needs Docker for rqlite like `api.test` does, and — for part of the suite — LocalStack, licensed.
 S3 is the only service the LocalStack free tier covers; `ecs`, `elbv2`, `cloudfront`, `ec2`, `iam`,
-`sts`, `efs`, `secretsmanager`, `servicediscovery`, `route53`, `ecr`, `sns` and `sqs` all need a token
-in `LOCALSTACK_AUTH_TOKEN` (or this project's own `LOCALSTACK_TOKEN`, read from `.envrc`), and
-`servicediscovery` a licence above Base: on a Base licence the apply stops at the Cloud Map namespace,
-which LocalStack refuses as "not included within your LocalStack license". Without one,
+`sts`, `efs`, `secretsmanager`, `route53`, `ecr`, `sns` and `sqs` all need a token in
+`LOCALSTACK_AUTH_TOKEN` (or this project's own `LOCALSTACK_TOKEN`, read from `.envrc`); a Base
+licence covers them all. Cloud Map, which LocalStack offers only on Ultimate, is not among them: the
+local configuration names its services in a Route 53 zone instead (see
+xref:infrastructure.adoc#service-names[Service names]). Without one,
 every spec that needs only S3 still runs; the deploy fixture and its end-to-end spec skip
 themselves rather than failing on a service LocalStack answers with a plain `UnrecognizedClientException`
 for.

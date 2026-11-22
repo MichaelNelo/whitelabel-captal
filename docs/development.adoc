@@ -40,7 +40,8 @@ use devenv
 
 `LOCALSTACK_TOKEN` (equivalently `LOCALSTACK_AUTH_TOKEN`) is a LocalStack Pro licence. Without one,
 the free tier covers only S3 — enough for most of `mcp.test` — and everything that needs ECS, ELBv2,
-CloudFront, EC2, IAM, STS, EFS, Secrets Manager, Cloud Map or ECR skips itself rather than failing;
+CloudFront, EC2, IAM, STS, EFS, Secrets Manager, Route 53, SNS, SQS or ECR skips itself rather than
+failing; a Base licence covers them all;
 see xref:testing.adoc[Test strategy]. Treat the value itself as a credential: it is read by the build
 (`Task.env`, not `System.getenv` — see <<Sharp edges>>) and must never be pasted into a log, a commit
 message, or a document.

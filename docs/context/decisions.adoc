@@ -923,10 +923,26 @@ rule are in `incidents.adoc`, section "The Mill build".
   57 of 77 ECS operations and 38 of 51 ELBv2 operations, including every call this repository makes.
   `ec2` is for the fixture, since a VPC, subnets and a security group must exist before a load
   balancer or an awsvpc service accepts them. `efs` backs the single-node rqlite, `secretsmanager`
-  holds the admin token, `servicediscovery` is the namespace rqlite is reached through, and `ecr` is
-  where the images come from. `route53` is never called directly, but
-  `servicediscovery.CreatePrivateDnsNamespace` refuses without it, because a private namespace is a
-  hosted zone. Without a licence only `s3` is started.
+  holds the admin token, `route53` the zone the services' names are kept in, `ecr` is where the
+  images come from, and `sns` and `sqs` carry the change feed. Without a licence only `s3` is started.
+  Not `servicediscovery`: LocalStack offers Cloud Map only on Ultimate, and the licence this runs on
+  is Base (next entry).
+* **Locally the services' names are kept in a Route 53 zone by a task, not by Cloud Map** (2026-11-22).
+  The LocalStack licence activated as Base, which leaves out Cloud Map, and the user ruled out
+  anything beside `tofu` → LocalStack that production does not have: no devenv process, no sidecar
+  per task. So `enable_cloud_map` is off for `local`, the root module creates a private zone of the
+  namespace's name instead, each module tags its service with the name Cloud Map would give it
+  (`DiscoveryName`), and `modules/local-discovery` runs one task on the AWS CLI's image that keeps
+  each tagged service's A record listing its running tasks' addresses — deployed by the same apply,
+  as every other service is. What was set aside: Route 53 records written by `tofu`, since a task's
+  address exists only once ECS starts it and changes with every replacement; alias records, which
+  point at load balancers, distributions and the like but never at a task; sending the internal
+  traffic through the load balancer, which carries HTTP alone while Redis and Raft are TCP, and
+  rqlite's nodes need each other's own addresses; and a licence upgrade, not taken. Checked on
+  LocalStack 2026.9.1 with the Base licence before building it: a task resolves a private zone's
+  records through LocalStack's DNS, which LocalStack sets in each task's container. It replaced
+  `syncLocalDiscovery`, which corrected the records LocalStack's Cloud Map left wrong; the release
+  now only waits for the names (`resolvesLocally`).
 * **Local dev tooling has its own choices.** `--tunnel` uses Cloudflare quick tunnels, because they need
   no account and no configuration (`mill-build/src/millbuild/Tunnels.scala`); a tunnel's URL is kept for
   as long as its process runs, which is why a running tunnel is reused rather than reopened. The
