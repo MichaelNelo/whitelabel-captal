@@ -1,7 +1,7 @@
 package whitelabel.captal.mcp
 
 import io.opentelemetry.api.trace.SpanKind
-import whitelabel.captal.cdc.protocol.ChangeFeedFollower
+import whitelabel.captal.cdc.protocol.{ChangeFeedFollower, ChangeFeedQueue}
 import whitelabel.captal.mcp.access.{Auth, OauthMetadata, Tokens}
 import whitelabel.captal.mcp.apps.{RunRoutes, ScriptDelivery, UiRoutes}
 import whitelabel.captal.mcp.aws.{DeployTargets, InfraSteps, InfraStore}
@@ -76,23 +76,39 @@ object Main extends ZIOAppDefault:
         s":${parsed.getPort}"
     s"${parsed.getScheme}://${parsed.getHost}$port"
 
-  /** Follows the change feed at `CDC_FEED_ADDRESS` (`host:port`) for the collector, for as long as
-    * the server runs. A warning and not a failure without it: the collector still runs at startup
-    * and on every replacement, and playbacks open at startup still expire; only playbacks that
-    * start or end afterwards go unheard.
+  /** Follows the change feed for the collector, for as long as the server runs: the
+    * `video_playbacks` topic on a queue of this task's own, where `CDC_TOPIC_PREFIX` and
+    * `CDC_QUEUE_PREFIX` are set (see [[ChangeFeedQueue]]); otherwise the relay at
+    * `CDC_FEED_ADDRESS` (`host:port`). A warning and not a failure without either: the collector
+    * still runs at startup and on every replacement, and playbacks open at startup still expire;
+    * only playbacks that start or end afterwards go unheard.
     */
   private def followChanges(collector: VideoFileCollector.Running): URIO[Scope & Tracing, Unit] =
-    System
-      .env("CDC_FEED_ADDRESS")
-      .orDie
-      .map(_.map(_.trim).filter(_.nonEmpty))
-      .flatMap:
-        case Some(address) =>
-          ZIO.logInfo(s"Following the change feed at $address") *>
-            VideoFileCollector.follow(collector, ChangeFeedFollower.follow(address)).forkScoped.unit
-        case None =>
-          ZIO.logWarning(
-            "No CDC_FEED_ADDRESS: playbacks that start or end from now on are not heard of until the next restart")
+    for
+      queue   <- ChangeFeedQueue.fromEnv
+      address <- System.env("CDC_FEED_ADDRESS").orDie.map(_.map(_.trim).filter(_.nonEmpty))
+      _       <-
+        (queue, address) match
+          case (Some(settings), _) =>
+            ZIO.logInfo("Following the playbacks' change feed on a queue of this task's own") *>
+              VideoFileCollector
+                .follow(
+                  collector,
+                  ChangeFeedQueue.follow(settings, "mcp", List("video_playbacks"), FeedRetention))
+                .forkScoped
+                .unit
+          case (None, Some(at)) =>
+            ZIO.logInfo(s"Following the change feed at $at") *>
+              VideoFileCollector.follow(collector, ChangeFeedFollower.follow(at)).forkScoped.unit
+          case (None, None) =>
+            ZIO.logWarning(
+              "No CDC_TOPIC_PREFIX nor CDC_FEED_ADDRESS: playbacks that start or end from now on are not heard of until the next restart")
+    yield ()
+
+  /** How long a change set waits on this task's queue before it is dropped: far longer than the
+    * collector could fall behind while it runs, and a task that stopped rebuilds as it starts.
+    */
+  private val FeedRetention = 1.hour
 
   /** The load balancer's health check, `GET /health` answering `ok`: served once the server is, so
     * a task still migrating or one that failed to start is not sent requests.

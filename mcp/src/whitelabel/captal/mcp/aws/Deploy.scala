@@ -55,6 +55,7 @@ import software.amazon.awssdk.services.elasticloadbalancingv2.model.{
   TargetHealthStateEnum,
   TargetTypeEnum
 }
+import whitelabel.captal.cdc.protocol.ChangeFeedQueue
 import whitelabel.captal.platform.aws.Poll
 import zio.*
 
@@ -77,6 +78,12 @@ import zio.*
   * `cdcFeedAddress` too, as `CDC_FEED_ADDRESS`: the change data capture relay this server follows,
   * which a location's API follows to tell a waiting page its error recurred. Its tasks reach it by
   * the same name this server does.
+  *
+  * `cdcFeed`, where there is one, the same change feed on a queue of each task's own:
+  * `CDC_TOPIC_PREFIX` and `CDC_QUEUE_PREFIX`, this server's own, which a location's task names its
+  * queue under after its slug, and `CDC_DEAD_LETTER_ARN`, the locations' dead-letter queue, which
+  * this server reads as `LOCATION_CDC_DEAD_LETTER_ARN`. A location's API follows the queue over the
+  * relay when it has both.
   *
   * `otlpEndpoint`, this server's own `OTEL_EXPORTER_OTLP_ENDPOINT`, where its traces go: a
   * location's API sends its own there, as the service `captal-api`, each span carrying the
@@ -107,6 +114,7 @@ final case class DeployTargets(
     unifiProxyUrl: Option[String] = None,
     publicBaseUrl: Option[String] = None,
     cdcFeedAddress: Option[String] = None,
+    cdcFeed: Option[ChangeFeedQueue.Settings] = None,
     otlpEndpoint: Option[String] = None,
     devEndpoints: Boolean = false):
 
@@ -183,7 +191,12 @@ object DeployTargets:
             proxy  <- System.env("UNIFI_PROXY_URL").orDie.map(_.map(_.trim).filter(_.nonEmpty))
             base   <- System.env("PUBLIC_BASE_URL").orDie.map(_.map(_.trim).filter(_.nonEmpty))
             feed   <- System.env("CDC_FEED_ADDRESS").orDie.map(_.map(_.trim).filter(_.nonEmpty))
-            otlp   <- System
+            queue  <- ChangeFeedQueue.fromEnv
+            letter <- System
+              .env("LOCATION_CDC_DEAD_LETTER_ARN")
+              .orDie
+              .map(_.map(_.trim).filter(_.nonEmpty))
+            otlp <- System
               .env("OTEL_EXPORTER_OTLP_ENDPOINT")
               .orDie
               .map(_.map(_.trim).filter(_.nonEmpty))
@@ -209,6 +222,7 @@ object DeployTargets:
               unifiProxyUrl = proxy,
               publicBaseUrl = base,
               cdcFeedAddress = feed,
+              cdcFeed = queue.map(_.copy(deadLetterArn = letter)),
               otlpEndpoint = otlp,
               devEndpoints = dev
             ))
@@ -398,6 +412,17 @@ final case class InfraStore(
                 .cdcFeedAddress
                 .map(address =>
                   KeyValuePair.builder().name("CDC_FEED_ADDRESS").value(address).build()) ++
+              targets
+                .cdcFeed
+                .toList
+                .flatMap(feed =>
+                  List(
+                    "CDC_TOPIC_PREFIX"    -> Some(feed.topicPrefix),
+                    "CDC_QUEUE_PREFIX"    -> Some(feed.queuePrefix),
+                    "CDC_DEAD_LETTER_ARN" -> feed.deadLetterArn).collect {
+                    case (name, Some(value)) =>
+                      KeyValuePair.builder().name(name).value(value).build()
+                  }) ++
               targets
                 .otlpEndpoint
                 .toList
