@@ -119,7 +119,9 @@ object LocationTools:
         for
           slug <- slugOf(in.slug)
           now  <- Clock.instant
-          id   <- Random.nextUUID
+          // As every id the domain makes: ZIO's `Random` repeats its ids from one run to the next
+          // under test, where the database outlives the run.
+          id <- ZIO.succeed(java.util.UUID.randomUUID())
         yield CreateLocationCommand(LocationId(id.toString), slug, in.name, now)):
         (_, created: Location[State.Created.type]) =>
           ZIO.succeed(

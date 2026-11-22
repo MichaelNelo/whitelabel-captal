@@ -105,7 +105,9 @@ object TermsTools:
       .requireScopes(Auth.ContentWrite)
       .runs((in: CreateRequest) =>
         for
-          id  <- Random.nextUUID
+          // As every id the domain makes: ZIO's `Random` repeats its ids from one run to the next
+          // under test, where the database outlives the run.
+          id  <- ZIO.succeed(java.util.UUID.randomUUID())
           now <- Clock.instant
         yield PublishTermsVersionCommand(
           id.toString,
