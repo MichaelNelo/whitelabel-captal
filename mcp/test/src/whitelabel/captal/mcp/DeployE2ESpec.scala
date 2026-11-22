@@ -262,7 +262,8 @@ object DeployE2ESpec extends ZIOSpecDefault:
         quill.run(query[QuestionRow].delete) *> quill.run(query[SurveyRow].delete) *>
         quill.run(query[VideoPlaybackRow].delete) *> quill.run(query[VideoFileRow].delete) *>
         quill.run(query[AdvertiserVideoRow].delete) *> quill.run(query[LocalizedTextRow].delete) *>
-        quill.run(query[AdvertiserRow].delete) *> quill.run(query[LocationRow].delete).unit
+        quill.run(query[AdvertiserRow].delete) *> quill.run(query[AccessPointRow].delete) *>
+        quill.run(query[LocationRow].delete).unit
 
   /** Something under `bundle/`, so the copy has work to do.
     *
@@ -964,7 +965,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
         ready.hasStyles,
         ready.hasIcon,
         ready.advertisers == 1,
-        ready.requiredKeys == 39,
+        ready.requiredKeys == 45,
         ready.activeVideos == 1,
         ready.pendingVideos == 0,
         ready.adVideos == 1,
@@ -1123,10 +1124,15 @@ object DeployE2ESpec extends ZIOSpecDefault:
     */
   private val Denial = """is not authorized to perform: ([A-Za-z0-9]+:[A-Za-z0-9]+)""".r
 
+  /** When this suite started: the container outlives it, and its log holds every earlier run's
+    * denials, which say nothing of this one's.
+    */
+  private val startedAt = java.time.Instant.now()
+
   private val deniedActions: ZIO[Any, Nothing, Set[String]] = ZIO
     .attemptBlocking:
       // `ProcessBuilder` rather than os-lib, which is Mill's and not a dependency of this module.
-      val process = new ProcessBuilder("docker", "logs", "localstack-dev")
+      val process = new ProcessBuilder("docker", "logs", "--since", startedAt.toString, "localstack-dev")
         .redirectErrorStream(true)
         .start()
       val output = Source.fromInputStream(process.getInputStream).mkString
