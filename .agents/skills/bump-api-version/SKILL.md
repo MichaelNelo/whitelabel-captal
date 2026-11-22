@@ -1,7 +1,7 @@
 ---
 name: bump-api-version
 description: Use when releasing a new version of the captal-api or captal-mcp image. Covers how the version is computed from conventional commits and git tags, the release `mill ci.run` makes (images, terraform, every location rolled, client, tags), and rolling back. Triggers on "bump api version", "release api", "release mcp", "publish api image", "subir api", "deploy api", "nueva versión".
-version: 3.1.0
+version: 3.1.1
 ---
 
 # Release a new API or backoffice image
@@ -53,7 +53,9 @@ and `messages` too. Its release publishes the bundle once, keeps it under
    versions: the apply pushes each image whose version changed and is not in its registry yet — a
    published version is never pushed again — and points every service at the digest it left;
 3. moves every deployed location onto the API image (a new task definition revision differing only
-   in the image and the relay's `CDC_FEED_ADDRESS`) and waits for them to settle;
+   in the image and the change feed's variables: the relay's `CDC_FEED_ADDRESS`, and
+   `CDC_TOPIC_PREFIX`, `CDC_QUEUE_PREFIX` and `CDC_DEAD_LETTER_ARN` for a queue of each task's own)
+   and waits for them to settle;
 4. publishes the client and copies it under every location's prefix;
 5. tags the commit with every version that moved and pushes the tags.
 
