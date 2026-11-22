@@ -177,8 +177,19 @@ https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-metadata-endpoi
 response]). No service here sets a platform version, so each runs on `LATEST`. LocalStack's ECS
 does not inject it: a task it ran had `AWS_ENDPOINT_URL`, `LOCALSTACK_HOSTNAME` and
 `AWS_EXECUTION_ENV=AWS_ECS_FARGATE`, and no `ECS_CONTAINER_METADATA_URI_V4`; the request to add it
-(https://github.com/localstack/localstack/issues/10645[localstack#10645]) was closed as stale. How a
-task names its queue in LocalStack is still to decide.
+(https://github.com/localstack/localstack/issues/10645[localstack#10645]) was closed as stale. So a
+queue's name takes a random id, and nothing depends on the task's own (<<one-queue-per-task>>).
+
+What an orphan costs — the queue of a task killed without SIGTERM, which nothing removes: queues do
+not expire (`DeleteQueue` says nothing of idle queues; only an old SDK page "reserves the right" to
+delete one with "no activity for more than 30 days", and SNS keeps delivering to it anyway); SQS
+charges per request, "every Amazon SQS action counts as a request", USD 0.40 per million on standard
+queues after a free million a month (AWS price list, 2026-11-11), and nothing for the queue or what it
+holds; SNS "does not charge for per-message notification delivery when delivering messages to Amazon
+SQS", only for the data (https://aws.amazon.com/sqs/pricing/[SQS pricing],
+https://aws.amazon.com/sns/pricing/[SNS pricing]). Whether each delivery counts as an SQS request is
+not settled; counted as one, an orphan of the backoffice costs about USD 0.01 a month at today's two
+locations and 0.48 at twenty, and one of a location nearly nothing, errors being rare.
 
 == The design
 
@@ -254,9 +265,9 @@ start, and a new filter policy takes up to 15 minutes to apply, delivering who k
 A task reading two tables subscribes its queue to both topics. Publishing a new table adds it to
 rqlite's filter and adds its topic.
 
-A queue's name is `captal-<env>-<service>-<task id>`, the service being `mcp` or a location's slug.
-A name has at most 80 characters, so a long slug is shortened with a digest, as
-`DeployTargets.targetGroupName` does.
+A queue's name is `captal-<env>-<service>-<random id>`, the service being `mcp` or a location's slug:
+the name only has to be unique, and LocalStack gives a task no id of its own. A name has at most 80
+characters, so a long slug is shortened with a digest, as `DeployTargets.targetGroupName` does.
 
 [[the-subscribers]]
 === The subscribers
@@ -294,35 +305,44 @@ would record a process's memory, false as soon as the process dies.
 A task declares the topics it reads, next to the code that reads them, as `ChangeFeedFollower` does
 today with `since`. As it starts:
 
-. it removes the queues and subscriptions of its service's tasks that no longer run — one killed
-  without SIGTERM, which ECS has replaced with this one;
 . it creates its queue, standard, with its retention, a visibility timeout of a few seconds and the
   service's dead-letter queue for messages it cannot process, and the queue policy letting its
   topics send to it;
 . it subscribes the queue to each topic, with raw delivery;
-. it publishes to each topic a marker carrying its task id, and waits until its queue has received
-  them: the subscription delivers. Every other task gets the marker too and discards it, as anything
-  that is not an rqlite change set;
+. it publishes to each topic a marker carrying its queue's id, and drains its queue until the marker
+  arrives: the subscription delivers. Whatever arrives before the marker is deleted unprocessed.
+  Every other task gets the marker too and discards it, as anything that is not an rqlite change set;
 . it rebuilds from the database;
 . it consumes: long polling of up to 20 s, batches of up to 10, `DeleteMessageBatch` after
   processing.
 
-Every change committed after the rebuild is published after the marker, once the subscription
-delivers, so it is in the queue; every one before is in what the rebuild read. Nothing is purged:
-purging takes up to a minute and may delete what arrives after it was asked, and a new queue starts
-empty anyway.
+What the drain discards is old: a message received before the marker was published before then, so
+its change was committed before the rebuild, which reads it. That holds whatever order a standard
+topic delivers in, since it is the receipt that comes before the marker, and it needs no clock. Every
+change committed after the rebuild is published after the marker came back, once the subscription
+delivers, so it is in the queue. Nothing is purged: purging takes up to a minute and may delete what
+arrives after it was asked, and a new queue starts empty anyway.
 
-On SIGTERM it stops consuming, unsubscribes and deletes its queue. `destroy_location` removes what a
-location's tasks left, since no task of that service will start again to do it.
+The queue, the subscription and the consumer are resources of the task's scope, acquired in that
+order, so its finalizers stop the consumer, unsubscribe and delete the queue, in the reverse order.
+They run on SIGTERM: `ZIOAppDefault` registers a JVM shutdown hook that interrupts the main fiber and
+waits for its finalizers (`ZIOAppPlatformSpecific.main`, zio 2.1.26), which ECS bounds by sending
+SIGKILL 30 s later. The JVM receives SIGTERM itself: each image runs `CMD ["java", "-jar", …]`, and
+the base image's entrypoint, `/__cacert_entrypoint.sh`, ends in `exec "$@"`, so `java` is PID 1. A
+task killed without SIGTERM — SIGKILL, memory exhausted — leaves its queue and subscription, and
+nothing removes them: each costs cents a month (<<verified>>), and they are removed by hand.
+`destroy_location` removes every queue and subscription of the location, by its prefix, since no
+task of a service that is gone has one alive.
 
 The task role needs, scoped by name: on the queues `captal-<env>-<service>-*`, create, set and get
-attributes, receive, delete messages and delete the queue; `sqs:ListQueues`; on its topics,
-`sns:Subscribe` only with `sns:Protocol = sqs` and `sns:Endpoint` one of those queues,
-`sns:Unsubscribe`, `sns:ListSubscriptionsByTopic` and `sns:Publish`, for the marker; and
-`ecs:ListTasks` on its service. No condition key names the subscription `sns:Unsubscribe` removes,
-so a task could remove another's subscription to the same topic; a marker or a forged message
-published by a task only makes the others check against the database. The relay's role needs
-`sns:Publish` on every `cdc` topic.
+attributes, receive, delete messages and delete the queue; on its topics, `sns:Subscribe` only with
+`sns:Protocol = sqs` and `sns:Endpoint` one of those queues, `sns:Unsubscribe` and `sns:Publish`, for
+the marker. A task keeps the subscription's ARN `Subscribe` answers, so it lists nothing. No condition
+key names the subscription `sns:Unsubscribe` removes, so a task could remove another's subscription to
+the same topic; a marker or a forged message published by a task only makes the others check against
+the database. The backoffice's role also needs, for `destroy_location`, `sqs:ListQueues`,
+`sns:ListSubscriptionsByTopic`, `sns:Unsubscribe` and `sqs:DeleteQueue` on the locations' queues. The
+relay's role needs `sns:Publish` on every `cdc` topic.
 
 === Push and pull, plainly
 
