@@ -18,6 +18,7 @@ Feature: Changing a deployed location while guests use it
     When Ana answers the video's survey with "Yes"
     Then Ana has internet access
 
+  @change-feed
   Scenario: A guest already watching the old file finishes it, the next guest gets the new one, and the old file goes once nobody plays it
     Given the operator's own deployed location "replacement" with one advertiser video
     When Ana opens the portal on a new phone
@@ -56,6 +57,7 @@ Feature: Changing a deployed location while guests use it
     And Ana opens the portal on a new phone
     Then Ana sees the welcome button "Empezar ahora"
 
+  @change-feed
   Scenario: A guest who walks away mid-video keeps the file only until its playback expires
     Given the operator's own deployed location "abandoned" with one advertiser video
     And the location "abandoned" closes a playback its page never ended 120 seconds after its file ends

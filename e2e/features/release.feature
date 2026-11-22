@@ -19,6 +19,7 @@ Feature: Releasing the build, and the change data capture relay restarting
     Then Ben's page runs the client its location serves
     And Ben's location serves the newest client release
 
+  @change-feed
   Scenario: A playback that was open while the relay restarted still ends, and the file it leaves behind is deleted
     Given the operator's own deployed location "relay" with one advertiser video
     When the relay restarts

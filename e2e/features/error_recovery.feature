@@ -61,7 +61,7 @@ Feature: Recovery from an error
   # distribution hands a response on only once it ends, which a stream never does, so the guests'
   # streams go through the load balancer. Five minutes, so the countdown is still running when the
   # shortening reaches it.
-  @stream-through-load-balancer
+  @stream-through-load-balancer @change-feed
   Scenario: Another guest running into the same error shortens the wait
     Given the location "plaza" makes a new guest wait 300 seconds for an error in its portal's code
     When Ana opens the portal on a new phone
