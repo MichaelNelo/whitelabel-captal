@@ -628,19 +628,21 @@ module "mcp" {
   http_listener_arn  = module.alb.http_listener_arn
   https_listener_arn = var.enable_dns ? aws_lb_listener.https[0].arn : ""
 
-  db_url                      = module.rqlite.http_url
-  cdc_feed_address            = module.cdc.feed_address
-  feed_topic_arn              = module.cdc.topic_arns["video_playbacks"]
-  location_feed_topic_arn     = module.cdc.topic_arns["errors"]
-  feed_queue_prefix           = local.feed_queue_prefix
-  redis_lock_addresses        = module.redis_lock.addresses
-  otlp_endpoint               = local.otlp_endpoint
-  location_dev_endpoints      = var.enable_location_faults
-  assets_bucket_name          = module.cloudfront.assets_bucket_name
-  assets_bucket_arn           = module.cloudfront.assets_bucket_arn
-  cloudfront_distribution_id  = module.cloudfront.distribution_id
-  cloudfront_distribution_arn = module.cloudfront.distribution_arn
-  public_base_url             = var.enable_dns ? "https://${var.cloudfront_domain}" : "https://${module.cloudfront.distribution_domain_name}${var.public_port == 0 ? "" : ":${var.public_port}"}"
+  db_url                        = module.rqlite.http_url
+  cdc_feed_address              = module.cdc.feed_address
+  feed_topic_arn                = module.cdc.topic_arns["video_playbacks"]
+  location_feed_topic_arn       = module.cdc.topic_arns["errors"]
+  feed_queue_prefix             = local.feed_queue_prefix
+  cdc_topic_prefix              = module.cdc.topic_prefix
+  location_feed_dead_letter_arn = aws_sqs_queue.location_feed_dead_letter.arn
+  redis_lock_addresses          = module.redis_lock.addresses
+  otlp_endpoint                 = local.otlp_endpoint
+  location_dev_endpoints        = var.enable_location_faults
+  assets_bucket_name            = module.cloudfront.assets_bucket_name
+  assets_bucket_arn             = module.cloudfront.assets_bucket_arn
+  cloudfront_distribution_id    = module.cloudfront.distribution_id
+  cloudfront_distribution_arn   = module.cloudfront.distribution_arn
+  public_base_url               = var.enable_dns ? "https://${var.cloudfront_domain}" : "https://${module.cloudfront.distribution_domain_name}${var.public_port == 0 ? "" : ":${var.public_port}"}"
 
   # What the deploy tools hand to a location: one image for all of them, the task role a location's
   # API runs as -- which is not the server's own -- and the proxy it reaches its venue's gateway

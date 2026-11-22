@@ -222,6 +222,11 @@ def release(
     locations,
     output("api_image"),
     outputs.get("cdc_feed_address"),
+    Seq(
+      "CDC_TOPIC_PREFIX"    -> "cdc_topic_prefix",
+      "CDC_QUEUE_PREFIX"    -> "feed_queue_prefix",
+      "CDC_DEAD_LETTER_ARN" -> "location_feed_dead_letter_arn").flatMap((name, output) =>
+      outputs.get(output).map(name -> _)),
     outputs.get("otlp_endpoint"),
     outputs.get("redis_lock_addresses"),
     await = awaitLocations)
@@ -430,10 +435,12 @@ val RegisterableFields = Seq(
   "runtimePlatform"
 )
 
-/** Moves every location onto `api`, the API image by digest, following the relay at `feed`, sending
-  * its traces to `otlp` and taking the migrations' lock on the Redis instances at `locks`: a new task
-  * definition revision that differs only in the image, `CDC_FEED_ADDRESS`, `REDIS_LOCK_ADDRESSES`
-  * and the `OTEL_*` variables `deploy_location` sets, and its service pointed at it.
+/** Moves every location onto `api`, the API image by digest, following the relay at `feed` and the
+  * change feed on queues of its own as `queue` says (`CDC_TOPIC_PREFIX`, `CDC_QUEUE_PREFIX`,
+  * `CDC_DEAD_LETTER_ARN`), sending its traces to `otlp` and taking the migrations' lock on the Redis
+  * instances at `locks`: a new task definition revision that differs only in the image, those
+  * variables, `CDC_FEED_ADDRESS`, `REDIS_LOCK_ADDRESSES` and the `OTEL_*` variables `deploy_location`
+  * sets, and its service pointed at it.
   * The service keeps its task count, so a paused location stays paused and runs the new image on resume. A
   * location already on all of them is left as it is.
   *
@@ -445,6 +452,7 @@ def rollLocations(
     locations: Seq[LocationService],
     api: String,
     feed: Option[String],
+    queue: Seq[(String, String)],
     otlp: Option[String],
     locks: Option[String],
     await: Boolean): Unit =
@@ -457,7 +465,7 @@ def rollLocations(
       .get("environment")
       .map(_.arr.toSeq)
       .getOrElse(Nil)
-    val set = feed.map("CDC_FEED_ADDRESS" -> _).toList ++
+    val set = feed.map("CDC_FEED_ADDRESS" -> _).toList ++ queue ++
       locks.map("REDIS_LOCK_ADDRESSES" -> _).toList ++ otlp.toList.flatMap(endpoint =>
       List(
         "OTEL_EXPORTER_OTLP_ENDPOINT" -> endpoint,

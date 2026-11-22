@@ -13,6 +13,11 @@ output "topic_arns" {
   value       = { for table, topic in aws_sns_topic.table : table => topic.arn }
 }
 
+output "topic_prefix" {
+  description = "A table's topic's ARN but for the table's name: the subscribers' CDC_TOPIC_PREFIX"
+  value       = local.topic_prefix
+}
+
 output "service_name" {
   description = "ECS service name"
   value       = aws_ecs_service.cdc.name

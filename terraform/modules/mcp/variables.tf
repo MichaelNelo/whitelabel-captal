@@ -155,6 +155,16 @@ variable "feed_queue_prefix" {
   type        = string
 }
 
+variable "cdc_topic_prefix" {
+  description = "A table's topic's ARN but for the table's name, which the server and every location it deploys append to the table they read"
+  type        = string
+}
+
+variable "location_feed_dead_letter_arn" {
+  description = "The locations' dead-letter queue, which `deploy_location` names in each location's task definition"
+  type        = string
+}
+
 variable "redis_lock_addresses" {
   description = "Every Redis instance the server takes a location's operation lock on, `host:port` comma separated"
   type        = string

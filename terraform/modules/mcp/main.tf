@@ -59,6 +59,13 @@ locals {
     { name = "AWS_REGION", value = var.aws_region },
     { name = "DB_URL", value = var.db_url },
     { name = "CDC_FEED_ADDRESS", value = var.cdc_feed_address },
+
+    # The change feed on a queue of each task's own, which the server follows over the relay; the
+    # first two `deploy_location` forwards to every location, with the locations' dead-letter queue.
+    { name = "CDC_TOPIC_PREFIX", value = var.cdc_topic_prefix },
+    { name = "CDC_QUEUE_PREFIX", value = var.feed_queue_prefix },
+    { name = "CDC_DEAD_LETTER_ARN", value = aws_sqs_queue.feed_dead_letter.arn },
+    { name = "LOCATION_CDC_DEAD_LETTER_ARN", value = var.location_feed_dead_letter_arn },
     { name = "REDIS_LOCK_ADDRESSES", value = var.redis_lock_addresses },
     { name = "LOCATION_DEV_ENDPOINTS", value = tostring(var.location_dev_endpoints) },
 

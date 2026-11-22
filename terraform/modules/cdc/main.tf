@@ -4,8 +4,13 @@
 # Internal only. It has no target group and no listener rule: rqlite and the subscribers reach it
 # as `cdc.<namespace>`, and its security group admits nothing else.
 
+data "aws_caller_identity" "current" {}
+
 locals {
   name = "${var.project_name}-${var.environment}-cdc"
+
+  # A table's topic's ARN but for the table's name, which the relay and every subscriber append.
+  topic_prefix = "arn:aws:sns:${var.aws_region}:${data.aws_caller_identity.current.account_id}:${local.name}-"
 }
 
 resource "aws_cloudwatch_log_group" "cdc" {
@@ -113,6 +118,7 @@ resource "aws_ecs_task_definition" "cdc" {
       { name = "CDC_PORT", value = tostring(var.http_port) },
       { name = "CDC_GRPC_PORT", value = tostring(var.grpc_port) },
       { name = "CDC_BUFFER", value = tostring(var.buffer) },
+      { name = "CDC_TOPIC_PREFIX", value = local.topic_prefix },
       ], var.otlp_endpoint == "" ? [] : [
       { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = var.otlp_endpoint },
       { name = "OTEL_SERVICE_NAME", value = "captal-cdc" },

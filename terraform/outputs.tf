@@ -209,6 +209,21 @@ output "cdc_feed_address" {
   value       = module.cdc.feed_address
 }
 
+output "cdc_topic_prefix" {
+  description = "A table's topic's ARN but for the table's name: every location's CDC_TOPIC_PREFIX, which a release sets on every location it moves"
+  value       = module.cdc.topic_prefix
+}
+
+output "feed_queue_prefix" {
+  description = "What every task's queue on the change feed is named under: every location's CDC_QUEUE_PREFIX, which a release sets on every location it moves"
+  value       = local.feed_queue_prefix
+}
+
+output "location_feed_dead_letter_arn" {
+  description = "The locations' dead-letter queue: every location's CDC_DEAD_LETTER_ARN, which a release sets on every location it moves"
+  value       = aws_sqs_queue.location_feed_dead_letter.arn
+}
+
 output "otlp_endpoint" {
   description = "Where every service sends its traces: Jaeger, over OTLP. A release sets it on every location it moves."
   value       = local.otlp_endpoint
