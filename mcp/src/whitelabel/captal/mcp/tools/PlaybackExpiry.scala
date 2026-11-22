@@ -102,8 +102,7 @@ object PlaybackExpiry:
         ZIO.unit
       case Some(deadline) =>
         for
-          now <- Clock.instant
-          _   <- ZIO.when(deadline.isAfter(now))(ZIO.sleep(Duration.fromInterval(now, deadline)))
+          _       <- reached(deadline)
           expired <- expire(id)
           _       <-
             if expired then
@@ -111,6 +110,18 @@ object PlaybackExpiry:
             else
               expireWhenDue(id, asked, Some(deadline))
         yield ()
+
+  /** Once the clock has reached `deadline`. A sleep can end before a deadline's last nanoseconds —
+    * the scheduler counts milliseconds — and the command, told an instant before it, would find the
+    * playback not due; so it sleeps until the clock says the deadline has come.
+    */
+  private def reached(deadline: Instant): UIO[Unit] =
+    Clock
+      .instant
+      .flatMap(now =>
+        ZIO.when(now.isBefore(deadline))(
+          ZIO.sleep(Duration.fromInterval(now, deadline).plusMillis(1)) *> reached(deadline)))
+      .unit
 
   /** Whether `ExpirePlaybackCommand` closed it. Closing is not refused, so a failure here is a
     * defect; an id that names no playback closes nothing.
