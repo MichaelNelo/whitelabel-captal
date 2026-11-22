@@ -158,8 +158,13 @@ Step 1 of the migration, done on 2026-11-22 from AWS's documentation, then run a
 | SNS and SQS are in every plan from Hobby on. With the licence, a FIFO topic with two FIFO queues,
   each filtered on `tables`: a change set on `errors` and `sessions` reached the `errors` queue, one
   on `sessions` alone reached none, a repeated `MessageDeduplicationId` was dropped, and raw
-  delivery kept the attributes and the group and deduplication ids. Not yet run: standard topics,
-  which the design now uses.
+  delivery kept the attributes and the group and deduplication ids. Then the design itself, from the
+  host, on standard topics: each task's marker came back to it in about 2 s, and every other task
+  received it too; two tasks overlapping each got its own copy of a playback's insert, one deleting
+  its copy leaving the other's, and an error published to `cdc-errors` reached neither; a task
+  unsubscribing and deleting its queue left the other's subscription alone; sweeping the queue of a
+  task killed without SIGTERM removed its queue and its subscription. A queue deleted without
+  unsubscribing left its subscription behind.
 |===
 
 A task knows its own id and service from the ECS task metadata endpoint v4: "Beginning with Fargate
@@ -169,8 +174,11 @@ into each container in a task", on by default, and `${ECS_CONTAINER_METADATA_URI
 (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-metadata-endpoint-v4-fargate.html[endpoint
 v4 on Fargate],
 https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-metadata-endpoint-v4-fargate-response.html[its
-response]). No service here sets a platform version, so each runs on `LATEST`. Not yet known:
-whether LocalStack's ECS injects the variable into the tasks it runs.
+response]). No service here sets a platform version, so each runs on `LATEST`. LocalStack's ECS
+does not inject it: a task it ran had `AWS_ENDPOINT_URL`, `LOCALSTACK_HOSTNAME` and
+`AWS_EXECUTION_ENV=AWS_ECS_FARGATE`, and no `ECS_CONTAINER_METADATA_URI_V4`; the request to add it
+(https://github.com/localstack/localstack/issues/10645[localstack#10645]) was closed as stale. How a
+task names its queue in LocalStack is still to decide.
 
 == The design
 
