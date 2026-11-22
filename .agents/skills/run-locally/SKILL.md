@@ -1,7 +1,7 @@
 ---
 name: run-locally
 description: Use to spin up the captal stack on your dev machine — the local configuration in LocalStack, the MCP backoffice, a deployed portal, the guest API, and the client bundle. Triggers on "run locally", "local dev", "start dev", "correr en local", "levantar local".
-version: 3.3.0
+version: 3.3.1
 ---
 
 # Run the stack locally
@@ -63,8 +63,9 @@ Every token the task reads lives in `.env`, which `.envrc` sources and `.gitigno
 
 The database is the configuration's three-node rqlite in LocalStack. `api.dev` reaches it on
 `localhost:5001`, the port one of its tasks publishes; the backoffice and every
-deployed location's task reach it as `rqlite.captal.local:5001`, by service discovery as in
-production. It lives in LocalStack's tasks, so recreating the container empties it.
+deployed location's task reach it as `rqlite.captal.local:5001`, by name as in production — kept
+locally in a Route 53 zone by `modules/local-discovery`, since LocalStack offers Cloud Map only on
+its Ultimate licence. It lives in LocalStack's tasks, so recreating the container empties it.
 
 It prints a ready-to-paste MCP client config, with the admin token the configuration generated into
 Secrets Manager (it lasts as long as the LocalStack container), and how to follow the backoffice's
