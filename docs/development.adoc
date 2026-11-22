@@ -329,9 +329,11 @@ the first four against LocalStack:
   run by hand without them fails at the push, before any service changes.
 . **Locations.** Every location's service — the ones whose task runs a single container named
   `api`, which is how `deploy_location` registers them — not already on the API image's digest,
-  following the relay and sending its traces to Jaeger gets a new revision of its task definition
-  differing only in the image, `CDC_FEED_ADDRESS` (the configuration's `cdc_feed_address` output)
-  and the `OTEL_*` variables `deploy_location` sets (from its `otlp_endpoint` output; see
+  following the change feed and sending its traces to Jaeger gets a new revision of its task
+  definition differing only in the image, `CDC_FEED_ADDRESS` (the configuration's `cdc_feed_address`
+  output), `CDC_TOPIC_PREFIX`, `CDC_QUEUE_PREFIX` and `CDC_DEAD_LETTER_ARN` (its `cdc_topic_prefix`,
+  `feed_queue_prefix` and `location_feed_dead_letter_arn` outputs) and the `OTEL_*` variables
+  `deploy_location` sets (from its `otlp_endpoint` output; see
   xref:tracing.adoc[Tracing]), and is pointed at it. The rest
   of its environment, roles and sizes carry over as the last deploy registered them, so a change to
   those is still a `deploy_location`. The

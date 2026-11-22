@@ -380,12 +380,19 @@ The module outputs `ingest_url`, passed to rqlite, and `feed_address`, `cdc.<nam
 passed to the backoffice as `CDC_FEED_ADDRESS`.
 
 It also creates a standard SNS topic for each of `cdc_tables`, `<prefix>-cdc-<table>`, output as
-`topic_arns`, and a task role of the relay's own allowed `sns:Publish` on them, nothing else. Not
-FIFO: a FIFO topic admits 100 subscriptions, and each task that follows a table subscribes a queue
-of its own. A topic per table rather than one topic with a filter policy per subscription, because a
-new filter policy takes up to 15 minutes to apply and a task subscribes on every start. What the
-relay and its subscribers do with them is in xref:context/relay-sns-sqs-plan.adoc[the relay plan];
-nothing publishes or subscribes yet.
+`topic_arns`, and a task role of the relay's own allowed `sns:Publish` on them, nothing else. The
+relay publishes there under `CDC_TOPIC_PREFIX`, `arn:aws:sns:<region>:<account>:<prefix>-cdc-`,
+output as `topic_prefix` and passed to the backoffice too. Not FIFO: a FIFO topic admits 100
+subscriptions, and each task that follows a table subscribes a queue of its own. A topic per table
+rather than one topic with a filter policy per subscription, because a new filter policy takes up to
+15 minutes to apply and a task subscribes on every start. See xref:cdc.adoc[Change data capture relay]
+for what the relay publishes and how a task follows it.
+
+The backoffice gets the change feed's variables — `CDC_TOPIC_PREFIX`, `CDC_QUEUE_PREFIX` (the feed's
+prefix, below), `CDC_DEAD_LETTER_ARN` (its own dead-letter queue) and `LOCATION_CDC_DEAD_LETTER_ARN`
+— and forwards the first two, with the last as `CDC_DEAD_LETTER_ARN`, into every location it deploys;
+the root outputs them as `cdc_topic_prefix`, `feed_queue_prefix` and
+`location_feed_dead_letter_arn`, which a release sets on every location it moves.
 
 The tasks that follow a table each name their queue `<prefix>-feed-<service>-<random id>`, the
 service being `mcp` or a location's slug, which can never be `mcp`. The root module grants the shared

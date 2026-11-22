@@ -105,7 +105,13 @@ loudly on a missing object rather than quietly finding a neighbour's.
 | rqlite endpoint
 
 | `CDC_FEED_ADDRESS`
-| `host:port` of the change data capture relay's feed. Followed by this server, and forwarded into every location's task definition for its API to follow. Optional: without it the server logs a warning and hears of no playback starting or ending after its startup, and locations are deployed without it
+| `host:port` of the change data capture relay's feed. Followed by this server when it has no queue, and forwarded into every location's task definition for its API to follow likewise. Optional: without it and the queue's variables the server logs a warning and hears of no playback starting or ending after its startup, and locations are deployed without it
+
+| `CDC_TOPIC_PREFIX`, `CDC_QUEUE_PREFIX`
+| A table's topic's ARN but for the table's name, and what every task's queue on the change feed is named under. With both, this server follows `video_playbacks` on a queue of its task's own, and forwards both into every location's task definition, whose API follows `errors` likewise
+
+| `CDC_DEAD_LETTER_ARN`, `LOCATION_CDC_DEAD_LETTER_ARN`
+| The dead-letter queues of this server's tasks' queues and of the locations', the second forwarded into every location's task definition as its `CDC_DEAD_LETTER_ARN`
 
 | `MCP_ADMIN_TOKEN`
 | Seeds the admin row on startup, which holds every scope. Every other token is issued from it with `create_token` and stored hashed in `mcp_tokens`; nothing else reads this. Rotating it and restarting replaces the credential in place.

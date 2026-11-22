@@ -70,8 +70,9 @@ up environment reaches this before `client.publish` has ever run, and the warnin
 once it has.
 . `Tokens.seedAdmin(token, "admin")` — idempotent; logs whether the admin row was created, rotated
 in place, or already current.
-. Follows the change data capture relay at `CDC_FEED_ADDRESS` (see <<replaced-files>>), in the
-background for as long as it serves.
+. Follows the change feed (see <<replaced-files>>), in the background for as long as it serves: the
+`video_playbacks` topic on a queue of the task's own where `CDC_TOPIC_PREFIX` and
+`CDC_QUEUE_PREFIX` are set, the relay at `CDC_FEED_ADDRESS` otherwise.
 . Serves `GET /health` (`ok`, the load balancer's health check) `++ UiRoutes.routes ++ RunRoutes.routes
 ++ OauthMetadata.routes(uiOrigin) ++ CaptalMcp.server(...).statelessRoutes`.
 
@@ -642,10 +643,11 @@ A pass runs on four occasions:
 
 * `confirm_video_upload`, for that video: the previous file may have nobody left on it already.
 * Every change set the change feed relays, and every gap in it (see xref:cdc.adoc[Change data
-  capture relay]). The server follows the relay at `CDC_FEED_ADDRESS` for as long as it runs; a
-  change set only asks for a pass, and a pass deletes nothing the database does not allow. Requests
-  queue in a one-slot sliding queue, so a burst costs two passes. Without `CDC_FEED_ADDRESS` the
-  server logs a warning and starts anyway.
+  capture relay]). The server follows the feed for as long as it runs, on a queue of its task's own
+  (`ChangeFeedQueue`, whose first event is a gap, once the queue receives) or from the relay at
+  `CDC_FEED_ADDRESS`; a change set only asks for a pass, and a pass deletes nothing the database
+  does not allow. Requests queue in a one-slot sliding queue, so a burst costs two passes. With
+  neither configured the server logs a warning and starts anyway.
 * Startup, for whatever changed while the server was not there to hear it.
 * A playback expiring (below).
 

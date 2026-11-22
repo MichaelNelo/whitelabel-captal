@@ -416,6 +416,27 @@ simulator, or the first apply to AWS, is what settles them.
     it starts.
   * Every location: `RecoveryFeed` reads its task's queue. Existing locations subscribe themselves
     when `ci.run` moves them onto the new image; `destroy_location` removes what their tasks left.
++
+*Steps 3 and 4 done on 2026-11-22*, both subscribers at once rather than one at a time, since each
+falls back to gRPC without the queue's variables. The relay publishes each new change set with
+`PublishBatch` (`Topics`), its index and trace context as message attributes, and answers `503`,
+taking nothing as seen, when a topic refuses one. `ChangeFeedQueue` (`cdc.protocol`) follows a
+table on a task's own queue and produces the gRPC follower's events: its first is a `Gap`, once
+the marker came back, which is the rebuild the design asks for, so neither subscriber changed what
+it does with an event. The index travels as an attribute because `cdc.protocol` parses no JSON: the
+API and the backoffice resolve different versions of zio-json. Every task gets the same
+`CDC_QUEUE_PREFIX` and adds its own service — `mcp`, or the slug it reads from `LOCATION_SLUG` — so
+neither `deploy_location` nor a release names a queue. Run end to end, against LocalStack with the
+Base licence, by the four scenarios now tagged `@change-feed`: every one passed, the backoffice and
+each location following its queue and each location's queue deleted as its task stopped. The run
+also found a fault of 2026-11-17's, unrelated to the feed: a playback timer woke up to a millisecond
+before its deadline's nanoseconds, the command found the playback not due, and the timer gave up;
+it now sleeps until the clock has reached the deadline.
++
+Not done: `destroy_location` does not yet remove what a location's tasks left, which is only what a
+task killed without SIGTERM leaves, since each removes its own as it stops (the permissions are
+there); and a change set larger than a topic takes (256 KiB) fails its post until rqlite drops it,
+holding the feed up meanwhile.
 . *gRPC is retired*: the relay stops serving it; the `cdc.protocol` module (`ChangeFeedFollower`,
   `cdc.proto`), the buffer, the `Gap`, `CDC_BUFFER`, the gRPC port and its security group rule go.
 . *The relay deploys overlapped*: the container health check, 100/200, the `stopTimeout`. ARM is
