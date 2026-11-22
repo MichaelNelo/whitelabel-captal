@@ -96,13 +96,13 @@ win. Revisit if the connections change. Measured against the hints in `preloadLi
 
 == The relay has a gap of a minute or two on every deploy
 
-The change data capture relay is one task deployed stop-then-start (`modules/cdc/main.tf:134`),
+The change data capture relay is one task deployed stop-then-start (`modules/cdc/main.tf:138`),
 because each relay keeps its change sets in memory and two at once would split rqlite's posts. Each
 relay deploy leaves one to two minutes with no live feed; rqlite retries its posts and subscribers get
 a `Gap` from the new instance, so nothing is lost unnoticed, but nothing arrives live either. The
-agreed fix — the relay publishes to SNS, every subscriber reads its own SQS queue, and the relay,
-stateless, deploys overlapped — is xref:relay-sns-sqs-plan.adoc[the relay plan], with the options set
-aside.
+agreed fix — the relay publishes to an SNS topic per table, every task that reads them has its own
+SQS queue, and the relay, stateless, deploys overlapped — is xref:relay-sns-sqs-plan.adoc[the relay
+plan], with the options set aside; its documentation check is done, the infrastructure is next.
 
 == The run page polls, and the API's routes run their flows by hand
 

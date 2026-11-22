@@ -2,10 +2,12 @@
 :toc:
 :toclevels: 2
 
-A plan agreed in conversation on 2026-11-13 and not started. The change data capture relay stops
-keeping change sets: it publishes each one to an SNS FIFO topic, and every subscriber reads its own
-SQS FIFO queue. The relay becomes stateless, so it deploys overlapped, and the gap of one to two
-minutes on every relay deploy goes away. Pick it up from <<migration>>.
+A plan agreed in conversation on 2026-11-13 and revised on 2026-11-22, once its first step — checking
+the documentation — had been done (<<verified>>). The change data capture relay stops keeping change
+sets: it publishes each one to an SNS topic per table it touches, and every task that reads them has
+an SQS queue of its own subscribed to the topics it reads. The relay becomes stateless, so it deploys
+overlapped, and the gap of one to two minutes on every relay deploy goes away. Pick it up from
+<<migration>>, step 2.
 
 == The problem
 
@@ -13,7 +15,7 @@ The relay (`cdc`) receives rqlite's change data capture over HTTP and fans it ou
 over a gRPC stream, keeping the last `CDC_BUFFER` (1000) change sets in memory for those that
 reconnect (xref:../cdc.adoc[Change data capture relay]). Because that history lives in one process:
 
-* It deploys stop-then-start (`deployment_minimum_healthy_percent = 0`, `modules/cdc/main.tf:134`).
+* It deploys stop-then-start (`deployment_minimum_healthy_percent = 0`, `modules/cdc/main.tf:138`).
   Two relays at once would split rqlite's posts: a subscriber that connected to the new one while
   rqlite still posted to the old misses those change sets with no `Gap`, since its instance never
   changed. DNS cannot coordinate the switch — `cdc.<namespace>` lists both tasks during an overlap,
@@ -91,35 +93,112 @@ Read from rqlite 10.6.1's documentation and, where the documentation is silent, 
   change it. Changing the table filter means restarting rqlite, which the user accepted: the new
   cluster takes no writes until the previous one is down.
 
+[[verified]]
+== What the documentation says
+
+Step 1 of the migration, done on 2026-11-22 from AWS's documentation, then run against LocalStack
+2026.9.1 with the licence, where its documentation is silent.
+
+[cols="2,3"]
+|===
+| Question | Answer
+
+| Where an SNS FIFO topic delivers
+| Only to SQS queues, standard or FIFO; never to HTTP(S), email or SMS
+  (https://docs.aws.amazon.com/sns/latest/dg/fifo-message-delivery.html[FIFO message delivery]).
+
+| Whether a filter policy matches a `String.Array` attribute on any element
+| Only shown by example: a message with `["soccer", "rugby", "hockey"]` is accepted by a policy
+  naming `rugby` (https://docs.aws.amazon.com/sns/latest/dg/example-filter-policies.html[example
+  filter policies]). FIFO topics filter as standard ones do. LocalStack matched on any element.
+
+| How long a filter policy takes
+| "Additions or changes to a subscription filter policy require up to 15 minutes to fully take
+  effect" (https://docs.aws.amazon.com/sns/latest/dg/sns-subscription-filter-policies.html[filter
+  policies]), with nothing said of what is delivered meanwhile. Decisive against filters: a task's
+  subscription is new on every start (<<one-queue-per-task>>).
+
+| How soon a new subscription delivers
+| A queue in the same account is confirmed automatically, "and the subscription should be active
+  almost immediately" — no figure
+  (https://docs.aws.amazon.com/sns/latest/dg/subscribe-sqs-queue-to-sns-topic.html[subscribing a
+  queue]). The queue's policy has to let the topic `sqs:SendMessage`, with `aws:SourceArn`.
+
+| Quotas
+| Subscriptions: 12,500,000 per standard topic, 100 per FIFO topic. FIFO throughput: 300 messages a
+  second per message group, 3,000 per topic. Message size 256 KiB by default, up to 1 MiB with the
+  topic's `MaximumMessageSize`. All adjustable through a quota request
+  (https://docs.aws.amazon.com/general/latest/gr/sns.html[SNS quotas]).
+
+| `PurgeQueue`
+| Takes up to 60 seconds, and "messages sent to the queue *after* you call `PurgeQueue` might be
+  deleted while the queue is being purged"
+  (https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_PurgeQueue.html[PurgeQueue]).
+  Decisive against purging on startup (<<startup>>).
+
+| Retention and names
+| `MessageRetentionPeriod` from 60 s to 14 days. A queue name is free again 60 s after its deletion;
+  `CreateQueue` with the same name and attributes answers the existing queue
+  (https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_CreateQueue.html[CreateQueue]).
+
+| A subscription whose queue is gone
+| Not settled: nothing says deleting a queue removes its subscription. SNS retries an SQS endpoint
+  100,015 times over 23 days before discarding
+  (https://docs.aws.amazon.com/sns/latest/dg/sns-message-delivery-retries.html[delivery retries]),
+  so whoever deletes a queue unsubscribes it too.
+
+| IAM
+| `sns:Subscribe` takes the condition keys `sns:Protocol` and `sns:Endpoint`; `sns:Unsubscribe` and
+  `sns:ListSubscriptionsByTopic` take none that names the subscription, so a role that may
+  unsubscribe may do it to any subscription of the topic
+  (https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonsns.html[SNS
+  actions]). SQS actions are scoped by the queue's ARN, its name included; `sqs:ListQueues` by none.
+
+| LocalStack
+| SNS and SQS are in every plan from Hobby on. With the licence, a FIFO topic with two FIFO queues,
+  each filtered on `tables`: a change set on `errors` and `sessions` reached the `errors` queue, one
+  on `sessions` alone reached none, a repeated `MessageDeduplicationId` was dropped, and raw
+  delivery kept the attributes and the group and deduplication ids. Not yet run: standard topics,
+  which the design now uses.
+|===
+
+Still to read: whether the ECS task metadata endpoint v4 (`ECS_CONTAINER_METADATA_URI_V4`,
+`TaskARN`) is documented for Fargate, which the queue's name depends on.
+
 == The design
 
 ----
-                                 ┌─ tables ∋ video_playbacks ─► captal-<env>-mcp.fifo     ─► backoffice
-rqlite ─POST─► relay ─► SNS ─────┼─ tables ∋ errors ──────────► captal-<env>-<slug>.fifo  ─► each location's API
-   (one in flight)  (stateless)  └─ …                            (one queue per subscriber)
-                    one FIFO topic, every table, in Raft order
+                         captal-<env>-cdc-video_playbacks ─┬─► queue of backoffice task A
+rqlite ─POST─► relay ─►                                    └─► queue of backoffice task B (in a deploy)
+   (one in flight)  (stateless)
+                         captal-<env>-cdc-errors ──────────┬─► queue of <slug-1>'s task
+                                                           └─► queue of <slug-2>'s task …
+             one standard topic per table, one queue per task, no filter policies
 ----
 
 === The relay
 
 For each change set in rqlite's post:
 
-* publish it to the topic `captal-<env>-cdc.fifo` with a fixed `MessageGroupId`, so the topic keeps
-  their order, and the Raft index as `MessageDeduplicationId`;
-* with message attributes: `tables` (`String.Array`, every table the change set touches — one can
-  touch several) for the subscriptions' filters, and the trace context (`traceparent`,
-  `tracestate`), so a change's trace still reaches every subscriber;
-* answer rqlite 200 only once SNS has accepted every change set of the post; if it did not, answer
-  503 and rqlite retries the post.
+* publish it to `captal-<env>-cdc-<table>` for every table it touches — once per table, so a change
+  set touching two tables reaches both topics whole;
+* with the trace context as message attributes (`traceparent`, `tracestate`), so a change's trace
+  still reaches every subscriber;
+* answer rqlite 200 only once SNS has accepted every publish of the post; if it did not, answer 503
+  and rqlite retries the post.
 
-Order holds even with two relays running: rqlite has one post in flight and waits for its 200, and the
-relay answers only after publishing. SNS drops duplicates within 5 minutes; rqlite can retry for about
-6, and a leader change can resend, so a subscriber still drops what it has already applied, by index.
+The topics are standard: no subscriber needs the order between change sets, nor to be spared a
+repeated one (<<the-subscribers>>), and a FIFO topic admits 100 subscriptions, too few for one per
+task. A table rqlite publishes and no topic exists for is a defect, logged and answered 503.
 
 The relay keeps nothing: no buffer, no `Gap`, no instance id, no gRPC. It deploys overlapped — a
 container health check on `/health`, `deployment_minimum_healthy_percent = 100` and
 `deployment_maximum_percent = 200`, and a `stopTimeout` long enough to finish a post in flight. One
 task is enough: if it dies, rqlite retries for about six minutes while ECS starts another.
+
+A batch rqlite drops after those six minutes is lost to every subscriber, and nothing tells them:
+there is no `Gap`. Each finds out only when it next starts and rebuilds. Today's relay answers that
+with a `Gap` from the instance that replaced it.
 
 === Why both SNS and SQS
 
@@ -129,84 +208,106 @@ task is enough: if it dies, rqlite retries for about six minutes while ECS start
 
 | SQS alone
 | A durable queue: keeps messages until someone processes and deletes them
-| Each message is consumed by one reader. Fanning out to the backoffice and every location means the
-  relay sending to every queue: knowing them, keeping the list current as locations come and go, and
-  retrying when three of five sends succeeded — reimplementing SNS.
+| Each message is consumed by one reader. Fanning out to every task means the relay sending to every
+  queue: knowing them, keeping the list current as tasks come and go, and retrying when three of five
+  sends succeeded — reimplementing SNS.
 
 | SNS alone
 | Fan-out: publish once, delivered to every subscription
 | Keeps nothing per subscriber: an HTTP subscriber that is away is retried for a while and then
-  dropped, and every location would need a public HTTPS endpoint. A FIFO topic delivers only to SQS
-  queues (to verify), so ordered delivery needs SQS anyway.
+  dropped, and every task would need an HTTPS endpoint.
 
 | SNS then SQS
-| SNS fans out once; each subscriber has its own queue, which keeps what is pending for up to 14 days
-  and lets it go at its own pace, restart and resume
+| SNS fans out once; each task has its own queue, which keeps what is pending and lets it go at its
+  own pace
 |
 |===
 
-=== One queue per subscriber, not per table
+[[one-queue-per-task]]
+=== One queue per task, one topic per table
 
-A queue is one reader's cursor: subscribers sharing a queue would split its messages between them. So
-every subscriber has its own queue, and the table is the subscription's filter on `tables`. One topic
-for every table, not one per table: a queue subscribed to several topics would lose the order between
-tables, and a change set touching two tables would have to be split. Publishing a new table adds it to
-rqlite's filter and to the filter of whoever reads it; no queue is added.
+A queue is one reader's cursor: readers sharing a queue split its messages between them. An ECS
+deploy runs the outgoing task beside the incoming one — 100/200, the default for the backoffice
+(`modules/mcp` sets none) and explicit for a location (`Deploy.scala`, `deploymentConfiguration`) —
+for as long as the incoming one takes to pass its checks and the outgoing one to drain. A playback
+that starts then, whose message the outgoing task takes, would be timed in the memory of a process
+about to stop, after the incoming one had already read the database. So every task has a queue of
+its own, and each gets every message of the topics it reads.
 
-Today each location runs one task, so one queue per location is enough. A location running two tasks
-would have them compete for its queue, which `RecoveryFeed` cannot accept — its waiting pages may be
-connected to either task. That would need a queue per task, with an ephemeral name, and something to
-remove those of tasks that die without deleting theirs.
+The table is the topic, not a filter policy on one topic: a task's subscription is new on every
+start, and a new filter policy takes up to 15 minutes to apply, delivering who knows what meanwhile.
+A task reading two tables subscribes its queue to both topics. Publishing a new table adds it to
+rqlite's filter and adds its topic.
 
+A queue's name is `captal-<env>-<service>-<task id>`, the service being `mcp` or a location's slug.
+A name has at most 80 characters, so a long slug is shortened with a digest, as
+`DeployTargets.targetGroupName` does.
+
+[[the-subscribers]]
 === The subscribers
 
-[cols="1,1,1,1,3"]
+[cols="1,1,1,3"]
 |===
-| Subscriber | Reads | Operation | Fields | Does
+| Subscriber | Topic | Retention | Does
 
-| Every location's API (`RecoveryFeed`)
-| `errors`
-| `INSERT`
-| `after.fingerprint`
-| Wakes every waiting page, which checks again whether its wait shortened. Reads every location's
-  errors: one repeating elsewhere shortens the wait too.
+| Every task of a location's API (`RecoveryFeed`)
+| `cdc-errors`
+| 60 s
+| Each `INSERT` wakes every page waiting on this task, which checks its offer again against `errors`
+  and hears of it only if it changed. A message is a doorbell, not data: consumed and forgotten. One
+  older than a minute serves no page — a page connecting later checks as it connects — and one
+  repeated or out of order checks to the same answer, since a shortening is recorded once
+  (`OpenOffer.current`).
 
-| Backoffice (`VideoFileCollector`)
-| `video_playbacks`
-| `INSERT` of an open row; `UPDATE` setting `ended_at`; `DELETE`
-| `after.id`, `before`/`after.ended_at`
-| Starts or cancels the playback's `PlaybackExpiry` timer; any change asks for a collection pass
-  (deleting replaced files no playback holds).
+| Every task of the backoffice (`VideoFileCollector`, `PlaybackExpiry`)
+| `cdc-video_playbacks`
+| one hour
+| An `INSERT` of an open row starts its playback's timer; an `UPDATE` setting `ended_at`, or a
+  `DELETE`, cancels it; any change asks for a collection pass. A repeated `INSERT` finds its timer
+  running (the map of timers), an old one finds its playback closed (`OpenPlaybacksQuery`, read
+  before sleeping), and either schedules nothing.
 |===
 
-Both rebuild what they derive from the database when they start: `RecoveryFeed` keeps nothing, each
-page computing its wait from `errors`; `PlaybackExpiry` resyncs "a timer for every playback the
-database has open and for none other" (`PlaybackExpiry.scala:41`), each sleeping until
-`Playback.expiresAt`, a deadline read from the database, never from the feed. That is what makes the
-startup below safe.
+A timer lives in the memory of the task that started it, and the database says which timers there
+should be: one per open playback, with its deadline. So each backoffice task rebuilds its timers from
+the database as it starts, and the queue tells it what happens after; recording which timers run
+would record a process's memory, false as soon as the process dies.
 
-=== Each subscriber subscribes itself
+[[startup]]
+=== Each task subscribes itself
 
-The subscriber declares what it reads, next to the code that reads it, as `ChangeFeedFollower` does
-today with `since`. On startup it ensures, idempotently and under a stable name — `captal-<env>-<slug>.fifo`
-for a location, `captal-<env>-mcp.fifo` for the backoffice:
+A task declares the topics it reads, next to the code that reads them, as `ChangeFeedFollower` does
+today with `since`. As it starts:
 
-. the queue, with a dead-letter queue for messages it cannot process;
-. the queue policy letting the topic send to it;
-. the subscription, with its filter on `tables`.
+. it removes the queues and subscriptions of its service's tasks that no longer run — one killed
+  without SIGTERM, which ECS has replaced with this one;
+. it creates its queue, standard, with its retention, a visibility timeout of a few seconds and the
+  service's dead-letter queue for messages it cannot process, and the queue policy letting its
+  topics send to it;
+. it subscribes the queue to each topic, with raw delivery;
+. it publishes to each topic a marker carrying its task id, and waits until its queue has received
+  them: the subscription delivers. Every other task gets the marker too and discards it, as anything
+  that is not an rqlite change set;
+. it rebuilds from the database;
+. it consumes: long polling of up to 20 s, batches of up to 10, `DeleteMessageBatch` after
+  processing.
 
-Then it purges the queue, rebuilds from the database, and consumes: long polling of up to 20 s,
-batches of up to 10, `DeleteMessageBatch` after processing, duplicates dropped by index. What arrives
-between the purge and the rebuild is both in the queue and in the database, and the index drops it.
-The purge also covers a paused location, whose queue fills while nobody reads it, and replaces the
-`Gap`: a new queue starts empty, and the rebuild is what a subscriber did on `Gap` anyway.
+Every change committed after the rebuild is published after the marker, once the subscription
+delivers, so it is in the queue; every one before is in what the rebuild read. Nothing is purged:
+purging takes up to a minute and may delete what arrives after it was asked, and a new queue starts
+empty anyway.
 
-A subscriber that no longer exists cannot delete its queue, so `destroy_location` removes the
-location's queue and subscription.
+On SIGTERM it stops consuming, unsubscribes and deletes its queue. `destroy_location` removes what a
+location's tasks left, since no task of that service will start again to do it.
 
-The task role needs, scoped by name: on its own queue, create, set attributes, purge, receive and
-delete; on the topic, `sns:Subscribe` only with `sns:Protocol = sqs` and `sns:Endpoint` = its own
-queue's ARN. The relay's role needs `sns:Publish` on the topic.
+The task role needs, scoped by name: on the queues `captal-<env>-<service>-*`, create, set and get
+attributes, receive, delete messages and delete the queue; `sqs:ListQueues`; on its topics,
+`sns:Subscribe` only with `sns:Protocol = sqs` and `sns:Endpoint` one of those queues,
+`sns:Unsubscribe`, `sns:ListSubscriptionsByTopic` and `sns:Publish`, for the marker; and
+`ecs:ListTasks` on its service. No condition key names the subscription `sns:Unsubscribe` removes,
+so a task could remove another's subscription to the same topic; a marker or a forged message
+published by a task only makes the others check against the database. The relay's role needs
+`sns:Publish` on every `cdc` topic.
 
 === Push and pull, plainly
 
@@ -218,9 +319,10 @@ again after each batch, and each request is billed.
 
 === Cost
 
-Monthly, us-east-1, prices from the AWS price list published 2026-11-12. Assumed about 3 changes per
-guest, each published as one 1 KB message delivered to every subscriber unfiltered, and each
-subscriber long polling every 20 s — upper bounds.
+Monthly, us-east-1, prices from the AWS price list published 2026-11-12, computed for the earlier
+design — one FIFO topic, one FIFO queue per subscriber — and not yet redone for standard topics and a
+queue per task. Assumed about 3 changes per guest, each published as one 1 KB message delivered to
+every subscriber unfiltered, and each subscriber long polling every 20 s — upper bounds.
 
 [cols="1,2,2"]
 |===
@@ -244,40 +346,37 @@ subscriber long polling every 20 s — upper bounds.
 | ~USD 10 to 34
 |===
 
-Two points the pricing pages do not settle were counted as billed: whether each SNS delivery to SQS
-also counts as an SQS request, and whether a long poll that returns empty is billed. Publishing one
-message per post instead of one per change set (rqlite sends up to 10 per post) and filtering by
-table both lower the total.
-
 [[migration]]
 == Migration
 
-. *Verify in the documentation* before writing code: that an SNS FIFO topic delivers only to SQS
-  queues; that subscription filter policies work on `String.Array` attributes for FIFO topics; SNS
-  FIFO throughput limits; that LocalStack supports SNS FIFO with filters.
-. *Infrastructure* (OpenTofu): the topic `captal-<env>-cdc.fifo`, `sns:Publish` for the relay's role,
-  the subscription permissions for the backoffice's and the locations' roles.
-. *The relay publishes to SNS and still serves gRPC.* Each change set to the topic with its attributes;
-  200 to rqlite only once SNS accepted; the gRPC fan-out as today, so current subscribers notice
-  nothing.
-. *Subscribers move to SQS one at a time*, each subscribing itself as above.
-  * The backoffice: an SQS consumer producing the same `Event.Changed(index, json, context)` as today,
-    so `VideoFileCollector` changes only its source.
-  * Every location: `RecoveryFeed` reads its queue. Existing locations subscribe themselves when
-    `ci.run` moves them onto the new image; `destroy_location` removes the queue and the subscription.
+. *Verify in the documentation* — done on 2026-11-22 (<<verified>>), but for the task metadata
+  endpoint on Fargate.
+. *Infrastructure* (OpenTofu): a standard topic per published table, `captal-<env>-cdc-<table>`;
+  `sns:Publish` on them for the relay's role; a dead-letter queue per subscribing service; the task
+  roles' permissions above, for the backoffice's and the locations'; `sns` and `sqs` in LocalStack's
+  `licensedServices`.
+. *The relay publishes to SNS and still serves gRPC.* Each change set to the topic of each table it
+  touches; 200 to rqlite only once SNS accepted every publish; the gRPC fan-out as today, so current
+  subscribers notice nothing.
+. *Subscribers move to SQS one at a time*, each task subscribing itself as above.
+  * The backoffice: an SQS consumer producing the same `Event.Changed(index, json, context)` as
+    today, without `Gap`, so `VideoFileCollector` changes only its source and rebuilds its timers as
+    it starts.
+  * Every location: `RecoveryFeed` reads its task's queue. Existing locations subscribe themselves
+    when `ci.run` moves them onto the new image; `destroy_location` removes what their tasks left.
 . *gRPC is retired*: the relay stops serving it; the `cdc.protocol` module (`ChangeFeedFollower`,
   `cdc.proto`), the buffer, the `Gap`, `CDC_BUFFER`, the gRPC port and its security group rule go.
 . *The relay deploys overlapped*: the container health check, 100/200, the `stopTimeout`. ARM is
   optional and needs the image built for arm64.
 . *Documentation*: rewrite `cdc.adoc`, update `infrastructure.adoc`, record in `decisions.adoc` why
-  SNS and SQS and what was set aside (the table above), and remove the relay entry from
-  `pending.adoc`.
+  SNS and SQS, why a queue per task and a topic per table, and what was set aside (the table above),
+  and remove the relay entry from `pending.adoc`.
 
 == What it changes elsewhere
 
 * xref:admin-core-plan.adoc[The admin core plan]: the progress of a deploy run can reach its page the
-  same way — publish `mcp_deploy_runs` through CDC to the backoffice's queue — once this is done;
+  same way — publish `mcp_deploy_runs` through CDC to the backoffice's tasks — once this is done;
   option A there stops being blocked on the relay.
 * The out-of-order delivery a leader change can cause, which the relay today drops silently when an
-  index arrives below the last it published, becomes each subscriber's to absorb: it drops what it
-  already applied by index, and applies the rest whatever their order.
+  index arrives below the last it published, reaches the subscribers, as do repeats; both are
+  idempotent, so they apply whatever arrives in whatever order.
