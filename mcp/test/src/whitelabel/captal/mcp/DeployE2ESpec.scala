@@ -1132,9 +1132,10 @@ object DeployE2ESpec extends ZIOSpecDefault:
   private val deniedActions: ZIO[Any, Nothing, Set[String]] = ZIO
     .attemptBlocking:
       // `ProcessBuilder` rather than os-lib, which is Mill's and not a dependency of this module.
-      val process = new ProcessBuilder("docker", "logs", "--since", startedAt.toString, "localstack-dev")
-        .redirectErrorStream(true)
-        .start()
+      val process =
+        new ProcessBuilder("docker", "logs", "--since", startedAt.toString, "localstack-dev")
+          .redirectErrorStream(true)
+          .start()
       val output = Source.fromInputStream(process.getInputStream).mkString
       process.waitFor()
       Denial.findAllMatchIn(output).map(_.group(1)).toSet
