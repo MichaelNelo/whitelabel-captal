@@ -135,11 +135,6 @@ variable "db_url" {
   type        = string
 }
 
-variable "cdc_feed_address" {
-  description = "`host:port` of the change data capture relay's feed, which the server follows to hear of playbacks starting and ending"
-  type        = string
-}
-
 variable "feed_topic_arn" {
   description = "The `video_playbacks` topic, which each of the server's tasks subscribes its own queue to"
   type        = string

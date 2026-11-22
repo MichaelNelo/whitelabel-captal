@@ -3,11 +3,6 @@ output "ingest_url" {
   value       = "http://cdc.${var.service_discovery_namespace_name}:${var.http_port}/cdc"
 }
 
-output "feed_address" {
-  description = "`host:port` of the change feed, which subscribers are given"
-  value       = "cdc.${var.service_discovery_namespace_name}:${var.grpc_port}"
-}
-
 output "topic_arns" {
   description = "Each table's topic, by the table's name"
   value       = { for table, topic in aws_sns_topic.table : table => topic.arn }

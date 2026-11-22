@@ -59,11 +59,6 @@ variable "rqlite_security_group_id" {
   type        = string
 }
 
-variable "subscriber_security_group_id" {
-  description = "The group of the tasks that subscribe, admitted on the gRPC port: the shared ECS tasks group, which the backoffice and every location's API run in"
-  type        = string
-}
-
 # ─── The task ───────────────────────────────────────────────────────────────
 
 variable "image" {
@@ -74,18 +69,6 @@ variable "image" {
 variable "http_port" {
   description = "Port rqlite posts its change data capture to"
   type        = number
-}
-
-variable "grpc_port" {
-  description = "Port subscribers follow the change feed on"
-  type        = number
-  default     = 9090
-}
-
-variable "buffer" {
-  description = "How many change sets the relay keeps for subscribers that reconnect. One that missed more is told it has a gap and rebuilds from the database."
-  type        = number
-  default     = 1000
 }
 
 variable "container_cpu" {

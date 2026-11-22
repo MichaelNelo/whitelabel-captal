@@ -271,7 +271,6 @@ module "cdc" {
   service_discovery_namespace_name = local.service_discovery_namespace
   execution_role_arn               = module.ecs.execution_role_arn
   rqlite_security_group_id         = module.rqlite.security_group_id
-  subscriber_security_group_id     = aws_security_group.ecs_tasks.id
   tables                           = var.cdc_tables
 
   image            = module.cdc_image.reference
@@ -629,7 +628,6 @@ module "mcp" {
   https_listener_arn = var.enable_dns ? aws_lb_listener.https[0].arn : ""
 
   db_url                        = module.rqlite.http_url
-  cdc_feed_address              = module.cdc.feed_address
   feed_topic_arn                = module.cdc.topic_arns["video_playbacks"]
   location_feed_topic_arn       = module.cdc.topic_arns["errors"]
   feed_queue_prefix             = local.feed_queue_prefix

@@ -204,11 +204,6 @@ output "unifi_fake_service_name" {
   value       = var.enable_unifi_fake ? module.unifi_fake[0].service_name : null
 }
 
-output "cdc_feed_address" {
-  description = "`host:port` of the relay's feed, which the backoffice and every location's API follow"
-  value       = module.cdc.feed_address
-}
-
 output "cdc_topic_prefix" {
   description = "A table's topic's ARN but for the table's name: every location's CDC_TOPIC_PREFIX, which a release sets on every location it moves"
   value       = module.cdc.topic_prefix

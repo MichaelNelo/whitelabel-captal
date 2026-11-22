@@ -221,7 +221,6 @@ def release(
     cluster,
     locations,
     output("api_image"),
-    outputs.get("cdc_feed_address"),
     Seq(
       "CDC_TOPIC_PREFIX"    -> "cdc_topic_prefix",
       "CDC_QUEUE_PREFIX"    -> "feed_queue_prefix",
@@ -435,12 +434,12 @@ val RegisterableFields = Seq(
   "runtimePlatform"
 )
 
-/** Moves every location onto `api`, the API image by digest, following the relay at `feed` and the
-  * change feed on queues of its own as `queue` says (`CDC_TOPIC_PREFIX`, `CDC_QUEUE_PREFIX`,
-  * `CDC_DEAD_LETTER_ARN`), sending its traces to `otlp` and taking the migrations' lock on the Redis
-  * instances at `locks`: a new task definition revision that differs only in the image, those
-  * variables, `CDC_FEED_ADDRESS`, `REDIS_LOCK_ADDRESSES` and the `OTEL_*` variables `deploy_location`
-  * sets, and its service pointed at it.
+/** Moves every location onto `api`, the API image by digest, following the change feed on queues
+  * of its own as `queue` says (`CDC_TOPIC_PREFIX`, `CDC_QUEUE_PREFIX`, `CDC_DEAD_LETTER_ARN`),
+  * sending its traces to `otlp` and taking the migrations' lock on the Redis instances at `locks`:
+  * a new task definition revision that differs only in the image, those variables,
+  * `REDIS_LOCK_ADDRESSES` and the `OTEL_*` variables `deploy_location` sets, and its service
+  * pointed at it. `CDC_FEED_ADDRESS`, the relay's gRPC feed, which is gone, is taken out.
   * The service keeps its task count, so a paused location stays paused and runs the new image on resume. A
   * location already on all of them is left as it is.
   *
@@ -451,7 +450,6 @@ def rollLocations(
     cluster: String,
     locations: Seq[LocationService],
     api: String,
-    feed: Option[String],
     queue: Seq[(String, String)],
     otlp: Option[String],
     locks: Option[String],
@@ -465,13 +463,15 @@ def rollLocations(
       .get("environment")
       .map(_.arr.toSeq)
       .getOrElse(Nil)
-    val set = feed.map("CDC_FEED_ADDRESS" -> _).toList ++ queue ++
+    val set = queue ++
       locks.map("REDIS_LOCK_ADDRESSES" -> _).toList ++ otlp.toList.flatMap(endpoint =>
       List(
         "OTEL_EXPORTER_OTLP_ENDPOINT" -> endpoint,
         "OTEL_SERVICE_NAME" -> "captal-api",
         "OTEL_RESOURCE_ATTRIBUTES" -> s"captal.location=${location.slug}"))
-    val following = environment.filterNot(variable => set.exists(_._1 == variable("name").str)) ++
+    val unset = Set("CDC_FEED_ADDRESS")
+    val following = environment.filterNot(variable =>
+      unset(variable("name").str) || set.exists(_._1 == variable("name").str)) ++
       set.map((name, value) => ujson.Obj("name" -> name, "value" -> value))
     if location.image != api || pairs(following) != pairs(environment) then
       val input = ujson.Obj.from(RegisterableFields.flatMap(field =>

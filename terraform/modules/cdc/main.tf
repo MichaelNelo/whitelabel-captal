@@ -1,8 +1,9 @@
-# The change data capture relay: rqlite's leader posts every change set to it, and the services
-# that follow the database subscribe to it over gRPC.
+# The change data capture relay: rqlite's leader posts every change set to it, and it publishes
+# each to the topic of every table it touches, which the tasks that follow a table read on queues of
+# their own.
 #
-# Internal only. It has no target group and no listener rule: rqlite and the subscribers reach it
-# as `cdc.<namespace>`, and its security group admits nothing else.
+# Internal only. It has no target group and no listener rule: rqlite reaches it as
+# `cdc.<namespace>`, and its security group admits nothing else.
 
 data "aws_caller_identity" "current" {}
 
@@ -58,8 +59,8 @@ resource "aws_iam_role_policy" "publish" {
   policy = data.aws_iam_policy_document.publish.json
 }
 
-# HTTP from rqlite, gRPC from the tasks that subscribe: the backoffice and every location's API,
-# which share the ECS tasks group. Both inline: neither group names this one, so there is no cycle.
+# HTTP from rqlite, and nothing else: the subscribers read the topics, never the relay. Inline,
+# since rqlite's group does not name this one.
 resource "aws_security_group" "cdc" {
   name        = local.name
   description = "Change data capture relay"
@@ -73,15 +74,7 @@ resource "aws_security_group" "cdc" {
     security_groups = [var.rqlite_security_group_id]
   }
 
-  ingress {
-    description     = "Change feed subscriptions"
-    from_port       = var.grpc_port
-    to_port         = var.grpc_port
-    protocol        = "tcp"
-    security_groups = [var.subscriber_security_group_id]
-  }
-
-  # Pulling its image from ECR, and nothing else it starts.
+  # Pulling its image from ECR, and publishing to SNS.
   egress {
     description = "Allow all outbound traffic"
     from_port   = 0
@@ -111,13 +104,20 @@ resource "aws_ecs_task_definition" "cdc" {
 
     portMappings = [
       { containerPort = var.http_port, protocol = "tcp" },
-      { containerPort = var.grpc_port, protocol = "tcp" },
     ]
+
+    # Healthy once it answers, which is what a deploy waits for before it stops the task this one
+    # replaces. The image is the JRE's, which carries curl.
+    healthCheck = {
+      command     = ["CMD-SHELL", "curl -sf http://localhost:${var.http_port}/health || exit 1"]
+      interval    = 10
+      timeout     = 5
+      retries     = 3
+      startPeriod = 30
+    }
 
     environment = concat([
       { name = "CDC_PORT", value = tostring(var.http_port) },
-      { name = "CDC_GRPC_PORT", value = tostring(var.grpc_port) },
-      { name = "CDC_BUFFER", value = tostring(var.buffer) },
       { name = "CDC_TOPIC_PREFIX", value = local.topic_prefix },
       ], var.otlp_endpoint == "" ? [] : [
       { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = var.otlp_endpoint },
@@ -157,8 +157,8 @@ resource "aws_service_discovery_service" "cdc" {
   # resource on every apply.
 }
 
-# One task. A second would split rqlite's posts from the subscriptions: the leader posts to
-# whichever address the name resolves to, and a subscriber follows whichever it resolved.
+# One task, which is enough: the relay keeps nothing, and while it is replaced or gone rqlite retries
+# its posts, for about six minutes before it drops one.
 resource "aws_ecs_service" "cdc" {
   name            = local.name
   cluster         = var.cluster_id
@@ -189,10 +189,10 @@ resource "aws_ecs_service" "cdc" {
     rollback = true
   }
 
-  # Stop-then-start. A rolling deploy would leave both tasks behind `cdc.<namespace>` for a while:
-  # a subscriber that connected to the new one while rqlite still posted to the old would miss
-  # those change sets with no gap to tell it. With no overlap, rqlite retries its posts while the
-  # new task starts, and every subscriber reconnects to it and gets a gap, since its instance is new.
-  deployment_minimum_healthy_percent = 0
-  deployment_maximum_percent         = 100
+  # Overlapped: the new task starts, and the old one stops once the new one is healthy. Both behind
+  # `cdc.<namespace>` meanwhile is harmless, since either publishes whatever rqlite posts to it, and
+  # a post cut short as the old one stops is posted again. The old one gets the default 30 seconds
+  # between SIGTERM and SIGKILL, far more than a post takes.
+  deployment_minimum_healthy_percent = 100
+  deployment_maximum_percent         = 200
 }
