@@ -29,7 +29,7 @@ variable "ecs_cluster_id" {
 }
 
 variable "service_discovery_namespace_id" {
-  description = "CloudMap private DNS namespace ID"
+  description = "CloudMap private DNS namespace ID. Empty where Cloud Map is off, and then the name is the service's `DiscoveryName` tag."
   type        = string
 }
 

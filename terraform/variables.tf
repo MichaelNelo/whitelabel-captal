@@ -69,6 +69,12 @@ variable "mcp_memory" {
   default     = 1024
 }
 
+variable "enable_cloud_map" {
+  description = "Whether the services find each other through Cloud Map, which ECS registers each task in as it starts. Off for `local`: LocalStack offers Cloud Map only on its Ultimate licence, and a private Route 53 zone of the same name takes its place, kept by `modules/local-discovery`."
+  type        = bool
+  default     = true
+}
+
 variable "enable_tailscale" {
   description = "The Tailscale subnet-router daemon and the rqlite ingress rule that lets it through. Off for `local`, where reaching into the network from a laptop is what `docker exec` already does -- and where the provider would talk to Tailscale's real API."
   type        = bool

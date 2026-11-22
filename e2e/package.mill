@@ -96,6 +96,7 @@ object `package` extends BaseModule:
       target,
       outputs("ecs_cluster_name"),
       outputs("mcp_service_name"),
+      outputs("discovery_zone_id"),
       Seq(
         "rqlite_service_name",
         "cdc_service_name",

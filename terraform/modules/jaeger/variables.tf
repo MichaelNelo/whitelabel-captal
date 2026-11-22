@@ -29,7 +29,7 @@ variable "subnet_ids" {
 }
 
 variable "service_discovery_namespace_id" {
-  description = "Cloud Map namespace the service registers in, as `jaeger`"
+  description = "Cloud Map namespace the service registers in, as `jaeger`. Empty where Cloud Map is off, and then its name is its `DiscoveryName` tag."
   type        = string
 }
 

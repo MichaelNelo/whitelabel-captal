@@ -16,11 +16,12 @@ val freeServices = "s3"
 /** The services a licensed container starts with: everything `deploy_location` and its fixture call, and
   * the change feed's topics and queues (`sns`, `sqs`).
   *
-  * `route53` is not called directly, but `servicediscovery.CreatePrivateDnsNamespace` requires it.
+  * `route53` holds the services' names, in the zone `modules/local-discovery` keeps in place of Cloud Map,
+  * which LocalStack offers only on its Ultimate licence; `servicediscovery` is not here for that reason.
   * A service missing here fails as `UnrecognizedClientException`, which is not a credentials error.
   */
 val licensedServices =
-  "s3,logs,ecs,elbv2,cloudfront,ec2,iam,sts,efs,secretsmanager,servicediscovery,route53,ecr,sns,sqs"
+  "s3,logs,ecs,elbv2,cloudfront,ec2,iam,sts,efs,secretsmanager,route53,ecr,sns,sqs"
 
 /** The LocalStack licence token, from `LOCALSTACK_AUTH_TOKEN` or `LOCALSTACK_TOKEN`. Never logged.
   *
@@ -207,10 +208,10 @@ val localLoadBalancerHost = "captal-local.elb.localhost.localstack.cloud"
   * ([[settledLocally]]), then for the server's own `ok` from its health check through the load
   * balancer, which answers `200 {}` for a target group with nobody in it. Ten minutes at most:
   * LocalStack takes minutes to stop the task a new definition replaces.
-  * Meanwhile the names of the services it and the locations reach, `discovered`, are kept naming
-  * their running tasks, every one and them alone ([[syncLocalDiscovery]]), and it waits for each to
-  * resolve too: the database's, which the backoffice migrates as it starts, and those a location
-  * the run deploys calls by name.
+  * Meanwhile it waits for the names of the services it and the locations reach, `discovered`, to
+  * resolve to every task they run and to them alone ([[resolvesLocally]]), as `modules/local-discovery`
+  * keeps them in the zone `zone`: the database's, which the backoffice migrates as it starts, and those
+  * a location the run deploys calls by name.
   *
   * LocalStack, unlike ECS, stops starting tasks for a service whose tasks keep exiting, and leaves
   * it running none. After a minute with no task running or starting, the service is told to start a
@@ -220,12 +221,13 @@ def awaitLocalBackoffice(
     target: ReleaseTarget,
     cluster: String,
     service: String,
+    zone: String,
     discovered: Seq[String]): Unit =
   val health = s"http://$localLoadBalancerHost:$localStackPort/health"
   // The services whose name the last look found not resolving to every task they run.
   var unresolved = Seq.empty[String]
   def serving: Boolean =
-    unresolved = discovered.filterNot(syncLocalDiscovery(target, cluster, _))
+    unresolved = discovered.filterNot(resolvesLocally(target, cluster, zone, _))
     unresolved.isEmpty && settledLocally(target, cluster, service, replaced = Set.empty) &&
       scala
         .util

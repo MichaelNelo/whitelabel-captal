@@ -25,9 +25,12 @@ aws_endpoint_url = "http://localhost:4567"
 #     laptop is what `docker exec` already does here.
 #   - global accelerator: not emulated. It also brings the portal dispatcher Lambda with it, which
 #     only exists to turn an AP MAC into a slug for real captive-portal hardware.
+#   - cloud map: LocalStack offers it only on its Ultimate licence. A private Route 53 zone of the
+#     same name takes its place, its records kept by `modules/local-discovery`.
 enable_dns                = false
 enable_tailscale          = false
 enable_global_accelerator = false
+enable_cloud_map          = false
 
 # On here alone: a stand-in for a venue's UniFi controller, as `unifi.captal.local:8443`, which the
 # end-to-end features point their locations at to check what access a guest was given. Its record of

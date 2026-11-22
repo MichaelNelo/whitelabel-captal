@@ -129,8 +129,11 @@ resource "aws_ecs_task_definition" "cdc" {
   }])
 }
 
+# None where Cloud Map is off: then `modules/local-discovery` keeps the name, the service's
+# `DiscoveryName` tag.
 resource "aws_service_discovery_service" "cdc" {
-  name = "cdc"
+  count = var.service_discovery_namespace_id == "" ? 0 : 1
+  name  = "cdc"
 
   dns_config {
     namespace_id = var.service_discovery_namespace_id
@@ -163,8 +166,16 @@ resource "aws_ecs_service" "cdc" {
     assign_public_ip = true
   }
 
-  service_registries {
-    registry_arn = aws_service_discovery_service.cdc.arn
+  dynamic "service_registries" {
+    for_each = aws_service_discovery_service.cdc[*].arn
+
+    content {
+      registry_arn = service_registries.value
+    }
+  }
+
+  tags = {
+    DiscoveryName = "cdc"
   }
 
   deployment_circuit_breaker {

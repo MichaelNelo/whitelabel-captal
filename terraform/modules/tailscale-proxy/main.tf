@@ -21,8 +21,11 @@ resource "aws_cloudwatch_log_group" "tailscale_proxy" {
 }
 
 # Service Discovery Service — registra `tailscale-proxy.<namespace>` (A record)
+# None where Cloud Map is off: then `modules/local-discovery` keeps the name, the service's
+# `DiscoveryName` tag.
 resource "aws_service_discovery_service" "tailscale_proxy" {
-  name = "tailscale-proxy"
+  count = var.service_discovery_namespace_id == "" ? 0 : 1
+  name  = "tailscale-proxy"
 
   dns_config {
     namespace_id = var.service_discovery_namespace_id
@@ -200,8 +203,16 @@ resource "aws_ecs_service" "tailscale_proxy" {
     assign_public_ip = var.assign_public_ip
   }
 
-  service_registries {
-    registry_arn = aws_service_discovery_service.tailscale_proxy.arn
+  dynamic "service_registries" {
+    for_each = aws_service_discovery_service.tailscale_proxy[*].arn
+
+    content {
+      registry_arn = service_registries.value
+    }
+  }
+
+  tags = {
+    DiscoveryName = "tailscale-proxy"
   }
 
   deployment_circuit_breaker {

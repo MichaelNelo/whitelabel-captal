@@ -282,82 +282,53 @@ def syncLocalTargets(target: ReleaseTarget, cluster: String, service: String): U
             targets(missing))*)
 end syncLocalTargets
 
-/** Leaves `service`'s records in its private DNS zone naming its running tasks, every one of them
-  * and them alone, and answers whether they already did: whether its name resolves to each task it
-  * runs. True for a service with no name.
+/** Whether `service`'s name in the local discovery zone `zone` resolves to each task it runs, and to
+  * them alone. True for a service with no name.
   *
-  * For LocalStack, which writes a record per task that starts, keyed by the task, and never removes
-  * one for a task that stopped, while its DNS answers the name with all of them: once a service's
-  * tasks are replaced, a client can be sent to an address nobody answers on. And which at times
-  * starts a task without registering it at all, which no wait mends: such a task is registered
-  * here, as LocalStack registers one, under the task's id and its container's address.
+  * Locally there is no Cloud Map: a service is named by its `DiscoveryName` tag, and
+  * `modules/local-discovery` keeps its record listing its tasks' containers' addresses. This only
+  * reads, so a release can wait for the names it needs.
   */
-def syncLocalDiscovery(target: ReleaseTarget, cluster: String, service: String): Boolean =
-  val registries =
-    awsJson(target, "ecs", "describe-services", "--cluster", cluster, "--services", service)(
-      "services")(0)("serviceRegistries").arr
-  registries
-    .headOption
-    .forall: registry =>
-      val discoveryId = registry("registryArn").str.split('/').last
-      val discovery = awsJson(target, "servicediscovery", "get-service", "--id", discoveryId)(
-        "Service")
-      val namespace = awsJson(
-        target,
-        "servicediscovery",
-        "get-namespace",
-        "--id",
-        discovery("NamespaceId").str)("Namespace")
-      val zone = namespace("Properties")("DnsProperties")("HostedZoneId").str
-      val name = s"${discovery("Name").str}.${namespace("Name").str}."
-      def idOf(task: ujson.Value) = task("taskArn").str.split('/').last
-      val tasks = runningTasks(target, cluster, service)
-      val running = tasks.map(idOf).toSet
-      val named = awsJson(target, "route53", "list-resource-record-sets", "--hosted-zone-id", zone)(
-        "ResourceRecordSets")
-        .arr
-        .filter(record => record("Name").str == name && record("Type").str == "A")
-        .flatMap(record => record.obj.get("SetIdentifier").map(_.str -> record))
-        .toMap
-      val stale = named.collect { case (id, record) if !running.contains(id) => record }
-      val missing = tasks.filterNot(task => named.contains(idOf(task)))
-      // The container's address, as LocalStack registers a task it does not leave out: the
-      // attachment's is one it makes up.
-      val addressed = missing.flatMap(task =>
+def resolvesLocally(target: ReleaseTarget, cluster: String, zone: String, service: String): Boolean =
+  val described = awsJson(
+    target,
+    "ecs",
+    "describe-services",
+    "--cluster",
+    cluster,
+    "--services",
+    service,
+    "--include",
+    "TAGS")("services")(0)
+  val tagged = described
+    .obj
+    .get("tags")
+    .toSeq
+    .flatMap(_.arr)
+    .find(_("key").str == "DiscoveryName")
+    .map(_("value").str)
+  tagged.forall: label =>
+    val domain = awsJson(target, "route53", "get-hosted-zone", "--id", zone)("HostedZone")("Name").str
+    val name = s"$label.$domain"
+    // The container's address, as the registrar reads it: LocalStack makes up the attachment's.
+    val running = runningTasks(target, cluster, service)
+      .flatMap(task =>
         task("containers")
           .arr
-          .flatMap(_.obj.get("networkInterfaces").toSeq.flatMap(_.arr))
-          .flatMap(_.obj.get("privateIpv4Address").map(_.str))
           .headOption
-          .map(idOf(task) -> _))
-      addressed.foreach: (id, address) =>
-        val _ = awsJson(
-          target,
-          "servicediscovery",
-          "register-instance",
-          "--service-id",
-          discoveryId,
-          "--instance-id",
-          id,
-          "--attributes",
-          s"AWS_INSTANCE_IPV4=$address")
-      if addressed.nonEmpty then
-        println(s"[release] $service: registered ${addressed.size} running task(s) its name left out")
-      if stale.nonEmpty then
-        val changes = ujson.Obj(
-          "Changes" -> ujson.Arr.from(
-            stale.map(record => ujson.Obj("Action" -> "DELETE", "ResourceRecordSet" -> record))))
-        val _ = awsJson(
-          target,
-          "route53",
-          "change-resource-record-sets",
-          "--hosted-zone-id",
-          zone,
-          "--change-batch",
-          ujson.write(changes))
-        println(s"[release] $service: removed ${stale.size} name record(s) of tasks that are gone")
-      tasks.nonEmpty && missing.isEmpty
-end syncLocalDiscovery
+          .flatMap(_.obj.get("networkInterfaces"))
+          .flatMap(_.arr.headOption)
+          .flatMap(_.obj.get("privateIpv4Address"))
+          .map(_.str))
+      .toSet
+    val named = awsJson(target, "route53", "list-resource-record-sets", "--hosted-zone-id", zone)(
+      "ResourceRecordSets")
+      .arr
+      .filter(record => record("Name").str == name && record("Type").str == "A")
+      .flatMap(record => record.obj.get("ResourceRecords").toSeq.flatMap(_.arr).map(_("Value").str))
+      .toSet
+    running.nonEmpty && running == named
+end resolvesLocally
 
 /** `service`'s tasks that are running, as ECS describes them. */
 def runningTasks(target: ReleaseTarget, cluster: String, service: String): Seq[ujson.Value] =

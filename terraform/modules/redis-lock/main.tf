@@ -86,8 +86,10 @@ resource "aws_ecs_task_definition" "redis" {
   }])
 }
 
+# None where Cloud Map is off: then `modules/local-discovery` keeps each name, its service's
+# `DiscoveryName` tag.
 resource "aws_service_discovery_service" "redis" {
-  count = var.instances
+  count = var.service_discovery_namespace_id == "" ? 0 : var.instances
   name  = "redis-lock-${count.index}"
 
   dns_config {
@@ -119,8 +121,16 @@ resource "aws_ecs_service" "redis" {
     assign_public_ip = true
   }
 
-  service_registries {
-    registry_arn = aws_service_discovery_service.redis[count.index].arn
+  dynamic "service_registries" {
+    for_each = var.service_discovery_namespace_id == "" ? [] : [aws_service_discovery_service.redis[count.index].arn]
+
+    content {
+      registry_arn = service_registries.value
+    }
+  }
+
+  tags = {
+    DiscoveryName = "redis-lock-${count.index}"
   }
 
   deployment_circuit_breaker {

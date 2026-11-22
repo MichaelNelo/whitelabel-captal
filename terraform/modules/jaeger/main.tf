@@ -90,8 +90,11 @@ resource "aws_ecs_task_definition" "jaeger" {
   }])
 }
 
+# None where Cloud Map is off: then `modules/local-discovery` keeps the name, the service's
+# `DiscoveryName` tag.
 resource "aws_service_discovery_service" "jaeger" {
-  name = "jaeger"
+  count = var.service_discovery_namespace_id == "" ? 0 : 1
+  name  = "jaeger"
 
   dns_config {
     namespace_id = var.service_discovery_namespace_id
@@ -121,8 +124,16 @@ resource "aws_ecs_service" "jaeger" {
     assign_public_ip = true
   }
 
-  service_registries {
-    registry_arn = aws_service_discovery_service.jaeger.arn
+  dynamic "service_registries" {
+    for_each = aws_service_discovery_service.jaeger[*].arn
+
+    content {
+      registry_arn = service_registries.value
+    }
+  }
+
+  tags = {
+    DiscoveryName = "jaeger"
   }
 
   deployment_circuit_breaker {

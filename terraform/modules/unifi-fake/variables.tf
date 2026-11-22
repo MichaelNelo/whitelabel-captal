@@ -29,7 +29,7 @@ variable "subnet_ids" {
 }
 
 variable "service_discovery_namespace_id" {
-  description = "Private DNS namespace it registers in as `unifi`"
+  description = "Private DNS namespace it registers in as `unifi`. Empty where Cloud Map is off, and then its name is its `DiscoveryName` tag."
   type        = string
 }
 

@@ -172,6 +172,7 @@ object `package` extends BaseModule with Released:
       target,
       outputs("ecs_cluster_name"),
       outputs("mcp_service_name"),
+      outputs("discovery_zone_id"),
       Seq(
         "rqlite_service_name",
         "cdc_service_name",
@@ -390,10 +391,11 @@ object `package` extends BaseModule with Released:
       if !os.exists(dir) then
         0
       else
-        // Everything the configuration reads: the CloudFront function's and the Lambda's code too.
+        // Everything the configuration reads: the CloudFront function's and the Lambda's code too,
+        // and the local registrar's script.
         os.walk(dir, skip = _.last == ".terraform")
           .filter(p =>
-            os.isFile(p) && Seq(".tf", ".tfvars", ".js", ".py").exists(p.last.endsWith) &&
+            os.isFile(p) && Seq(".tf", ".tfvars", ".js", ".py", ".sh").exists(p.last.endsWith) &&
               !p.last.endsWith(".test.js"))
           .sorted
           .map(p => (p.relativeTo(dir).toString, os.read(p)).hashCode)

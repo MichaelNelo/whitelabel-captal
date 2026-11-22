@@ -167,11 +167,45 @@ module "alb" {
   portal_dispatcher_target_group_arn = var.enable_global_accelerator ? module.portal_dispatcher[0].target_group_arn : ""
 }
 
-# CloudMap namespace for service discovery
+# The names the services reach each other by, `<name>.<namespace>`. Cloud Map's where there is one,
+# which ECS registers each task in as it starts. Where it is off, a private zone of the same name,
+# which `modules/local-discovery` keeps: the modules are given no namespace, and name their services
+# by a `DiscoveryName` tag instead.
 resource "aws_service_discovery_private_dns_namespace" "main" {
+  count = var.enable_cloud_map ? 1 : 0
+
   name        = local.service_discovery_namespace
   description = "Service discovery namespace for ${var.project_name}"
   vpc         = local.vpc_id
+}
+
+resource "aws_route53_zone" "discovery" {
+  count = var.enable_cloud_map ? 0 : 1
+
+  name = local.service_discovery_namespace
+
+  vpc {
+    vpc_id = local.vpc_id
+  }
+}
+
+locals {
+  service_discovery_namespace_id = var.enable_cloud_map ? aws_service_discovery_private_dns_namespace.main[0].id : ""
+}
+
+module "local_discovery" {
+  count  = var.enable_cloud_map ? 0 : 1
+  source = "./modules/local-discovery"
+
+  project_name       = var.project_name
+  environment        = var.environment
+  aws_region         = var.aws_region
+  cluster_id         = module.ecs.cluster_id
+  subnet_ids         = local.workload_subnet_ids
+  security_group_id  = aws_security_group.ecs_tasks.id
+  execution_role_arn = module.ecs.execution_role_arn
+  zone_id            = aws_route53_zone.discovery[0].zone_id
+  zone_name          = aws_route53_zone.discovery[0].name
 }
 
 # ECS Cluster + IAM roles + log groups. Per-location services and task definitions
@@ -194,13 +228,17 @@ module "ecs" {
 module "rqlite" {
   source = "./modules/rqlite"
 
+  # Where Cloud Map is off, the names are kept from before rqlite's nodes start: each waits two
+  # minutes for the others' addresses under its name, and gives up on the cluster after that.
+  depends_on = [module.local_discovery]
+
   project_name                     = var.project_name
   environment                      = var.environment
   aws_region                       = var.aws_region
   vpc_id                           = local.vpc_id
   subnet_ids                       = local.workload_subnet_ids
   ecs_cluster_id                   = module.ecs.cluster_id
-  service_discovery_namespace_id   = aws_service_discovery_private_dns_namespace.main.id
+  service_discovery_namespace_id   = local.service_discovery_namespace_id
   service_discovery_namespace_name = local.service_discovery_namespace
   app_security_group_id            = aws_security_group.ecs_tasks.id
   desired_count                    = var.rqlite_desired_count
@@ -229,7 +267,7 @@ module "cdc" {
   cluster_id                       = module.ecs.cluster_id
   vpc_id                           = local.vpc_id
   subnet_ids                       = local.workload_subnet_ids
-  service_discovery_namespace_id   = aws_service_discovery_private_dns_namespace.main.id
+  service_discovery_namespace_id   = local.service_discovery_namespace_id
   service_discovery_namespace_name = local.service_discovery_namespace
   execution_role_arn               = module.ecs.execution_role_arn
   rqlite_security_group_id         = module.rqlite.security_group_id
@@ -336,7 +374,7 @@ module "jaeger" {
   cluster_id                     = module.ecs.cluster_id
   vpc_id                         = local.vpc_id
   subnet_ids                     = local.workload_subnet_ids
-  service_discovery_namespace_id = aws_service_discovery_private_dns_namespace.main.id
+  service_discovery_namespace_id = local.service_discovery_namespace_id
   execution_role_arn             = module.ecs.execution_role_arn
   sender_security_group_ids      = [aws_security_group.ecs_tasks.id, module.cdc.security_group_id]
   ui_security_group_ids          = var.enable_tailscale ? [module.tailscale_proxy[0].security_group_id] : []
@@ -353,7 +391,7 @@ module "redis_lock" {
   cluster_id                       = module.ecs.cluster_id
   vpc_id                           = local.vpc_id
   subnet_ids                       = local.workload_subnet_ids
-  service_discovery_namespace_id   = aws_service_discovery_private_dns_namespace.main.id
+  service_discovery_namespace_id   = local.service_discovery_namespace_id
   service_discovery_namespace_name = local.service_discovery_namespace
   execution_role_arn               = module.ecs.execution_role_arn
   caller_security_group_ids        = [aws_security_group.ecs_tasks.id]
@@ -373,7 +411,7 @@ module "unifi_fake" {
   cluster_id                       = module.ecs.cluster_id
   vpc_id                           = local.vpc_id
   subnet_ids                       = local.workload_subnet_ids
-  service_discovery_namespace_id   = aws_service_discovery_private_dns_namespace.main.id
+  service_discovery_namespace_id   = local.service_discovery_namespace_id
   service_discovery_namespace_name = local.service_discovery_namespace
   execution_role_arn               = module.ecs.execution_role_arn
   caller_security_group_id         = aws_security_group.ecs_tasks.id
@@ -473,7 +511,7 @@ module "tailscale_proxy" {
   # `data "aws_vpc" "default"` block for why the private option is gone.
   assign_public_ip                 = true
   ecs_cluster_id                   = module.ecs.cluster_id
-  service_discovery_namespace_id   = aws_service_discovery_private_dns_namespace.main.id
+  service_discovery_namespace_id   = local.service_discovery_namespace_id
   service_discovery_namespace_name = local.service_discovery_namespace
   app_security_group_id            = aws_security_group.ecs_tasks.id
   ts_authkey_secret_arn            = aws_secretsmanager_secret.tailscale_authkey[0].arn

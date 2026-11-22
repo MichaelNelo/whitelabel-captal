@@ -29,9 +29,11 @@ resource "aws_cloudwatch_log_group" "rqlite" {
   retention_in_days = 30
 }
 
-# Service Discovery Service (registers A records in CloudMap)
+# Service Discovery Service (registers A records in CloudMap). None where Cloud Map is off: then
+# `modules/local-discovery` keeps the name, the service's `DiscoveryName` tag.
 resource "aws_service_discovery_service" "rqlite" {
-  name = "rqlite"
+  count = var.service_discovery_namespace_id == "" ? 0 : 1
+  name  = "rqlite"
 
   dns_config {
     namespace_id = var.service_discovery_namespace_id
@@ -499,8 +501,16 @@ resource "aws_ecs_service" "rqlite" {
     assign_public_ip = var.assign_public_ip
   }
 
-  service_registries {
-    registry_arn = aws_service_discovery_service.rqlite.arn
+  dynamic "service_registries" {
+    for_each = aws_service_discovery_service.rqlite[*].arn
+
+    content {
+      registry_arn = service_registries.value
+    }
+  }
+
+  tags = {
+    DiscoveryName = "rqlite"
   }
 
   deployment_circuit_breaker {

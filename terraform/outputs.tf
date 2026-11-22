@@ -240,6 +240,11 @@ output "cdc_log_group_name" {
   value       = module.cdc.log_group_name
 }
 
+output "discovery_zone_id" {
+  description = "The private zone the services' names are kept in where Cloud Map is off, which the local release reads to wait for them. Null where Cloud Map is on."
+  value       = var.enable_cloud_map ? null : aws_route53_zone.discovery[0].zone_id
+}
+
 # The local suite's credentials. Null in every AWS environment, because `mcp_create_test_user` is
 # only ever true for `local` -- see the resource in modules/mcp for why the secret is safe to
 # produce there and is absent everywhere else.
