@@ -1,0 +1,25 @@
+package build.cdc.feed
+
+import com.goyeau.mill.scalafix.ScalafixModule
+import mill.*, scalalib.*, scalafmt.*
+import millbuild.*
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Following the change feed: what a subscriber needs to read a table's change sets on a queue of
+// its task's own, subscribed to the relay's topic for that table. The API and the backoffice
+// depend on it; the relay does not, since it only publishes.
+// ─────────────────────────────────────────────────────────────────────────────
+
+object `package` extends BaseModule:
+  // Synchronous clients only, `netty-nio-client` excluded, as everywhere the AWS SDK is used here.
+  def mvnDeps = Seq(
+    mvn"dev.zio::zio:2.1.26",
+    mvn"dev.zio::zio-streams:2.1.26",
+    mvn"software.amazon.awssdk:sns:2.29.51".exclude("software.amazon.awssdk" -> "netty-nio-client"),
+    mvn"software.amazon.awssdk:sqs:2.29.51".exclude("software.amazon.awssdk" -> "netty-nio-client")
+  )
+
+  object test extends ScalaTests with ScalafmtModule with ScalafixModule:
+    def mvnDeps = Seq(mvn"dev.zio::zio-test:2.1.26", mvn"dev.zio::zio-test-sbt:2.1.26")
+    def testFramework = "zio.test.sbt.ZTestFramework"
+end `package`

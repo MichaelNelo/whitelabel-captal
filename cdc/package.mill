@@ -5,8 +5,8 @@ import mill.*, scalalib.*, scalafmt.*
 import millbuild.*
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CDC: the relay between rqlite's change data capture and whoever subscribes. Its own deployable,
-// internal: no route on the load balancer. `cdc.protocol` is what it speaks to subscribers.
+// CDC: the relay between rqlite's change data capture and the tables' topics. Its own deployable,
+// internal: no route on the load balancer. `cdc.feed` is how a subscriber reads a topic.
 // ─────────────────────────────────────────────────────────────────────────────
 
 object `package` extends BaseModule with Released:
@@ -15,10 +15,14 @@ object `package` extends BaseModule with Released:
   /** Empty, as the backoffice's: the image runs `java -jar`. */
   def prependShellScript = ""
 
-  def moduleDeps = Seq(build.cdc.protocol, build.telemetry)
+  def moduleDeps = Seq(build.telemetry)
 
-  // zio-http at the version `platform` uses, for the one route rqlite posts to.
-  def mvnDeps = Seq(mvn"dev.zio::zio-http:3.0.1")
+  // zio-http at the version `platform` uses, for the one route rqlite posts to; the topics' client,
+  // synchronous, `netty-nio-client` excluded, as everywhere the AWS SDK is used here.
+  def mvnDeps = Seq(
+    mvn"dev.zio::zio-http:3.0.1",
+    mvn"software.amazon.awssdk:sns:2.29.51".exclude("software.amazon.awssdk" -> "netty-nio-client")
+  )
 
   /** Files counted in this module's version besides its sources: the Dockerfile. */
   override def versionFiles: T[Seq[PathRef]] = Task(Seq(dockerfile()))

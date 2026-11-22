@@ -8,10 +8,9 @@ WORKDIR /app
 
 COPY cdc.jar cdc.jar
 
-# HTTP, where rqlite posts its change data capture, on the `container_port` every service uses; and
-# gRPC, where subscribers follow it. Both reached only inside the network.
-EXPOSE 8080 9090
+# HTTP, where rqlite posts its change data capture, on the `container_port` every service uses,
+# reached only inside the network.
+EXPOSE 8080
 ENV CDC_PORT=8080
-ENV CDC_GRPC_PORT=9090
 
 CMD ["java", "-jar", "cdc.jar"]

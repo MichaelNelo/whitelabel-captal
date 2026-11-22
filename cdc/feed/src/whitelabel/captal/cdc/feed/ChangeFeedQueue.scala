@@ -1,4 +1,4 @@
-package whitelabel.captal.cdc.protocol
+package whitelabel.captal.cdc.feed
 
 import java.net.URI
 import java.security.MessageDigest
@@ -8,6 +8,8 @@ import scala.jdk.CollectionConverters.*
 
 import software.amazon.awssdk.services.sns.SnsClient
 import software.amazon.awssdk.services.sns.model.{
+  ListSubscriptionsByTopicRequest,
+  NotFoundException,
   PublishRequest,
   SubscribeRequest as SnsSubscribe,
   UnsubscribeRequest
@@ -19,6 +21,7 @@ import software.amazon.awssdk.services.sqs.model.{
   DeleteMessageBatchRequestEntry,
   DeleteQueueRequest,
   GetQueueAttributesRequest,
+  ListQueuesRequest,
   Message,
   QueueAttributeName,
   ReceiveMessageRequest,
@@ -27,29 +30,39 @@ import software.amazon.awssdk.services.sqs.model.{
 import zio.*
 import zio.stream.ZStream
 
-import ChangeFeedFollower.Event
-
 /** Following the change feed on a queue of this task's own, subscribed to the relay's topic for
   * each table it reads, `<topic prefix><table>`.
   *
   * A queue per task: tasks sharing one would split its messages, and a deploy runs the outgoing
-  * task beside the incoming one. So the queue is made as the stream starts, named `<queue
-  * prefix>-<service>- <random id>`, subscribed with raw delivery, and unsubscribed and deleted as
-  * its scope closes — on SIGTERM, through the shutdown hook `ZIOAppDefault` registers. A task
-  * killed otherwise leaves its queue behind.
+  * task beside the incoming one. So the queue is made as the stream starts, named after the task's
+  * service with a random id ([[namePrefix]]), subscribed with raw delivery, and unsubscribed and
+  * deleted as its scope closes — on SIGTERM, through the shutdown hook `ZIOAppDefault` registers. A
+  * task killed otherwise leaves its queue behind, for [[removeLeft]].
   *
   * Before anything is read, the task publishes a marker to each topic and drains its queue until
   * every one has come back: the subscription delivers. What arrived before the marker was committed
-  * before then, so the rebuild that follows reads it: the stream's first event is a
-  * [[ChangeFeedFollower.Event.Gap]], which has a subscriber rebuild from the database, and every
-  * change after it is in the queue. A change set is a message whose `index` attribute the relay
-  * set; the others' markers carry none and are passed over.
+  * before then, so the rebuild that follows reads it: the stream's first event is a [[Event.Gap]],
+  * which has a subscriber rebuild from the database, and every change after it is in the queue. A
+  * change set is a message whose `index` attribute the relay set; the others' markers carry none
+  * and are passed over.
   *
   * It never fails and never ends: whatever stops a queue is logged, and a new one is made, with
   * another gap. Messages are deleted as they are received; they are only ever read once, and a task
-  * that dies before handling one rebuilds on its next queue anyway.
+  * that dies before handling one rebuilds on its next queue anyway. A change set can arrive twice
+  * or out of order, which a subscriber absorbs: each reads what it acts on from the database.
   */
 object ChangeFeedQueue:
+  enum Event:
+    /** One change set, exactly as rqlite posted it: `{"index": n, "events": [...]}`, and the trace
+      * the relay received it in, as W3C trace context headers, for the subscriber to continue.
+      */
+    case Changed(index: Long, json: String, context: Map[String, String] = Map.empty)
+
+    /** Change sets may be missing: whatever a subscriber keeps from them, it rebuilds from the
+      * database.
+      */
+    case Gap
+
   /** @param topicPrefix
     *   the ARN of a table's topic, but for the table's name.
     * @param queuePrefix
@@ -128,6 +141,58 @@ object ChangeFeedQueue:
   def isQueueOf(prefix: String, service: String, name: String): Boolean =
     val under = namePrefix(prefix, service)
     name.startsWith(under) && name.drop(under.length).matches("[0-9a-f]{32}")
+
+  /** Removes every queue of `service`'s tasks, and every subscription of the `tables`' topics to
+    * one of them, whether its queue is still there or not; the number removed of each. For when
+    * none of them runs any more — every task removes its own as it stops, so what is left is a
+    * task's that was killed.
+    */
+  def removeLeft(settings: Settings, service: String, tables: List[String]): Task[(Int, Int)] = ZIO
+    .scoped:
+      for
+        endpoint <- System.env("AWS_ENDPOINT_URL").map(_.map(_.trim).filter(_.nonEmpty))
+        sqs      <- ZIO.fromAutoCloseable(ZIO.attempt(sqsClient(endpoint)))
+        sns      <- ZIO.fromAutoCloseable(ZIO.attempt(snsClient(endpoint)))
+        ours = (arn: String) => isQueueOf(settings.queuePrefix, service, arn.split(':').last)
+        // A topic that is not there has no subscription to remove.
+        subscriptions <-
+          ZIO.foreach(tables)(table =>
+            ZIO
+              .attemptBlocking(
+                sns
+                  .listSubscriptionsByTopicPaginator(
+                    ListSubscriptionsByTopicRequest
+                      .builder()
+                      .topicArn(settings.topicPrefix + table)
+                      .build())
+                  .subscriptions()
+                  .asScala
+                  .toList
+                  .filter(s => s.protocol == "sqs" && ours(s.endpoint))
+                  .map(_.subscriptionArn))
+              .catchSome { case _: NotFoundException =>
+                ZIO.succeed(Nil)
+              })
+        _ <-
+          ZIO.foreachDiscard(subscriptions.flatten)(arn =>
+            ZIO.attemptBlocking(
+              sns.unsubscribe(UnsubscribeRequest.builder().subscriptionArn(arn).build())))
+        queues <- ZIO.attemptBlocking(
+          sqs
+            .listQueuesPaginator(
+              ListQueuesRequest
+                .builder()
+                .queueNamePrefix(namePrefix(settings.queuePrefix, service))
+                .build())
+            .queueUrls()
+            .asScala
+            .toList
+            .filter(url => isQueueOf(settings.queuePrefix, service, url.split('/').last)))
+        _ <-
+          ZIO.foreachDiscard(queues)(url =>
+            ZIO.attemptBlocking(
+              sqs.deleteQueue(DeleteQueueRequest.builder().queueUrl(url).build())))
+      yield (queues.size, subscriptions.flatten.size)
 
   private def subscribed(
       settings: Settings,
