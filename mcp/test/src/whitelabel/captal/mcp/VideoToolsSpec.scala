@@ -85,7 +85,7 @@ object VideoToolsSpec extends ZIOSpecDefault:
     // resyncs them all. A change set of another table asks for nothing.
     test(
       "a playbacks change set asks for one pass and starts and cancels timers; a gap resyncs them"):
-      import whitelabel.captal.cdc.protocol.ChangeFeedFollower.Event
+      import whitelabel.captal.cdc.feed.ChangeFeedQueue.Event
       for
         asked <- zio.Queue.sliding[Unit](1)
         calls <- zio.Ref.make(List.empty[String])

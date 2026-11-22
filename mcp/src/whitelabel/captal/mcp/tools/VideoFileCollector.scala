@@ -2,7 +2,7 @@ package whitelabel.captal.mcp.tools
 
 import io.opentelemetry.api.common.{AttributeKey, Attributes}
 import io.opentelemetry.api.trace.SpanKind
-import whitelabel.captal.cdc.protocol.ChangeFeedFollower
+import whitelabel.captal.cdc.feed.ChangeFeedQueue
 import whitelabel.captal.core.application.commands.CollectReplacedFilesCommand
 import whitelabel.captal.core.video
 import whitelabel.captal.platform.{Operator, OperatorContext}
@@ -68,8 +68,8 @@ object VideoFileCollector:
     */
   def follow(
       running: Running,
-      feed: ZStream[Any, Nothing, ChangeFeedFollower.Event]): URIO[Tracing, Unit] = feed.foreach:
-    case event @ ChangeFeedFollower.Event.Changed(index, _, context) =>
+      feed: ZStream[Any, Nothing, ChangeFeedQueue.Event]): URIO[Tracing, Unit] = feed.foreach:
+    case event @ ChangeFeedQueue.Event.Changed(index, _, context) =>
       Telemetry.continuing(
         context,
         "cdc VideoFileCollector",
@@ -83,9 +83,9 @@ object VideoFileCollector:
     * A gap — change sets that may never arrive — resyncs the timers with the database, as at
     * startup, and asks for a pass too.
     */
-  def changed(running: Running, event: ChangeFeedFollower.Event): UIO[Unit] =
+  def changed(running: Running, event: ChangeFeedQueue.Event): UIO[Unit] =
     event match
-      case ChangeFeedFollower.Event.Changed(_, json, _) =>
+      case ChangeFeedQueue.Event.Changed(_, json, _) =>
         ZIO
           .when(playbackEvents(json).nonEmpty)(
             ZIO
@@ -96,7 +96,7 @@ object VideoFileCollector:
                   running.timers.cancel(id)
               .zipRight(running.asked.offer(())))
           .unit
-      case ChangeFeedFollower.Event.Gap =>
+      case ChangeFeedQueue.Event.Gap =>
         running.timers.resync *> running.asked.offer(()).unit
 
   import zio.json.ast.Json

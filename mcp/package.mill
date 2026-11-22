@@ -24,7 +24,7 @@ object `package` extends BaseModule with Released:
     */
   def prependShellScript = ""
   // platform's UnifiClient needs zio-http 3.0.1, not the 3.11.3 used here: align versions before using it.
-  def moduleDeps = Seq(build.core, build.platform, build.cdc.protocol)
+  def moduleDeps = Seq(build.core, build.platform, build.cdc.feed)
   def mvnDeps = Seq(
     // zio-http-mcp 0.10.0: TaskExecution, McpApps, and the skills primitives.
     mvn"com.jamesward::zio-http-mcp:0.10.0",
@@ -465,8 +465,11 @@ object `package` extends BaseModule with Released:
           "PUBLIC_BASE_URL"            -> "https://portal.test",
           // Stands in for the Tailscale proxy output, which the local configuration does not have.
           "UNIFI_PROXY_URL"            -> "http://tailscale-proxy.test:1055",
-          // Forwarded into every location's task definition; nothing in the suite follows it.
-          "CDC_FEED_ADDRESS"           -> "cdc.test:9090",
+          // Forwarded into every location's task definition; nothing in the suite follows them.
+          "CDC_TOPIC_PREFIX"             -> "arn:aws:sns:us-east-1:000000000000:captal-test-cdc-",
+          "CDC_QUEUE_PREFIX"             -> "captal-test-feed",
+          "LOCATION_CDC_DEAD_LETTER_ARN" ->
+            "arn:aws:sqs:us-east-1:000000000000:captal-test-locations-dead-letter",
           "REDIS_LOCK_ADDRESSES"       -> redisAddress(),
           "LOCALSTACK_ENDPOINT"        -> localStackStamp().split(" ")(1)
         ) ++ localStackInfra()

@@ -1,5 +1,6 @@
 package whitelabel.captal.mcp.aws
 
+import whitelabel.captal.cdc.feed.ChangeFeedQueue
 import whitelabel.captal.core.infrastructure.OperationSteps
 import whitelabel.captal.core.location.Slug
 import whitelabel.captal.core.operation.{Step, StepFailure}
@@ -114,19 +115,23 @@ object InfraSteps:
               rejected(assets.resumePage(name)).map(found =>
                 Option.unless(found)("No saved page was found"))
             case Step.Teardown =>
-              rejected(store.destroy(name)).map: report =>
-                Some(
-                  s"Service ${
-                      if report.serviceDeleted then
-                        "deleted"
-                      else
-                        "already gone"
-                    }, ${report.rulesDeleted} rule(s), target group ${
-                      if report.targetGroupDeleted then
-                        "deleted"
-                      else
-                        "already gone"
-                    }, ${report.taskDefinitionsDeregistered} revision(s); ${report.logGroup} kept")
+              for
+                report <- rejected(store.destroy(name))
+                left   <- rejected(feedLeft(store, name))
+              yield Some(
+                s"Service ${
+                    if report.serviceDeleted then
+                      "deleted"
+                    else
+                      "already gone"
+                  }, ${report.rulesDeleted} rule(s), target group ${
+                    if report.targetGroupDeleted then
+                      "deleted"
+                    else
+                      "already gone"
+                  }, ${report.taskDefinitionsDeregistered} revision(s), ${left
+                    ._1} feed queue(s) and ${left._2} subscription(s) left by killed tasks; ${report
+                    .logGroup} kept")
             case Step.DeleteAssets =>
               rejected(
                 assets.deletePrefix(s"$name/") <*
@@ -136,6 +141,16 @@ object InfraSteps:
               ZIO.none
         outcome.either
       end run
+
+  /** What the location's tasks left on the change feed: their queues and subscriptions to the
+    * `errors` topic, the table a location's API reads (`RecoveryFeed`). By the teardown its tasks
+    * have drained, each removing its own as it stopped, so what is left is a killed task's; none,
+    * where the feed is not configured.
+    */
+  private def feedLeft(store: InfraStore, slug: String): ZIO[Any, String, (Int, Int)] = ZIO
+    .foreach(store.targets.cdcFeed)(ChangeFeedQueue.removeLeft(_, slug, List("errors")))
+    .map(_.getOrElse((0, 0)))
+    .mapError(e => s"Could not remove the change feed queues of $slug: ${e.getMessage}")
 
   private def rejected[A](effect: ZIO[Any, String, A]): ZIO[Any, StepFailure, A] = effect.mapError(
     StepFailure.Rejected(_))

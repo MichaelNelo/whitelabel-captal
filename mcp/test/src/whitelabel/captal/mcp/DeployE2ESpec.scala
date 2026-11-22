@@ -1000,8 +1000,10 @@ object DeployE2ESpec extends ZIOSpecDefault:
         // the second from passing on `None == None`.
         store.targets.unifiProxyUrl.nonEmpty,
         taskEnv.get("UNIFI_PROXY_URL") == store.targets.unifiProxyUrl,
-        store.targets.cdcFeedAddress.nonEmpty,
-        taskEnv.get("CDC_FEED_ADDRESS") == store.targets.cdcFeedAddress,
+        store.targets.cdcFeed.nonEmpty,
+        taskEnv.get("CDC_TOPIC_PREFIX") == store.targets.cdcFeed.map(_.topicPrefix),
+        taskEnv.get("CDC_QUEUE_PREFIX") == store.targets.cdcFeed.map(_.queuePrefix),
+        taskEnv.get("CDC_DEAD_LETTER_ARN") == store.targets.cdcFeed.flatMap(_.deadLetterArn),
         taskEnv.get("LOCATION_SLUG").contains(Slug),
         // The location's own copy of the manifest, under this server's `PUBLIC_BASE_URL`.
         taskEnv.get("BUNDLE_MANIFEST_URL").contains(s"https://portal.test/$Slug/manifest.json"),

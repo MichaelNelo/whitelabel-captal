@@ -1,7 +1,7 @@
 ---
 name: configure-aws
 description: Use this skill for the backoffice deployment itself — its environment variables, its AWS permissions, where the infrastructure lives, and the operator tokens it issues. Triggers on "configure aws", "setup aws", "env vars", "variables de entorno", "MCP_ADMIN_TOKEN", "assets bucket", "cloudfront distribution", "iam permissions", "terraform", "tofu", "infra", "create token", "nuevo operador", "dar acceso", "revoke token", "revocar token".
-version: 2.0.0
+version: 2.0.1
 ---
 
 # Configure the backoffice deployment
@@ -46,7 +46,9 @@ something a tool would otherwise discover halfway through a write.
 | `SCRIPT_BASE_URL` | optional, default `PUBLIC_BASE_URL` | Where the MCP App pages load their scripts from, `<base>/ui/<name>`. For a bucket the operator's browser reaches at another address, such as LocalStack behind a tunnel |
 | `PRESIGN_ENDPOINT_URL` | optional, default `AWS_ENDPOINT_URL` | The endpoint the upload URLs name, for the same case |
 | `TASK_DB_URL` | optional, default `DB_URL` | The database URL a deployed location's task is given, for a server that reaches the database by another name than its tasks do |
-| `CDC_FEED_ADDRESS` | `cdc.<namespace>:9090` | `host:port` of the change data capture relay, followed to hear of playbacks starting and ending, and forwarded into every location's task definition, whose API follows it to tell a waiting guest their error recurred. Without it the server starts with a warning, only replacements and its own startup collect replaced files, and locations are deployed without it |
+| `CDC_TOPIC_PREFIX` | `tofu output cdc_topic_prefix` | A change data capture topic's ARN but for its table. This server follows `video_playbacks` on a queue of its task's own to hear of playbacks starting and ending, and forwards the prefix into every location's task definition, whose API follows `errors` to tell a waiting guest their error recurred |
+| `CDC_QUEUE_PREFIX` | `tofu output feed_queue_prefix` | What each task's queue is named under, after its service: `mcp` here, the slug for a location. Forwarded like the prefix above. Without the two the server starts with a warning, only replacements and its own startup collect replaced files, and locations are deployed without them |
+| `CDC_DEAD_LETTER_ARN`, `LOCATION_CDC_DEAD_LETTER_ARN` | the configuration's two dead-letter queues | Where a message a task cannot process ends: this server's tasks' and the locations', the second forwarded into every location's task definition |
 
 Locally, `mill mcp.dev` runs this server as a task in LocalStack, with the same task definition the
 configuration gives it in AWS: its rqlite, bucket, distribution, cluster and relay, the admin token
