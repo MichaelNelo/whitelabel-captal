@@ -2,10 +2,11 @@ package whitelabel.captal.api
 
 import io.opentelemetry.api.common.{AttributeKey, Attributes}
 import io.opentelemetry.api.trace.SpanKind
-import whitelabel.captal.cdc.protocol.ChangeFeedFollower
+import whitelabel.captal.cdc.protocol.{ChangeFeedFollower, ChangeFeedQueue}
 import whitelabel.captal.telemetry.{Telemetry, Tracing}
 import zio.*
 import zio.json.ast.Json
+import zio.stream.ZStream
 
 /** What a waiting page is told of as it happens: an error recorded anywhere, on any location, which
   * may make the one it waits on recurrent. Heard from the change data capture relay, so a page
@@ -34,9 +35,11 @@ object RecoveryFeed:
   /** A feed nothing publishes to but its caller: the suites publish to it. */
   def make: UIO[RecoveryFeed] = Hub.sliding[Signal](256).map(RecoveryFeed(_))
 
-  /** Following the relay at `CDC_FEED_ADDRESS` (`host:port`) for as long as the server runs. A
-    * warning and not a failure without it: a waiting page then learns of a recurrence when it
-    * connects again, and its wait still ends.
+  /** Following the change feed for as long as the server runs: the `errors` topic on a queue of
+    * this task's own, where `CDC_TOPIC_PREFIX` and `CDC_QUEUE_PREFIX` are set (see
+    * [[ChangeFeedQueue]]), named after the location the task serves; otherwise the relay at
+    * `CDC_FEED_ADDRESS` (`host:port`). A warning and not a failure without either: a waiting page
+    * then learns of a recurrence when it connects again, and its wait still ends.
     *
     * Each change set is read in a span continuing the trace the relay received it in, so that trace
     * shows this location among the subscribers it reached.
@@ -44,20 +47,33 @@ object RecoveryFeed:
   val layer: ZLayer[Tracing, Nothing, RecoveryFeed] = ZLayer.scoped:
     for
       feed    <- make
+      queue   <- ChangeFeedQueue.fromEnv
+      slug    <- System.env("LOCATION_SLUG").orDie.map(_.map(_.trim).filter(_.nonEmpty))
       address <- System.env("CDC_FEED_ADDRESS").orDie.map(_.map(_.trim).filter(_.nonEmpty))
-      _       <-
-        address match
-          case Some(at) =>
+      follow =
+        (changes: ZStream[Any, Nothing, ChangeFeedFollower.Event]) =>
+          changes
+            .foreach(event => traced(event)(ZIO.foreachDiscard(signalsOf(event))(feed.publish)))
+            .forkScoped
+            .unit
+      _ <-
+        (queue, address) match
+          case (Some(settings), _) =>
+            ZIO.logInfo(s"Following the errors' change feed on a queue of this task's own") *>
+              follow(
+                ChangeFeedQueue.follow(settings, slug.getOrElse("api"), List("errors"), Retention))
+          case (None, Some(at)) =>
             ZIO.logInfo(s"Following the change feed at $at") *>
-              ChangeFeedFollower
-                .follow(at)
-                .foreach(event => traced(event)(ZIO.foreachDiscard(signalsOf(event))(feed.publish)))
-                .forkScoped
-                .unit
-          case None =>
+              follow(ChangeFeedFollower.follow(at))
+          case (None, None) =>
             ZIO.logWarning(
-              "No CDC_FEED_ADDRESS: a waiting page hears that its error recurred only when it connects again")
+              "No CDC_TOPIC_PREFIX nor CDC_FEED_ADDRESS: a waiting page hears that its error recurred only when it connects again")
     yield feed
+
+  /** How long an error waits on this task's queue: a page connecting later checks as it connects,
+    * so one older than this tells nobody anything.
+    */
+  val Retention: Duration = 1.minute
 
   /** `read` in a consumer span under the change set's trace; a gap carries none, and is read as is.
     */
