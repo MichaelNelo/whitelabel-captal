@@ -9,8 +9,14 @@
 # of what deploying this server means, and keeping them in a separate module is how they came to
 # describe a different set of permissions than the server actually calls.
 
+data "aws_caller_identity" "current" {}
+
 locals {
   name = "${var.project_name}-${var.environment}-mcp"
+
+  # The feed's queues by ARN, which the policy scopes to: the server's under `-mcp-`, the locations'
+  # under their slugs.
+  feed_queue_arn = "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:${var.feed_queue_prefix}"
 
   # On the HTTPS listener where there is a certificate to present, behind CloudFront at the portals'
   # own origin; on HTTP where there is not, reached at the load balancer's own name. The listener
@@ -273,6 +279,78 @@ data "aws_iam_policy_document" "mcp" {
     ]
     resources = ["*"]
   }
+
+  # Each task's own queue on the change feed, which it creates and subscribes to the `video_playbacks`
+  # topic as it starts, publishing its marker there, and unsubscribes and deletes as it stops.
+  statement {
+    sid    = "OwnFeedQueue"
+    effect = "Allow"
+    actions = [
+      "sqs:CreateQueue",
+      "sqs:GetQueueAttributes",
+      "sqs:SetQueueAttributes",
+      "sqs:ReceiveMessage",
+      "sqs:DeleteMessage",
+      "sqs:DeleteQueue",
+    ]
+    resources = ["${local.feed_queue_arn}-mcp-*"]
+  }
+
+  statement {
+    sid       = "SubscribeOwnFeedQueue"
+    effect    = "Allow"
+    actions   = ["sns:Subscribe"]
+    resources = [var.feed_topic_arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "sns:Protocol"
+      values   = ["sqs"]
+    }
+
+    condition {
+      test     = "StringLike"
+      variable = "sns:Endpoint"
+      values   = ["${local.feed_queue_arn}-mcp-*"]
+    }
+  }
+
+  statement {
+    sid       = "UnsubscribeAndMark"
+    effect    = "Allow"
+    actions   = ["sns:Unsubscribe", "sns:Publish"]
+    resources = [var.feed_topic_arn]
+  }
+
+  # `destroy_location` removes every queue a location's tasks left, and its subscriptions: with the
+  # service gone, none of them has a task alive. `ListQueues` names no queue, so it is not scoped.
+  statement {
+    sid       = "ListFeedQueues"
+    effect    = "Allow"
+    actions   = ["sqs:ListQueues"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "RemoveLocationFeedQueues"
+    effect    = "Allow"
+    actions   = ["sqs:GetQueueAttributes", "sqs:DeleteQueue"]
+    resources = ["${local.feed_queue_arn}-*"]
+  }
+
+  statement {
+    sid       = "RemoveLocationFeedSubscriptions"
+    effect    = "Allow"
+    actions   = ["sns:ListSubscriptionsByTopic", "sns:Unsubscribe"]
+    resources = [var.location_feed_topic_arn]
+  }
+}
+
+# Where a message one of the server's tasks cannot process ends, after a few tries, for someone to
+# read. Named outside the feed's prefix, so no task can delete it.
+resource "aws_sqs_queue" "feed_dead_letter" {
+  name                      = "${local.name}-dead-letter"
+  message_retention_seconds = 1209600
 }
 
 resource "aws_iam_policy" "mcp" {

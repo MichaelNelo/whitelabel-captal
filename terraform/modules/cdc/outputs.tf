@@ -8,6 +8,11 @@ output "feed_address" {
   value       = "cdc.${var.service_discovery_namespace_name}:${var.grpc_port}"
 }
 
+output "topic_arns" {
+  description = "Each table's topic, by the table's name"
+  value       = { for table, topic in aws_sns_topic.table : table => topic.arn }
+}
+
 output "service_name" {
   description = "ECS service name"
   value       = aws_ecs_service.cdc.name

@@ -13,6 +13,46 @@ resource "aws_cloudwatch_log_group" "cdc" {
   retention_in_days = 30
 }
 
+# One standard topic per table, which every change set touching that table goes to, whole. A table
+# rather than a filter policy on one topic, because a task subscribes on every start, and a new
+# filter policy takes up to 15 minutes to apply, delivering nobody says what meanwhile. Standard
+# rather than FIFO: no subscriber needs the order or the deduplication, and a FIFO topic admits 100
+# subscriptions, too few for one per task.
+resource "aws_sns_topic" "table" {
+  for_each = toset(var.tables)
+
+  name = "${local.name}-${each.key}"
+}
+
+# What the relay runs as: publishing to its topics, and nothing else.
+resource "aws_iam_role" "task" {
+  name = "${local.name}-task"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRole"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+    }]
+  })
+}
+
+data "aws_iam_policy_document" "publish" {
+  statement {
+    sid       = "PublishChanges"
+    effect    = "Allow"
+    actions   = ["sns:Publish"]
+    resources = [for topic in aws_sns_topic.table : topic.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "publish" {
+  name   = "${local.name}-publish"
+  role   = aws_iam_role.task.id
+  policy = data.aws_iam_policy_document.publish.json
+}
+
 # HTTP from rqlite, gRPC from the tasks that subscribe: the backoffice and every location's API,
 # which share the ECS tasks group. Both inline: neither group names this one, so there is no cycle.
 resource "aws_security_group" "cdc" {
@@ -57,6 +97,7 @@ resource "aws_ecs_task_definition" "cdc" {
   cpu                      = var.container_cpu
   memory                   = var.container_memory
   execution_role_arn       = var.execution_role_arn
+  task_role_arn            = aws_iam_role.task.arn
 
   container_definitions = jsonencode([{
     name      = "cdc"

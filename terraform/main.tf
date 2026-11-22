@@ -210,8 +210,9 @@ module "rqlite" {
   http_port                        = var.rqlite_http_port
   raft_port                        = var.rqlite_raft_port
   # The relay by its service discovery name, unless the configuration says otherwise.
-  cdc_endpoint     = coalesce(var.rqlite_cdc_endpoint, module.cdc.ingest_url)
-  cdc_table_filter = var.rqlite_cdc_table_filter
+  cdc_endpoint = coalesce(var.rqlite_cdc_endpoint, module.cdc.ingest_url)
+  # rqlite takes the tables as a regular expression; the names need no escaping.
+  cdc_table_filter = "^(${join("|", var.cdc_tables)})$"
   # Public subnets and no NAT, so a task without an address of its own cannot reach ECR. See the
   # `data "aws_vpc" "default"` block for why the private option is gone.
   assign_public_ip = true
@@ -233,6 +234,7 @@ module "cdc" {
   execution_role_arn               = module.ecs.execution_role_arn
   rqlite_security_group_id         = module.rqlite.security_group_id
   subscriber_security_group_id     = aws_security_group.ecs_tasks.id
+  tables                           = var.cdc_tables
 
   image            = module.cdc_image.reference
   http_port        = var.container_port
@@ -240,6 +242,87 @@ module "cdc" {
   container_memory = var.cdc_memory
   desired_count    = var.cdc_desired_count
   otlp_endpoint    = local.otlp_endpoint
+}
+
+# ─── Following the change feed ──────────────────────────────────────────────
+#
+# Every task that follows a table has a queue of its own, `<prefix>-feed-<service>-<random id>`,
+# which it creates and subscribes to the table's topic as it starts, and unsubscribes and deletes as
+# it stops: tasks sharing a queue would split its messages, and a deploy runs the outgoing task beside
+# the incoming one. The service is `mcp` for the backoffice and the slug for a location, which can
+# never be `mcp`. A message a task cannot process goes to its kind's dead-letter queue, named outside
+# the `feed` prefix so no task can delete it.
+
+data "aws_caller_identity" "current" {}
+
+locals {
+  feed_queue_prefix = "${local.name_prefix}-feed"
+  feed_queue_arn    = "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:${local.feed_queue_prefix}"
+}
+
+# One for every location: the locations are the backoffice's to create, not this configuration's.
+resource "aws_sqs_queue" "location_feed_dead_letter" {
+  name                      = "${local.name_prefix}-locations-dead-letter"
+  message_retention_seconds = 1209600
+}
+
+# On the role every location's API runs as: its own queue, any location's but never the backoffice's,
+# and the `errors` topic, which it subscribes that queue to and publishes its marker on. A task could
+# unsubscribe another's queue from the topic, since no condition key names the subscription; a marker
+# or a forged message only makes the others check again against the database.
+data "aws_iam_policy_document" "location_feed" {
+  statement {
+    sid    = "OwnQueue"
+    effect = "Allow"
+    actions = [
+      "sqs:CreateQueue",
+      "sqs:GetQueueAttributes",
+      "sqs:SetQueueAttributes",
+      "sqs:ReceiveMessage",
+      "sqs:DeleteMessage",
+      "sqs:DeleteQueue",
+    ]
+    resources = ["${local.feed_queue_arn}-*"]
+  }
+
+  statement {
+    sid       = "NotTheBackofficesQueues"
+    effect    = "Deny"
+    actions   = ["sqs:*"]
+    resources = ["${local.feed_queue_arn}-mcp-*"]
+  }
+
+  statement {
+    sid       = "SubscribeOwnQueue"
+    effect    = "Allow"
+    actions   = ["sns:Subscribe"]
+    resources = [module.cdc.topic_arns["errors"]]
+
+    condition {
+      test     = "StringEquals"
+      variable = "sns:Protocol"
+      values   = ["sqs"]
+    }
+
+    condition {
+      test     = "StringLike"
+      variable = "sns:Endpoint"
+      values   = ["${local.feed_queue_arn}-*"]
+    }
+  }
+
+  statement {
+    sid       = "UnsubscribeAndMark"
+    effect    = "Allow"
+    actions   = ["sns:Unsubscribe", "sns:Publish"]
+    resources = [module.cdc.topic_arns["errors"]]
+  }
+}
+
+resource "aws_iam_role_policy" "location_feed" {
+  name   = "${local.name_prefix}-location-feed"
+  role   = module.ecs.task_role_name
+  policy = data.aws_iam_policy_document.location_feed.json
 }
 
 # Jaeger, where every service's traces go: the backoffice's, the relay's and every location's API.
@@ -509,6 +592,9 @@ module "mcp" {
 
   db_url                      = module.rqlite.http_url
   cdc_feed_address            = module.cdc.feed_address
+  feed_topic_arn              = module.cdc.topic_arns["video_playbacks"]
+  location_feed_topic_arn     = module.cdc.topic_arns["errors"]
+  feed_queue_prefix           = local.feed_queue_prefix
   redis_lock_addresses        = module.redis_lock.addresses
   otlp_endpoint               = local.otlp_endpoint
   location_dev_endpoints      = var.enable_location_faults

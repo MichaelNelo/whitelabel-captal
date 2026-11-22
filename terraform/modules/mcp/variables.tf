@@ -140,6 +140,21 @@ variable "cdc_feed_address" {
   type        = string
 }
 
+variable "feed_topic_arn" {
+  description = "The `video_playbacks` topic, which each of the server's tasks subscribes its own queue to"
+  type        = string
+}
+
+variable "location_feed_topic_arn" {
+  description = "The `errors` topic the locations' tasks subscribe to, whose subscriptions `destroy_location` removes"
+  type        = string
+}
+
+variable "feed_queue_prefix" {
+  description = "What every task's queue is named under, `<prefix>-<service>-<random id>`: the server's are `<prefix>-mcp-…`, a location's `<prefix>-<slug>-…`"
+  type        = string
+}
+
 variable "redis_lock_addresses" {
   description = "Every Redis instance the server takes a location's operation lock on, `host:port` comma separated"
   type        = string

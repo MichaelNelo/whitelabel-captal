@@ -66,6 +66,8 @@ provider "aws" {
       s3               = var.aws_endpoint_url
       secretsmanager   = var.aws_endpoint_url
       servicediscovery = var.aws_endpoint_url
+      sns              = var.aws_endpoint_url
+      sqs              = var.aws_endpoint_url
       sts              = var.aws_endpoint_url
     }
   }
@@ -114,6 +116,8 @@ provider "aws" {
       s3               = var.aws_endpoint_url
       secretsmanager   = var.aws_endpoint_url
       servicediscovery = var.aws_endpoint_url
+      sns              = var.aws_endpoint_url
+      sqs              = var.aws_endpoint_url
       sts              = var.aws_endpoint_url
     }
   }

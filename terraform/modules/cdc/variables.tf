@@ -45,6 +45,13 @@ variable "execution_role_arn" {
   type        = string
 }
 
+# ─── What it publishes ──────────────────────────────────────────────────────
+
+variable "tables" {
+  description = "The tables rqlite posts the changes of, each given a topic of its own, `<project>-<environment>-cdc-<table>`, that the tasks reading it subscribe their own queue to"
+  type        = list(string)
+}
+
 # ─── Who reaches it ─────────────────────────────────────────────────────────
 
 variable "rqlite_security_group_id" {

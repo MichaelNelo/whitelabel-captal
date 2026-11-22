@@ -13,13 +13,14 @@ val localStackVersion = "2026.9.1"
 /** The services the free edition starts: S3 is the only one this project uses there. */
 val freeServices = "s3"
 
-/** The services a licensed container starts with: everything `deploy_location` and its fixture call.
+/** The services a licensed container starts with: everything `deploy_location` and its fixture call, and
+  * the change feed's topics and queues (`sns`, `sqs`).
   *
   * `route53` is not called directly, but `servicediscovery.CreatePrivateDnsNamespace` requires it.
   * A service missing here fails as `UnrecognizedClientException`, which is not a credentials error.
   */
 val licensedServices =
-  "s3,logs,ecs,elbv2,cloudfront,ec2,iam,sts,efs,secretsmanager,servicediscovery,route53,ecr"
+  "s3,logs,ecs,elbv2,cloudfront,ec2,iam,sts,efs,secretsmanager,servicediscovery,route53,ecr,sns,sqs"
 
 /** The LocalStack licence token, from `LOCALSTACK_AUTH_TOKEN` or `LOCALSTACK_TOKEN`. Never logged.
   *
