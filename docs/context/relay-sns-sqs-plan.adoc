@@ -162,8 +162,15 @@ Step 1 of the migration, done on 2026-11-22 from AWS's documentation, then run a
   which the design now uses.
 |===
 
-Still to read: whether the ECS task metadata endpoint v4 (`ECS_CONTAINER_METADATA_URI_V4`,
-`TaskARN`) is documented for Fargate, which the queue's name depends on.
+A task knows its own id and service from the ECS task metadata endpoint v4: "Beginning with Fargate
+platform version `1.4.0`, an environment variable named `ECS_CONTAINER_METADATA_URI_V4` is injected
+into each container in a task", on by default, and `${ECS_CONTAINER_METADATA_URI_V4}/task` answers
+`TaskARN`, `Family`, `Cluster` and, for a task of a service, `ServiceName`
+(https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-metadata-endpoint-v4-fargate.html[endpoint
+v4 on Fargate],
+https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-metadata-endpoint-v4-fargate-response.html[its
+response]). No service here sets a platform version, so each runs on `LATEST`. Not yet known:
+whether LocalStack's ECS injects the variable into the tasks it runs.
 
 == The design
 
@@ -349,8 +356,7 @@ every subscriber unfiltered, and each subscriber long polling every 20 s — upp
 [[migration]]
 == Migration
 
-. *Verify in the documentation* — done on 2026-11-22 (<<verified>>), but for the task metadata
-  endpoint on Fargate.
+. *Verify in the documentation* — done on 2026-11-22 (<<verified>>).
 . *Infrastructure* (OpenTofu): a standard topic per published table, `captal-<env>-cdc-<table>`;
   `sns:Publish` on them for the relay's role; a dead-letter queue per subscribing service; the task
   roles' permissions above, for the backoffice's and the locations'; `sns` and `sqs` in LocalStack's
