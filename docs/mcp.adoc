@@ -71,8 +71,8 @@ once it has.
 . `Tokens.seedAdmin(token, "admin")` — idempotent; logs whether the admin row was created, rotated
 in place, or already current.
 . Follows the change feed (see <<replaced-files>>), in the background for as long as it serves: the
-`video_playbacks` topic on a queue of the task's own where `CDC_TOPIC_PREFIX` and
-`CDC_QUEUE_PREFIX` are set, the relay at `CDC_FEED_ADDRESS` otherwise.
+`video_playbacks` topic on a queue of the task's own, where `CDC_TOPIC_PREFIX` and
+`CDC_QUEUE_PREFIX` are set.
 . Serves `GET /health` (`ok`, the load balancer's health check) `++ UiRoutes.routes ++ RunRoutes.routes
 ++ OauthMetadata.routes(uiOrigin) ++ CaptalMcp.server(...).statelessRoutes`.
 
@@ -644,10 +644,10 @@ A pass runs on four occasions:
 * `confirm_video_upload`, for that video: the previous file may have nobody left on it already.
 * Every change set the change feed relays, and every gap in it (see xref:cdc.adoc[Change data
   capture relay]). The server follows the feed for as long as it runs, on a queue of its task's own
-  (`ChangeFeedQueue`, whose first event is a gap, once the queue receives) or from the relay at
-  `CDC_FEED_ADDRESS`; a change set only asks for a pass, and a pass deletes nothing the database
-  does not allow. Requests queue in a one-slot sliding queue, so a burst costs two passes. With
-  neither configured the server logs a warning and starts anyway.
+  (`ChangeFeedQueue`, whose first event is a gap, once the queue receives); a change set only asks
+  for a pass, and a pass deletes nothing the database does not allow. Requests queue in a one-slot
+  sliding queue, so a burst costs two passes. Without the queue's variables the server logs a
+  warning and starts anyway.
 * Startup, for whatever changed while the server was not there to hear it.
 * A playback expiring (below).
 
@@ -844,7 +844,9 @@ the terms of service or an access point, or through one another deployed locatio
 the slug typed back as confirmation. Elicits whether to also delete the location's S3 objects in the
 call, counted with `AssetsOfQuery`, before the command (declining is the default for any client that cannot ask, or does not
 answer): the answer is the command's argument, so nothing waits on a person with the location's lock
-taken. Keeps the log group and the database rows regardless.
+taken. Keeps the log group and the database rows regardless. Its teardown, once the tasks have
+drained, also removes the change feed queues a killed task of the location left, and their
+subscriptions (`ChangeFeedQueue.removeLeft`; see xref:cdc.adoc[Change data capture relay]).
 
 |`get_deploy_status`
 |none, read-only

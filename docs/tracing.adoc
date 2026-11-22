@@ -87,12 +87,11 @@ The trace of a change set crosses the relay with it, so one trace shows every su
 reached:
 
 . rqlite posts a change set; the relay's `cdc ingest` span starts a trace.
-. Each change set keeps that span's context (`Change.context`), and the relay hands it on: as the
-  `traceparent` and `tracestate` message attributes of what it publishes to the topics, and as
-  `ChangeSet.trace_context` in `cdc.proto` over gRPC, per change set, since gRPC metadata belongs to
-  the subscription and is sent once.
-. `ChangeFeedQueue` and `ChangeFeedFollower` read it into `Event.Changed`'s `context`, and each
-  subscriber continues the trace in a consumer span.
+. Each change set keeps that span's context (`Change.context`), and the relay hands it on as the
+  `traceparent` and `tracestate` message attributes of what it publishes to the topics, per change
+  set.
+. `ChangeFeedQueue` reads them into `Event.Changed`'s `context`, and each subscriber continues the
+  trace in a consumer span.
 
 The write that caused the change set is in another trace, the request's: rqlite carries no trace
 context, so nothing at the relay can name it.

@@ -2,12 +2,13 @@
 :toc:
 :toclevels: 2
 
-A plan agreed in conversation on 2026-11-13 and revised on 2026-11-22, once its first step — checking
-the documentation — had been done (<<verified>>). The change data capture relay stops keeping change
-sets: it publishes each one to an SNS topic per table it touches, and every task that reads them has
-an SQS queue of its own subscribed to the topics it reads. The relay becomes stateless, so it deploys
-overlapped, and the gap of one to two minutes on every relay deploy goes away. Pick it up from
-<<migration>>, step 2.
+A plan agreed in conversation on 2026-11-13, revised on 2026-11-22 once its first step — checking
+the documentation — had been done (<<verified>>), and carried out whole on 2026-11-22. The change data
+capture relay stops keeping change sets: it publishes each one to an SNS topic per table it touches,
+and every task that reads them has an SQS queue of its own subscribed to the topics it reads. The
+relay becomes stateless, so it deploys overlapped, and the gap of one to two minutes on every relay
+deploy goes away. What the migration did, step by step, is under <<migration>>; what it leaves is in
+`pending.adoc`.
 
 == The problem
 
@@ -433,10 +434,9 @@ also found a fault of 2026-11-17's, unrelated to the feed: a playback timer woke
 before its deadline's nanoseconds, the command found the playback not due, and the timer gave up;
 it now sleeps until the clock has reached the deadline.
 +
-Not done: `destroy_location` does not yet remove what a location's tasks left, which is only what a
-task killed without SIGTERM leaves, since each removes its own as it stops (the permissions are
-there); and a change set larger than a topic takes (256 KiB) fails its post until rqlite drops it,
-holding the feed up meanwhile.
+Not done then: `destroy_location` removing what a location's tasks left (done with step 5, below);
+and a change set larger than a topic takes (256 KiB), which fails its post until rqlite drops it,
+holding the feed up meanwhile (still open, in `pending.adoc`).
 . *gRPC is retired*: the relay stops serving it; the `cdc.protocol` module (`ChangeFeedFollower`,
   `cdc.proto`), the buffer, the `Gap`, `CDC_BUFFER`, the gRPC port and its security group rule go.
 . *The relay deploys overlapped*: the container health check, 100/200, the `stopTimeout`. ARM is
@@ -444,6 +444,17 @@ holding the feed up meanwhile.
 . *Documentation*: rewrite `cdc.adoc`, update `infrastructure.adoc`, record in `decisions.adoc` why
   SNS and SQS, why a queue per task and a topic per table, and what was set aside (the table above),
   and remove the relay entry from `pending.adoc`.
++
+*Steps 5 to 7 done on 2026-11-22*, with what step 4 had left. The module that remained is
+`cdc.feed`, `ChangeFeedQueue` alone, its `Event` the gRPC follower's; the relay keeps nothing at all,
+not even the last index, so a change set rqlite sends again is published again, and `CDC_TOPIC_PREFIX`
+is required. A release takes `CDC_FEED_ADDRESS` out of every location it moves. The relay deploys
+100/200 behind a container health check on `/health` (`curl`, which the JRE's image carries), with
+ECS's default 30 seconds between SIGTERM and SIGKILL rather than a `stopTimeout` of its own, since a
+post cut short is posted again; ARM was not taken. `destroy_location`'s teardown removes what the
+location's tasks left (`ChangeFeedQueue.removeLeft`), the queues by name and the subscriptions to the
+`errors` topic by the queue they name, once its tasks have drained. Mill's ScalaPB plugin went with
+the protocol.
 
 == What it changes elsewhere
 

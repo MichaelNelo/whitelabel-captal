@@ -468,6 +468,25 @@ with `git log --grep`; short hashes are from `9386a44..main` on `feat/mcp-backof
   subscriber follows the one it resolved; two tasks would split the posts from the subscriptions.
 * **Locally the relay runs as a task in LocalStack**, as in AWS, released by `mcp.dev`; rqlite and the
   backoffice reach it as `cdc.captal.local`.
+* **The relay publishes to SNS, and every task follows a table on an SQS queue of its own**
+  (2026-11-22), in place of the gRPC fan-out, the buffer, the instance and the relay's `Gap` above,
+  and of deploying the relay stop-then-start. Kept in one process, the history made every relay
+  deploy a minute or two with no live feed and a rebuild in every subscriber; the relay now keeps
+  nothing, deploys overlapped, and a publish SNS refuses is a `503`, which rqlite retries. A topic
+  per table, standard: a new filter policy takes up to 15 minutes to apply, no subscriber needs order
+  or deduplication, and a FIFO topic admits 100 subscriptions. A queue per task, not per service,
+  because a deploy runs the outgoing task beside the incoming one and tasks sharing a queue split its
+  messages. Each task drains its new queue up to a marker of its own before it rebuilds from the
+  database, rather than purging, since a purge may delete what arrives after it; it names the queue
+  at random, removes it on SIGTERM through its scope, and leaves only what a killed task leaves,
+  which `destroy_location` removes for a location. Set aside: an ALB in front of the relay, fan-in
+  in the follower, a handoff between relays, RabbitMQ, NATS JetStream, Kinesis, API Gateway or a
+  Lambda in place of the relay, and configured bridges or SaaS (the table in
+  `relay-sns-sqs-plan.adoc` gives each one's reason); a queue sweep by each task or by the relay on
+  every post, the first needing task identities LocalStack does not give, the second two listings
+  on every post and a race with tasks just started. Run end to end against LocalStack by the
+  `@change-feed` scenarios. What it gives up: a post rqlite drops after six minutes of retries
+  reaches no subscriber, and nothing tells them until each next starts.
 
 == Client and bundle
 

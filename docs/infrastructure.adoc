@@ -347,16 +347,16 @@ authoritative `ingress` blocks would revoke those external rules on every apply.
 
 The leader posts every change to the tables the root variable `cdc_tables` lists —
 `["video_playbacks", "errors"]`, which the root writes as the regular expression
-`^(video_playbacks|errors)$` — to `cdc_endpoint`: the change data capture relay, which hands each
-change set to the services that follow it (see xref:cdc.adoc[Change data capture relay]). Whole
+`^(video_playbacks|errors)$` — to `cdc_endpoint`: the change data capture relay, which publishes
+each change set to its tables' topics (see xref:cdc.adoc[Change data capture relay]). Whole
 rows, not `row_ids_only`: subscribers read the rows' own ids, and a row id is SQLite's. The
 entrypoint writes the `-cdc-config` file only when `RQLITE_CDC_ENDPOINT` is set, and refuses to start
 when it is set without `RQLITE_CDC_TABLE_FILTER`, which it reads from image `1.0.8` on; both
 environments name that image in their tfvars. Changing either variable changes the task definition,
 which replaces every node. Retries are bounded — ten, backing off
-exponentially to a minute — because with the relay down unbounded retries grow the on-disk queue
-until the disk is full; a subscriber that misses changes is told so by a gap and rebuilds from the
-database. In the config file the retry policy and the backoff are numbers: `1` for exponential,
+exponentially to a minute, about six minutes in all — because with the relay down unbounded retries
+grow the on-disk queue until the disk is full; a post dropped after them reaches no subscriber, and
+each finds out only when it next starts and rebuilds from the database. In the config file the retry policy and the backoff are numbers: `1` for exponential,
 durations in nanoseconds. rqlited refuses to start on the names and duration strings the guide
 shows.
 
@@ -365,19 +365,18 @@ The root passes `rqlite_cdc_endpoint`, or the relay's `ingest_url`,
 
 === Change data capture relay
 
-`modules/cdc` runs the relay: one Fargate task with a public address (to pull from ECR) and no load
-balancer, named `cdc.<namespace>` (<<service-names>>). Its own security group admits rqlite's group
-on the HTTP port (`container_port`) and the shared `ecs_tasks` group on the gRPC port (`9090`); both
-inline, since neither of those groups names this one. One task, because rqlite posts to one address
-and every subscriber has to follow the relay that receives the posts — and deployed stop-then-start
-(`deployment_minimum_healthy_percent = 0`, `deployment_maximum_percent = 100`, with the circuit
-breaker rolling back), so a deploy never leaves two tasks behind the name: a subscriber that
-reached the new one while rqlite still posted to the old would miss those change sets with no gap to
-tell it. While the new task starts rqlite retries its posts, and the subscribers reconnect to it and
-get a gap. `CDC_BUFFER` (1000) is how many change sets it keeps for subscribers that reconnect.
+`modules/cdc` runs the relay: one Fargate task with a public address (to pull from ECR and reach
+SNS) and no load balancer, named `cdc.<namespace>` (<<service-names>>). Its own security group admits
+rqlite's group on the HTTP port (`container_port`), inline, since rqlite's group does not name this
+one, and nothing else. One task is enough, since it keeps nothing: while it is replaced or gone
+rqlite retries its posts. It deploys overlapped (`deployment_minimum_healthy_percent = 100`,
+`deployment_maximum_percent = 200`, with the circuit breaker rolling back): the old task stops once a
+container health check, `curl -sf http://localhost:<container_port>/health` every ten seconds, finds
+the new one healthy. Two tasks behind the name meanwhile is harmless — either publishes what rqlite
+posts to it, and a post cut short as the old one stops is posted again — and the old one gets the
+default 30 seconds between SIGTERM and SIGKILL.
 
-The module outputs `ingest_url`, passed to rqlite, and `feed_address`, `cdc.<namespace>:9090`,
-passed to the backoffice as `CDC_FEED_ADDRESS`.
+The module outputs `ingest_url`, passed to rqlite.
 
 It also creates a standard SNS topic for each of `cdc_tables`, `<prefix>-cdc-<table>`, output as
 `topic_arns`, and a task role of the relay's own allowed `sns:Publish` on them, nothing else. The

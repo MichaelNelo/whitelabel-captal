@@ -330,10 +330,10 @@ the first four against LocalStack:
 . **Locations.** Every location's service — the ones whose task runs a single container named
   `api`, which is how `deploy_location` registers them — not already on the API image's digest,
   following the change feed and sending its traces to Jaeger gets a new revision of its task
-  definition differing only in the image, `CDC_FEED_ADDRESS` (the configuration's `cdc_feed_address`
-  output), `CDC_TOPIC_PREFIX`, `CDC_QUEUE_PREFIX` and `CDC_DEAD_LETTER_ARN` (its `cdc_topic_prefix`,
-  `feed_queue_prefix` and `location_feed_dead_letter_arn` outputs) and the `OTEL_*` variables
-  `deploy_location` sets (from its `otlp_endpoint` output; see
+  definition differing only in the image, `CDC_TOPIC_PREFIX`, `CDC_QUEUE_PREFIX` and
+  `CDC_DEAD_LETTER_ARN` (the configuration's `cdc_topic_prefix`, `feed_queue_prefix` and
+  `location_feed_dead_letter_arn` outputs), taking out `CDC_FEED_ADDRESS`, which no service reads,
+  and the `OTEL_*` variables `deploy_location` sets (from its `otlp_endpoint` output; see
   xref:tracing.adoc[Tracing]), and is pointed at it. The rest
   of its environment, roles and sizes carry over as the last deploy registered them, so a change to
   those is still a `deploy_location`. The
@@ -409,8 +409,8 @@ api.releaseVersion` prints the tag the next release goes out under and the last 
 same when nothing since moves it. The client carries its own as `BuildInfo.version`.
 
 Only commits touching the module count: its own folder and its source folders, those of the
-modules it depends on (`core`, `messages`, `platform` and `cdc.protocol` for the API;
-`cdc.protocol` for the relay and the backoffice; `core` and `messages`, through
+modules it depends on (`core`, `messages`, `platform` and `cdc.feed` for the API; `telemetry`
+for the relay; `core`, `platform` and `cdc.feed` for the backoffice; `core` and `messages`, through
 `core-js` and `messages-js`, for the client), and the files it lists as `versionFiles` — the
 Dockerfile of an image, and the portal stylesheet the backoffice carries. Source folders as well as
 module folders because `core-js` and `messages-js` have none of their own: their sources are

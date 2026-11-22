@@ -4,121 +4,75 @@
 
 The `cdc` module is a service of its own between rqlite's change data capture and the services that
 react to changes in the database. rqlite's leader posts every change set it commits to the relay
-over HTTP. The relay publishes each to the SNS topic of every table it touches, and every task that
-follows a table reads it on an SQS queue of its own subscribed to that topic. It also still serves
-the change sets over gRPC, each subscriber with one server-streaming call, for a task configured
-with no queue.
+over HTTP; the relay publishes each to the SNS topic of every table it touches; and every task that
+follows a table reads it on an SQS queue of its own, subscribed to that topic.
 
 [source]
 ----
 rqlite leader ──POST /cdc──▶ relay ──▶ <prefix>-cdc-video_playbacks ──▶ queue of each backoffice task
-                                   ├─▶ <prefix>-cdc-errors ──────────▶ queue of each location's task
-                                   └─ChangeFeed.Subscribe────────────▶ a task with no queue
+                                   └─▶ <prefix>-cdc-errors ──────────▶ queue of each location's task
 ----
 
-== Why a relay
+== Why a relay, and why topics and queues
 
 rqlite takes one change data capture configuration per node: one `endpoint`, one `table_filter`.
 A second service that wants the same changes cannot be added to rqlite; it has to be added
-downstream of whatever rqlite posts to. The relay is that place, so that no subscriber receives
-rqlite's posts for another, and none depends on another being up.
+downstream of whatever rqlite posts to. The relay is that place, and the only one: it keeps nothing,
+so it can be replaced, and two can run at once while it is. rqlite cannot sign AWS requests, so it
+cannot publish to SNS itself.
+
+SNS fans each change set out once to every subscription; SQS keeps what each task has not read yet,
+and lets it read at its own pace. A queue per task rather than per service, because tasks sharing a
+queue would split its messages, and a deploy runs the outgoing task beside the incoming one. A topic
+per table rather than one topic with a filter policy per subscription, because a task subscribes as
+it starts and a new filter policy takes up to 15 minutes to apply. The topics and queues are
+standard: no subscriber needs the order or the deduplication, and a FIFO topic admits 100
+subscriptions. Why this and not the other options considered is in
+xref:context/decisions.adoc[Decisions] and xref:context/relay-sns-sqs-plan.adoc[the relay plan].
 
 == Modules
 
-`cdc.protocol`:: The contract, `cdc/protocol/protobuf/cdc.proto`, compiled by Mill's ScalaPB
-contrib module with the zio-grpc generator; `ChangeFeedFollower`, what a subscriber uses to follow
-the relay over gRPC; and `ChangeFeedQueue`, what it uses to follow the topics on a queue of its own.
-A subscriber depends on this module and on nothing else of the relay's.
+`cdc`:: The relay: `Relay`, `Topics` (SNS), `RelayRoutes` (HTTP) and `Main`.
 
-`cdc`:: The relay itself: `Relay`, `Topics` (SNS), `RelayRoutes` (HTTP), `ChangeFeedService`
-(gRPC) and `Main`.
-
-== The contract
-
-[source,proto]
-----
-service ChangeFeed { rpc Subscribe(SubscribeRequest) returns (stream Delivery); }
-
-message SubscribeRequest { optional uint64 since = 1; }
-message Delivery { string instance = 1; oneof kind { ChangeSet change = 2; Gap gap = 3; } }
-message ChangeSet { uint64 index = 1; string json = 2; map<string, string> trace_context = 3; }
-message Gap {}
-----
-
-`ChangeSet.json` is one entry of the `payload` rqlite posted, unchanged:
-`{"index": n, "events": [{"op": "INSERT", "table": "...", "before": {...}, "after": {...}}]}`. The
-relay does not reinterpret rows; a subscriber reads the tables and columns it cares about from the
-JSON, as it would from rqlite.
-
-`index` is the Raft log index of the change set. It is what orders change sets and what a
-subscriber resumes from: `since` asks for the change sets after that index. `instance` identifies
-the relay process that sent the delivery; it changes when the relay restarts.
+`cdc.feed`:: `ChangeFeedQueue`, what a subscriber uses to read a table on a queue of its task's own.
+The API and the backoffice depend on it, and on nothing of the relay's.
 
 == The relay
 
 `POST /cdc` takes rqlite's post, `{"node_id": "...", "payload": [...]}`. Each entry of `payload`
-with an `index` is a change set, and the tables its events name are the topics it goes to. rqlite
-delivers at least once and does not guarantee order, so the relay publishes a change set only if its
-index is above the last one it published, and sorts each post's change sets by index first. Posts
-are taken one at a time.
+with an `index` is a change set, `{"index": n, "events": [{"op": "INSERT", "table": "...",
+"before": {...}, "after": {...}}]}`, and the tables its events name are the topics it goes to. The
+relay does not reinterpret rows; a subscriber reads the tables and columns it cares about from the
+JSON, as it would from rqlite. `index` is the change set's Raft log index.
 
-It answers `200` once every new change set of the post is published to its topics, and for a body
-that is not rqlite's, whose refusal would only make rqlite retry it. When a topic refuses a publish
-it answers `503` and takes none of the post's change sets as seen: rqlite takes only `200` and `202`
-as delivered, posts it again, and they are published then. `Topics` publishes with `PublishBatch`,
-per topic, at most ten change sets and 200 KiB a batch, each message the change set as rqlite wrote
-it, with two message attributes: `index`, a `Number`, and the post's trace context (`traceparent`,
-`tracestate`). A subscriber's queue reads the index from the attribute, so it never parses a message
-to know it is a change set. Without `CDC_TOPIC_PREFIX` the relay publishes to no topic, and only
-serves gRPC.
+It keeps nothing. Every change set of every post is published, in index order within the post: a
+retry's, one a leader change resends, and one that arrives below another. rqlite delivers at least
+once and, after a leader change, out of order; each subscriber absorbs both, reading what it acts on
+from the database.
 
-The relay keeps the last `CDC_BUFFER` change sets (1000 unless set). A subscription with `since`
-gets, in order:
+It answers `200` once every change set of the post is published to its topics, and for a body that
+is not rqlite's, whose refusal would only make rqlite retry it. When a topic refuses a publish it
+answers `503`: rqlite takes only `200` and `202` as delivered, and posts it again, for about six
+minutes before it drops it (see xref:infrastructure.adoc[Infrastructure]). `Topics` publishes with
+`PublishBatch`, per topic, at most ten change sets and 200 KiB a batch, each message the change set
+as rqlite wrote it, with two message attributes: `index`, a `Number`, and the post's trace context
+(`traceparent`, `tracestate`). A subscriber's queue reads the index from the attribute, so it never
+parses a message to know it is a change set.
 
-. a `Gap` if change sets after `since` were already evicted from what it keeps;
-. the change sets it keeps after `since`;
-. every change set published from then on.
+`GET /health` answers `ok`. Nothing is authenticated: the relay's security group admits rqlite on
+the HTTP port and nothing else.
 
-Without `since`, a subscription starts with what is published from then on. The live part comes
-from a sliding `Hub` the subscription joins before reading what is kept, so a change set published
-in between arrives either way, and the index filter drops the copy.
+== Following a table
 
-`GET /health` answers `ok`. Neither HTTP nor gRPC is authenticated: the relay's security group
-admits rqlite on the HTTP port and the shared ECS tasks group on the gRPC port, and nothing else.
+`ChangeFeedQueue.follow(settings, service, tables, retention)` is a `ZStream` of
+`Changed(index, json, context)` and `Gap` that never fails and never ends. `context` is the trace the
+relay received the change set in, which each post from rqlite starts (`cdc ingest`) and which every
+subscriber continues as it handles the change set, so one trace shows every subscriber a change
+reached; see xref:tracing.adoc[Tracing].
 
-The gRPC server is built directly on grpc-java's Netty server rather than zio-grpc's
-`ScopedServer`, whose release waits for every call to end; a subscription never ends on its own.
-The relay's release calls `shutdownNow`, which ends the subscriptions, and the subscribers
-reconnect. It permits keepalive pings every 10 seconds, also without calls in flight.
-
-== Following the feed
-
-`ChangeFeedFollower.follow(address)` is a `ZStream` of `Changed(index, json, context)` and `Gap`
-that never fails and never ends. `context` is the change set's `trace_context`: the trace the relay
-received it in, which each post from rqlite starts (`cdc ingest`) and which every subscriber
-continues as it handles the change set, so one trace shows every subscriber a change reached; see
-xref:tracing.adoc[Tracing].
-
-* It opens a channel to `address` (`host:port`), with keepalive pings every 30 seconds so a relay
-  that went away is noticed on a quiet stream.
-* It subscribes with the last index it saw, and when the stream drops it logs a warning, waits two
-  seconds and subscribes again from there.
-* When a delivery comes from a different `instance` than the last one, after it had already seen a
-  change set, it emits a `Gap` first: a restarted relay kept nothing, and its indexes say nothing
-  about what the previous one sent.
-
-A `Gap` means change sets may have been missed. A subscriber that keeps state derived from changes
-rebuilds it from the database when it gets one, and carries on.
-
-=== On a queue of its own
-
-`ChangeFeedQueue.follow(settings, service, tables, retention)` is the same stream, read from a
-standard SQS queue the task makes for itself. A queue per task, because tasks sharing one would split
-its messages, and a deploy runs the outgoing task beside the incoming one.
-
-. It creates the queue, `<CDC_QUEUE_PREFIX>-<service>-<32 hexadecimal characters>` (the service
-  shortened with a digest where the name would pass SQS's 80 characters), with `retention`, a
-  visibility timeout of five seconds and, with `CDC_DEAD_LETTER_ARN`, that queue as its dead-letter
+. It creates a standard queue, `<CDC_QUEUE_PREFIX>-<service>-<32 hexadecimal characters>` (the
+  service shortened with a digest where the name would pass SQS's 80 characters), with `retention`,
+  a visibility timeout of five seconds and, with `CDC_DEAD_LETTER_ARN`, that queue as its dead-letter
   queue after five receipts; and a policy letting the tables' topics send to it, by `aws:SourceArn`.
 . It subscribes it to each table's topic, `<CDC_TOPIC_PREFIX><table>`, with raw delivery.
 . It publishes to each topic a marker, `{"marker":"<queue name>"}`, and drains the queue until every
@@ -126,16 +80,22 @@ its messages, and a deploy runs the outgoing task beside the incoming one.
 . It emits a `Gap`, and from then on every change set its long polls receive (20 seconds, ten at a
   time), deleting each batch as it receives it.
 
-What the drain discards was received before the marker, so it was committed before the marker came
-back and before the rebuild the `Gap` asks for, which reads it. That holds whatever order a standard
-topic delivers in, and needs no clock. The other tasks' markers carry no `index` attribute and are
-passed over. The queue is never purged, since a purge takes up to a minute and may delete what
-arrives after it.
+A `Gap` means change sets may have been missed: a subscriber that keeps state derived from changes
+rebuilds it from the database when it gets one, and carries on. What the drain discards was received
+before the marker, so it was committed before the marker came back and before that rebuild, which
+reads it. That holds whatever order a standard topic delivers in, and needs no clock. The other
+tasks' markers carry no `index` attribute and are passed over. The queue is never purged, since a
+purge takes up to a minute and may delete what arrives after it.
 
 The queue and the subscriptions belong to the stream's scope: unsubscribed and deleted as it
 closes, which on SIGTERM is the shutdown hook `ZIOAppDefault` registers. A task killed otherwise
-leaves them, and nothing removes them. Whatever stops a queue is logged, and the stream makes
-another, with another `Gap`, two seconds later; it never fails and never ends.
+leaves them; `ChangeFeedQueue.removeLeft` removes every queue of a service's tasks and every
+subscription to one, for when none of them runs, which `destroy_location` does for the location it
+destroys. Whatever stops a queue is logged, and the stream makes another, with another `Gap`, two
+seconds later.
+
+What no subscriber hears of is a post rqlite drops after its six minutes of retries: nothing tells
+it. Each finds out only when it next starts, and rebuilds.
 
 == Subscribers
 
@@ -160,16 +120,15 @@ another, with another `Gap`, two seconds later; it never fails and never ends.
   location it moves. See xref:api.adoc#recovery-stream[the waiting page's stream].
 |===
 
-Each follows its table on a queue of its own when `CDC_TOPIC_PREFIX` and `CDC_QUEUE_PREFIX` are set,
-and the relay at `CDC_FEED_ADDRESS` over gRPC otherwise; with neither it logs a warning, and the
-backoffice only runs the passes and timers of startup and replacements. Both handle the change sets
-alike whichever way they arrive, and a change set repeated or out of order changes nothing: a timer
-reads its deadline from the database, and a page checks its offer against it.
+Without `CDC_TOPIC_PREFIX` and `CDC_QUEUE_PREFIX` a subscriber logs a warning and follows nothing,
+and the backoffice only runs the passes and timers of startup and replacements. A change set
+repeated or out of order changes nothing: a timer reads its deadline from the database, and a page
+checks its offer against it.
 
 Which tables reach the relay is rqlite's `table_filter`: the root variable `cdc_tables`,
 `["video_playbacks", "errors"]`, written as `^(video_playbacks|errors)$`, which reaches the
-entrypoint as `RQLITE_CDC_TABLE_FILTER`. Changing it changes rqlite's task definition, which replaces
-every node.
+entrypoint as `RQLITE_CDC_TABLE_FILTER`; the same list names the topics. Changing it changes
+rqlite's task definition, which replaces every node.
 
 == Configuration
 
@@ -179,10 +138,8 @@ every node.
 
 | `CDC_PORT` | `8090` | HTTP port rqlite posts to. The image sets `8080`, the `container_port` every
   service uses.
-| `CDC_GRPC_PORT` | `9090` | gRPC port subscribers follow.
-| `CDC_BUFFER` | `1000` | Change sets kept for subscribers that reconnect.
-| `CDC_TOPIC_PREFIX` | none | A table's topic's ARN but for the table's name,
-  `arn:aws:sns:<region>:<account>:<prefix>-cdc-`. None: no topic is published to.
+| `CDC_TOPIC_PREFIX` | required | A table's topic's ARN but for the table's name,
+  `arn:aws:sns:<region>:<account>:<prefix>-cdc-`. The relay does not start without it.
 |===
 
 A subscriber reads `CDC_TOPIC_PREFIX` too, `CDC_QUEUE_PREFIX`, `<prefix>-feed`, which its queue is
@@ -192,13 +149,16 @@ xref:infrastructure.adoc#service-names[Infrastructure] for the queues' permissio
 == Deployment
 
 `terraform/modules/cdc`: one Fargate task with no load balancer, named `cdc.<namespace>` (see
-xref:infrastructure.adoc#service-names[Service names]), with its own security group. One task, because rqlite's leader posts to one
-address and every subscriber has to follow the relay that receives those posts. The module outputs
-`ingest_url`, which the root passes to rqlite as its `cdc_endpoint`, and `feed_address`, which it
-passes to the backoffice as `CDC_FEED_ADDRESS`. See xref:infrastructure.adoc[Infrastructure].
+xref:infrastructure.adoc#service-names[Service names]), with its own security group, the topics and
+a task role allowed to publish to them. It deploys overlapped (`100`/`200`): the new task starts,
+the old one stops once the container health check, `curl -sf http://localhost:<port>/health`, finds
+the new one healthy. Both behind the name meanwhile is harmless, since either publishes whatever
+rqlite posts to it, and a post cut short as the old one stops is posted again. The module outputs
+`ingest_url`, which the root passes to rqlite as its `cdc_endpoint`, `topic_arns` and
+`topic_prefix`. See xref:infrastructure.adoc[Infrastructure].
 
-Locally it runs the same way, as a task in LocalStack that `mill mcp.dev` releases, and rqlite and
-the backoffice reach it as `cdc.captal.local`. See xref:development.adoc[Local development].
+Locally it runs the same way, as a task in LocalStack that `mill mcp.dev` releases, and rqlite
+reaches it as `cdc.captal.local`. See xref:development.adoc[Local development].
 
 The relay is released like the other images: `docker/cdc.Dockerfile`, the `captal-cdc` ECR
 repository, its version from `cdc/cliff.toml` and `cdc/v*` tags, passed to the configuration as
@@ -206,7 +166,10 @@ repository, its version from `cdc/cliff.toml` and `cdc/v*` tags, passed to the c
 
 == Tests
 
-`cdc/test`, `RelaySpec`: deduplication across posts, resuming from an index, the `Gap` after
-eviction, bodies that are not rqlite's, and, over gRPC on a free port, a follower receiving change
-sets and a follower whose relay is replaced by another on the same port getting a `Gap` and carrying
-on. Run with `mill cdc.test`; it needs no container.
+`cdc/test`, `RelaySpec`: a post's change sets published in index order with its trace, a change set
+sent again published again, a post the topics refuse failing, bodies that are not rqlite's, the
+tables a change set names, and how `Topics` batches and attributes them. `cdc/feed/test`,
+`ChangeFeedQueueSpec`: the queues' names, a long slug's included, and telling one slug's queues from
+those of a slug that extends it. Run with `mill cdc.test` and `mill cdc.feed.test`; neither needs a
+container. The end-to-end scenarios tagged `@change-feed` run both subscribers against LocalStack
+(see xref:testing.adoc#end-to-end[the end-to-end features]).

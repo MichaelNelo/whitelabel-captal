@@ -75,7 +75,8 @@ describes, it is architecture; if it stops making sense, it was context.
 
 | xref:cdc.adoc[Change data capture relay]
 | The service between rqlite's change data capture and the services that react to changes: the
-  gRPC contract, deduplication and replay by Raft index, gaps, following the feed, its subscribers.
+  topic per table it publishes to, the queue per task a subscriber reads them on, gaps, its
+  subscribers.
 
 | xref:tracing.adoc[Tracing]
 | OpenTelemetry traces from every service to Jaeger: the `telemetry` module and its fiber-kept

@@ -528,8 +528,7 @@ stream ends.
 Otherwise the stream sends an `offer` event with the `RecoveryOffer` as it stands, and checks again
 each time `RecoveryFeed` publishes a signal: an `INSERT` into `errors` with a fingerprint, heard on
 the change feed (see xref:cdc.adoc[Change data capture relay]) — the `errors` topic on a queue of
-the task's own where `CDC_TOPIC_PREFIX` and `CDC_QUEUE_PREFIX` are set, the relay at
-`CDC_FEED_ADDRESS` otherwise — or a gap in that feed. Each check is `CheckRecoveryHandler`, run in the session the stream was
+the task's own, where `CDC_TOPIC_PREFIX` and `CDC_QUEUE_PREFIX` are set — or a gap in that feed. Each check is `CheckRecoveryHandler`, run in the session the stream was
 opened for (`SessionContext.locally`, since the stream outlives the request), so a recurrence
 shortens the wait and records it as `POST /api/recovery` would. An `offer` is sent only when its
 `availableAt` or `recurrent` changed; a `failed` event ends the stream. The stream subscribes before
@@ -538,9 +537,9 @@ location wakes every waiting page, which checks whether it was its own: the page
 the database, and errors are rare.
 
 A comment, `: keepalive`, goes every 15 seconds (`RecoveryRoutes.KeepAlive`), under CloudFront's 30
-seconds for an origin to answer and the load balancer's 60-second idle timeout. With neither the
-queue's variables nor `CDC_FEED_ADDRESS` the server starts with a warning, and a page learns of a
-recurrence only when it connects again.
+seconds for an origin to answer and the load balancer's 60-second idle timeout. Without the
+queue's variables the server starts with a warning, and a page learns of a recurrence only when it
+connects again.
 
 === Health
 

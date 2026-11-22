@@ -94,15 +94,14 @@ Not done, because the venue connections are not 1.6 Mbps and at their speeds the
 win. Revisit if the connections change. Measured against the hints in `preloadLinks`
 (`mill-build/src/millbuild/Bundle.scala`); see "Client and bundle" in `decisions.adoc`.
 
-== The relay has a gap of a minute or two on every deploy
+== The change feed drops what rqlite drops, and stalls on a change set too large
 
-The change data capture relay is one task deployed stop-then-start (`modules/cdc/main.tf:138`),
-because each relay keeps its change sets in memory and two at once would split rqlite's posts. Each
-relay deploy leaves one to two minutes with no live feed; rqlite retries its posts and subscribers get
-a `Gap` from the new instance, so nothing is lost unnoticed, but nothing arrives live either. The
-agreed fix — the relay publishes to an SNS topic per table, every task that reads them has its own
-SQS queue, and the relay, stateless, deploys overlapped — is xref:relay-sns-sqs-plan.adoc[the relay
-plan], with the options set aside; its documentation check is done, the infrastructure is next.
+The relay publishes to SNS and keeps nothing (xref:relay-sns-sqs-plan.adoc[the relay plan], done),
+which leaves two cases no subscriber hears of. A post rqlite drops after its six minutes of retries —
+the relay down that long, or every publish refused — reaches no queue, and nothing tells the
+subscribers: each finds out only when it next starts and rebuilds. And a change set larger than a
+topic takes (256 KiB) fails its post every time, so the feed stalls until rqlite drops it. Neither has
+been seen: the relay is replaced overlapped, and the tables it publishes hold small rows.
 
 == The run page polls, and the API's routes run their flows by hand
 
@@ -110,8 +109,8 @@ Every backoffice tool, resource and background job runs a `core` command or quer
 plans that got it there are left:
 
 * The run page reads a run's progress by polling `RunStatus` (`RunRoutes`, every `PollEvery`). Being
-  told it through the relay is the sixth step of xref:admin-core-plan.adoc[the admin core plan], and
-  waits on xref:relay-sns-sqs-plan.adoc[the relay plan].
+  told it through the change feed is the sixth step of xref:admin-core-plan.adoc[the admin core
+  plan]; xref:relay-sns-sqs-plan.adoc[the relay plan] it waited on is done.
 * The API's routes run their flows by hand. The extension the backoffice's tools are built with
   (`Adapters`) has its counterpart for typed endpoints in xref:flow-adapters-plan.adoc[the flow
   adapters plan], left for the next time the routes are reworked.
