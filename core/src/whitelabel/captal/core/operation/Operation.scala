@@ -99,7 +99,9 @@ enum Step(val description: String):
   case AwaitHealthyTarget        extends Step("Wait for a healthy target")
   case RestorePage               extends Step("Put the location's page back")
   case AwaitEdgeDropsMaintenance extends Step("Wait for the edge to drop the maintenance page")
-  case Teardown     extends Step("Remove the service, its rules, target group and task definitions")
+  case Teardown
+      extends Step(
+        "Remove the service, its rules, target group, task definitions and change feed queues")
   case DeleteAssets extends Step("Delete the location's S3 objects")
   case KeepAssets   extends Step("Keep the location's S3 objects")
 end Step
