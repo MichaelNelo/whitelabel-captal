@@ -341,6 +341,11 @@ def ensureLocalStackTofu(
     "MCP_IMAGE_REPOSITORY_URL" -> output("mcp_image_repository_url"),
     "CDC_IMAGE_REPOSITORY_URL" -> output("cdc_image_repository_url"),
     "RQLITE_URL" -> output("rqlite_url"),
+    // The configuration's own change feed, which a deploy forwards to a location: the topics and the
+    // queues the backoffice's policy scopes to, so its enforcement evaluates the calls a teardown makes.
+    "CDC_TOPIC_PREFIX" -> output("cdc_topic_prefix"),
+    "CDC_QUEUE_PREFIX" -> output("feed_queue_prefix"),
+    "LOCATION_CDC_DEAD_LETTER_ARN" -> output("location_feed_dead_letter_arn"),
     // An image already on the machine: LocalStack runs tasks as real containers, and would retry a pull that cannot succeed.
     "API_IMAGE" -> s"rqlite/rqlite:$rqliteVersion"
   )
