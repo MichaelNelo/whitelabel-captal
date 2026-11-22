@@ -316,7 +316,7 @@ object RecoverySuite:
         ,
         test(
           "the feed reads an error recorded, by its fingerprint, out of what the relay hands on"):
-          import whitelabel.captal.cdc.protocol.ChangeFeedFollower.Event
+          import whitelabel.captal.cdc.feed.ChangeFeedQueue.Event
           val recorded =
             """{"index":7,"events":[{"op":"INSERT","table":"errors","after":{"id":"e-1","fingerprint":"f-1"}}]}"""
           val serverError =
