@@ -8,21 +8,29 @@ import whitelabel.captal.telemetry.Telemetry
 import zio.*
 import zio.http.Server
 
-/** The relay: rqlite posts to it over HTTP, subscribers follow it over gRPC.
+/** The relay: rqlite posts to it over HTTP; it publishes to the tables' topics, and subscribers
+  * follow it over gRPC.
   *
   * `CDC_PORT` (8090 unless set) is the HTTP port, `CDC_GRPC_PORT` (9090) the gRPC one, and
   * `CDC_BUFFER` (1000) how many change sets it keeps for subscribers that reconnect.
+  * `CDC_TOPIC_PREFIX` is a table's topic's ARN but for the table's name; without it, it publishes
+  * to no topic.
   */
 object Main extends ZIOAppDefault:
-  def run =
+  def run = ZIO.scoped:
     for
       httpPort <- System.envOrElse("CDC_PORT", "8090").map(_.toInt)
       grpcPort <- System.envOrElse("CDC_GRPC_PORT", "9090").map(_.toInt)
       capacity <- System.envOrElse("CDC_BUFFER", "1000").map(_.toInt)
-      relay    <- Relay.make(capacity)
+      prefix   <- System.env("CDC_TOPIC_PREFIX").map(_.map(_.trim).filter(_.nonEmpty))
+      topics   <- ZIO.foreach(prefix)(Topics.make)
+      relay    <- Relay.make(capacity, changes => ZIO.foreachDiscard(topics)(_.publish(changes)))
       instance = relay.instance
       _ <- ZIO.logInfo(
         s"Relaying change data capture from :$httpPort to :$grpcPort as $instance, keeping $capacity")
+      _ <-
+        prefix.fold(ZIO.logWarning("No CDC_TOPIC_PREFIX: publishing to no topic"))(at =>
+          ZIO.logInfo(s"Publishing each table's change sets to $at<table>"))
       _ <-
         Server
           .serve(RelayRoutes(relay))
