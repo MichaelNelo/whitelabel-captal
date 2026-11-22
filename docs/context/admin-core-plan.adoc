@@ -380,7 +380,7 @@ time in this project — and the user asked for push. The options, as put:
 | Yes
 
 | Cost
-| Changing `rqlite_cdc_table_filter` changes rqlite's task definition and replaces every node — a
+| Changing `cdc_tables` changes rqlite's task definition and replaces every node — a
   single deliberate operation with the S3 backup verified first, worth doing once with this plan's
   migrations
 | None in infrastructure

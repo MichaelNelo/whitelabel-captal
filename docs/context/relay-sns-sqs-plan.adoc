@@ -265,9 +265,12 @@ start, and a new filter policy takes up to 15 minutes to apply, delivering who k
 A task reading two tables subscribes its queue to both topics. Publishing a new table adds it to
 rqlite's filter and adds its topic.
 
-A queue's name is `captal-<env>-<service>-<random id>`, the service being `mcp` or a location's slug:
-the name only has to be unique, and LocalStack gives a task no id of its own. A name has at most 80
-characters, so a long slug is shortened with a digest, as `DeployTargets.targetGroupName` does.
+A queue's name is `captal-<env>-feed-<service>-<random id>`, the service being `mcp` or a location's
+slug, which can never be `mcp`: the name only has to be unique, and LocalStack gives a task no id of
+its own. The `feed` segment keeps the permissions on these queues apart from every other queue
+under `captal-<env>-`. A name has at most 80 characters, so a long slug is shortened with a digest, as
+`DeployTargets.targetGroupName` does; the id is 32 hexadecimal characters, so a location's queues are
+told from those of a slug that extends it (`x` and `x-y`) by the whole name, not the prefix.
 
 [[the-subscribers]]
 === The subscribers
@@ -305,9 +308,10 @@ would record a process's memory, false as soon as the process dies.
 A task declares the topics it reads, next to the code that reads them, as `ChangeFeedFollower` does
 today with `since`. As it starts:
 
-. it creates its queue, standard, with its retention, a visibility timeout of a few seconds and the
-  service's dead-letter queue for messages it cannot process, and the queue policy letting its
-  topics send to it;
+. it creates its queue, standard, with its retention, a visibility timeout of a few seconds and its
+  kind's dead-letter queue for messages it cannot process — `captal-<env>-mcp-dead-letter` for the
+  backoffice's tasks, `captal-<env>-locations-dead-letter` for every location's, the locations not
+  being OpenTofu's to create — and the queue policy letting its topics send to it;
 . it subscribes the queue to each topic, with raw delivery;
 . it publishes to each topic a marker carrying its queue's id, and drains its queue until the marker
   arrives: the subscription delivers. Whatever arrives before the marker is deleted unprocessed.
@@ -334,10 +338,11 @@ nothing removes them: each costs cents a month (<<verified>>), and they are remo
 `destroy_location` removes every queue and subscription of the location, by its prefix, since no
 task of a service that is gone has one alive.
 
-The task role needs, scoped by name: on the queues `captal-<env>-<service>-*`, create, set and get
-attributes, receive, delete messages and delete the queue; on its topics, `sns:Subscribe` only with
-`sns:Protocol = sqs` and `sns:Endpoint` one of those queues, `sns:Unsubscribe` and `sns:Publish`, for
-the marker. A task keeps the subscription's ARN `Subscribe` answers, so it lists nothing. No condition
+The task role needs, scoped by name: on its queues, create, set and get attributes, receive, delete
+messages and delete the queue — `captal-<env>-feed-mcp-*` for the backoffice's role, and
+`captal-<env>-feed-*` with every SQS action on `-feed-mcp-*` denied for the role every location
+shares; on its topics, `sns:Subscribe` only with `sns:Protocol = sqs` and `sns:Endpoint` one of those
+queues, `sns:Unsubscribe` and `sns:Publish`, for the marker. A task keeps the subscription's ARN `Subscribe` answers, so it lists nothing. No condition
 key names the subscription `sns:Unsubscribe` removes, so a task could remove another's subscription to
 the same topic; a marker or a forged message published by a task only makes the others check against
 the database. The backoffice's role also needs, for `destroy_location`, `sqs:ListQueues`,
@@ -385,10 +390,22 @@ every subscriber unfiltered, and each subscriber long polling every 20 s — upp
 == Migration
 
 . *Verify in the documentation* — done on 2026-11-22 (<<verified>>).
-. *Infrastructure* (OpenTofu): a standard topic per published table, `captal-<env>-cdc-<table>`;
-  `sns:Publish` on them for the relay's role; a dead-letter queue per subscribing service; the task
-  roles' permissions above, for the backoffice's and the locations'; `sns` and `sqs` in LocalStack's
-  `licensedServices`.
+. *Infrastructure* (OpenTofu): a standard topic per published table, `captal-<env>-cdc-<table>`, the
+  tables a root list (`cdc_tables`) rqlite's filter is written from; a task role for the relay, with
+  `sns:Publish` on them; a dead-letter queue for the backoffice's tasks and one for every location's;
+  the task roles' permissions above; `sns` and `sqs` in LocalStack's `licensedServices` and in the
+  provider's local `endpoints`. Nothing in the task definitions yet: what the relay and the subscribers
+  read is added with the code that reads it.
++
+*Done on 2026-11-22*, applied to LocalStack with a Base licence: both topics, both dead-letter
+queues, the relay's role and policy, the locations' policy and the backoffice's created. The rest of
+the local environment did not apply: Base leaves out `servicediscovery` — "not included within your
+LocalStack license, but is available in an upgraded license" — and every service here is found
+through Cloud Map. The policies' conditions were not verified: LocalStack's `SimulatePrincipalPolicy`
+ignores the context entries, `SimulateCustomPolicy` is not implemented, and its soft enforcement
+logged a first `sns:Subscribe` of a location's own queue to `errors` as not authorized and then no
+denial at all, apparently logging each once. They follow the documented condition keys; AWS's policy
+simulator, or the first apply to AWS, is what settles them.
 . *The relay publishes to SNS and still serves gRPC.* Each change set to the topic of each table it
   touches; 200 to rqlite only once SNS accepted every publish; the gRPC fan-out as today, so current
   subscribers notice nothing.

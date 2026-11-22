@@ -319,7 +319,8 @@ authoritative `ingress` blocks would revoke those external rules on every apply.
 
 ==== Change data capture
 
-The leader posts every change to the tables `rqlite_cdc_table_filter` matches —
+The leader posts every change to the tables the root variable `cdc_tables` lists —
+`["video_playbacks", "errors"]`, which the root writes as the regular expression
 `^(video_playbacks|errors)$` — to `cdc_endpoint`: the change data capture relay, which hands each
 change set to the services that follow it (see xref:cdc.adoc[Change data capture relay]). Whole
 rows, not `row_ids_only`: subscribers read the rows' own ids, and a row id is SQLite's. The
@@ -351,6 +352,26 @@ get a gap. `CDC_BUFFER` (1000) is how many change sets it keeps for subscribers 
 
 The module outputs `ingest_url`, passed to rqlite, and `feed_address`, `cdc.<namespace>:9090`,
 passed to the backoffice as `CDC_FEED_ADDRESS`.
+
+It also creates a standard SNS topic for each of `cdc_tables`, `<prefix>-cdc-<table>`, output as
+`topic_arns`, and a task role of the relay's own allowed `sns:Publish` on them, nothing else. Not
+FIFO: a FIFO topic admits 100 subscriptions, and each task that follows a table subscribes a queue
+of its own. A topic per table rather than one topic with a filter policy per subscription, because a
+new filter policy takes up to 15 minutes to apply and a task subscribes on every start. What the
+relay and its subscribers do with them is in xref:context/relay-sns-sqs-plan.adoc[the relay plan];
+nothing publishes or subscribes yet.
+
+The tasks that follow a table each name their queue `<prefix>-feed-<service>-<random id>`, the
+service being `mcp` or a location's slug, which can never be `mcp`. The root module grants the shared
+location task role (`aws_iam_role_policy.location_feed`) what such a task does with its own queue —
+create it, set and read its attributes, receive and delete its messages, delete it — on
+`<prefix>-feed-*`, denying every SQS action on `<prefix>-feed-mcp-*`, the backoffice's; and, on the
+`errors` topic, `sns:Subscribe` only with `sns:Protocol = sqs` and an `sns:Endpoint` among those
+queues, `sns:Unsubscribe`, and `sns:Publish` for the marker a task waits for before it reads the
+database. No condition key names the subscription `sns:Unsubscribe` removes, so a task could remove
+another's from the topic. A message a location's task cannot process goes to the one
+`<prefix>-locations-dead-letter` queue, kept 14 days, named outside the `feed` prefix so no task
+can delete it.
 
 See xref:context/pending.adoc[Pending work] for a risk rqlite's shape carries that has not yet been
 settled: `continue_on_failure: true` in the backup entrypoint turning a missing or unreachable S3
@@ -543,7 +564,29 @@ called before the target group it would scope to exists.
 |`LocationLogs` — Create/Delete/Describe log group, `PutRetentionPolicy`
 |Unscoped. The log group is created before the service, so the first lines the container writes
 have somewhere to land.
+
+|`OwnFeedQueue` — create, set and get attributes, receive and delete messages, delete the queue
+|`<prefix>-feed-mcp-*`: each task's own queue on the change feed.
+
+|`SubscribeOwnFeedQueue` — `sns:Subscribe`
+|The `video_playbacks` topic, only with `sns:Protocol = sqs` and an `sns:Endpoint` among those queues.
+
+|`UnsubscribeAndMark` — `sns:Unsubscribe`, `sns:Publish`
+|The same topic: a task unsubscribes as it stops, and publishes the marker it waits for as it starts.
+
+|`ListFeedQueues` — `sqs:ListQueues`
+|Unscoped: the action names no queue. For `destroy_location`, which removes every queue a location's
+tasks left.
+
+|`RemoveLocationFeedQueues` — `sqs:GetQueueAttributes`, `sqs:DeleteQueue`
+|`<prefix>-feed-*`, the locations' queues and the server's own.
+
+|`RemoveLocationFeedSubscriptions` — `sns:ListSubscriptionsByTopic`, `sns:Unsubscribe`
+|The `errors` topic, whose subscriptions to a destroyed location's queues go with them.
 |===
+
+A message one of the server's tasks cannot process goes to `<prefix>-mcp-dead-letter`, kept 14 days
+and named outside the feed's prefix.
 
 The admin token that seeds the row holding every scope (`random_password`, 48 characters) lives in
 Secrets Manager rather than in the task definition's plain `environment` list — that list is visible
