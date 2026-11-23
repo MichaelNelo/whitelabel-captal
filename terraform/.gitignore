@@ -4,6 +4,9 @@
 *.tfstate.*
 .terraform.lock.hcl
 
+# The portal dispatcher's package, which `archive_file` builds from `dispatcher.py` on every plan.
+modules/portal-dispatcher/dispatcher.zip
+
 # Crash logs
 crash.log
 crash.*.log
