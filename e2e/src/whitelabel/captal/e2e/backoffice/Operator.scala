@@ -1,6 +1,7 @@
 package whitelabel.captal.e2e.backoffice
 
 import java.nio.file.Path
+import java.time.{Duration, Instant}
 
 import scala.collection.mutable
 import scala.util.control.NonFatal
@@ -172,7 +173,8 @@ object Operator:
   end upload
 
   /** A run tool's page, watched until it says the run ended; the run then as the server has it,
-    * failing with its steps unless it succeeded.
+    * failing with its steps unless it succeeded, or when the page saw the end later than
+    * [[ToldWithin]] after the server recorded it.
     */
   def run[A: Schema](tool: String, in: A): DeployTools.RunView =
     val (started, opened) = open[A, DeployTools.RunView](tool, in)
@@ -182,8 +184,25 @@ object Operator:
             .app
             .locator("#status")
             .textContent()}")
+    val seen = Instant.now()
     opened.linger()
-    Backoffice.awaitRun(started)
+    val finished = Backoffice.awaitRun(started)
+    for
+      at <- finished.finishedAt.map(Instant.parse)
+      late = Duration.between(at, seen)
+      if late.compareTo(ToldWithin) > 0
+    do
+      throw AssertionError(
+        s"The page of $tool for ${started.slug} saw its run end ${late
+            .toSeconds} s after it did: the change feed did not tell it, and it read the run again only as its heartbeat went stale")
+    finished
+  end run
+
+  /** How soon a run page sees its run end: told through the change feed, seconds after the server
+    * records it. A page that reads its run again only once the heartbeat would have gone stale sees
+    * it some fifty seconds after, or more.
+    */
+  private val ToldWithin = Duration.ofSeconds(20)
 
   private def encode(result: CallToolResult): Json = summon[JsonCodec[CallToolResult]]
     .encoder

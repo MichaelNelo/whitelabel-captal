@@ -344,7 +344,8 @@ host — `ui/initialize`, `resources/read`, `tools/call` — is answered through
 what it tells the model (`ui/message`) is kept. So the UniFi settings are typed into the form and
 saved by it, the spot is chosen on the upload page, which reads its length, uploads it and confirms
 it, a deploy is watched on the run page until it says the run ended, then checked through
-`get_deploy_status`, and the preview of a location never deployed is read screen by screen. No
+`get_deploy_status` — which also says the page saw the end within 20 seconds of the server recording
+it, as only the change feed tells it (`Operator.ToldWithin`) — and the preview of a location never deployed is read screen by screen. No
 content security policy is applied: the pages' declared CSP is not tested.
 * **Locations** are created through the tools and deployed (`Locations`): one per name a feature
 uses, shared by its scenarios, since a deploy takes minutes; each run creates its own under a slug
