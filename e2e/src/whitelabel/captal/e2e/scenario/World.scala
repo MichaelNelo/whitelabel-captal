@@ -102,6 +102,16 @@ object World:
     .filter(_ > 0)
     .map(_ * 1000)
 
+  /** The feature the scenario before ran in. */
+  private var feature = Option.empty[String]
+
+  /** Whether `scenario` is the first of another feature than the scenario before it. */
+  private[e2e] def startsFeature(scenario: Scenario): Boolean =
+    val uri = scenario.getUri.toString
+    val other = feature.exists(_ != uri)
+    feature = Some(uri)
+    other
+
   /** Starts the scenario's recording afresh: what an earlier run recorded for it, failed or not, is
     * removed; other scenarios' recordings stay.
     */
@@ -141,21 +151,35 @@ object World:
     locations.clear()
 end World
 
-/** Once every scenario has run, destroys the locations the features made
-  * ([[whitelabel.captal.e2e.backoffice.Locations.sweep]]), unless the run was told to keep them
-  * (`E2E_KEEP_LOCATIONS`). Not in a dry run, which has no backoffice to reach.
+/** Destroys the locations the features made ([[Locations.sweep]]): before the first scenario, the
+  * ones a run cut short left, which would otherwise stay up through every feature of this one; once
+  * every scenario has run, this run's. Neither when the run was told to keep them
+  * (`E2E_KEEP_LOCATIONS`), nor in a dry run, which has no backoffice to reach.
   */
 object RunHooks extends ScalaDsl with EN:
+  /** Whether the run destroys what it builds: not a dry run, and not one told to keep it. */
+  val destroys: Boolean =
+    sys.env.contains("E2E_MCP_URL") && !sys.env.get("E2E_KEEP_LOCATIONS").contains("true")
+
+  BeforeAll {
+    if destroys then
+      Locations.sweep()
+  }
+
   AfterAll {
-    val keep = sys.env.get("E2E_KEEP_LOCATIONS").contains("true")
-    if sys.env.contains("E2E_MCP_URL") && !keep then
-      whitelabel.captal.e2e.backoffice.Locations.sweep()
+    if destroys then
+      Locations.sweep()
   }
 end RunHooks
 
-/** Empties the [[World]] around each scenario. */
+/** Empties the [[World]] around each scenario, and, as a feature after the first begins, destroys
+  * the locations the features before it built ([[Locations.release]]), so a run holds no more at
+  * once than one feature uses.
+  */
 final class WorldHooks extends ScalaDsl with EN:
   Before { (scenario: Scenario) =>
+    if World.startsFeature(scenario) && RunHooks.destroys then
+      Locations.release()
     World.begin(scenario)
   }
 

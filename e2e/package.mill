@@ -55,8 +55,9 @@ object `package` extends BaseModule:
   /** Releases this build into LocalStack as `ci.run` releases it, then runs the features against
     * it: the backoffice at its load balancer address, with the admin token the configuration
     * generated, and the portal at the distribution. Each feature deploys the locations it needs,
-    * and the run destroys every `e2e-` location once the scenarios are over, any an earlier run left
-    * included, unless `keep` says to leave them up to look at. Needs a LocalStack licence.
+    * destroyed as the next feature begins, and the run destroys every `e2e-` location before its
+    * first scenario, any an earlier run left, and once the scenarios are over, unless `keep` says to
+    * leave them up to look at. Needs a LocalStack licence.
     *
     * A scenario tagged `@pending` needs something the product or this stack does not have yet; it
     * runs only when `tags` asks for it.

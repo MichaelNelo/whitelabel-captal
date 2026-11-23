@@ -347,19 +347,23 @@ it, a deploy is watched on the run page until it says the run ended, then checke
 `get_deploy_status`, and the preview of a location never deployed is read screen by screen. No
 content security policy is applied: the pages' declared CSP is not tested.
 * **Locations** are created through the tools and deployed (`Locations`): one per name a feature
-uses, shared by its scenarios for the run, since a deploy takes minutes; each run creates its own
-under a slug of its own, `e2e-<name>-<4 characters>`, in the local database. The identification
+uses, shared by its scenarios, since a deploy takes minutes; each run creates its own under a slug
+of its own, `e2e-<name>-<4 characters>`, in the local database. As each feature after the first
+begins, the locations the features before it built are destroyed and forgotten
+(`Locations.release`), and a later feature that asks for one by the same name builds it anew: every
+location is a task in LocalStack, an API's JVM of its own, and the run holds no more of them at once
+than one feature uses. The identification
 surveys and the terms of service belong to the whole deployment, so they are created only when
 missing; `terms_of_service.feature` publishes new versions of the terms, which every later guest
 accepts like any other. Every text a guest
 sees is written as `text <key>` in `en` and `es`, which is how a step finds a button. The video is
-`e2e/resources/spot.webm`, six seconds of VP9: Playwright's Chromium plays no H.264. Once the
-scenarios are over, an `AfterAll` hook (`RunHooks`) destroys every `e2e-` location whose latest run
-is not a successful destroy — this run's, and any a run cut short left — all teardowns started at
-once and then followed; one that fails is reported, not raised. Their objects in S3 go too:
+`e2e/resources/spot.webm`, six seconds of VP9: Playwright's Chromium plays no H.264. Before the
+first scenario and once the scenarios are over, `RunHooks` destroys every `e2e-` location whose
+latest run is not a successful destroy — first any a run cut short left, last this run's — all
+teardowns started at once and then followed; one that fails is reported, not raised. Their objects in S3 go too:
 `destroy_location` asks the operator whether to delete them, and `Backoffice` answers that question
-yes and declines any other. Their rows stay. `--keep` leaves them up, to look at what a scenario
-left.
+yes and declines any other. Their rows stay. `--keep` leaves them up, every feature's, to look at
+what a scenario left.
 * **Guests** are Playwright browser contexts (`Portal`), each a phone of its own — its own cookies
 and storage, mobile viewport and touch — sent to the portal the way the access point sends them,
 with a MAC, the location's access point and a fingerprint in the query string. Certificate errors are ignored: the

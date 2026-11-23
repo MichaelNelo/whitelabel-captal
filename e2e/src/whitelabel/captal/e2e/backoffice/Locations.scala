@@ -54,7 +54,7 @@ object Locations:
   private val deployed = TrieMap.empty[String, Deployed]
 
   /** `name`, with an advertiser video and the survey asked after it, deployed: the one shape most
-    * features need, built once per run.
+    * features need, built once per feature ([[release]]).
     */
   def withAdvertiserVideo(name: String): Deployed = deployed.getOrElseUpdate(
     name, {
@@ -63,8 +63,9 @@ object Locations:
       deploy(location)
     })
 
-  /** Once per run for each `key`: `build` runs the first time a feature asks, and every scenario
-    * after it shares what it built. For a feature that needs a location of its own shape.
+  /** Once per feature for each `key`: `build` runs the first time a scenario of it asks, and every
+    * scenario after it in the feature shares what it built ([[release]]). For a feature that needs
+    * a location of its own shape.
     */
   def once(key: String)(build: => Deployed): Deployed = deployed.getOrElseUpdate(key, build)
 
@@ -225,25 +226,43 @@ object Locations:
     * that fails is reported and left: the run's outcome is its scenarios'. The objects in S3 go
     * with it, which [[Backoffice]] answers yes to; the rows stay.
     */
-  def sweep(): Unit =
-    val standing = Backoffice
+  def sweep(): Unit = destroy(
+    "the features made",
+    Backoffice
       .tool[LocationTools.ListRequest, LocationTools.ListResponse](
         "list_locations",
         LocationTools.ListRequest(includeInactive = true))
       .locations
       .map(_.slug)
       .filter(_.startsWith("e2e-"))
-      .filter(slug =>
-        latestRun(slug).exists(run => !(run.operation == "destroy" && run.status == "succeeded")))
+  )
+
+  /** Destroys every location this run has built so far, and forgets them, so a feature that asks
+    * for one again builds it anew. Called as each feature after the first begins: every location in
+    * a run is a task in LocalStack, an API's JVM of its own, and a run that kept them all until the
+    * end held one for every scenario at once.
+    */
+  def release(): Unit =
+    val built = deployed.values.map(_.slug).toList.distinct
+    deployed.clear()
+    destroy("the previous feature made", built)
+
+  /** The `slugs` still standing — each whose latest run is not a destroy that succeeded, and not
+    * one never deployed — destroyed side by side: every teardown started, then each followed to its
+    * end.
+    */
+  private def destroy(made: String, slugs: List[String]): Unit =
+    val standing = slugs.filter(slug =>
+      latestRun(slug).exists(run => !(run.operation == "destroy" && run.status == "succeeded")))
     if standing.nonEmpty then
-      println(s"[e2e] Destroying the locations the features made: ${standing.mkString(", ")}")
+      println(s"[e2e] Destroying the locations $made: ${standing.mkString(", ")}")
     val started = standing.flatMap(slug =>
       attempt(s"destroy $slug")(
         Backoffice.tool[DeployTools.DestroyRequest, DeployTools.RunView](
           "destroy_location",
           DeployTools.DestroyRequest(slug = slug, confirm = slug))))
     started.foreach(run => attempt(s"destroy ${run.slug}")(Backoffice.awaitRun(run)))
-  end sweep
+  end destroy
 
   /** A location's latest run, or none when it never had one: then nothing of it was deployed. */
   private def latestRun(slug: String): Option[DeployTools.RunView] =
