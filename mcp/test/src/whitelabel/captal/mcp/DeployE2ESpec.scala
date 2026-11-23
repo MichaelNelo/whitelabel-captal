@@ -1006,6 +1006,8 @@ object DeployE2ESpec extends ZIOSpecDefault:
         taskEnv.get("CDC_QUEUE_PREFIX") == store.targets.cdcFeed.map(_.queuePrefix),
         taskEnv.get("CDC_DEAD_LETTER_ARN") == store.targets.cdcFeed.flatMap(_.deadLetterArn),
         taskEnv.get("LOCATION_SLUG").contains(Slug),
+        // The JVM told its task's memory, which LocalStack does not limit the container to.
+        taskEnv.get("JDK_JAVA_OPTIONS").contains("-XX:MaxRAM=512m"),
         // The location's own copy of the manifest, under this server's `PUBLIC_BASE_URL`.
         taskEnv.get("BUNDLE_MANIFEST_URL").contains(s"https://portal.test/$Slug/manifest.json"),
         service.desiredCount() == 1,

@@ -135,6 +135,17 @@ final case class DeployTargets(
 end DeployTargets
 
 object DeployTargets:
+  /** A location's task, as Fargate sizes it: a quarter of a vCPU and 512 MiB. */
+  val TaskCpu = 256
+  val TaskMemoryMiB = 512
+
+  /** What the API's JVM is told its memory is: its task's, so it sizes its heap to fit it. Fargate
+    * limits the container to that, which the JVM reads on its own; LocalStack limits nothing, and
+    * the JVM would size itself to the whole machine — a quarter of it, for its heap. Passed as
+    * `JDK_JAVA_OPTIONS`, which `java` adds to its command line, so the image's `JAVA_TOOL_OPTIONS`
+    * stays as it is.
+    */
+  def jvmOptions(memoryMiB: Int): String = s"-XX:MaxRAM=${memoryMiB}m"
 
   /** `captal-<slug>` while that fits the 32 characters AWS allows a target group's name; past them,
     * the slug's first 16 characters and 8 of its hash, the same every time for the same slug. A
@@ -373,7 +384,8 @@ final case class InfraStore(
     * `updateService` takes a revision rather than a diff.
     *
     * `LOCATION_SLUG` is what makes this per-location. The API reads it once at boot and bakes it
-    * into its route paths, so one container serves exactly one portal.
+    * into its route paths, so one container serves exactly one portal. `JDK_JAVA_OPTIONS` tells its
+    * JVM the task's memory ([[DeployTargets.jvmOptions]]).
     */
   def registerTaskDefinition(slug: String): ZIO[Any, String, String] = ZIO
     .attemptBlocking:
@@ -387,6 +399,11 @@ final case class InfraStore(
           (
             Seq(
               KeyValuePair.builder().name("LOCATION_SLUG").value(slug).build(),
+              KeyValuePair
+                .builder()
+                .name("JDK_JAVA_OPTIONS")
+                .value(DeployTargets.jvmOptions(DeployTargets.TaskMemoryMiB))
+                .build(),
               KeyValuePair.builder().name("DB_URL").value(targets.dbUrl).build(),
               KeyValuePair
                 .builder()
@@ -456,8 +473,8 @@ final case class InfraStore(
             .family(targets.serviceName(slug))
             .requiresCompatibilities(Compatibility.FARGATE)
             .networkMode(NetworkMode.AWSVPC)
-            .cpu("256")
-            .memory("512")
+            .cpu(DeployTargets.TaskCpu.toString)
+            .memory(DeployTargets.TaskMemoryMiB.toString)
             .executionRoleArn(targets.executionRoleArn)
             // Required for ECS Exec, which is how an operator gets a shell into a running portal.
             .taskRoleArn(targets.taskRoleArn)
