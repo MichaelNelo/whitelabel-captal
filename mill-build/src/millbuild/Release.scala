@@ -438,8 +438,9 @@ val RegisterableFields = Seq(
   * of its own as `queue` says (`CDC_TOPIC_PREFIX`, `CDC_QUEUE_PREFIX`, `CDC_DEAD_LETTER_ARN`),
   * sending its traces to `otlp` and taking the migrations' lock on the Redis instances at `locks`:
   * a new task definition revision that differs only in the image, those variables,
-  * `REDIS_LOCK_ADDRESSES` and the `OTEL_*` variables `deploy_location` sets, and its service
-  * pointed at it. `CDC_FEED_ADDRESS`, the relay's gRPC feed, which is gone, is taken out.
+  * `REDIS_LOCK_ADDRESSES`, `JDK_JAVA_OPTIONS` (the JVM told its task's memory) and the `OTEL_*`
+  * variables `deploy_location` sets, and its service pointed at it. `CDC_FEED_ADDRESS`, which no
+  * service reads, is taken out.
   * The service keeps its task count, so a paused location stays paused and runs the new image on resume. A
   * location already on all of them is left as it is.
   *
@@ -463,7 +464,9 @@ def rollLocations(
       .get("environment")
       .map(_.arr.toSeq)
       .getOrElse(Nil)
-    val set = queue ++
+    // The JVM told its task's memory, as `deploy_location` tells it (`DeployTargets.jvmOptions`).
+    val memory = location.taskDefinition.obj.get("memory").map(_.str).toList
+    val set = queue ++ memory.map(mib => "JDK_JAVA_OPTIONS" -> s"-XX:MaxRAM=${mib}m") ++
       locks.map("REDIS_LOCK_ADDRESSES" -> _).toList ++ otlp.toList.flatMap(endpoint =>
       List(
         "OTEL_EXPORTER_OTLP_ENDPOINT" -> endpoint,
