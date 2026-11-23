@@ -628,7 +628,7 @@ module "mcp" {
   https_listener_arn = var.enable_dns ? aws_lb_listener.https[0].arn : ""
 
   db_url                        = module.rqlite.http_url
-  feed_topic_arn                = module.cdc.topic_arns["video_playbacks"]
+  feed_topic_arns               = [module.cdc.topic_arns["video_playbacks"], module.cdc.topic_arns["mcp_deploy_runs"]]
   location_feed_topic_arn       = module.cdc.topic_arns["errors"]
   feed_queue_prefix             = local.feed_queue_prefix
   cdc_topic_prefix              = module.cdc.topic_prefix

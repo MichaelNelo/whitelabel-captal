@@ -287,7 +287,8 @@ data "aws_iam_policy_document" "mcp" {
   }
 
   # Each task's own queue on the change feed, which it creates and subscribes to the `video_playbacks`
-  # topic as it starts, publishing its marker there, and unsubscribes and deletes as it stops.
+  # and `mcp_deploy_runs` topics as it starts, publishing its marker to each, and unsubscribes and
+  # deletes as it stops.
   statement {
     sid    = "OwnFeedQueue"
     effect = "Allow"
@@ -306,7 +307,7 @@ data "aws_iam_policy_document" "mcp" {
     sid       = "SubscribeOwnFeedQueue"
     effect    = "Allow"
     actions   = ["sns:Subscribe"]
-    resources = [var.feed_topic_arn]
+    resources = var.feed_topic_arns
 
     condition {
       test     = "StringEquals"
@@ -325,7 +326,7 @@ data "aws_iam_policy_document" "mcp" {
     sid       = "UnsubscribeAndMark"
     effect    = "Allow"
     actions   = ["sns:Unsubscribe", "sns:Publish"]
-    resources = [var.feed_topic_arn]
+    resources = var.feed_topic_arns
   }
 
   # `destroy_location` removes every queue a location's tasks left, and its subscriptions: with the

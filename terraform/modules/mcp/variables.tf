@@ -135,9 +135,9 @@ variable "db_url" {
   type        = string
 }
 
-variable "feed_topic_arn" {
-  description = "The `video_playbacks` topic, which each of the server's tasks subscribes its own queue to"
-  type        = string
+variable "feed_topic_arns" {
+  description = "The `video_playbacks` and `mcp_deploy_runs` topics, which each of the server's tasks subscribes its own queue to"
+  type        = list(string)
 }
 
 variable "location_feed_topic_arn" {

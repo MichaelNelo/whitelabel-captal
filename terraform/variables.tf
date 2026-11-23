@@ -159,9 +159,9 @@ variable "rqlite_cdc_endpoint" {
 }
 
 variable "cdc_tables" {
-  description = "The tables whose changes rqlite posts to the relay, each with a topic of its own: `video_playbacks`, which the backoffice follows to collect replaced video files and expire the playbacks no page ended, and `errors`, which a location's API follows to shorten a recovery wait when an error recurs. Changing it changes rqlite's task definition, which replaces every node."
+  description = "The tables whose changes rqlite posts to the relay, each with a topic of its own: `video_playbacks`, which the backoffice follows to collect replaced video files and expire the playbacks no page ended; `mcp_deploy_runs`, which it follows to tell a run page each step as it happens; and `errors`, which a location's API follows to shorten a recovery wait when an error recurs. Changing it changes rqlite's task definition, which replaces every node."
   type        = list(string)
-  default     = ["video_playbacks", "errors"]
+  default     = ["video_playbacks", "mcp_deploy_runs", "errors"]
 }
 
 variable "cdc_image_tag" {
