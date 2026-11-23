@@ -105,7 +105,7 @@ loudly on a missing object rather than quietly finding a neighbour's.
 | rqlite endpoint
 
 | `CDC_TOPIC_PREFIX`, `CDC_QUEUE_PREFIX`
-| A table's topic's ARN but for the table's name, and what every task's queue on the change feed is named under. With both, this server follows `video_playbacks` on a queue of its task's own, and forwards both into every location's task definition, whose API follows `errors` likewise. Optional: without them the server logs a warning and hears of no playback starting or ending after its startup, and locations are deployed without them
+| A table's topic's ARN but for the table's name, and what every task's queue on the change feed is named under. With both, this server follows `video_playbacks` and `mcp_deploy_runs` on a queue of its task's own, and forwards both into every location's task definition, whose API follows `errors` likewise. Optional: without them the server logs a warning, hears of no playback starting or ending after its startup, and a run page reads its run again only when the run's heartbeat would have gone stale; and locations are deployed without them
 
 | `CDC_DEAD_LETTER_ARN`, `LOCATION_CDC_DEAD_LETTER_ARN`
 | The dead-letter queues of this server's tasks' queues and of the locations', the second forwarded into every location's task definition as its `CDC_DEAD_LETTER_ARN`

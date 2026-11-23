@@ -103,17 +103,13 @@ subscribers: each finds out only when it next starts and rebuilds. And a change 
 topic takes (256 KiB) fails its post every time, so the feed stalls until rqlite drops it. Neither has
 been seen: the relay is replaced overlapped, and the tables it publishes hold small rows.
 
-== The run page polls, and the API's routes run their flows by hand
+== The API's routes run their flows by hand
 
-Every backoffice tool, resource and background job runs a `core` command or query. Two pieces of the
-plans that got it there are left:
-
-* The run page reads a run's progress by polling `RunStatus` (`RunRoutes`, every `PollEvery`). Being
-  told it through the change feed is the sixth step of xref:admin-core-plan.adoc[the admin core
-  plan]; xref:relay-sns-sqs-plan.adoc[the relay plan] it waited on is done.
-* The API's routes run their flows by hand. The extension the backoffice's tools are built with
-  (`Adapters`) has its counterpart for typed endpoints in xref:flow-adapters-plan.adoc[the flow
-  adapters plan], left for the next time the routes are reworked.
+Every backoffice tool, resource and background job runs a `core` command or query, and
+xref:admin-core-plan.adoc[the admin core plan] is done. One piece of the plans that got it there is
+left: the API's routes run their flows by hand. The extension the backoffice's tools are built with
+(`Adapters`) has its counterpart for typed endpoints in xref:flow-adapters-plan.adoc[the flow
+adapters plan], left for the next time the routes are reworked.
 
 == The Redlock is the simple version
 

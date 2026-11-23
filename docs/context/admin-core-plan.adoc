@@ -7,8 +7,8 @@ A plan agreed in conversation on 2026-11-13, revised on 2026-11-14, with its fir
 (<<decided-2026-11-15>>). It moves the
 backoffice's business rules into `core`, models a location as an entity whose state is in its type and
 each operation on it as a run of its own, run by a saga, and then moves `/api/status`'s logic into a
-command on that model. One question stays open that blocks part of it: the availability of the change
-data capture relay. Pick it up from <<order-of-work>>.
+command on that model. Done on 2026-11-23: every step of <<order-of-work>> is, the last once the
+relay moved to SNS and SQS (xref:relay-sns-sqs-plan.adoc[the relay plan]).
 
 Status when written: access points (migration `V34__access_points.sql`, `access_points` table, the AP
 check at `/api/status`, `update_access_point` and `remove_access_point`) and the split of
@@ -799,6 +799,21 @@ checked against canned rqlite answers and `tofu validate`, and reaches productio
 `ci.run`, whose apply also removes the endpoint.
 . Once the relay moves to SNS and SQS (xref:relay-sns-sqs-plan.adoc[the relay plan]), tell the run
   page of progress through it.
++
+*Done on 2026-11-23*, as option A of <<Open: progress to the page, and the relay's availability>>:
+`cdc_tables` publishes `mcp_deploy_runs`, and each backoffice task follows it on the queue it follows
+`video_playbacks` on, its policy now naming both topics (`feed_topic_arns`). `RunFeed` publishes the
+id of every run a change set wrote, and every gap, to a `Hub`; `RunRoutes` subscribes before its first
+read and reads the run again on a change that names it or a gap. What it became, against the sketch:
++
+* *A change says which run, not what it is.* The stream reads the row again through `RunStatus`, as
+  `get_deploy_status` does, rather than building the view from the change set: the view is the
+  query's, and the read is one per change of an open page's own run.
+* *One deadline is left.* A runner that dies writes nothing more, so no change announces that its run
+  became interrupted: the stream reads it once more a second after its heartbeat would go stale
+  (`Run.StaleAfter`). A deadline, not a schedule — the read every second went.
+* *Without the feed configured* the stream sends the run as the page connects and then only at those
+  deadlines, with the backoffice's warning saying so.
 . Video lifecycle with advertisers; survey and question authoring; recovery policy; terms of service
   versions; i18n keys; styles and icon. Each tool a command or a query, as the table in
   <<decided-2026-11-15>> has it.

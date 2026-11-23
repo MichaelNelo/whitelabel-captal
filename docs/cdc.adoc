@@ -10,6 +10,7 @@ follows a table reads it on an SQS queue of its own, subscribed to that topic.
 [source]
 ----
 rqlite leader ──POST /cdc──▶ relay ──▶ <prefix>-cdc-video_playbacks ──▶ queue of each backoffice task
+                                   ├─▶ <prefix>-cdc-mcp_deploy_runs ─▶ the same queue
                                    └─▶ <prefix>-cdc-errors ──────────▶ queue of each location's task
 ----
 
@@ -107,8 +108,12 @@ it. Each finds out only when it next starts, and rebuilds.
 | `VideoFileCollector` reads `video_playbacks` events: an `INSERT` of an open row starts a
   `PlaybackExpiry` timer, an `UPDATE` that sets `ended_at` or a `DELETE` cancels it, and every
   change set of that table asks for a collection pass; one of any other table does nothing. A `Gap`
-  resyncs the timers with the open playbacks in the database and asks for a pass. Its queue is the
-  `mcp` service's, on `video_playbacks`, kept an hour. See xref:mcp.adoc#replaced-files[Replaced files].
+  resyncs the timers with the open playbacks in the database and asks for a pass. `RunFeed` reads
+  `mcp_deploy_runs` events: the id of each run a change set wrote, from `after` or, for a `DELETE`,
+  `before`, is published to every run page's stream, which reads its run again when the id is its
+  own; a `Gap` is published too, and every page reads its run again. Its queue is the `mcp`
+  service's, on both tables, kept an hour. See xref:mcp.adoc#replaced-files[Replaced files] and
+  xref:mcp.adoc#run-page[the run page].
 
 | Every location's API (`api`)
 | `RecoveryFeed` reads `errors` events: an `INSERT` with a fingerprint, read from `after`, is
@@ -120,13 +125,15 @@ it. Each finds out only when it next starts, and rebuilds.
   location it moves. See xref:api.adoc#recovery-stream[the waiting page's stream].
 |===
 
-Without `CDC_TOPIC_PREFIX` and `CDC_QUEUE_PREFIX` a subscriber logs a warning and follows nothing,
-and the backoffice only runs the passes and timers of startup and replacements. A change set
-repeated or out of order changes nothing: a timer reads its deadline from the database, and a page
-checks its offer against it.
+Without `CDC_TOPIC_PREFIX` and `CDC_QUEUE_PREFIX` a subscriber logs a warning and follows nothing:
+the backoffice only runs the passes and timers of startup and replacements, and a run page reads its
+run again only when the run's heartbeat would have gone stale. A change set repeated or out of order
+changes nothing: a timer reads its deadline from the database, a waiting page checks its offer
+against it, and a run page reads the run's row.
 
 Which tables reach the relay is rqlite's `table_filter`: the root variable `cdc_tables`,
-`["video_playbacks", "errors"]`, written as `^(video_playbacks|errors)$`, which reaches the
+`["video_playbacks", "mcp_deploy_runs", "errors"]`, written as
+`^(video_playbacks|mcp_deploy_runs|errors)$`, which reaches the
 entrypoint as `RQLITE_CDC_TABLE_FILTER`; the same list names the topics. Changing it changes
 rqlite's task definition, which replaces every node.
 

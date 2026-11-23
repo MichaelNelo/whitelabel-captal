@@ -346,8 +346,8 @@ authoritative `ingress` blocks would revoke those external rules on every apply.
 ==== Change data capture
 
 The leader posts every change to the tables the root variable `cdc_tables` lists —
-`["video_playbacks", "errors"]`, which the root writes as the regular expression
-`^(video_playbacks|errors)$` — to `cdc_endpoint`: the change data capture relay, which publishes
+`["video_playbacks", "mcp_deploy_runs", "errors"]`, which the root writes as the regular expression
+`^(video_playbacks|mcp_deploy_runs|errors)$` — to `cdc_endpoint`: the change data capture relay, which publishes
 each change set to its tables' topics (see xref:cdc.adoc[Change data capture relay]). Whole
 rows, not `row_ids_only`: subscribers read the rows' own ids, and a row id is SQLite's. The
 entrypoint writes the `-cdc-config` file only when `RQLITE_CDC_ENDPOINT` is set, and refuses to start
@@ -601,10 +601,12 @@ have somewhere to land.
 |`<prefix>-feed-mcp-*`: each task's own queue on the change feed.
 
 |`SubscribeOwnFeedQueue` — `sns:Subscribe`
-|The `video_playbacks` topic, only with `sns:Protocol = sqs` and an `sns:Endpoint` among those queues.
+|The `video_playbacks` and `mcp_deploy_runs` topics, only with `sns:Protocol = sqs` and an
+`sns:Endpoint` among those queues.
 
 |`UnsubscribeAndMark` — `sns:Unsubscribe`, `sns:Publish`
-|The same topic: a task unsubscribes as it stops, and publishes the marker it waits for as it starts.
+|The same topics: a task unsubscribes as it stops, and publishes the marker it waits for to each as
+it starts.
 
 |`ListFeedQueues` — `sqs:ListQueues`
 |Unscoped: the action names no queue. For `destroy_location`, which removes every queue a location's

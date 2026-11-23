@@ -70,9 +70,9 @@ up environment reaches this before `client.publish` has ever run, and the warnin
 once it has.
 . `Tokens.seedAdmin(token, "admin")` — idempotent; logs whether the admin row was created, rotated
 in place, or already current.
-. Follows the change feed (see <<replaced-files>>), in the background for as long as it serves: the
-`video_playbacks` topic on a queue of the task's own, where `CDC_TOPIC_PREFIX` and
-`CDC_QUEUE_PREFIX` are set.
+. Follows the change feed (see <<replaced-files>> and <<run-page>>), in the background for as long
+as it serves: the `video_playbacks` and `mcp_deploy_runs` topics on a queue of the task's own, where
+`CDC_TOPIC_PREFIX` and `CDC_QUEUE_PREFIX` are set.
 . Serves `GET /health` (`ok`, the load balancer's health check) `++ UiRoutes.routes ++ RunRoutes.routes
 ++ OauthMetadata.routes(uiOrigin) ++ CaptalMcp.server(...).statelessRoutes`.
 
@@ -1078,11 +1078,18 @@ own, only the location's stylesheet, icon and video, so it declares the portal's
 (`AssetStore.portalOrigin`, from `PUBLIC_BASE_URL`) in `resourceDomains`. `deploy_location` does not
 copy it under a location.
 
+[[run-page]]
 The run page follows its run through `RunRoutes`: a `POST /ui/runs/events` with a `RunTicket` in a
 urlencoded body, answered as Server-Sent Events, each the whole `RunView` again, read off the run's
-row every second and sent when it changes. The heartbeat changes the row every ten seconds, so a
-running run is never silent long enough for the ALB or a tunnel to cut it, and the stream ends
-after the event that shows the run finished. A run ticket is `<tokenId>.<runId>.<signature>`,
+row as the page connects and sent when it changes. It is read again each time the change feed says
+the row was written: `RunFeed` publishes the id of every run a change set of `mcp_deploy_runs`
+wrote, and a `Gap`, to every open stream (xref:cdc.adoc#_subscribers[Subscribers]), so a page open
+on one task follows a run another task is running. The stream subscribes before its first read, so
+a write between the two is still heard. Nothing writes the row of a run whose runner died, so the
+stream also reads it once more a second after its heartbeat would go stale (`Run.StaleAfter`), and
+sends it as interrupted. The heartbeat writes the row every ten seconds, so a running run is never
+silent long enough for the ALB or a tunnel to cut it, and the stream ends after the event that
+shows the run finished. A run ticket is `<tokenId>.<runId>.<signature>`,
 signed with the calling token's stored hash over a `run.` prefix: bound to one run, read-only, with
 no expiry, and dead once that token is revoked. The page declares this server's origin in
 `connectDomains`.
