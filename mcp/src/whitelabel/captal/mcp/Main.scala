@@ -3,7 +3,7 @@ package whitelabel.captal.mcp
 import io.opentelemetry.api.trace.SpanKind
 import whitelabel.captal.cdc.feed.ChangeFeedQueue
 import whitelabel.captal.mcp.access.{Auth, OauthMetadata, Tokens}
-import whitelabel.captal.mcp.apps.{RunRoutes, ScriptDelivery, UiRoutes}
+import whitelabel.captal.mcp.apps.{RunFeed, RunRoutes, ScriptDelivery, UiRoutes}
 import whitelabel.captal.mcp.aws.{DeployTargets, InfraSteps, InfraStore}
 import whitelabel.captal.mcp.protocol.{Skills, SkillsExtension}
 import whitelabel.captal.mcp.resources.Readiness
@@ -76,27 +76,34 @@ object Main extends ZIOAppDefault:
         s":${parsed.getPort}"
     s"${parsed.getScheme}://${parsed.getHost}$port"
 
-  /** Follows the `video_playbacks` topic for the collector, for as long as the server runs, on a
-    * queue of this task's own (see [[ChangeFeedQueue]]), where `CDC_TOPIC_PREFIX` and
-    * `CDC_QUEUE_PREFIX` are set. A warning and not a failure without them: the collector still runs
-    * at startup and on every replacement, and playbacks open at startup still expire; only
-    * playbacks that start or end afterwards go unheard.
+  /** Follows the `video_playbacks` topic for the collector and the `mcp_deploy_runs` one for the
+    * run pages ([[RunFeed]]), for as long as the server runs, on a queue of this task's own (see
+    * [[ChangeFeedQueue]]), where `CDC_TOPIC_PREFIX` and `CDC_QUEUE_PREFIX` are set. A warning and
+    * not a failure without them: the collector still runs at startup and on every replacement, and
+    * playbacks open at startup still expire, but playbacks that start or end afterwards go unheard;
+    * and a run page reads its run again only when its heartbeat would have gone stale.
     */
-  private def followChanges(collector: VideoFileCollector.Running): URIO[Scope & Tracing, Unit] =
+  private def followChanges(
+      collector: VideoFileCollector.Running): URIO[Scope & Tracing & RunFeed, Unit] =
     ChangeFeedQueue
       .fromEnv
       .flatMap:
         case Some(settings) =>
-          ZIO.logInfo("Following the playbacks' change feed on a queue of this task's own") *>
-            VideoFileCollector
-              .follow(
-                collector,
-                ChangeFeedQueue.follow(settings, "mcp", List("video_playbacks"), FeedRetention))
-              .forkScoped
-              .unit
+          ZIO.serviceWithZIO[RunFeed]: runs =>
+            ZIO.logInfo(
+              "Following the playbacks' and the runs' change feed on a queue of this task's own") *>
+              VideoFileCollector
+                .follow(
+                  collector,
+                  ChangeFeedQueue
+                    .follow(settings, "mcp", List("video_playbacks", RunFeed.Table), FeedRetention)
+                    .tap(event => ZIO.foreachDiscard(RunFeed.signalsOf(event))(runs.publish))
+                )
+                .forkScoped
+                .unit
         case None =>
           ZIO.logWarning(
-            "No CDC_TOPIC_PREFIX or CDC_QUEUE_PREFIX: playbacks that start or end from now on are not heard of until the next restart")
+            "No CDC_TOPIC_PREFIX or CDC_QUEUE_PREFIX: playbacks that start or end from now on are not heard of until the next restart, and a run page reads its run again only once its heartbeat would have gone stale")
 
   /** How long a change set waits on this task's queue before it is dropped: far longer than the
     * collector could fall behind while it runs, and a task that stopped rebuilds as it starts.
@@ -251,7 +258,7 @@ object Main extends ZIOAppDefault:
 
   type Layers =
     CaptalMcp.Env & Option[InfraStore] & Server & OperationQueue & OperationFlows.Complete &
-      DistributedLock
+      DistributedLock & RunFeed
 
   /** Everything the server runs on, built against a declared type, as the API's `appLayers` is: the
     * flows' refined types meet in one intersection, which only a declared target splits back into
@@ -305,6 +312,8 @@ object Main extends ZIOAppDefault:
     OperationQueue.layer,
     OperationFlows.startLayer,
     OperationFlows.completeLayer,
+    // What the run pages hear of their runs, fed from the change feed (`followChanges`).
+    RunFeed.layer,
     // The locations' locks, on the Redis instances at `REDIS_LOCK_ADDRESSES`, connected on first use;
     // the server does not start without them.
     Redlock.layer

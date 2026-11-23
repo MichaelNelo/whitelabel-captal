@@ -27,7 +27,7 @@ import software.amazon.awssdk.services.s3.model.{
 import whitelabel.captal.core.i18n.{I18n, I18nSchema}
 import whitelabel.captal.core.operation.Step as CoreStep
 import whitelabel.captal.mcp.access.{Auth, Tokens}
-import whitelabel.captal.mcp.apps.RunRoutes
+import whitelabel.captal.mcp.apps.{RunFeed, RunRoutes}
 import whitelabel.captal.mcp.aws.{DeployTargets, InfraSteps, InfraStore}
 import whitelabel.captal.platform.locks.Redlock
 import whitelabel.captal.platform.operations.OperationQueue
@@ -395,8 +395,11 @@ object DeployE2ESpec extends ZIOSpecDefault:
             AssetFlows.environment(env.get[QuillSqlite], operators, env.get[AssetStore]) ++
             VideoFlows.environment(env.get[QuillSqlite], operators, env.get[AssetStore]) ++ queries)
       _ <- TestClient.addRoutes(routes)
-      // The run page's stream, which lives beside the protocol rather than inside it.
-      _        <- TestClient.addRoutes(RunRoutes.routes.provideEnvironment(env ++ queries))
+      // The run page's stream, which lives beside the protocol rather than inside it. Read once the
+      // run is over, so its first read is its last and the feed has nothing to tell it.
+      runs <- RunFeed.make
+      _    <- TestClient.addRoutes(
+        RunRoutes.routes.provideEnvironment(env ++ queries ++ ZEnvironment(runs)))
       declared <- ZIO
         .fromEither(McpClientExtensions(McpApps.clientExtension(McpAppsClientSettings.Html)))
         .mapError(error => new IllegalStateException(s"Client extensions: $error"))
