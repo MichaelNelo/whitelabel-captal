@@ -101,6 +101,72 @@ plan run by hand has to pass the released ones too, `-var=image_tag=<api version
 -var=mcp_image_tag=<mcp version> -var=cdc_image_tag=<cdc version>`, which `git describe --tags
 --abbrev=0 --match 'api/v*'` (and `mcp/v*`, `cdc/v*`) names.
 
+=== The identity that applies
+
+The configuration is applied, and `ci.run` releases, as the AWS identity whose keys `.envrc`
+exports: in prod, the IAM user `Terraform`. Its permissions are not part of this configuration,
+which cannot grant itself the right to apply: they are one inline policy on that user,
+`TerraformPermissions`, a wildcard per service (`ecs:*`, `sqs:*`, ...), kept by hand outside the
+repository. A service the configuration starts to use goes into that policy before the apply that
+first creates something of it. An apply refused part way leaves what it created in place, and the
+next one, once the policy allows it, creates the rest.
+
+[cols="1,3"]
+|===
+|Service (IAM prefix) |What needs it
+
+|`ecs`
+|The cluster, every service and task definition; a release, which moves the locations onto the API
+image.
+
+|`ecr`
+|The repositories and their lifecycle policies; `modules/image`, which checks whether a tag is
+published and pushes it (`describe-images`, `get-login-password`).
+
+|`ec2`
+|The security groups, and the default VPC and subnets the configuration reads.
+
+|`elasticloadbalancing`
+|The ALB, its listeners, target groups and rules.
+
+|`iam`
+|The tasks' roles and policies, and `iam:PassRole` to hand them to ECS.
+
+|`s3`
+|The state bucket, with its lock file (`use_lockfile`); the assets and rqlite backup buckets and
+their objects; a release, which publishes the client to the assets bucket.
+
+|`cloudfront`
+|The distribution, its functions and policies; a release's invalidation.
+
+|`route53`, `acm`
+|The zone, its records, and the certificates validated against it.
+
+|`servicediscovery`
+|The Cloud Map namespace and a name per service (<<service-names>>).
+
+|`elasticfilesystem`
+|rqlite's file system, on the single-node branch.
+
+|`lambda`, `globalaccelerator`
+|The portal dispatcher and the accelerator in front of it.
+
+|`secretsmanager`
+|The backoffice's admin token and Tailscale's auth key.
+
+|`logs`
+|Every service's log group.
+
+|`sns`, `sqs`
+|The change feed's topics, and the dead-letter queues of the backoffice's and the locations' queues
+(xref:cdc.adoc[Change data capture relay]).
+|===
+
+`aws_caller_identity` calls `sts:GetCallerIdentity`, which needs no permission. The queue each task
+makes for itself, its policy and its subscriptions are the task role's doing, not this identity's.
+The policy also grants `codepipeline`, `codebuild`, `events`, `application-autoscaling`,
+`cloudwatch` and `dynamodb`, which nothing in the configuration uses.
+
 === An environment with nothing in AWS yet
 
 Two things have to exist before the configuration can be applied whole, and the configuration
