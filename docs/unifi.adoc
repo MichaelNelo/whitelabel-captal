@@ -713,9 +713,9 @@ The next hop is the ALB's HTTP listener, where the backoffice keeps one rule per
 (`DispatchRules`, see xref:mcp.adoc#dispatch-rules[Dispatch rules]):
 
 . *It matches* `/guest/s/*` with the MAC in the `ap` query parameter, written as UniFi writes it,
-  `94:2a:6f:d0:30:57`, and with its colons encoded, `94%3A2a%3A6f%3Ad0%3A30%3A57`, since AWS does
-  not document whether it compares the raw query or the decoded one. The comparison is not
-  case-sensitive.
+  `94:2a:6f:d0:30:57`: the same in the raw query and the decoded one, whichever AWS compares, which
+  it does not document. Not with its colons encoded as well: AWS refuses a `%` in a condition's
+  value. The comparison is not case-sensitive.
 . *It redirects*, `302`, where `core`'s `Dispatch.destination` sends the guests of that MAC: of
   the locations configured with it, the one that took it and is deployed
   (<<which-location-takes-an-access-point>>), else the newest paused, whose page is the maintenance

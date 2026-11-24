@@ -30,7 +30,8 @@ a `302` to the access point's own redirect URL — unless the location is paused
 * *The rule's two values* are the MAC as UniFi writes it, `94:2a:6f:d0:30:57`, and with its colons
   encoded, `94%3A2a%3A6f%3Ad0%3A30%3A57`. The documentation does not say whether the comparison is
   on the raw query or the decoded one; with both, either way matches. The comparison is not
-  case-sensitive.
+  case-sensitive. _Changed at the first release to prod: AWS refuses a `%` in a condition's value,
+  so the rule carries the unencoded MAC alone (see xref:pending.adoc[Pending work])._
 * *The action* is the redirect the dispatcher answered: `Location`'s protocol, host, port and path
   from `PUBLIC_BASE_URL` and the slug, or from the access point's own URL, and `#{query}`, which
   keeps the query string as UniFi sent it. The dispatcher encoded it once more
