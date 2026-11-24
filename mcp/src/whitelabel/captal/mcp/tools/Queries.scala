@@ -6,6 +6,8 @@ import whitelabel.captal.core.application.queries.{
   AdvertiserReport,
   AssetCount,
   AssetsOfQuery,
+  DispatchQuery,
+  DispatchRoute,
   IconOfQuery,
   ListAdvertisersQuery,
   ListLocationsQuery,
@@ -42,6 +44,7 @@ import whitelabel.captal.core.application.queries.{
 import whitelabel.captal.platform.aws.AssetStore
 import whitelabel.captal.platform.queries.{
   AssetsOf as AssetsOfQuill,
+  DispatchRoutes,
   ListAdvertisers as ListAdvertisersQuill,
   LocationReadiness as LocationReadinessQuill,
   Locations,
@@ -75,6 +78,7 @@ object Queries:
   type RunStatus = Query.Aux[Task, RunStatusQuery, RunReport]
   type VideoOf = Query.Aux[Task, VideoOfQuery, VideoReport]
   type OpenPlaybacks = Query.Aux[Task, OpenPlaybacksQuery, List[OpenPlaybackReport]]
+  type Dispatch = Query.Aux[Task, DispatchQuery, List[DispatchRoute]]
 
   type PreviewLocation = Query.Aux[Task, PreviewLocationQuery, LocationPreview]
   type StylesOf = Query.Aux[Task, StylesOfQuery, PublishedDocument]
@@ -87,7 +91,7 @@ object Queries:
   type Database =
     ListLocations & AccessPointsOf & ListAdvertisers & RecoveryPolicyOf & TermsInForce &
       TranslationCoverage & ListSurveys & SurveyOf & VideosOf & PendingUploads & RunStatus &
-      VideoOf & OpenPlaybacks
+      VideoOf & OpenPlaybacks & Dispatch
 
   /** The ones that read the assets bucket too. */
   type Assets = PreviewLocation & StylesOf & IconOf & UploadUrl & LocationReadiness & AssetsOf
@@ -109,6 +113,7 @@ object Queries:
     .add[RunStatus](RunStatusQuill(quill))
     .add[VideoOf](Videos.one(quill))
     .add[OpenPlaybacks](Playbacks.open(quill))
+    .add[Dispatch](DispatchRoutes(quill))
 
   def assets(quill: QuillSqlite, store: AssetStore): ZEnvironment[Assets] = ZEnvironment
     .empty

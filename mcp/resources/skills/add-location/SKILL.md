@@ -1,7 +1,7 @@
 ---
 name: add-location
 description: Use this skill to onboard a location end-to-end — create it, give it translations, advertisers and videos, brand it, register its access points with their UniFi controllers, set how its guests recover from errors, and check what is still missing. Composes the smaller skills into one flow. Triggers on "agregar location", "add new location", "onboard location", "nuevo cliente", "new client", "create location", "configurar unifi", "configure unifi", "access point", "punto de acceso", "agregar AP", "add AP", "desactivar unifi", "disable unifi", "espera de error", "error wait", "recovery policy", "readiness", "qué falta".
-version: 2.6.0
+version: 2.7.0
 ---
 
 # Onboard a location end-to-end
@@ -92,13 +92,13 @@ What the form stores:
 | `siteId` | yes | Site **UUID**, not the `default` name |
 | `apiToken` | when the AP has none | Left blank on a later edit, the stored one is kept |
 | `port` | no | Defaults to 443 |
-| `redirectUrl` | no | This AP's: when set, the dispatcher sends the guests who join through it here instead of the portal. Blank clears it |
+| `redirectUrl` | no | This AP's: when set, the load balancer sends the guests who join through it here instead of the portal. An http or https address with no fragment, its host and path up to 128 characters and no encoded characters in the path: anything else is refused. Blank clears it |
 | `durationMinutes` | no | This AP's, for the guests who join through it. Defaults to 1440. Blank clears it |
 
-**The AP MAC is also what routes traffic to this location.** The portal dispatcher Lambda runs
-`SELECT l.slug, a.redirect_url FROM access_points a JOIN locations l ON l.id = a.location_id WHERE a.mac = ?`
-against rqlite, with the MAC lowercase and colon-separated; with no access point registered, a
-device redirected by the UCG gets a 404 instead of the portal. Find each MAC in the controller under
+**The AP MAC is also what routes traffic to this location.** This server keeps a rule on the load
+balancer per registered AP's MAC, which redirects the devices the UCG sends with that MAC to this
+location's portal once it is deployed; with no access point registered, such a device gets a 404
+instead of the portal. Find each MAC in the controller under
 Devices → the AP → Details → MAC Address.
 
 **An access point takes the guests of one deployed location.** Registering an AP that another

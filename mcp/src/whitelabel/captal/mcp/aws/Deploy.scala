@@ -111,7 +111,11 @@ final case class DeployTargets(
     publicBaseUrl: Option[String] = None,
     cdcFeed: Option[ChangeFeedQueue.Settings] = None,
     otlpEndpoint: Option[String] = None,
-    devEndpoints: Boolean = false):
+    devEndpoints: Boolean = false,
+    /** The listener Global Accelerator's address reaches, where the access points' dispatch rules
+      * go ([[DispatchRules]]): `ALB_DISPATCH_LISTENER_ARN`.
+      */
+    dispatchListenerArn: Option[String] = None):
 
   def targetGroupName(slug: String): String = DeployTargets.targetGroupName(slug)
 
@@ -135,6 +139,22 @@ final case class DeployTargets(
 end DeployTargets
 
 object DeployTargets:
+  /** The configuration's own rule for the access points no rule dispatches, a `404` on
+    * [[DispatchRules.GuestPath]]: the last priority a listener takes, so every rule the backoffice
+    * numbers stays ahead of it.
+    */
+  val GuestFallbackPriority = 50000
+
+  /** The next free priority on a listener using `used`: one past the highest in use below
+    * [[GuestFallbackPriority]], or 10 when none is.
+    */
+  def nextPriority(used: Set[Int]): Int =
+    val below = used.filter(_ < GuestFallbackPriority)
+    if below.isEmpty then
+      10
+    else
+      below.max + 1
+
   /** A location's task, as Fargate sizes it: a quarter of a vCPU and 512 MiB. */
   val TaskCpu = 256
   val TaskMemoryMiB = 512
@@ -205,8 +225,12 @@ object DeployTargets:
               .env("OTEL_EXPORTER_OTLP_ENDPOINT")
               .orDie
               .map(_.map(_.trim).filter(_.nonEmpty))
-            dev <- System.env("LOCATION_DEV_ENDPOINTS").orDie.map(_.exists(_.trim == "true"))
-            _   <-
+            dev      <- System.env("LOCATION_DEV_ENDPOINTS").orDie.map(_.exists(_.trim == "true"))
+            dispatch <- System
+              .env("ALB_DISPATCH_LISTENER_ARN")
+              .orDie
+              .map(_.map(_.trim).filter(_.nonEmpty))
+            _ <-
               ZIO.when(proxy.isEmpty)(
                 ZIO.logWarning(
                   "UNIFI_PROXY_URL is unset: locations deployed from here call their UniFi gateway directly, which works only if the gateway is reachable from where the task runs."))
@@ -228,7 +252,8 @@ object DeployTargets:
               publicBaseUrl = base,
               cdcFeed = queue.map(_.copy(deadLetterArn = letter)),
               otlpEndpoint = otlp,
-              devEndpoints = dev
+              devEndpoints = dev,
+              dispatchListenerArn = dispatch
             ))
 end DeployTargets
 
@@ -355,15 +380,10 @@ final case class InfraStore(
                 elb.deleteRule(DeleteRuleRequest.builder().ruleArn(other.ruleArn()).build()))
             rule.ruleArn()
           case None =>
-            // The default rule carries no numeric priority; the next free slot is one past the
-            // highest in use, or 10 when none are.
+            // The default rule carries no numeric priority.
             val used =
-              existing.asScala.flatMap(r => scala.util.Try(r.priority().toInt).toOption).toList
-            val priority =
-              if used.isEmpty then
-                10
-              else
-                used.max + 1
+              existing.asScala.flatMap(r => scala.util.Try(r.priority().toInt).toOption).toSet
+            val priority = DeployTargets.nextPriority(used)
             elb
               .createRule(
                 CreateRuleRequest

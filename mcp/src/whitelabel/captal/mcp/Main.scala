@@ -4,7 +4,8 @@ import io.opentelemetry.api.trace.SpanKind
 import whitelabel.captal.cdc.feed.ChangeFeedQueue
 import whitelabel.captal.mcp.access.{Auth, OauthMetadata, Tokens}
 import whitelabel.captal.mcp.apps.{RunFeed, RunRoutes, ScriptDelivery, UiRoutes}
-import whitelabel.captal.mcp.aws.{DeployTargets, InfraSteps, InfraStore}
+import whitelabel.captal.core.application.queries.DispatchQuery
+import whitelabel.captal.mcp.aws.{DeployTargets, DispatchRules, InfraSteps, InfraStore}
 import whitelabel.captal.mcp.protocol.{Skills, SkillsExtension}
 import whitelabel.captal.mcp.resources.Readiness
 import whitelabel.captal.mcp.tools.{
@@ -231,11 +232,13 @@ object Main extends ZIOAppDefault:
     yield ()
 
   /** The runner that takes the runs the operation tools start, for as long as the server runs: none
-    * without the deploy configuration, where those tools are not registered either.
+    * without the deploy configuration, where those tools are not registered either. Every access
+    * point's dispatch rule is written once as it starts, in the background: one a write missed
+    * meanwhile, or one for a MAC no location holds any more, is put right.
     */
   private def startRunner(infra: Option[InfraStore]): ZIO[
     Scope & QuillSqlite & AssetStore & OperatorContext & OperationQueue & OperationFlows.Complete &
-      DistributedLock,
+      DistributedLock & DispatchRules,
     Nothing,
     Unit] =
     ZIO.foreachDiscard(infra): store =>
@@ -246,19 +249,22 @@ object Main extends ZIOAppDefault:
         operators <- ZIO.service[OperatorContext]
         complete  <- ZIO.service[OperationFlows.Complete]
         locks     <- ZIO.service[DistributedLock]
+        dispatch  <- ZIO.service[DispatchRules]
         _         <- OperationRunner.start(
           queue,
           quill,
           InfraSteps(store, assets),
           complete,
           operators,
-          locks)
+          locks,
+          dispatch)
         _ <- ZIO.logInfo("Operation runner started")
+        _ <- dispatch.write(DispatchQuery.All).forkScoped
       yield ()
 
   type Layers =
     CaptalMcp.Env & Option[InfraStore] & Server & OperationQueue & OperationFlows.Complete &
-      DistributedLock & RunFeed
+      DistributedLock & RunFeed & DispatchRules
 
   /** Everything the server runs on, built against a declared type, as the API's `appLayers` is: the
     * flows' refined types meet in one intersection, which only a declared target splits back into
@@ -314,6 +320,8 @@ object Main extends ZIOAppDefault:
     OperationFlows.completeLayer,
     // What the run pages hear of their runs, fed from the change feed (`followChanges`).
     RunFeed.layer,
+    // The access points' rules on the load balancer, written after what decides them changes.
+    DispatchRules.layer,
     // The locations' locks, on the Redis instances at `REDIS_LOCK_ADDRESSES`, connected on first use;
     // the server does not start without them.
     Redlock.layer

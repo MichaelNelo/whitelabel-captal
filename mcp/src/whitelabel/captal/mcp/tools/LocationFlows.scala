@@ -14,8 +14,11 @@ import whitelabel.captal.core.application.commands.{
   UpdateAccessPointHandler
 }
 import whitelabel.captal.core.application.Flow
+import whitelabel.captal.core.application.queries.DispatchQuery
+import whitelabel.captal.core.device.Mac
 import whitelabel.captal.core.infrastructure.{AccessPointRepository, LocationRepository}
 import whitelabel.captal.core.location.{AccessPoint, Location, State}
+import whitelabel.captal.mcp.aws.DispatchRules
 import whitelabel.captal.platform.OperatorContext
 import whitelabel.captal.platform.eventhandlers.{
   EventLogHandler,
@@ -57,35 +60,56 @@ object LocationFlows:
     ZLayer.fromFunction: (quill: QuillSqlite, operators: OperatorContext) =>
       flow(quill, operators)(RequireFingerprintHandler[Task](_))
 
-  val registerAccessPoint: ZLayer[QuillSqlite & OperatorContext, Nothing, RegisterAccessPoint] =
-    ZLayer.fromFunction: (quill: QuillSqlite, operators: OperatorContext) =>
-      flow(quill, operators)(repositories =>
-        RegisterAccessPointHandler[Task](repositories, repositories))
+  /** `flow`, and once it committed, the dispatch rules of the MACs the command touched written
+    * again: where a MAC's guests go depends on the access points its locations have.
+    */
+  private def dispatching[C, R](dispatch: DispatchRules)(macs: C => Set[Mac])(
+      flow: Flow.Aux[Task, C, R]): Flow.Aux[Task, C, R] =
+    new Flow[Task, C]:
+      type Result = R
+      def execute(command: C): Task[R] = flow
+        .execute(command)
+        .tap(_ => dispatch.write(DispatchQuery.Of(macs(command))))
 
-  val updateAccessPoint: ZLayer[QuillSqlite & OperatorContext, Nothing, UpdateAccessPoint] = ZLayer
-    .fromFunction: (quill: QuillSqlite, operators: OperatorContext) =>
+  private def register(quill: QuillSqlite, operators: OperatorContext, dispatch: DispatchRules) =
+    dispatching(dispatch)((c: RegisterAccessPointCommand) => Set(c.mac))(
       flow(quill, operators)(repositories =>
-        UpdateAccessPointHandler[Task](repositories, repositories))
+        RegisterAccessPointHandler[Task](repositories, repositories)))
 
-  val removeAccessPoint: ZLayer[QuillSqlite & OperatorContext, Nothing, RemoveAccessPoint] = ZLayer
-    .fromFunction: (quill: QuillSqlite, operators: OperatorContext) =>
+  private def update(quill: QuillSqlite, operators: OperatorContext, dispatch: DispatchRules) =
+    dispatching(dispatch)((c: UpdateAccessPointCommand) => Set(c.mac) ++ c.newMac)(
       flow(quill, operators)(repositories =>
-        RemoveAccessPointHandler[Task](repositories, repositories))
+        UpdateAccessPointHandler[Task](repositories, repositories)))
+
+  private def remove(quill: QuillSqlite, operators: OperatorContext, dispatch: DispatchRules) =
+    dispatching(dispatch)((c: RemoveAccessPointCommand) => Set(c.mac))(
+      flow(quill, operators)(repositories =>
+        RemoveAccessPointHandler[Task](repositories, repositories)))
+
+  val registerAccessPoint
+      : ZLayer[QuillSqlite & OperatorContext & DispatchRules, Nothing, RegisterAccessPoint] = ZLayer
+    .fromFunction(register)
+
+  val updateAccessPoint
+      : ZLayer[QuillSqlite & OperatorContext & DispatchRules, Nothing, UpdateAccessPoint] = ZLayer
+    .fromFunction(update)
+
+  val removeAccessPoint
+      : ZLayer[QuillSqlite & OperatorContext & DispatchRules, Nothing, RemoveAccessPoint] = ZLayer
+    .fromFunction(remove)
 
   /** The five, for a caller that builds its environment by hand — a test that runs the tools
-    * without `Main`'s layers. Added one by one, so each is found by its own type.
+    * without `Main`'s layers — writing the dispatch rules through `dispatch`, none by default.
+    * Added one by one, so each is found by its own type.
     */
-  def environment(quill: QuillSqlite, operators: OperatorContext): ZEnvironment[All] = ZEnvironment
+  def environment(
+      quill: QuillSqlite,
+      operators: OperatorContext,
+      dispatch: DispatchRules = DispatchRules.off): ZEnvironment[All] = ZEnvironment
     .empty
     .add[Create](flow(quill, operators)(CreateLocationHandler[Task](_)))
     .add[RequireFingerprint](flow(quill, operators)(RequireFingerprintHandler[Task](_)))
-    .add[RegisterAccessPoint](
-      flow(quill, operators)(repositories =>
-        RegisterAccessPointHandler[Task](repositories, repositories)))
-    .add[UpdateAccessPoint](
-      flow(quill, operators)(repositories =>
-        UpdateAccessPointHandler[Task](repositories, repositories)))
-    .add[RemoveAccessPoint](
-      flow(quill, operators)(repositories =>
-        RemoveAccessPointHandler[Task](repositories, repositories)))
+    .add[RegisterAccessPoint](register(quill, operators, dispatch))
+    .add[UpdateAccessPoint](update(quill, operators, dispatch))
+    .add[RemoveAccessPoint](remove(quill, operators, dispatch))
 end LocationFlows

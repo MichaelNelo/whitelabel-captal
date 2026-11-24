@@ -1,7 +1,7 @@
 ---
 name: troubleshoot-deployment
 description: Symptom to cause to fix for a portal that is misbehaving — blank page, 403s, 500s, unhealthy targets, stale content, missing questions or videos, guests stuck at Ready with no internet, guests turned away on the first page, guests waiting on the error page, replaced video files still stored. Triggers on "no funciona", "broken", "error", "503", "502", "500", "404", "403", "unhealthy", "stuck", "drain", "no carga", "troubleshoot", "diagnose", "debug", "sin internet", "no autoriza", "algo salió mal", "espera", "cuenta regresiva".
-version: 2.4.0
+version: 2.5.0
 ---
 
 # Troubleshoot a portal
@@ -133,18 +133,24 @@ one in their portal URL (`ap=`):
 * A guest whose AP was removed with `remove_access_point`, or given a new MAC, after they arrived
   has no controller to authorize them; they need to come in again through a registered AP.
 
-## K. The UCG redirect gives 404 "No location registered for AP"
+## K. The UCG redirect gives 404 "No portal is set up for this access point."
 
-The portal dispatcher Lambda resolves the slug by the AP's MAC, lowercase and colon-separated:
-`SELECT l.slug, a.redirect_url FROM access_points a JOIN locations l ON l.id = a.location_id WHERE a.mac = ?`.
-No location has the AP the guest hit registered. `get_unifi_config` lists a location's access
-points; register the missing one with `configure_unifi`, or fix a mistyped MAC with
-`update_access_point` and `newApMac`.
+The load balancer answers a guest the controller redirects with a rule per access point's MAC,
+which this server writes: one that redirects to the portal of the location holding the AP. The
+`404` is what is left when no rule matches the `ap` the controller sent. Three causes, in order:
 
-When several locations have the AP, the newest one that is not paused takes its guests. The
-backoffice keeps one deployed location per AP — registering an AP another deployed location has is
-refused, and so are `deploy_location` and `resume_location` for a location that shares one — so to
-move an AP to another location, pause the old one first.
+1. No location has that AP registered. `get_unifi_config` lists a location's access points;
+   register the missing one with `configure_unifi`, or fix a mistyped MAC with
+   `update_access_point` and `newApMac`.
+2. The locations that have it are neither deployed nor paused — created and never deployed, or
+   destroyed. Deploy one.
+3. The rule was not written: this server logs `The dispatch rules for … were not written` with
+   why. It writes every rule again as it starts, so a redeploy of the server puts them right.
+
+When several locations have the AP, the newest deployed one takes its guests, and with none
+deployed the newest paused. The backoffice keeps one deployed location per AP — registering an AP
+another deployed location has is refused, and so are `deploy_location` and `resume_location` for a
+location that shares one — so to move an AP to another location, pause the old one first.
 
 ## L. The portal renders key names or `[some.key]` to guests
 

@@ -72,8 +72,30 @@ object Refusals:
             .asString}' already exists, named '$by'. Slugs are permanent; pick another one."
       case LocationError.NotFound(slug) =>
         s"No location has the slug '${slug.asString}'. Call list_locations for the slugs."
-      case LocationError.InvalidRedirectUrl(url) =>
-        s"'$url' no es una URL http o https."
+      case LocationError.InvalidRedirectUrl(url, problem) =>
+        import whitelabel.captal.core.location.RedirectTarget.Problem
+        val max = whitelabel.captal.core.location.RedirectTarget.MaxLength
+        val why =
+          problem match
+            case Problem.NotHttp =>
+              "no es una URL http o https"
+            case Problem.Fragment =>
+              "tiene un fragmento (#…), que una redirección no lleva"
+            case Problem.BadHost =>
+              "su host falta o tiene caracteres que un host no admite"
+            case Problem.LongHost =>
+              s"su host pasa de $max caracteres"
+            case Problem.BadPort =>
+              "su puerto no está entre 1 y 65535"
+            case Problem.LongPath =>
+              s"su ruta pasa de $max caracteres"
+            case Problem.PathCharacter =>
+              "su ruta tiene un carácter que la redirección del balanceador no admite, como uno codificado (%…)"
+            case Problem.LongQuery =>
+              s"su query, con los parámetros del portal, pasa de $max caracteres"
+            case Problem.QueryCharacter =>
+              "su query tiene espacios o caracteres fuera de ASCII visible"
+        s"'$url' no sirve como destino de los huéspedes: $why."
       case LocationError.InvalidDuration(minutes) =>
         s"La duración debe ser de 1 minuto o más, no $minutes."
       case LocationError.BlankHost =>

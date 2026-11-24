@@ -15,7 +15,9 @@ import software.amazon.awssdk.services.ecs.model.{
 }
 import software.amazon.awssdk.services.elasticloadbalancingv2.model.{
   DescribeRulesRequest,
-  DescribeTargetGroupsRequest
+  DescribeTargetGroupsRequest,
+  RedirectActionConfig,
+  RedirectActionStatusCodeEnum
 }
 import software.amazon.awssdk.services.s3.model.{
   DeleteObjectRequest,
@@ -28,10 +30,11 @@ import whitelabel.captal.core.i18n.{I18n, I18nSchema}
 import whitelabel.captal.core.operation.Step as CoreStep
 import whitelabel.captal.mcp.access.{Auth, Tokens}
 import whitelabel.captal.mcp.apps.{RunFeed, RunRoutes}
-import whitelabel.captal.mcp.aws.{DeployTargets, InfraSteps, InfraStore}
+import whitelabel.captal.core.device.Mac
+import whitelabel.captal.mcp.aws.{DeployTargets, DispatchRules, InfraSteps, InfraStore}
 import whitelabel.captal.platform.locks.Redlock
 import whitelabel.captal.platform.operations.OperationQueue
-import whitelabel.captal.platform.queries.Playbacks
+import whitelabel.captal.platform.queries.{DispatchRoutes, Playbacks}
 import whitelabel.captal.mcp.resources.Readiness
 import whitelabel.captal.mcp.tools.{
   AdvertiserTools,
@@ -129,6 +132,9 @@ import QuillArrow.->
 object DeployE2ESpec extends ZIOSpecDefault:
   private val Slug = "e2e-cafe"
   private val Locale = "es"
+
+  /** The location's one access point. */
+  private val ApMac = Mac.parse("1c:6a:1b:ee:5c:be").get
 
   /** Seeded into this spec's own database and presented as a bearer token on every call.
     *
@@ -331,6 +337,25 @@ object DeployE2ESpec extends ZIOSpecDefault:
     * `AssetStore.get` is typed to the two assets an operator can override, and what this needs to
     * read is the page the edge serves — which is a bundle object, not one of those.
     */
+  /** The redirect the dispatch rule for `mac` answers on the configuration's HTTP listener, if
+    * there is one.
+    */
+  private def dispatchRuleOf(store: InfraStore, mac: Mac): Task[Option[RedirectActionConfig]] = ZIO
+    .attemptBlocking:
+      store
+        .targets
+        .dispatchListenerArn
+        .toList
+        .flatMap(listener =>
+          store
+            .elb
+            .describeRules(DescribeRulesRequest.builder().listenerArn(listener).build())
+            .rules()
+            .asScala)
+        .find(rule => DispatchRules.macOf(rule).contains(mac))
+        .flatMap(_.actions().asScala.headOption)
+        .flatMap(action => Option(action.redirectConfig()))
+
   private def objectText(key: String): ZIO[AssetStore, Throwable, Option[String]] = ZIO
     .serviceWithZIO[AssetStore]: assets =>
       ZIO
@@ -366,6 +391,15 @@ object DeployE2ESpec extends ZIOSpecDefault:
       queue <- OperationQueue.layer.build.map(_.get)
       locks <- Redlock.layer.build.map(_.get)
       start = OperationFlows.start(env.get[QuillSqlite], operators, queue, locks)
+      // The access points' dispatch rules, written on the configuration's HTTP listener as `Main`
+      // writes them.
+      dispatch <- DispatchRules
+        .layer
+        .build
+        .provideSome[Scope](
+          ZLayer.succeed(infra) ++
+            ZLayer.succeed[Queries.Dispatch](DispatchRoutes(env.get[QuillSqlite])))
+        .map(_.get[DispatchRules])
       _ <-
         ZIO.foreachDiscard(infra)(store =>
           OperationRunner.start(
@@ -374,7 +408,9 @@ object DeployE2ESpec extends ZIOSpecDefault:
             InfraSteps(store, env.get[AssetStore]),
             OperationFlows.complete(env.get[QuillSqlite], operators, locks),
             operators,
-            locks))
+            locks,
+            dispatch
+          ))
       queries =
         Queries.database(env.get[QuillSqlite]) ++
           Queries.assets(env.get[QuillSqlite], env.get[AssetStore])
@@ -390,7 +426,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
         .statelessRoutes
         .provideEnvironment(
           env.add(tracing).add[Operators](operators).add[OperationFlows.Start](start) ++
-            LocationFlows.environment(env.get[QuillSqlite], operators) ++
+            LocationFlows.environment(env.get[QuillSqlite], operators, dispatch) ++
             ContentFlows.environment(env.get[QuillSqlite], operators) ++
             AssetFlows.environment(env.get[QuillSqlite], operators, env.get[AssetStore]) ++
             VideoFlows.environment(env.get[QuillSqlite], operators, env.get[AssetStore]) ++ queries)
@@ -715,7 +751,7 @@ object DeployE2ESpec extends ZIOSpecDefault:
                 AccessPointRow(
                   id = s"$Slug-ap",
                   locationId = location.id,
-                  mac = "1c:6a:1b:ee:5c:be",
+                  mac = ApMac.show,
                   unifiHost = "unifi.e2e.test",
                   unifiPort = None,
                   unifiSiteId = "default",
@@ -737,6 +773,10 @@ object DeployE2ESpec extends ZIOSpecDefault:
         DeployTools.DeployRequest(Slug))
       deployDone <- client.awaitRun(deployRun)
       deployed = succeeded(deployDone)
+      // Written once the run has ended, so looked for until it is there.
+      dispatchedOnDeploy <-
+        dispatchRuleOf(store, ApMac).repeatUntil(_.isDefined).timeout(30.seconds) *>
+          dispatchRuleOf(store, ApMac)
       // What the run page does with the same answer: follow the run through its own stream, which
       // a ticket for another run, or for nothing, does not open.
       watch <- ZIO
@@ -809,6 +849,8 @@ object DeployE2ESpec extends ZIOSpecDefault:
         "pause_location",
         DeployTools.PauseRequest(Slug))
       paused <- client.awaitRun(pauseRun).map(succeeded)
+      // Paused, its guests still reach its page, which is the maintenance page now.
+      dispatchedOnPause <- dispatchRuleOf(store, ApMac)
       // What the edge now serves for this location, and what it does not.
       pausedIndex <- objectText(AssetStore.indexKey(Slug))
       savedPage   <- objectText(AssetStore.savedPageKey(Slug))
@@ -892,6 +934,10 @@ object DeployE2ESpec extends ZIOSpecDefault:
         "destroy_location",
         DeployTools.DestroyRequest(Slug, Slug))
       destroyed <- client.awaitRun(destroyedRun).map(succeeded)
+      // Destroyed, nothing holds the access point that has a portal: its rule goes.
+      dispatchedOnDestroy <-
+        dispatchRuleOf(store, ApMac).repeatUntil(_.isEmpty).timeout(30.seconds) *>
+          dispatchRuleOf(store, ApMac)
       // A deleted service lingers as INACTIVE rather than vanishing, which is the state
       // `upsertService` already knows to create over.
       servicesAfter <- ZIO.attemptBlocking:
@@ -1000,6 +1046,15 @@ object DeployE2ESpec extends ZIOSpecDefault:
       assertTrue(
         // Infrastructure, as AWS reports it.
         service.serviceName() == store.targets.serviceName(Slug),
+        // The access point's dispatch rule: written once the deploy ended, to the location's
+        // portal with UniFi's query kept; kept through the pause, its page being the maintenance
+        // page; gone with the destroy. `PUBLIC_BASE_URL` here is `https://portal.test`.
+        dispatchedOnDeploy.exists(redirect =>
+          redirect.protocol == "HTTPS" && redirect.host == "portal.test" &&
+            redirect.path == s"/$Slug/" && redirect.query == "#{query}" &&
+            redirect.statusCode == RedirectActionStatusCodeEnum.HTTP_302),
+        dispatchedOnPause.exists(_.path == s"/$Slug/"),
+        dispatchedOnDestroy.isEmpty,
         // Forwarded from this server's own environment, the way `DB_URL` is. The first clause keeps
         // the second from passing on `None == None`.
         store.targets.unifiProxyUrl.nonEmpty,

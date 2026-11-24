@@ -1,6 +1,7 @@
 package whitelabel.captal.mcp.tools
 
 import whitelabel.captal.core.application.commands.CompleteOperationCommand
+import whitelabel.captal.core.application.queries.DispatchQuery
 import whitelabel.captal.core.infrastructure.{OperationSteps, RunProgress, RunRepository}
 import whitelabel.captal.core.operation.{
   Execution,
@@ -11,6 +12,7 @@ import whitelabel.captal.core.operation.{
   Step,
   StepFailure
 }
+import whitelabel.captal.mcp.aws.DispatchRules
 import whitelabel.captal.platform.locks.{DistributedLock, Lease}
 import whitelabel.captal.platform.operations.{OperationLock, OperationQueue, RunProgressQuill}
 import whitelabel.captal.platform.repositories.RunRepositoryQuill
@@ -35,18 +37,22 @@ import zio.interop.catz.*
   * operation asked of the location offers to finish it.
   */
 object OperationRunner:
-  /** Forks the loop for the life of the given `Scope`. Building it starts nothing. */
+  /** Forks the loop for the life of the given `Scope`. Building it starts nothing. Once a run has
+    * ended, its location's dispatch rules are written through `dispatch`: a deploy, pause, resume
+    * or destroy changes where its access points' guests go.
+    */
   def start(
       queue: OperationQueue,
       quill: QuillSqlite,
       steps: OperationSteps[Task],
       complete: OperationFlows.Complete,
       operators: OperatorContext,
-      locks: DistributedLock): ZIO[Scope, Nothing, Unit] =
+      locks: DistributedLock,
+      dispatch: DispatchRules): ZIO[Scope, Nothing, Unit] =
     queue
       .take
       .flatMap(run =>
-        runOne(run, quill, steps, complete, operators, locks)
+        runOne(run, quill, steps, complete, operators, locks, dispatch)
           .catchAllCause(cause => ZIO.logErrorCause(s"Run ${run.asString} could not be run", cause))
           .forkScoped)
       .forever
@@ -62,7 +68,8 @@ object OperationRunner:
       steps: OperationSteps[Task],
       complete: OperationFlows.Complete,
       operators: OperatorContext,
-      locks: DistributedLock): Task[Unit] =
+      locks: DistributedLock,
+      dispatch: DispatchRules): Task[Unit] =
     val runs = RunRepositoryQuill(quill, locks)
     runs
       .findStarted(id)
@@ -86,6 +93,8 @@ object OperationRunner:
               _   <-
                 operators.locally(Operator(run.startedBy, None))(
                   complete.execute(CompleteOperationCommand(run.id, outcome, now)))
+              // Still holding the location's lock, so no other operation moves it meanwhile.
+              _ <- dispatch.write(DispatchQuery.OfLocation(run.location))
             yield ()
   end runOne
 
