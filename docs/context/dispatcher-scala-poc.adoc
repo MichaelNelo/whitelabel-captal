@@ -1,0 +1,128 @@
+= Proof of concept: the portal dispatcher in Scala with Kyo
+:toc:
+:toclevels: 2
+
+A proof of concept run on 2026-11-23, asked for in conversation: whether the portal dispatcher —
+today `terraform/modules/portal-dispatcher/dispatcher.py`, a Python Lambda behind the ALB that
+turns a UniFi access point's MAC into a `302` to its location's portal — can be Scala, with Kyo
+rather than ZIO, and at what cost to the cold start a guest waits through. Nothing was decided
+from it yet; the code lived outside the repository and is not kept. What follows is what was
+built, how it was measured, and what came out.
+
+== What was built
+
+One core and three targets, from one Mill build (`mill-version: 1.3.1`):
+
+* *The core* (`Dispatcher`): the Python dispatcher's rule without its fallbacks for databases
+  before V36 — normalize the `ap` MAC, query rqlite over HTTP (`/db/query?level=none`), take the
+  newest deployed location with the access point, else the newest paused, else the newest, and
+  answer the ALB a `302` to the access point's redirect URL or `https://<cloudfront>/<slug>/`, the
+  query string encoded as `urllib.parse.urlencode` encodes it. `kyo-http`'s `HttpClient.getText`
+  for the query, `kyo-schema-json` with `derives Schema` for the event, rqlite's answer and the
+  response.
+* *Scala Native* (`provided.al2023`): `KyoApp` running the Lambda Runtime API's loop itself — a
+  long-polled `GET .../invocation/next` with the client's timeout set to `Duration.Infinity`, then
+  a `POST .../invocation/<id>/response`.
+* *Scala.js* (`nodejs24.x`): a `@JSExportTopLevel("handler")` returning a `js.Promise`, linked once
+  as JavaScript and once with `scalaJSUseWebAssembly` — the same sources, an ES module either way.
+  The Wasm backend honours `@JSExportTopLevel`; it ignores only `@JSExport` and `@JSExportAll`.
+
+Versions are Kyo's: `1.0.0-RC7` requires Scala 3.9.0, Scala Native 0.5.12 and Scala.js 1.22 or
+later (1.23.0 was used). The repository builds with Scala 3.8.0, so a dispatcher module would carry
+its own `scalaVersion`.
+
+== How it was measured
+
+Each variant in its AWS Lambda base image (`public.ecr.aws/lambda/python:3.12`,
+`.../nodejs:24`, `.../provided:al2023`), which carries the Runtime Interface Emulator, against
+rqlite 10.6.1 with a minimal `locations` and `access_points` and one ALB event. Each sample is a new
+container — so a cold start — invoked three times: the first is the cold start, measured at the
+client, the others warm. Each container gets the memory under test and the CPU Lambda gives that
+memory, `memory / 1769` of a vCPU (`docker run --cpus`). Five samples per variant at 128 and 256 MB,
+three at 512, 1024 and 1769 MB; the medians are below.
+
+The emulator is not Firecracker, and nothing here downloads the package the way Lambda does, which
+costs more the larger the artifact. The numbers compare the variants with one another under the
+same constraint; they are not AWS's.
+
+== Results
+
+Cold start, median, by the function's memory:
+
+[cols="2,1,1,1,1,1"]
+|===
+|Variant |128 MB |256 MB |512 MB |1024 MB |1769 MB (1 vCPU)
+
+|Python, as deployed
+|1105 ms |512 ms |177 ms |100 ms |79 ms
+
+|Scala Native, slim
+|2983 ms |1034 ms |476 ms |269 ms |146 ms
+
+|Scala.js to Wasm, slim
+|3083 ms |1494 ms |622 ms |284 ms |179 ms
+
+|Scala Native
+|— |1199 ms |— |— |245 ms
+
+|Scala.js to Wasm
+|— |3099 ms |— |— |—
+
+|Scala.js to JavaScript
+|— |9011 ms |— |— |—
+
+|An empty Node.js handler
+|— |383 ms |— |— |50 ms
+|===
+
+Warm, every variant answers in 2 to 6 ms, with the odd sample near 80 ms where the CPU quota cut in.
+Memory in use, as `docker stats` reads it: Python 16 MB, Native slim 51, Wasm slim 48, Native 162,
+Wasm 109, JavaScript 255 at a 256 MB limit. Artifacts: Python's source 5 KB; Native 35 MB, slim
+12.7 MB; Wasm 14.4 MB (with 1.2 MB of JavaScript), slim 2.4 MB (41 KB); JavaScript 32 MB.
+
+What the table says:
+
+* *At the same memory, Scala costs two to three times Python's cold start*, at every size measured.
+* *Memory moves the cold start more than the language.* Python goes from 1.1 s at the 128 MB it is
+  deployed with to 177 ms at 512 MB; Native slim at 1024 MB (269 ms) starts four times faster than
+  the Python deployed today.
+* *Native's cold start is its own initialisation*, about 140 ms of CPU at one vCPU: the emulator
+  reports it as the `INIT` phase, before the first invocation reaches the runtime. Where it goes was
+  not looked into.
+
+== What it found on the way
+
+* *"Slim" is the data `kyo-http` brings and the dispatcher never reads.* Through Kyo's logging and
+  `java.time`, the build pulls `scala-java-time-tzdb` and `locales-full-currencies-db` (every CLDR
+  locale). Excluding both and adding `locales-minimal-en-db` took Wasm from 14.4 MB to 2.4 MB and
+  Native from 35 MB to 12.7 MB, and halved their cold starts at 256 MB, with the same answers.
+* *Kyo's I/O backend selection can cost seconds.* Unforced, `kyo-net` probes its native backends
+  (io_uring and epoll through the `koffi` npm package on Node), falls back, and logs a warning; the
+  warning's timestamp is formatted through `java.util.Locale`, whose first use loads every CLDR
+  locale — 0.3 s in JavaScript, 10 s in Wasm, 97 % of the first call. `KYO_NET_BACKEND=node` (the
+  `kyo.net.backend` flag, read from the environment as `KYO_NET_BACKEND`) skips the probe; with it
+  the Wasm first call went from 10.5 s to 53 ms on a full CPU.
+* *`kyo-http` on Native needs OpenSSL, though the dispatcher only speaks plain HTTP.* Its TLS layer
+  is C (`kyo_tls.c`) compiled against `openssl/ssl.h` and not linked: the build needs
+  `openssl-devel` and `nativeLinkingOptions = Seq("-lssl", "-lcrypto")`. The binary then needs
+  `libssl.so.3`, `libcrypto.so.3` and `libz.so.1`, which the `provided.al2023` image has.
+* *The native binary has to be built on Amazon Linux 2023*, here in an `amazonlinux:2023`
+  container with clang, a JDK 21 and Mill: one built on this machine links against Nix's glibc. The
+  first build took about three minutes, of which 140 s compiling to native code; a rebuild, about
+  25 s.
+* *Kyo's own WebAssembly support is a Node.js 24+ target* — its README says it is tested in CI but
+  ships no artifact; the `_sjs1-wasm` artifacts stop at RC5. The regular Scala.js artifacts linked
+  with the Wasm backend worked on Node.js 24.18 and on the Lambda image's 24.22 without
+  `--experimental-wasm-exnref`.
+* *Lambda has no WebAssembly runtime of its own*, and Scala.js's bare `WasmModule` output, new in
+  1.23, has no JavaScript interop — no network — so it cannot query rqlite or speak the Runtime
+  API. Wasm on Lambda here means the ES module output, hosted by the Node.js runtime.
+
+== Open
+
+* Whether to raise the function's memory, which shortens the cold start whatever the language: a
+  separate decision from the rewrite, and one that can be taken with the Python dispatcher as it is.
+* Whether the rewrite goes ahead, and on which target. Native slim is the fastest Scala variant,
+  Wasm slim close behind with a smaller artifact, a build with no container, and `core` within
+  reach, since `core` compiles to Scala.js and not to Native.
+* Where Native's 140 ms of initialisation goes, before choosing it.

@@ -38,16 +38,19 @@ Read it before changing anything. Most of what is here was expensive to learn.
 
 | xref:admin-core-plan.adoc[Plan: the administrative side in core]
 | You are moving the backoffice's rules into `core`, touching a location's deploy, pause, resume
-  or destroy, or moving `/api/status`'s logic into a command. An agreed plan, its first four steps
-  done.
+  or destroy, or moving `/api/status`'s logic into a command. An agreed plan, carried out whole.
 
 | xref:flow-adapters-plan.adoc[Plan: tools and endpoints from flows and queries]
 | You are writing a backoffice tool or an API route that runs one command or one query. An agreed
-  plan, not started: it waits for the admin core plan.
+  plan: its tools part is done, its routes part left for the next time the routes are reworked.
 
 | xref:relay-sns-sqs-plan.adoc[Plan: the relay hands its fan-out to SNS and SQS]
 | You are touching the change data capture relay, its subscribers or rqlite's CDC configuration. An
-  agreed plan, not started, with what rqlite's CDC actually does.
+  agreed plan, carried out whole, with what rqlite's CDC actually does.
+
+| xref:dispatcher-scala-poc.adoc[Proof of concept: the portal dispatcher in Scala with Kyo]
+| You are deciding the portal dispatcher's language, runtime or memory. Native, Wasm and
+  JavaScript measured against the Python dispatcher; nothing decided.
 |===
 
 Architecture — what exists and how it is wired — is one level up, indexed in
