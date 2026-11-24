@@ -9,7 +9,7 @@ import io.getquill.*
 import whitelabel.captal.core.access.Event as AccessEvent
 import whitelabel.captal.core.application.Event
 import whitelabel.captal.core.device.Event as DeviceEvent
-import whitelabel.captal.core.location.{AccessPoint, Event as LocationEvent, LocationId}
+import whitelabel.captal.core.location.{AccessPoint, Controller, Event as LocationEvent, LocationId}
 import whitelabel.captal.core.operation.{Event as OperationEvent, RunId}
 import whitelabel.captal.core.advertiser.Event as AdvertiserEvent
 import whitelabel.captal.core.survey.authoring.Event as AuthoringEvent
@@ -460,9 +460,7 @@ object EventLogHandler:
           Json.obj("termsId" -> Json.fromString(terms), "locale" -> Json.fromString(locale)),
           occurredAt)
 
-  /** A location's events, its access points' tokens left out: whether one is set is all the log
-    * says of them.
-    */
+  /** A location's events, and its controllers', their tokens left out: the log never says them. */
   private def extractLocationEvent(event: LocationEvent): (String, Json, Instant) =
     event match
       case LocationEvent.LocationCreated(id, slug, name, occurredAt) =>
@@ -501,6 +499,15 @@ object EventLogHandler:
           Json.obj(
             "locationId" -> Json.fromString(location.asString),
             "mac"        -> Json.fromString(mac.show)),
+          occurredAt)
+      case LocationEvent.ControllerRegistered(controller, occurredAt) =>
+        ("unifi.controller_registered", controllerJson(controller), occurredAt)
+      case LocationEvent.ControllerChanged(controller, occurredAt) =>
+        ("unifi.controller_changed", controllerJson(controller), occurredAt)
+      case LocationEvent.ControllerRemoved(id, occurredAt) =>
+        (
+          "unifi.controller_removed",
+          Json.obj("controllerId" -> Json.fromString(id.asString)),
           occurredAt)
       case LocationEvent.LocationDeployed(id, by, occurredAt) =>
         ("location.deployed", transitionJson(id, by), occurredAt)
@@ -567,12 +574,17 @@ object EventLogHandler:
 
   private def accessPointJson(point: AccessPoint): Json = Json.obj(
     "mac"             -> Json.fromString(point.mac.show),
-    "host"            -> Json.fromString(point.controller.host),
-    "port"            -> point.controller.port.asJson,
-    "siteId"          -> Json.fromString(point.controller.siteId),
+    "controllerId"    -> Json.fromString(point.controller.id.asString),
     "durationMinutes" -> point.settings.durationMinutes.asJson,
     "redirectUrl"     -> point.settings.redirectUrl.asJson,
     "unifiEnabled"    -> Json.fromBoolean(point.settings.unifiEnabled)
+  )
+
+  private def controllerJson(controller: Controller): Json = Json.obj(
+    "controllerId" -> Json.fromString(controller.id.asString),
+    "host"         -> Json.fromString(controller.host),
+    "port"         -> controller.port.asJson,
+    "siteId"       -> Json.fromString(controller.siteId)
   )
 
   private def extractUserEvent(event: UserEvent): Option[(String, Json, Instant)] =

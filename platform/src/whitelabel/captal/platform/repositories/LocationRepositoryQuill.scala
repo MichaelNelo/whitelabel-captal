@@ -3,10 +3,15 @@ package whitelabel.captal.platform.repositories
 import cats.data.NonEmptyList
 import io.getquill.*
 import whitelabel.captal.core.device.Mac
-import whitelabel.captal.core.infrastructure.{AccessPointRepository, LocationRepository}
+import whitelabel.captal.core.infrastructure.{
+  AccessPointRepository,
+  ControllerRepository,
+  LocationRepository
+}
 import whitelabel.captal.core.location.{
   AccessPoint,
   Controller,
+  ControllerId,
   Location,
   LocationId,
   Secret,
@@ -17,12 +22,21 @@ import whitelabel.captal.core.location.{
 import whitelabel.captal.core.operation.RunId
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.{AccessPointRow, LocationRow, LocationStates}
+import whitelabel.captal.platform.{
+  AccessPointRow,
+  ActiveAccessPointRow,
+  LocationAccessPointRow,
+  LocationRow,
+  LocationStates,
+  UnifiControllerRow
+}
 import zio.*
 
-/** Locations and their access points as `locations` and `access_points` hold them. A row the model
-  * cannot hold — a deployed location with no access point, an access point with no token — is a
-  * defect, since no command writes one.
+/** Locations and the access points they are configured with, as `locations`,
+  * `location_access_points`, `access_points` and `unifi_controllers` hold them; which location has
+  * taken an access point, as `active_access_points` does. A row the model cannot hold — a deployed
+  * location with no access point, a controller with no token — is a defect, since no command writes
+  * one.
   */
 object LocationRepositoryQuill:
   def apply(quill: QuillSqlite): LocationRepository[Task] & AccessPointRepository[Task] =
@@ -65,19 +79,59 @@ object LocationRepositoryQuill:
           })
 
       def of(location: LocationId): Task[List[AccessPoint]] =
-        run(query[AccessPointRow].filter(_.locationId == lift(location.asString)))
-          .map(_.map(accessPointOf))
+        run(
+          for
+            configured <- query[LocationAccessPointRow].filter(
+              _.locationId == lift(location.asString))
+            point      <- query[AccessPointRow].join(_.id == configured.accessPointId)
+            controller <- query[UnifiControllerRow].join(_.id == point.controllerId)
+          yield (configured, point, controller))
+          .map(_.map(accessPointOf).sortBy(_.mac.toLong))
           .orDie
 
-      def deployedHolders(mac: Mac): Task[List[Slug]] =
+      def takenBy(mac: Mac): Task[Option[Slug]] =
         run(
           for
             point    <- query[AccessPointRow].filter(_.mac == lift(mac.show))
-            location <- query[LocationRow].join(l =>
-              l.id == point.locationId && l.state == lift(LocationStates.Deployed))
-          yield location.slug).map(_.distinct.map(Slug.unsafe)).orDie
+            taken    <- query[ActiveAccessPointRow].join(_.accessPointId == point.id)
+            location <- query[LocationRow].join(_.id == taken.locationId)
+          yield location.slug).map(_.headOption.map(Slug.unsafe)).orDie
+
+      def controllerOf(mac: Mac): Task[Option[Controller]] =
+        run(
+          for
+            point      <- query[AccessPointRow].filter(_.mac == lift(mac.show))
+            controller <- query[UnifiControllerRow].join(_.id == point.controllerId)
+          yield controller).map(_.headOption.map(LocationRepositoryQuill.controllerOf)).orDie
     end new
   end apply
+
+  /** The UniFi controllers `unifi_controllers` holds. */
+  def controllers(quill: QuillSqlite): ControllerRepository[Task] =
+    import quill.*
+    new ControllerRepository[Task]:
+      def find(id: ControllerId): Task[Option[Controller]] =
+        run(query[UnifiControllerRow].filter(_.id == lift(id.asString)))
+          .map(_.headOption.map(controllerOf))
+          .orDie
+
+      def at(host: String, port: Option[Int], siteId: String): Task[Option[ControllerId]] =
+        run(
+          query[UnifiControllerRow].filter(row =>
+            row.host == lift(host) && row.siteId == lift(siteId)))
+          .map(
+            _.find(_.port.getOrElse(443) == port.getOrElse(443)).map(row => ControllerId(row.id)))
+          .orDie
+
+      def uses(id: ControllerId): Task[Int] =
+        run(
+          query[AccessPointRow]
+            .filter(point =>
+              point.controllerId == lift(id.asString) &&
+                query[LocationAccessPointRow].filter(_.accessPointId == point.id).nonEmpty)
+            .size).map(_.toInt).orDie
+    end new
+  end controllers
 
   private def locationOf(row: LocationRow, points: List[AccessPoint]): Location[State] =
     def run = RunId(row.stateRun.getOrElse(defect(s"'${row.slug}' is ${row.state} by no run")))
@@ -105,18 +159,27 @@ object LocationRepositoryQuill:
       state)
   end locationOf
 
-  private def accessPointOf(row: AccessPointRow): AccessPoint = AccessPoint(
-    Mac.parse(row.mac).getOrElse(defect(s"Access point ${row.id} has no MAC: '${row.mac}'")),
-    Controller(
-      row.unifiHost,
-      row.unifiPort,
-      row.unifiSiteId,
-      Secret.parse(row.unifiApiToken).getOrElse(defect(s"Access point ${row.mac} has no token"))),
+  /** A location's view of an access point it is configured with: the access point, its controller,
+    * and what the location does for its guests.
+    */
+  private[platform] def accessPointOf(
+      configured: LocationAccessPointRow,
+      point: AccessPointRow,
+      controller: UnifiControllerRow): AccessPoint = AccessPoint(
+    Mac.parse(point.mac).getOrElse(defect(s"Access point ${point.id} has no MAC: '${point.mac}'")),
+    controllerOf(controller),
     Settings(
-      durationMinutes = row.durationMinutes,
-      redirectUrl = row.redirectUrl,
-      unifiEnabled = row.unifiIsEnabled == 1)
+      durationMinutes = configured.durationMinutes,
+      redirectUrl = configured.redirectUrl,
+      unifiEnabled = configured.unifiIsEnabled == 1)
   )
+
+  private[platform] def controllerOf(row: UnifiControllerRow): Controller = Controller(
+    ControllerId(row.id),
+    row.host,
+    row.port,
+    row.siteId,
+    Secret.parse(row.apiToken).getOrElse(defect(s"Controller ${row.id} has no token")))
 
   private def defect(what: String): Nothing = throw IllegalStateException(what)
 end LocationRepositoryQuill

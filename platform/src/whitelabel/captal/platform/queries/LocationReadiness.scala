@@ -17,10 +17,10 @@ import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.core.given
 import whitelabel.captal.platform.schema.given
 import whitelabel.captal.platform.{
-  AccessPointRow,
   AdvertiserRow,
   AdvertiserVideoRow,
   LocalizedTextRow,
+  LocationAccessPointRow,
   LocationRow,
   QuestionRow,
   SurveyCategory,
@@ -74,7 +74,7 @@ object LocationReadiness:
     import quill.*
     for
       texts       <- run(textsForLocation(lift(row.id)))
-      points      <- run(query[AccessPointRow].filter(_.locationId == lift(row.id)))
+      points      <- run(query[LocationAccessPointRow].filter(_.locationId == lift(row.id)))
       videos      <- run(query[AdvertiserVideoRow])
       surveys     <- run(query[SurveyRow])
       advertisers <- run(query[AdvertiserRow])
@@ -101,8 +101,8 @@ object LocationReadiness:
         slug = row.slug,
         name = row.name,
         active = row.isActive == 1,
-        // An access point is stored only with all of host, site id and token, so having one is
-        // being configured.
+        // An access point answers to a controller stored with all of host, site id and token, so
+        // being configured with one is being configured.
         unifiConfigured = points.nonEmpty,
         unifiEnabled = points.exists(_.unifiIsEnabled == 1),
         locales = byLocale,

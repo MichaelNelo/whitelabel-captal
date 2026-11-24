@@ -59,6 +59,11 @@ package object schema:
   inline given SchemaMeta[VideoViewRow] = schemaMeta[VideoViewRow]("video_views")
   inline given SchemaMeta[LocationRow] = schemaMeta[LocationRow]("locations")
   inline given SchemaMeta[AccessPointRow] = schemaMeta[AccessPointRow]("access_points")
+  inline given SchemaMeta[UnifiControllerRow] = schemaMeta[UnifiControllerRow]("unifi_controllers")
+  inline given SchemaMeta[LocationAccessPointRow] = schemaMeta[LocationAccessPointRow](
+    "location_access_points")
+  inline given SchemaMeta[ActiveAccessPointRow] = schemaMeta[ActiveAccessPointRow](
+    "active_access_points")
   inline given SchemaMeta[LocationRecoveryRow] = schemaMeta[LocationRecoveryRow](
     "location_recovery")
   inline given SchemaMeta[EventLogRow] = schemaMeta[EventLogRow]("event_log")

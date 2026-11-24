@@ -2,7 +2,13 @@ package whitelabel.captal.platform.services
 
 import io.getquill.*
 import whitelabel.captal.core.device.Mac
-import whitelabel.captal.platform.{AccessPointRow, LocationRow, UnifiAccess}
+import whitelabel.captal.platform.{
+  AccessPointRow,
+  LocationAccessPointRow,
+  LocationRow,
+  UnifiAccess,
+  UnifiControllerRow
+}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
 import zio.*
@@ -31,24 +37,34 @@ object LocationService:
   inline def findBySlugQuery = quote: (slugParam: String) =>
     query[LocationRow].filter(_.slug == slugParam).take(1)
 
+  /** The location's configuration for the access point `macParam`, with its controller. */
   inline def accessPointQuery = quote: (idParam: String, macParam: String) =>
-    query[AccessPointRow].filter(ap => ap.locationId == idParam && ap.mac == macParam).take(1)
+    (
+      for
+        point      <- query[AccessPointRow].filter(_.mac == macParam)
+        configured <- query[LocationAccessPointRow].join(link =>
+          link.accessPointId == point.id && link.locationId == idParam)
+        controller <- query[UnifiControllerRow].join(_.id == point.controllerId)
+      yield (configured, controller)
+    ).take(1)
 
   def apply(quill: QuillSqlite): LocationService =
     new LocationService:
       import quill.*
 
-      private def accessPoint(id: String, ap: Mac): Task[Option[AccessPointRow]] = run(
+      private def accessPoint(
+          id: String,
+          ap: Mac): Task[Option[(LocationAccessPointRow, UnifiControllerRow)]] = run(
         accessPointQuery(lift(id), lift(ap.show))).map(_.headOption)
 
       def findBySlug(slug: String): Task[Option[LocationRow]] =
         run(findBySlugQuery(lift(slug))).map(_.headOption).orDie
 
       def unifiEnabled(id: String, ap: Mac): Task[Boolean] = accessPoint(id, ap).map(
-        !_.exists(_.unifiIsEnabled == 0))
+        !_.exists(_._1.unifiIsEnabled == 0))
 
       def unifiFor(id: String, ap: Mac): Task[Option[UnifiAccess]] = accessPoint(id, ap).map(
-        _.map(UnifiAccess.of))
+        _.map((configured, controller) => UnifiAccess.of(controller, configured)))
 
   /** Resolve a slug to a location ID, failing with LocationNotFound if not found. */
   def resolveSlug(slug: String): ZIO[LocationService, LocationNotFound, String] = ZIO

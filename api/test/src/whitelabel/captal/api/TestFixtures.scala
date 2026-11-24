@@ -416,8 +416,9 @@ object TestFixtures:
     )
     run(query[LocationRow].insertValue(lift(location))).unit
 
-  /** An access point of `locationId` with its controller and its settings, its MAC stored as the
-    * backoffice stores it whatever spelling it is given in.
+  /** `locationId` configured with an access point and its settings: the access point, its MAC
+    * stored as the backoffice stores it whatever spelling it is given in, and the controller at
+    * `host` it answers to, each made when the database does not have it yet.
     */
   def seedAccessPoint(
       locationId: String,
@@ -427,23 +428,33 @@ object TestFixtures:
       : ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*
     val stored = Mac.parse(mac).fold(mac)(_.show)
+    val controller = UnifiControllerRow(
+      id = s"controller-$host",
+      host = host,
+      port = None,
+      siteId = "test-site",
+      apiToken = "test-token",
+      createdAt = FixedNow,
+      updatedAt = FixedNow)
     val point = AccessPointRow(
-      id = s"$locationId/$stored",
-      locationId = locationId,
+      id = stored,
       mac = stored,
-      unifiHost = host,
-      unifiPort = None,
-      unifiSiteId = "test-site",
-      unifiApiToken = "test-token",
+      controllerId = controller.id,
+      createdAt = FixedNow,
+      updatedAt = FixedNow)
+    val configured = LocationAccessPointRow(
+      locationId = locationId,
+      accessPointId = point.id,
       createdAt = FixedNow,
       updatedAt = FixedNow,
       unifiIsEnabled =
         if unifiEnabled then
           1
         else
-          0
-    )
-    run(query[AccessPointRow].insertValue(lift(point))).unit
+          0)
+    run(query[UnifiControllerRow].insertValue(lift(controller)).onConflictIgnore) *>
+      run(query[AccessPointRow].insertValue(lift(point)).onConflictIgnore) *>
+      run(query[LocationAccessPointRow].insertValue(lift(configured))).unit
 
   /** Moves a session to a location, as if the API serving it were that location's: the tests' own
     * API serves none.
@@ -566,7 +577,10 @@ object TestFixtures:
         stmt.execute("DELETE FROM advertisers")
         stmt.execute("DELETE FROM users")
         stmt.execute("DELETE FROM location_recovery")
+        stmt.execute("DELETE FROM active_access_points")
+        stmt.execute("DELETE FROM location_access_points")
         stmt.execute("DELETE FROM access_points")
+        stmt.execute("DELETE FROM unifi_controllers")
         stmt.execute("DELETE FROM locations")
         stmt.close()
       finally

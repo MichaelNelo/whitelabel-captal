@@ -296,23 +296,49 @@ final case class RunRow(
     heartbeatAt: String,
     finishedAt: Option[String])
 
-/** One of a location's access points, with the UniFi controller that authorizes the guests who join
-  * through it and what the portal does for them. `mac` is lowercase with colons, as
-  * [[whitelabel.captal.core.device.Mac.show]] writes it.
+/** A UniFi controller, the system's: any access point of any location can answer to it, and its
+  * token is stored here alone. `port` `None` is 443.
+  */
+final case class UnifiControllerRow(
+    id: String,
+    host: String,
+    port: Option[Int],
+    siteId: String,
+    apiToken: String,
+    createdAt: String,
+    updatedAt: String)
+
+/** A physical access point, and the controller it answers to. `mac` is lowercase with colons, as
+  * [[whitelabel.captal.core.device.Mac.show]] writes it, and one access point's alone.
   */
 final case class AccessPointRow(
     id: String,
-    locationId: String,
     mac: String,
-    unifiHost: String,
-    unifiPort: Option[Int],
-    unifiSiteId: String,
-    unifiApiToken: String,
+    controllerId: String,
+    createdAt: String,
+    updatedAt: String)
+
+/** An access point a location is configured with, and what the location does for the guests who
+  * join through it. Any number of locations can be configured with one access point.
+  */
+final case class LocationAccessPointRow(
+    locationId: String,
+    accessPointId: String,
     createdAt: String,
     updatedAt: String,
     durationMinutes: Option[Int] = None,
     redirectUrl: Option[String] = None,
     unifiIsEnabled: Int = 1)
+
+/** The location taking an access point's guests ([[ActiveAccessPoints]]): one per access point at
+  * most, which the table's primary key holds it to.
+  */
+final case class ActiveAccessPointRow(
+    accessPointId: String,
+    locationId: String,
+    state: String,
+    runId: String,
+    since: String)
 
 /** What a location changed of the recovery defaults; `None` takes the default. See
   * [[LocationRecovery]].
