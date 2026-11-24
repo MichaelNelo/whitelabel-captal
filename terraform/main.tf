@@ -160,11 +160,6 @@ module "alb" {
   container_port    = var.container_port
   # The port it answers on from outside, where that is not the scheme's own: LocalStack's gateway.
   http_port = var.public_port != 0 ? var.public_port : 80
-  # Wire the captive portal dispatcher Lambda target group into the HTTP listener.
-  # enable_portal_dispatcher_rule is a static bool so the resource count can be
-  # evaluated at plan time (must NOT use a module attribute for count gating).
-  enable_portal_dispatcher_rule      = var.enable_global_accelerator
-  portal_dispatcher_target_group_arn = var.enable_global_accelerator ? module.portal_dispatcher[0].target_group_arn : ""
 }
 
 # The names the services reach each other by, `<name>.<namespace>`. Cloud Map's where there is one,
@@ -431,26 +426,10 @@ resource "aws_vpc_security_group_ingress_rule" "rqlite_from_tailscale_proxy" {
   referenced_security_group_id = module.tailscale_proxy[0].security_group_id
 }
 
-# Captive portal dispatcher — Lambda that looks up the slug by AP MAC in rqlite
-# and 302-redirects the device to the correct CloudFront URL. Sits behind the
-# ALB's HTTP listener (rule on /guest/s/*), fed by Global Accelerator's static IP.
-module "portal_dispatcher" {
-  source = "./modules/portal-dispatcher"
-  count  = var.enable_global_accelerator ? 1 : 0
-
-  project_name                     = var.project_name
-  environment                      = var.environment
-  vpc_id                           = local.vpc_id
-  subnet_ids                       = local.workload_subnet_ids
-  rqlite_security_group_id         = module.rqlite.security_group_id
-  service_discovery_namespace_name = local.service_discovery_namespace
-  cloudfront_host                  = var.cloudfront_domain
-  rqlite_http_port                 = var.rqlite_http_port
-}
-
 # Global Accelerator — static IPv4 in front of the ALB so UniFi External Portal
 # Server (which validates the field as IPv4 only) has something stable to point
-# at. Wraps the ALB at TCP/80; HTTPS keeps going directly to CloudFront.
+# at. Wraps the ALB at TCP/80, where the backoffice's rule for each access point's
+# MAC redirects its guests to their portal; HTTPS keeps going directly to CloudFront.
 module "global_accelerator" {
   source = "./modules/global-accelerator"
   count  = var.enable_global_accelerator ? 1 : 0

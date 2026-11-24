@@ -80,6 +80,8 @@ locals {
     { name = "SUBNET_IDS", value = join(",", var.subnet_ids) },
     { name = "SECURITY_GROUP_ID", value = var.security_group_id },
     { name = "ALB_LISTENER_ARN", value = local.listener_arn },
+    # Where the access points' dispatch rules go: the HTTP listener, which UniFi sends guests to.
+    { name = "ALB_DISPATCH_LISTENER_ARN", value = var.http_listener_arn },
     { name = "TASK_EXECUTION_ROLE_ARN", value = var.execution_role_arn },
     { name = "TASK_ROLE_ARN", value = var.location_task_role_arn },
     { name = "API_IMAGE", value = var.api_image },

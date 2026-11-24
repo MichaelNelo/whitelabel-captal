@@ -87,18 +87,22 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-# Captive portal dispatcher rule: forwards UCG-redirected hits (path
-# /guest/s/*) to the dispatcher Lambda target group. The Lambda resolves the
-# slug by ap_mac in rqlite and returns a 302 to the matching CloudFront URL.
-resource "aws_lb_listener_rule" "portal_dispatcher" {
-  count = var.enable_portal_dispatcher_rule ? 1 : 0
-
+# The guests of an access point no location dispatches: UniFi sends a guest to /guest/s/<site>/
+# with the access point's MAC in `ap`, and the backoffice keeps one rule per MAC ahead of this one
+# that redirects them to their portal. This is what is left, at the last priority a listener takes,
+# which the backoffice keeps every rule it numbers below.
+resource "aws_lb_listener_rule" "unknown_access_point" {
   listener_arn = aws_lb_listener.http.arn
-  priority     = 100
+  priority     = 50000
 
   action {
-    type             = "forward"
-    target_group_arn = var.portal_dispatcher_target_group_arn
+    type = "fixed-response"
+
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "No portal is set up for this access point."
+      status_code  = "404"
+    }
   }
 
   condition {

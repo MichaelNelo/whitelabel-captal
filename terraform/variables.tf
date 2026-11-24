@@ -240,7 +240,7 @@ variable "tailscale_authkey_expiry_seconds" {
 }
 
 variable "enable_global_accelerator" {
-  description = "Provision Global Accelerator + portal dispatcher Lambda. Required for UniFi External Portal Server integration (UniFi only accepts IPv4 in that field). Costs ~$18/mo for the accelerator + per-request Lambda + traffic. Disable in environments not integrating with UniFi."
+  description = "Provision Global Accelerator, a static IPv4 in front of the load balancer's HTTP listener, where the backoffice's rule for each access point's MAC redirects its guests to their portal. Required for UniFi External Portal Server integration (UniFi only accepts IPv4 in that field). Costs ~$18/mo for the accelerator plus traffic. Disable in environments not integrating with UniFi."
   type        = bool
   default     = true
 }

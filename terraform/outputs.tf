@@ -40,6 +40,11 @@ output "alb_listener_arn" {
   value       = var.enable_dns ? aws_lb_listener.https[0].arn : module.alb.http_listener_arn
 }
 
+output "alb_dispatch_listener_arn" {
+  description = "Listener the access points' dispatch rules hang off: the HTTP one, which Global Accelerator's address reaches and UniFi sends guests to."
+  value       = module.alb.http_listener_arn
+}
+
 output "task_execution_role_arn" {
   description = "Role ECS assumes to pull an image and read secrets, named in every task definition the backoffice registers"
   value       = module.ecs.execution_role_arn
@@ -92,10 +97,6 @@ output "global_accelerator_dns_name" {
   value       = var.enable_global_accelerator ? module.global_accelerator[0].accelerator_dns_name : null
 }
 
-output "portal_dispatcher_function_name" {
-  description = "Lambda function name for the captive portal dispatcher (for log tailing). Null when GA is disabled."
-  value       = var.enable_global_accelerator ? module.portal_dispatcher[0].function_name : null
-}
 
 # ─── Tailscale proxy ────────────────────────────────────────────────────────
 

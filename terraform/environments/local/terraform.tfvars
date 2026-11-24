@@ -23,8 +23,8 @@ aws_endpoint_url = "http://localhost:4567"
 #     certificate and its generated domain name, which is all a local run addresses.
 #   - tailscale: the provider talks to Tailscale's real API, and reaching into the network from a
 #     laptop is what `docker exec` already does here.
-#   - global accelerator: not emulated. It also brings the portal dispatcher Lambda with it, which
-#     only exists to turn an AP MAC into a slug for real captive-portal hardware.
+#   - global accelerator: not emulated. The load balancer's HTTP listener it would sit in front of,
+#     with the backoffice's rule for each access point's MAC, is reached directly instead.
 #   - cloud map: LocalStack offers it only on its Ultimate licence. A private Route 53 zone of the
 #     same name takes its place, its records kept by `modules/local-discovery`.
 enable_dns                = false

@@ -112,7 +112,7 @@ variable "alb_dns_name" {
 }
 
 variable "http_listener_arn" {
-  description = "Port 80 listener. The rule attached here is what makes the server reachable locally, where there is no certificate and so no HTTPS listener."
+  description = "Port 80 listener. The rule attached here is what makes the server reachable locally, where there is no certificate and so no HTTPS listener; and the server writes each access point's dispatch rule on it, where UniFi sends guests."
   type        = string
 }
 

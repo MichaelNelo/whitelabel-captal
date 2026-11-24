@@ -42,14 +42,3 @@ variable "enable_deletion_protection" {
   default     = false
 }
 
-variable "enable_portal_dispatcher_rule" {
-  description = "When true, add a high-priority HTTP listener rule routing /guest/s/* to the dispatcher Lambda. Must be a static bool (NOT derived from a module attribute) so count evaluates at plan time."
-  type        = bool
-  default     = false
-}
-
-variable "portal_dispatcher_target_group_arn" {
-  description = "Target group ARN for the captive portal dispatcher Lambda. Only consumed when enable_portal_dispatcher_rule = true. Empty string is fine when the rule isn't being created."
-  type        = string
-  default     = ""
-}

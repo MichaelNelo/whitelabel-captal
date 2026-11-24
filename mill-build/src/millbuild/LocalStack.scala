@@ -331,6 +331,7 @@ def ensureLocalStackTofu(
     "SUBNET_IDS" -> output("subnet_ids"),
     "SECURITY_GROUP_ID" -> output("ecs_tasks_security_group_id"),
     "ALB_LISTENER_ARN" -> output("alb_listener_arn"),
+    "ALB_DISPATCH_LISTENER_ARN" -> output("alb_dispatch_listener_arn"),
     "TASK_EXECUTION_ROLE_ARN" -> output("task_execution_role_arn"),
     "TASK_ROLE_ARN" -> output("task_role_arn"),
     // Only the id is used, by the invalidation: nothing fetches through the distribution.

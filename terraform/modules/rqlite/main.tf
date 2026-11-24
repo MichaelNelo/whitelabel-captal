@@ -96,7 +96,7 @@ resource "aws_security_group" "rqlite" {
     Name = "${local.name_prefix}-sg"
   }
 
-  # Sibling modules (portal-dispatcher, root-level tailscale-proxy rule)
+  # Sibling modules (the root-level tailscale-proxy rule, among others)
   # attach their own ingress as separate aws_vpc_security_group_ingress_rule
   # resources. Without this, the authoritative inline `ingress` blocks above
   # would revoke those external rules on every apply.
