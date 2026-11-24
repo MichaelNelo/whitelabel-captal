@@ -1,7 +1,7 @@
 ---
 name: change-terraform
 description: Use when changing the OpenTofu configuration under terraform/ — adding a module, threading a variable, or editing a resource. Covers the two environments, how a variable reaches a module, the for_each plan-time rule, formatting, and the drift rule. Triggers on "terraform", "tofu", "add a module", "infra change", "cambiar terraform", "infraestructura".
-version: 1.0.1
+version: 1.0.2
 ---
 
 # Change the terraform configuration
@@ -42,9 +42,8 @@ Miss one and it silently keeps the default.
 4. `terraform/main.tf` — pass it in the `module "<m>"` block.
 5. `terraform/environments/<env>/terraform.tfvars` — override it only where the default is wrong.
 
-Grep for the literal before you finish. A port or a name is often hardcoded in more than one module:
-`rqlite_http_port` had to reach both `modules/rqlite` and `modules/portal-dispatcher`, which built
-the database's URL independently.
+Grep for the literal before you finish. A port or a name is often hardcoded in more than one module,
+each building the same URL independently.
 
 ## `for_each` keys must be known at plan time
 
@@ -82,9 +81,9 @@ The build never inits in `terraform/` itself: it copies `*.tf` (minus `backend.t
 top-level `.tf` is picked up by that copy with no build change.
 
 **Run the plan even if you only edited an asset.** Files that end up *inside* a resource —
-`modules/portal-dispatcher/dispatcher.py`, `modules/cloudfront/function/cdn.js`,
-`docker/rqlite-entrypoint.sh` — change the resource's hash, but nothing reaches AWS until an apply.
-Hours have been lost to a Lambda serving old code that had been fixed on disk in an earlier session.
+`modules/cloudfront/function/cdn.js`, `docker/rqlite-entrypoint.sh` — change the resource's hash,
+but nothing reaches AWS until an apply. Hours have been lost to a resource serving old code that had
+been fixed on disk in an earlier session.
 
 ## What the build reads back
 
