@@ -1,6 +1,7 @@
 package whitelabel.captal.core.application.queries
 
-import whitelabel.captal.core.location.Slug
+import whitelabel.captal.core.device.Mac
+import whitelabel.captal.core.location.{Destination, LocationId, Slug}
 
 /** The locations, retired ones only with `includeInactive`. */
 final case class ListLocationsQuery(includeInactive: Boolean)
@@ -31,6 +32,19 @@ final case class AccessPointsReport(
     slug: String,
     name: String,
     accessPoints: List[AccessPointReport])
+
+/** Where access points' guests are sent (`Dispatch.destination`): every MAC a location holds, the
+  * MACs given, or the MACs of one location. Every MAC asked for is answered, held or not.
+  */
+enum DispatchQuery:
+  case All
+  case Of(macs: Set[Mac])
+  case OfLocation(id: LocationId)
+
+/** An access point's MAC and where its guests are sent: none when no location holding it is
+  * deployed or paused, or no location holds it any more.
+  */
+final case class DispatchRoute(mac: Mac, destination: Option[Destination])
 
 /** What the portal of the location `slug` draws with, in `locale`. */
 final case class PreviewLocationQuery(slug: Slug, locale: String)

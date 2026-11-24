@@ -110,7 +110,10 @@ object LocationTests extends TestSuite:
           redirectUrl = Some(Some("ftp://example.com")))
         assert(
           change.applyTo(Settings.Default).left.map(_.toList) ==
-            Left(List(Error.InvalidDuration(0), Error.InvalidRedirectUrl("ftp://example.com"))))
+            Left(
+              List(
+                Error.InvalidDuration(0),
+                Error.InvalidRedirectUrl("ftp://example.com", RedirectTarget.Problem.NotHttp))))
 
     test("CreateLocation"):
       val cmd = CreateLocationCommand(LocationId("new-id"), Here, "  Plaza ", Now)

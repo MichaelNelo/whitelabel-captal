@@ -30,7 +30,7 @@ final case class SettingsChange(
     redirectUrl: Option[Option[String]] = None,
     unifiEnabled: Option[Boolean] = None):
   /** `settings` changed as asked, or every reason it cannot be: a duration under a minute, a
-    * redirect URL that is not http or https.
+    * redirect URL the load balancer's redirect cannot send a guest to ([[RedirectTarget.of]]).
     */
   def applyTo(settings: Settings): Either[NonEmptyChain[Error], Settings] =
     val redirect = redirectUrl.map(_.map(_.trim))
@@ -39,8 +39,8 @@ final case class SettingsChange(
         durationMinutes.flatten.filter(_ < 1).map(Error.InvalidDuration(_)),
         redirect
           .flatten
-          .filterNot(url => url.startsWith("https://") || url.startsWith("http://"))
-          .map(Error.InvalidRedirectUrl(_))
+          .flatMap(url =>
+            RedirectTarget.of(url).left.toOption.map(Error.InvalidRedirectUrl(url, _)))
       ).flatten
     NonEmptyChain
       .fromSeq(problems)

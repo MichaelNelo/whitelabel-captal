@@ -12,8 +12,8 @@ enum Error:
   case SlugTaken(slug: Slug, by: String)
   case NotFound(slug: Slug)
 
-  /** Not an http or https URL. */
-  case InvalidRedirectUrl(url: String)
+  /** Not an address the load balancer's redirect can send a guest to, for `problem`. */
+  case InvalidRedirectUrl(url: String, problem: RedirectTarget.Problem)
 
   /** Not a whole number of minutes from 1 up. */
   case InvalidDuration(minutes: Int)
