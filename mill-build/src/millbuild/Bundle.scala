@@ -39,6 +39,11 @@ def writeManifest(dir: os.Path, version: String): Unit =
   */
 val localImport = """(?:from|import)\s*"\./([^"]+)"""".r
 
+/** A local ES import of either kind: a static one, as [[localImport]], or a dynamic `import("./x")`,
+  * which is how the portal loads its views.
+  */
+val anyLocalImport = """(?:from|import)\s*\(?\s*"\./([^"]+)"""".r
+
 /** `<link rel="modulepreload" fetchpriority="low">` for everything `entry` reaches through static imports,
   * transitively. Derived from the built output, so that no hash in it is stale.
   */
@@ -62,15 +67,17 @@ val uiPrefix = "ui"
 /** The entries the MCP App pages load, and nothing else. */
 val uiEntries = Seq("upload.js", "unifi.js", "run.js")
 
-/** Every local module reachable from `roots` through the `import`s Rollup wrote. Modules are selected by
-  * import graph, not by name: a chunk shared with the portal takes its name from whichever module pulled it in.
+/** Every local module reachable from `roots` through the `import`s Rollup wrote, dynamic ones
+  * included: a view the portal loads when it needs it is the portal's, and so is every chunk it
+  * imports. Modules are selected by import graph, not by name: a chunk shared with the portal takes
+  * its name from whichever module pulled it in.
   */
 def moduleClosure(dir: os.Path, roots: Seq[String]): Set[String] =
   def walk(name: String, seen: Set[String]): Set[String] =
     if seen.contains(name) || !os.exists(dir / name) then
       seen
     else
-      localImport
+      anyLocalImport
         .findAllMatchIn(os.read(dir / name))
         .map(_.group(1))
         .foldLeft(seen + name)((acc, next) => walk(next, acc))
