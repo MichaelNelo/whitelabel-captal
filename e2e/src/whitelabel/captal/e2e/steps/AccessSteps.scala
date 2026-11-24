@@ -35,8 +35,7 @@ final class AccessSteps extends ScalaDsl with EN:
 
   private def unreachable: Locations.Deployed =
     Locations.once("access-unreachable"):
-      val location = Locations.create("unreachable")
-      Locations.configureUnifi(location.slug, Venue.AccessMinutes, host = "nowhere.captal.local")
+      val location = Locations.create("unreachable", host = "nowhere.captal.local")
       Locations.addAdvertiserVideo(location)
       Locations.deploy(location)
 

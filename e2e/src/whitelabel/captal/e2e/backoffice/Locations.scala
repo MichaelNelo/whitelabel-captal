@@ -82,22 +82,26 @@ object Locations:
   /** What a slug leaves for a location's name: 25, less `e2e-` and `-<4 characters>`. */
   val SlugName = 16
 
-  /** A new location, not yet deployed: created, its UniFi settings pointed at the stand-in with
-    * access lasting `accessMinutes`, the deployment's identification surveys ensured, and every
-    * text a guest sees written as `text <key>` in [[Locales]].
+  /** A new location, not yet deployed: created, configured with an access point of its own that
+    * answers to the stand-in — or to the controller at `host` — with access lasting
+    * `accessMinutes`, the deployment's identification surveys ensured, and every text a guest sees
+    * written as `text <key>` in [[Locales]].
     *
     * Its slug is `e2e-<name>-<4 characters>`, with `name` cut to [[SlugName]] characters: the
     * backoffice takes 25 at most, since the slug names AWS resources with limits of their own. The
     * display name keeps all of `name`.
     */
-  def create(name: String, accessMinutes: Int = Venue.AccessMinutes): Deployed =
+  def create(
+      name: String,
+      accessMinutes: Int = Venue.AccessMinutes,
+      host: String = Run.setting("E2E_UNIFI_HOST")): Deployed =
     val run = scala.util.Random.alphanumeric.filter(_.isLetterOrDigit).take(4).mkString.toLowerCase
     val short = name.take(SlugName).stripSuffix("-")
     val location = Deployed(s"e2e-$short-$run", s"E2E $name")
     Backoffice.tool[LocationTools.CreateRequest, LocationTools.CreateResponse](
       "create_location",
       LocationTools.CreateRequest(location.slug, location.name))
-    configureUnifi(location.slug, accessMinutes)
+    configureUnifi(location.slug, accessMinutes, host = host)
     ensureIdentification()
     ensureTerms()
     translate(location, key => text(key))
@@ -185,28 +189,45 @@ object Locations:
 
   def texts(value: String): List[LocalizedText] = Locales.map(LocalizedText(_, value))
 
-  /** The location's access point ([[Venue.apFor]]) with its controller's settings, entered on the
-    * page `configure_unifi` opens and saved by it. Then the calls are turned on, which a new
-    * location has by default anyway. The controller is the stand-in unless `host` and `port` name
-    * another, such as one that is not there. Read by a location's API as it authorizes a guest, so
-    * settings entered after a deploy apply to the next one.
+  /** The location configured with the access point `ap` — its own ([[Venue.apFor]]) unless another
+    * is named — and its access duration, entered on the page `configure_unifi` opens and saved by
+    * it. Then the calls are turned on, which a new location has by default anyway.
+    *
+    * An access point the system has answers to its own controller, which the page picks. A new one
+    * answers to the stand-in unless `host` and `port` name another, such as one that is not there:
+    * chosen from the page's list when the system has it, and entered with its token when it does
+    * not, so the first location a run configures takes the page's one path and every later one the
+    * other. Read by a location's API as it authorizes a guest, so settings entered after a deploy
+    * apply to the next one.
     */
   def configureUnifi(
       slug: String,
       accessMinutes: Int,
       host: String = Run.setting("E2E_UNIFI_HOST"),
-      port: String = Run.setting("E2E_UNIFI_PORT")): Unit =
-    val (_, opened) = Operator.open[UnifiTools.ConfigureRequest, UnifiTools.ConfigureResponse](
+      port: String = Run.setting("E2E_UNIFI_PORT"),
+      ap: Option[String] = None): Unit =
+    val mac = ap.getOrElse(Venue.apFor(slug))
+    val (config, opened) = Operator.open[UnifiTools.ConfigureRequest, UnifiTools.ConfigureResponse](
       "configure_unifi",
       UnifiTools.ConfigureRequest(slug))
     val form = opened.app
     form.locator("#form.ready").waitFor(Locator.WaitForOptions().setTimeout(60_000))
     opened.linger()
-    form.locator("#apMac").fill(Venue.apFor(slug))
-    form.locator("#host").fill(host)
-    form.locator("#port").fill(port)
-    form.locator("#siteId").fill(Venue.Site)
-    form.locator("#apiToken").fill(Venue.ApiKey)
+    form.locator("#apMac").fill(mac)
+    if !config.knownAccessPoints.exists(_.mac == mac) then
+      config
+        .controllers
+        .find(controller =>
+          controller.host == host && controller.siteId == Venue.Site &&
+            controller.port.getOrElse(443) == port.toIntOption.getOrElse(443)) match
+        case Some(controller) =>
+          form.locator("#controllerId").selectOption(controller.id)
+        case None =>
+          form.locator("#controllerId").selectOption("new")
+          form.locator("#host").fill(host)
+          form.locator("#port").fill(port)
+          form.locator("#siteId").fill(Venue.Site)
+          form.locator("#apiToken").fill(Venue.ApiKey)
     form.locator("#durationMinutes").fill(accessMinutes.toString)
     opened.linger()
     form.locator("#save").click()
@@ -217,7 +238,7 @@ object Locations:
     opened.linger()
     Backoffice.tool[UnifiTools.UpdateAccessPointRequest, UnifiTools.StatusResponse](
       "update_access_point",
-      UnifiTools.UpdateAccessPointRequest(slug, Venue.apFor(slug), unifiEnabled = Some(true)))
+      UnifiTools.UpdateAccessPointRequest(slug, mac, unifiEnabled = Some(true)))
   end configureUnifi
 
   /** Changes how a location treats errors and abandoned playbacks, as an operator does. Its portal
