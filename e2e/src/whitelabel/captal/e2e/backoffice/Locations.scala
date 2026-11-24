@@ -33,17 +33,27 @@ import whitelabel.captal.mcp.tools.{
 object Locations:
   final case class Deployed(slug: String, name: String):
     /** The portal as UniFi sends a guest to it, from the device `mac` behind the access point, with
-      * the fingerprint the link shortener gave the device, when it gave one.
+      * the fingerprint the link shortener gave the device, when it gave one: what the load
+      * balancer's dispatch rule for the location's access point redirects that request to. Fails
+      * when it sends the phone anywhere but this location's portal.
       */
     def portal(mac: String, fingerprint: Option[String]): String =
       val back = java.net.URLEncoder.encode("http://example.com", "UTF-8")
-      s"$address?id=$mac&ap=${Venue.apFor(slug)}&ssid=E2E&url=$back" +
-        fingerprint.fold("")(sent => s"&fingerprint=$sent")
+      val query =
+        s"id=$mac&ap=${Venue.apFor(slug)}&ssid=E2E&url=$back" +
+          fingerprint.fold("")(sent => s"&fingerprint=$sent")
+      val sent = Venue.dispatched(query)
+      val (to, expected) = (java.net.URI.create(sent), java.net.URI.create(address))
+      if to.getHost != expected.getHost || to.getPath != expected.getPath then
+        throw AssertionError(
+          s"The access point of $slug sent its guest to $sent rather than to its portal, $address")
+      sent
 
     /** The portal's address alone, as a phone opens it outside the venue's WiFi: no redirect. */
     def address: String = s"${Run.setting("E2E_PORTAL")}/$slug/"
 
     def api(path: String): String = s"${Run.setting("E2E_PORTAL")}/$slug/api/$path"
+  end Deployed
 
   /** Every text a guest sees, in both locales, as `text <key>`: a step finds a button by its key.
     */

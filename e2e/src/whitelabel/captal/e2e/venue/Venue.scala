@@ -27,6 +27,52 @@ object Venue:
   /** One action the controller was asked for. */
   final case class Call(mac: String, action: String, timeLimitMinutes: Option[Int], apiKey: String)
 
+  /** What the load balancer answers a phone UniFi sends to its external portal server with `query`:
+    * `/guest/s/default/`, over HTTP as Global Accelerator reaches it, the redirect not followed.
+    * The status, and the `Location` a dispatch rule answers.
+    */
+  def dispatch(query: String): (Int, Option[String]) =
+    val balancer = Run.setting("E2E_LOAD_BALANCER").replaceFirst("^https://", "http://")
+    val client = java
+      .net
+      .http
+      .HttpClient
+      .newBuilder()
+      .followRedirects(java.net.http.HttpClient.Redirect.NEVER)
+      .build()
+    val response = client.send(
+      java
+        .net
+        .http
+        .HttpRequest
+        .newBuilder(java.net.URI.create(s"$balancer/guest/s/default/?$query"))
+        .GET()
+        .build(),
+      java.net.http.HttpResponse.BodyHandlers.discarding()
+    )
+    (response.statusCode, Option(response.headers.firstValue("Location").orElse(null)))
+  end dispatch
+
+  /** Where the load balancer sends a phone UniFi sends with `query`, waiting for the access point's
+    * dispatch rule, which the backoffice writes once a run ends: the address with `query` carried
+    * over. LocalStack answers `#{query}` as it is rather than the query (see the dispatch plan), so
+    * the query is put back here, as AWS puts it.
+    */
+  def dispatched(query: String): String =
+    val deadline = System.nanoTime + 60_000_000_000L
+    def ask(): String =
+      dispatch(query) match
+        case (302, Some(location)) =>
+          val address = location.replaceFirst("#.*$", "").replaceFirst("\\?.*$", "")
+          s"$address?$query"
+        case _ if System.nanoTime < deadline =>
+          Thread.sleep(500)
+          ask()
+        case (status, location) =>
+          throw AssertionError(
+            s"The load balancer answered $status${location.fold("")(l => s" to $l")} for $query")
+    ask()
+
   /** Every action asked for the device `mac`, oldest first. */
   def callsFor(mac: String): List[Call] =
     val url = s"${Run.setting("E2E_UNIFI_RECORDS")}/calls?mac=${mac.toLowerCase}"

@@ -367,7 +367,13 @@ yes and declines any other. Their rows stay. `--keep` leaves them up, every feat
 what a scenario left.
 * **Guests** are Playwright browser contexts (`Portal`), each a phone of its own — its own cookies
 and storage, mobile viewport and touch — sent to the portal the way the access point sends them,
-with a MAC, the location's access point and a fingerprint in the query string. Certificate errors are ignored: the
+with a MAC, the location's access point and a fingerprint in the query string: through the load
+balancer's HTTP listener at `/guest/s/default/`, where the access point's dispatch rule has to
+redirect them to their own location's portal or the arrival fails (`Venue.dispatched`,
+`Locations.Deployed.portal`). It is asked again for up to a minute, since the rule is written once
+the deploy has ended. LocalStack's redirect answers `#{query}` as it is, so the query is put back on
+the address the rule sends to, as AWS does. `dispatch.feature` covers an access point with an
+address of its own and one no location has. Certificate errors are ignored: the
 distribution's name is two levels under the one LocalStack's certificate covers. Starting only
 presses the welcome's button; a scenario says when the guest accepts the terms of service, a step
 of its own that fails when the dialog is not open. A phone the portal knows nothing about is always
