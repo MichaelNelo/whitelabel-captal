@@ -162,7 +162,9 @@ git-ignored.
 
 | `client.publishS3 --bucket … --prefix bundle`
 | Uploads the portal half of the bundle. Files reachable *only* from the MCP-UI entries are
-  subtracted by import graph, not by name.
+  subtracted by import graph, not by name; the graph follows dynamic imports too
+  (`import("./…")`), since the portal loads its views so, and a chunk a view shares with an MCP-UI
+  page is the portal's as well.
 
 | `client.publish --bucket …`
 | Uploads `upload.js`, `unifi.js`, `run.js` and the chunks they reach to `<bucket>/ui/`: chunks

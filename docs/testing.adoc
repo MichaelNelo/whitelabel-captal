@@ -92,7 +92,8 @@ migrators connects to it on its own, as separate processes would.
   needs a served location builds a `/api/status` backend for one, seeding the location deployed —
   `TestFixtures.seedLocation` does unless told `deployed = false`, since the portal admits guests
   only into a deployed location — and its access points with `TestFixtures.seedAccessPoint`, each
-  with its own switch.
+  with its own switch and a controller named after its host, made when the database does not have
+  it yet.
 
 `TestFixtures.scala` is the seeding and read-back layer the suites share: `seedEmailSurvey`,
 `seedProfilingSurvey`, `seedAllIdentificationSurveys`, `seedMultiQuestionProfilingSurvey`,
@@ -110,8 +111,13 @@ database through the chain the backoffice runs them with (`LocationPersistenceHa
 `EventLogHandler.forOperator`), since `platform` has no test module of its own. What the commands
 write is what `LocationRepositoryQuill` reads back; every change is logged under the operator who
 made it, and no controller token is; and the rules that read the database — a slug another location
-has, an access point another deployed location takes guests through, a deployed location's last
-access point — refuse before anything is written.
+has, a controller an access point answers to, a deployed location's last access point — refuse
+before anything is written. Its runs' starts and ends go through the handlers that take and let go
+of access points (`AccessPointTaking`, `LocationPersistenceHandler`) with no AWS behind them: two
+locations configured with one access point start their deploys one after the other, and the second
+start is refused on the database's key with `AccessPointHeld`; a failed deploy lets its access
+points go; a deployed location takes an access point it is configured with at once, and one it is
+moved to in place of another.
 
 One Docker container, `rqlite-test` on port 4011, shared by the whole suite. It is checked fresh on
 every invocation (`Task.Input`, not a cached `Task`) specifically so an operator removing the
@@ -373,7 +379,9 @@ redirect them to their own location's portal or the arrival fails (`Venue.dispat
 `Locations.Deployed.portal`). It is asked again for up to a minute, since the rule is written once
 the deploy has ended. LocalStack's redirect answers `#{query}` as it is, so the query is put back on
 the address the rule sends to, as AWS does. `dispatch.feature` covers an access point with an
-address of its own and one no location has. Certificate errors are ignored: the
+address of its own, one no location has, and one two locations are configured with: the second's
+deploy is refused while the first has it, and goes through once the first is paused, its guests
+then sent to the second's portal. Certificate errors are ignored: the
 distribution's name is two levels under the one LocalStack's certificate covers. Starting only
 presses the welcome's button; a scenario says when the guest accepts the terms of service, a step
 of its own that fails when the dialog is not open. A phone the portal knows nothing about is always
@@ -402,11 +410,14 @@ distribution.
 `enable_unifi_fake`): a Python script on the public Python image, reached by the locations' tasks
 as `unifi.captal.local:8443` over HTTPS, as a controller is. It answers the two calls of the
 Integration v1 API the API makes — any MAC is a connected client — and records every action. Each
-location registers an access point of its own, `Venue.apFor(slug)` — a locally administered `02:`
-MAC from a digest of the slug, since an AP takes the guests of a single deployed location — with the
-stand-in as its controller, through the page `configure_unifi` opens, posting the form with the
+location is configured with an access point of its own, `Venue.apFor(slug)` — a locally
+administered `02:` MAC from a digest of the slug, since an AP takes the guests of one location at a
+time — answering to the stand-in, through the page `configure_unifi` opens, posting the form with the
 ticket as the page does, then turns its UniFi calls on with `update_access_point`; the location
-`access.feature` deploys with UniFi turned off turns them off the same way. The portal URL a guest opens names that AP, which
+`access.feature` deploys with UniFi turned off turns them off the same way. The stand-in is one
+controller: the page chooses it when the system has it, and registers it, with its token, when the
+system does not, so a run that starts from an empty database takes both of the page's paths. The
+location `access.feature` sends to a controller that is not there answers to one of its own. The portal URL a guest opens names that AP, which
 is what admits the guest and what the API finds the controller by. `Venue` reads the record from
 `http://localhost:18080/calls`, which LocalStack publishes on the host, so a step checks what the
 network was asked for a guest's MAC: the action, its time limit, the API key.

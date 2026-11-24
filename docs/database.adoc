@@ -66,7 +66,7 @@ code rather than by matching its text.
 == The schema
 
 Two independent schemas live in one database. The portal schema is created and owned by the API
-(`platform/resources/db/migration`, `V1` … `V37`); the backoffice's own tables are created and owned
+(`platform/resources/db/migration`, `V1` … `V40`); the backoffice's own tables are created and owned
 by the MCP server (`mcp/resources/db/migration-mcp`, `V1` … `V3`).
 
 === Portal tables
@@ -147,11 +147,23 @@ by the MCP server (`mcp/resources/db/migration-mcp`, `V1` … `V3`).
 | via its session
 
 | `locations`
-| A venue: `slug` (UNIQUE), `name`, `is_active`, `fingerprint_is_required` — the location's whichever access point a guest came through — and where it stands: `state` (`created`, `deployed`, `paused` or `destroyed`, each an operation that succeeded; `created` until a deploy) and `state_run`, the backoffice run that left it so, NULL for `created` (V35, filled for the locations that existed before by the backoffice's V3). The UniFi columns are still there and read by nothing: `unifi_duration_minutes`, `unifi_redirect_url` and `unifi_is_enabled`, which V36 copied to each access point, and `unifi_ap_mac`, `unifi_host`, `unifi_port`, `unifi_site_id` and `unifi_api_token`, which V34 copied to `access_points`. A later migration drops them.
+| A venue: `slug` (UNIQUE), `name`, `is_active`, `fingerprint_is_required` — the location's whichever access point a guest came through — and where it stands: `state` (`created`, `deployed`, `paused` or `destroyed`, each an operation that succeeded; `created` until a deploy) and `state_run`, the backoffice run that left it so, NULL for `created` (V35, filled for the locations that existed before by the backoffice's V3). The UniFi columns are still there and read by nothing: `unifi_duration_minutes`, `unifi_redirect_url`, `unifi_is_enabled`, `unifi_ap_mac`, `unifi_host`, `unifi_port`, `unifi_site_id` and `unifi_api_token`. A later migration drops them.
 | is the scope
 
+| `unifi_controllers`
+| A UniFi controller, the system's: any access point of any location can answer to it. `host`, `port` (NULL = 443), `site_id`, `api_token` — stored here alone —, timestamps. UNIQUE on `(host, COALESCE(port, 443), site_id)`: one row per address. The backoffice names one it registers `controller-` and a random UUID; V40 named those it made from the access points before it `controller-` and the smallest of their row ids. A controller outlives the last location that uses it, and is removed only once no location is configured with an access point that answers to it — with the access points that do and no location is configured with. See xref:unifi.adoc[UniFi integration].
+| Global
+
 | `access_points`
-| One of a location's access points with the UniFi controller that authorizes the guests who join through it: `mac` (lowercase with colons, as `Mac.show` writes it), `unifi_host`, `unifi_port` (NULL = 443), `unifi_site_id`, `unifi_api_token`, timestamps; and what the portal does for those guests (V36): `duration_minutes` (NULL = 1440), `redirect_url`, where the load balancer's dispatch rule sends them instead of the portal, and `unifi_is_enabled`. UNIQUE on `(location_id, mac)`, which the backoffice checks before it writes, and indexed on `mac`; the same MAC may be in several locations, and the backoffice keeps at most one of them deployed. The backoffice gives a row it registers a random UUID; rows V34 copied from `locations` have the id `<location_id>/<mac>` and the location's `updated_at` as both stamps. See xref:unifi.adoc[UniFi integration].
+| A physical access point, the system's: `mac` (UNIQUE, lowercase with colons, as `Mac.show` writes it), which is also its `id`, and `controller_id`, the controller it answers to for every location configured with it. It outlives the last location configured with it.
+| Global
+
+| `location_access_points`
+| An access point a location is configured with, and what the portal does for the guests who join through it there: `duration_minutes` (NULL = 1440), `redirect_url`, where the load balancer's dispatch rule sends them instead of the portal, and `unifi_is_enabled`. Its key is `(location_id, access_point_id)`: any number of locations can be configured with one access point. Indexed on `access_point_id`.
+| `location_id`
+
+| `active_access_points`
+| The location that took an access point's guests, one per access point at most — its key is `access_point_id` —: `location_id`, `state` (`deploying` while the deploy or resume `run_id` goes, `deployed` once it succeeded) and `since`. Written as that run starts, in the transaction that writes the run, so a second location's start through the same access point fails its commit on the key, whatever the timing; held as the run succeeds, deleted as it fails or as the location is paused or destroyed. A deployed location has taken every access point it is configured with: one added to it is taken at once. See xref:platform.adoc#access-point-taking[Platform].
 | `location_id`
 
 | `location_recovery`
@@ -193,10 +205,12 @@ what lets a returning visitor skip the questions they have already answered. The
 `location_id` on it and none is implied by a join.
 
 Everything a venue configures or produces is scoped by location: `sessions`, `surveys`,
-`advertiser_videos`, `localized_texts`, `access_points` and `locations` carry `location_id` directly, and
-`questions`, `question_options`, `question_rules`, `answers`, `user_survey_progress`, `video_files`,
-`video_playbacks`, `video_views` and `event_log` inherit it through their parent. `advertisers` and `devices` are global, like
-`users`.
+`advertiser_videos`, `localized_texts`, `location_access_points`, `active_access_points` and
+`locations` carry `location_id` directly, and `questions`, `question_options`, `question_rules`,
+`answers`, `user_survey_progress`, `video_files`, `video_playbacks`, `video_views` and `event_log`
+inherit it through their parent. `advertisers`, `devices`, `access_points` and `unifi_controllers`
+are global, like `users`: an access point and its controller are the venue's hardware, which any
+number of locations can be configured with.
 
 A nullable `location_id` means *shared*. `surveys.location_id IS NULL` is a deployment-wide survey
 (the email, profiling and location surveys are shared this way); `localized_texts.location_id IS
@@ -251,7 +265,7 @@ side would let deactivating an answered question close a survey that still has u
 | API (`platform`)
 | `platform/resources/db/migration`
 | `flyway_schema_history` (Flyway's default, exposed as `Migrate.ApiHistoryTable`)
-| `V1__initial_schema.sql` … `V37__event_log_actor.sql` — every table the portal reads
+| `V1__initial_schema.sql` … `V40__access_points_and_controllers.sql` — every table the portal reads
 
 | MCP server (`mcp`)
 | `mcp/resources/db/migration-mcp`
@@ -295,7 +309,8 @@ Two SQLite consequences worth knowing before writing one:
 
 And one of rqlite's: a statement runs on every node, so a migration that writes rows has to write
 the same values on each — no random id, no current time. `V34` derives each id from the row it
-copies and takes that row's own timestamp.
+copies and takes that row's own timestamp; `V40` names a controller after the smallest row id of the
+access points that use it, and an access point by its MAC.
 
 === Concurrency is not Flyway's problem to solve here
 
@@ -341,7 +356,12 @@ reports none of them affecting a row, so the count says nothing: the event handl
 inside `TransactionalEventHandler` — every command's, the guest's and the backoffice's alike — check
 none. What a count would catch is checked before, by the command reading what it decides on (the
 slug free, the access point there, the file still awaited), and a statement rqlite refuses fails the
-commit. A handler that has to know what a write did runs after the commit instead: `PlaybackHandler`
+commit. The driver joins the refusals' texts into one `SQLException` (`Transaction commit failed: …`),
+without their codes, and Quill 4.8.6 commits in the transaction's finalizer inside `ZIO.succeed`, so
+the failure reaches the caller as a defect, not an error. What has to tell one refusal from another
+reads the database again once the commit failed rather than matching the text: the start of a run
+whose access point another location took first is one (xref:platform.adoc#access-point-taking[Platform]).
+A handler that has to know what a write did runs after the commit instead: `PlaybackHandler`
 reads the count of a playback's insert, and `ReplacedFileDeletionHandler` reads a file's mark back
 before deleting its object. In the backoffice, the tokens are the one write outside `core`'s
 commands, and `Writes` checks them.

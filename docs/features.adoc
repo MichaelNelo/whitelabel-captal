@@ -231,9 +231,9 @@ scheduler — is xref:unifi.adoc[UniFi integration]'s; the guest-relevant facts:
   offers a retry, and creates no session.
 
 | Default grant length
-| `duration_minutes` on the access point the guest came through, defaulting to **1440 minutes (24
-  hours)**, not a fixed short window. It is per access point, since each answers to its own
-  controller, and operator-set, via `configure_unifi` or `update_access_point`.
+| `duration_minutes` of the location for the access point the guest came through, defaulting to
+  **1440 minutes (24 hours)**, not a fixed short window. It is per access point, and operator-set,
+  via `configure_unifi` or `update_access_point`.
 
 | What ends it
 | One thing only — `accessExpiresAt`, this system's own deadline, enforced by its own scheduled

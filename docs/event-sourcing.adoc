@@ -229,8 +229,8 @@ These carry a session id in their own payload because the commands that emit the
 | `location.fingerprint_requirement_changed`
 
 | `AccessPointRegistered`
-| `location`, `accessPoint` (its MAC, controller and settings), `occurredAt`
-| `location.access_point_registered`
+| `location`, `accessPoint` (its MAC, controller and the location's settings for it), `occurredAt`
+| `location.access_point_registered`, with the controller's id
 
 | `AccessPointUpdated`
 | `location`, `mac` — the MAC it had — and `accessPoint`, as it is now, `occurredAt`
@@ -239,6 +239,14 @@ These carry a session id in their own payload because the commands that emit the
 | `AccessPointRemoved`
 | `location`, `mac`, `occurredAt`
 | `location.access_point_removed`
+
+| `ControllerRegistered`, `ControllerChanged`
+| `controller` (its id, address and token), `occurredAt`
+| `unifi.controller_registered`, `.controller_changed`, with its id and address
+
+| `ControllerRemoved`
+| `id`, `occurredAt`
+| `unifi.controller_removed`
 
 | `LocationDeployed`, `LocationPaused`, `LocationResumed`, `LocationDestroyed`
 | `id`, `by` — the run that did it — `occurredAt`
@@ -249,7 +257,7 @@ These carry a session id in their own payload because the commands that emit the
 | `location.styles_changed`, `.icon_changed`, with the document's size, not the document
 |===
 
-The access point's controller token travels in the event as a `Secret`, which prints redacted, and is left out of `event_data`: the log says nothing of it. `LocationPersistenceHandler` writes these to `locations` and `access_points`, in a chain of their own that the backoffice runs (see xref:platform.adoc[Platform]); a state reached is the outcome of an operation (`operation.Event`'s `OperationStarted`, `OperationCompleted`, `OperationFailed`, logged as `operation.*`); a stylesheet or an icon is published to the assets bucket after the commit by `AssetPublishingHandler`.
+A controller's token travels in the event as a `Secret`, which prints redacted, and is left out of `event_data`: the log says nothing of it. `LocationPersistenceHandler` writes these to `locations`, `unifi_controllers`, `access_points`, `location_access_points` and `active_access_points`, in a chain of their own that the backoffice runs (see xref:platform.adoc[Platform]); a state reached is the outcome of an operation (`operation.Event`'s `OperationStarted`, `OperationCompleted`, `OperationFailed`, logged as `operation.*`), and the access points a deploy or a resume takes are written as it starts and let go as it fails (`AccessPointTaking`, see xref:platform.adoc#access-point-taking[Platform]); a stylesheet or an icon is published to the assets bucket after the commit by `AssetPublishingHandler`.
 
 === The backoffice's content events
 

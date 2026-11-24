@@ -1,0 +1,149 @@
+= Plan: access points and controllers as entities, and the access point a location is taking
+:toc:
+:toclevels: 2
+
+A plan agreed in conversation on 2026-11-24, after a race was found in how two locations share an
+access point (<<the-race>>). An access point and the UniFi controller it answers to become entities
+of the system; a location is configured with any of them (N:M); and which location takes an access
+point's guests is a relation of its own, one row per access point at most, written as a deploy or a
+resume starts. The database refuses a second location the same access point, at the start.
+
+[[the-race]]
+== Why
+
+`access_points` holds a row per access point *as a location configures it*: `UNIQUE (location_id,
+mac)`, each with the controller's host, site and token. Two consequences:
+
+* *A race.* "At most one deployed location per MAC" is a check the application makes before it
+  writes (`AccessPointHeld`, from `deployedHolders`): a deploy, a resume, and an access point's
+  registration each read who holds the MAC, then write. Their locks are per location, and a location
+  is recorded deployed only once its run completes, so a deploy of B and a resume of A, sharing a
+  MAC, both read the other as not deployed and both end deployed.
+* *Secrets repeated.* Every row carries its controller's token: once per access point of a
+  controller, and again in every location that holds one of them.
+
+== The design
+
+[cols="1,2,2"]
+|===
+|Table |What a row is |What holds it to it
+
+|`unifi_controllers`
+|A UniFi controller, and its token, stored once. The system's, not a location's
+|`UNIQUE (host, COALESCE(port, 443), site_id)`
+
+|`access_points`
+|A physical access point: its MAC and the controller it answers to
+|`mac` `UNIQUE`; `controller_id` references `unifi_controllers`
+
+|`location_access_points`
+|An access point a location is configured with, and what the location does for the guests who join
+through it: how long they are let in for, its own redirect URL, whether the controller is called
+|`PRIMARY KEY (location_id, access_point_id)`: N:M
+
+|`active_access_points`
+|The location taking the access point's guests: `deploying` while a deploy or a resume runs,
+`deployed` once it succeeded
+|`PRIMARY KEY (access_point_id)`: one location per access point at most
+|===
+
+* *A deploy or a resume takes its access points as it starts*: in the transaction that writes the
+  run, its location's rows in `active_access_points` are deleted — a run left unfinished had
+  written them — and one per configured access point inserted, `deploying`. An access point
+  another location has already taken fails the insert, and the start with it, whatever the timing:
+  rqlite applies writes one after the other.
+* *It holds them as it ends*: succeeded, they become `deployed`; failed, they are deleted.
+* *A pause or a destroy lets them go as it ends*, once succeeded: while a pause runs, the location
+  still serves.
+* *A run that stops part way keeps them `deploying`*: no other location takes those access points
+  until the run is finished or the location destroyed, as no other operation goes on a location
+  whose last run was left unfinished.
+* *An access point added to a deployed location* is taken at once, `deployed`, and refused when
+  another location has it; one removed from it is let go. So a deployed location has taken every
+  access point it is configured with.
+* *The check `core` makes stays*, reading `active_access_points` (`AccessPointHeld`), for the
+  refusal an operator reads; the primary key is what holds when two starts meet. That one is turned
+  into the same refusal.
+* *A controller outlives its last access point*, and `remove_unifi_controller` refuses one an
+  access point points at. An access point outlives its last location the same way. Carried out with
+  one turn: "points at" counts only the access points a location is configured with, and those no
+  location is configured with go with their controller — otherwise a controller whose access points
+  no location uses could never be removed, since only a location's command moves an access point.
+
+== The dispatch
+
+Per access point: the location that took it, when `deployed` — its portal, or the access point's
+redirect URL in that location; else the newest paused location configured with it, whose page is
+the maintenance page; else none, the `404`. `deploying` takes no guests yet: the API turns them
+away until the location is deployed.
+
+== The schema: V40
+
+`platform/resources/db/migration/V40__access_points_and_controllers.sql` renames the table that is
+there, creates the four, fills them from it, and drops it:
+
+* a controller per distinct `(unifi_host, COALESCE(unifi_port, 443), unifi_site_id)`, its id
+  `controller-` and the smallest row id of the group, its token and stamps the group's most recently
+  updated row's;
+* an access point per MAC, its id the MAC, pointing at its controller;
+* a configuration per row, with the row's duration, redirect URL and switch;
+* a `deployed` row per access point of a deployed location, its run the location's `state_run`.
+
+Ids derive from the data, never random: rqlite runs each statement on every node. No MAC is in two
+deployed locations anywhere this runs (said in conversation), so the primary key takes.
+
+== The model
+
+* `Controller(id, host, port, siteId, token)`, with `ControllerId`.
+* `AccessPoint(mac, controller, settings)` stays the view a location has of an access point it is
+  configured with.
+* Commands:
+  ** `RegisterAccessPoint(slug, mac, controller, settings…)`: an access point the system has is
+     configured as it is, with its own controller; a new one needs `controller`, an existing one
+     (`ControllerChoice.Existing`) or a new one (`ControllerChoice.New`, which emits
+     `ControllerRegistered` ahead of the access point's event).
+  ** `UpdateAccessPoint`: the location's settings for it; `controller`, which moves the access point
+     to another controller, for every location configured with it; `newMac`, which configures the
+     location with the access point of that MAC instead.
+  ** `UpdateController(id, host?, port?, siteId?, token?)` and `RemoveController(id)`.
+* `AccessPointRepository.takenBy(mac)` in place of `deployedHolders`, and `controllerOf(mac)`;
+  `ControllerRepository` with `find`, `at` and `uses`.
+* Queries: `ControllersQuery`, `AccessPointsQuery` (every access point, where it is configured and
+  which location took it), and `AccessPointsOfQuery` answering each access point's controller and
+  the location that took it.
+
+== How the start's refusal is told apart
+
+`platform`'s `AccessPointTaking` writes the `deploying` rows as the run starts, with one
+`INSERT … SELECT` from `location_access_points`, and deletes a failed run's. The driver reports a
+refused commit as one `SQLException` with the refusals' texts joined and no codes, and Quill 4.8.6
+commits inside `ZIO.succeed`, so it arrives as a defect. `AccessPointTaking.refusing` catches the
+cause, reads which of the location's access points another location took, and fails with
+`AccessPointHeld` for each, or lets the cause through when none — no matching on the text.
+
+== The backoffice and the page
+
+* Tools: `configure_unifi` opens the page with the access points and controllers there are;
+  `get_unifi_config` says each access point's controller and whether this location took it;
+  `update_access_point` takes `controllerId`; `list_unifi_controllers`, `update_unifi_controller` and
+  `remove_unifi_controller` are new.
+* The page offers an access point the system has, or a new one; and for a new one, a controller the
+  system has, or a new one with its token.
+* The start's failure on the primary key becomes `AccessPointHeld`, naming the location that took it.
+
+== The end-to-end features
+
+The UniFi stand-in is one controller, so the first location the features configure creates it and
+every later one chooses it: both of the page's paths for a controller run in every run. A scenario
+configures two locations with one access point, deploys one, and is refused deploying the other; and
+takes the access point over by pausing the first.
+
+== Order of work
+
+. V40, the rows, and the model in `core` with its tests.
+. `platform`: the repositories, the persistence handlers — the access points taken as a run starts
+  and held or let go as it ends — `UnifiAccess`, `LocationService`, the queries, the dispatch; the
+  API's suites.
+. The backoffice: the tools, the page's route, `Refusals`, the skills; its suites.
+. The page in `client`.
+. The end-to-end features, and the docs.

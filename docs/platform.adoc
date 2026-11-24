@@ -134,10 +134,14 @@ defaulting, naming the column and the V22 rename in the message.
 `SessionRow`, `SurveyRow`, `QuestionRow`, `QuestionOptionRow`, `QuestionRuleRow`, `AnswerRow`,
 `UserSurveyProgressRow`, `NextIdentificationSurveyRow`, `LocalizedTextRow`, `AdvertiserRow`,
 `AdvertiserVideoRow`, `VideoViewRow`, `DeviceRow`, `DeviceUserRow`, `TermsRow`,
-`TermsTranslationRow`, `LocationRow`, `AccessPointRow`, `LocationRecoveryRow`, `EventLogRow`.
+`TermsTranslationRow`, `LocationRow`, `UnifiControllerRow`, `AccessPointRow`,
+`LocationAccessPointRow`, `ActiveAccessPointRow`, `LocationRecoveryRow`, `EventLogRow`.
 
 `LocationStates` (`platform/LocationStates.scala`) is how `locations.state` writes `core`'s location
 `State`: `created`, `deployed`, `paused`, `destroyed`, with `state_run` the run that left it so.
+`AccessPoints.idOf` (`platform/AccessPoints.scala`) is an access point's id, its MAC as `Mac.show`
+writes it, and `ActiveAccessPoints` how `active_access_points.state` writes how far the location
+that took it is: `deploying`, `deployed`.
 `record(quill, slug, state, by)` records that the run `by` left the location in `state`, failing
 unless exactly one row changed: what the backoffice's deploy, pause, resume and destroy write once
 they succeed, outside any transaction.
@@ -239,16 +243,20 @@ is ambient, which is what lets the same repository serve a request and a schedul
   `BundleManifest` layer. Takes no `SessionContext`: every question it answers names its session or
   device.
 
-| `LocationRepository[Task]`, `AccessPointRepository[Task]`
+| `LocationRepository[Task]`, `AccessPointRepository[Task]`, `ControllerRepository[Task]`
 | `repositories/LocationRepositoryQuill.scala`
-| `locations` and `access_points` for the backoffice's location commands: `find(slug)`, the location
-  with its state read from `state` and `state_run` (a deployed one with its access points), `of`,
-  the location's access points, and `deployedHolders(mac)`, the slugs of the locations whose `state`
-  is `deployed` that have that MAC. For entering the portal, `findDeployed(id)`: the location only
-  while its `state` is `deployed`. `apply(quill)` alone: no guest session. A row the model cannot
-  hold — a deployed location with no access point, an access point with no token, a state it does
-  not know — is a defect, since no command writes one; `findDeployed` answers none for a deployed
-  one with no access point, which would admit no guest anyway.
+| The location tables for the backoffice's location commands: `find(slug)`, the location with its
+  state read from `state` and `state_run` (a deployed one with its access points); `of`, the access
+  points it is configured with — `location_access_points` joined to `access_points` and
+  `unifi_controllers`; `takenBy(mac)`, the location in `active_access_points` for that MAC, deploying
+  or deployed; and `controllerOf(mac)`, the controller of an access point the system has. For
+  entering the portal, `findDeployed(id)`: the location only while its `state` is `deployed`.
+  `controllers(quill)` is the `ControllerRepository`: `find(id)`, `at(host, port, siteId)` — the
+  controller at that address, a port of `None` read as 443 — and `uses(id)`, how many access points
+  answer to it. No guest session. A row the model cannot hold — a deployed location with no access
+  point, a controller with no token, a state it does not know — is a defect, since no command writes
+  one; `findDeployed` answers none for a deployed one with no access point, which would admit no
+  guest anyway.
 
 | `SessionRepository[Task]`, `DeviceLookup[Task]`, `UserDirectory[Task]`
 | `repositories/EntryRepositoriesQuill.scala`
@@ -327,9 +335,16 @@ backoffice's layers.
 |===
 | Implementation | Answers
 
-| `Locations.list`, `.accessPoints`, `.preview(quill, store)`
-| `ListLocationsQuery`, `AccessPointsOfQuery`, `PreviewLocationQuery`; an unknown slug is
-  `location.Error.NotFound`
+| `Locations.list`, `.accessPoints`, `.controllers`, `.known`, `.preview(quill, store)`
+| `ListLocationsQuery`, `AccessPointsOfQuery` — each access point with its controller, minus the
+  token, and the location that took it —, `ControllersQuery`, `AccessPointsQuery` — every access
+  point the system has, the locations configured with it and the one that took it —,
+  `PreviewLocationQuery`; an unknown slug is `location.Error.NotFound`
+
+| `DispatchRoutes`
+| `DispatchQuery`: for each MAC asked for, every location configured with it as `core`'s
+  `Dispatch.destination` reads them, `Deployed` the one whose row in `active_access_points` is
+  `deployed`, `Paused` a paused one
 
 | `LocationReadiness(quill, store)`, `RunStatus`, `AssetsOf(store)`
 | `LocationReadinessQuery`, `RunStatusQuery`, `AssetsOfQuery`
@@ -365,12 +380,11 @@ questions the domain does not model as aggregate reads.
 `LocationService` (`services/LocationService.scala`) resolves a slug to a `LocationRow` with
 `findBySlug`. `LocationService.resolveSlug` narrows that to the id and fails with
 `LocationNotFound` when the configured `LOCATION_SLUG` matches no row — a configuration error, not a
-request error. The rest it answers by location id, read when asked rather than at startup, so a
-change through the backoffice needs no restart: `fingerprintRequired(id)`, the location's switch,
-true when no such location exists; `hasAccessPoint(id, mac)`, whether the location has an access
-point with that MAC; `unifiEnabled(id, mac)`, that access point's UniFi switch, true when it has no
-such AP; and `unifiFor(id, mac)`, that access point's `UnifiAccess` with its own access duration, or
-`None` when it has no such AP.
+request error. The rest it answers by location id and an access point's MAC, read when asked rather
+than at startup, so a change through the backoffice needs no restart: `unifiEnabled(id, mac)`, the
+UniFi switch of the location for that access point, true when it is not configured with it; and
+`unifiFor(id, mac)`, the access point's controller as `UnifiAccess`, with the location's access
+duration for it, or `None` when the location is not configured with it.
 
 `LocaleService` (`services/LocaleService.scala`, implemented by `LocaleServiceQuill`) reads
 `localized_texts`:
@@ -579,10 +593,17 @@ runs: the operator token a tool's call carries, or `job:video-upkeep` for the ba
 
 | `LocationPersistenceHandler`
 | `LocationCreated` inserts the `locations` row (requiring a fingerprint, `created`);
-  `FingerprintRequirementChanged` sets `fingerprint_is_required`; `AccessPointRegistered` inserts an
-  `access_points` row with a random UUID, its controller and its settings; `AccessPointUpdated`
-  updates the row with the location and the old MAC, the MAC included; `AccessPointRemoved` deletes
-  it
+  `FingerprintRequirementChanged` sets `fingerprint_is_required`. `ControllerRegistered`,
+  `ControllerChanged` and `ControllerRemoved` write `unifi_controllers`. `AccessPointRegistered`
+  inserts the access point when the system does not have it (`INSERT … ON CONFLICT DO NOTHING`: the
+  command read which controller one it has answers to) and the location's `location_access_points`
+  row; a deployed location takes it at once, `deployed`, in `active_access_points`.
+  `AccessPointUpdated` moves the access point to the controller the event names and writes the
+  location's settings; for a new MAC it configures the location with that access point in place of
+  the old one, taking it as the old one was taken. `AccessPointRemoved` lets the access point go and
+  deletes the location's row; the access point stays the system's. The operations' transitions write
+  `state` and `state_run`: `LocationDeployed` and `LocationResumed` hold what the run took
+  (`deployed`), `LocationPaused` and `LocationDestroyed` let it go
 
 | `RecoveryHandler`
 | on `PolicyChanged`, the location's `location_recovery` row, whole (see <<location-recovery>>)
@@ -622,6 +643,30 @@ rqlite refuses fails the commit. Two run after the commit, outside it: `AssetPub
 puts a stylesheet or an icon in the assets bucket and invalidates it at the edge, and
 `ReplacedFileDeletionHandler`, which deletes a collected file's object — only when its row reads
 back marked, since the mark is the statement that checks nobody plays the file.
+
+[[access-point-taking]]
+=== The access points a run takes
+
+`AccessPointTaking` (`operations/AccessPointTaking.scala`) is how one access point's guests go to one
+location at a time, any number of locations configured with it. Its `handler()` writes
+`active_access_points` from the operations' events:
+
+* `OperationStarted` of a deploy or a resume deletes the location's own rows — a run left part way
+  wrote them — and inserts one per access point the location is configured with, `deploying`, by the
+  run: one `INSERT … SELECT` from `location_access_points`, in the transaction that writes the run.
+* `OperationFailed` deletes the run's `deploying` rows. A run that stops part way keeps them until it
+  is finished or the location destroyed, as no other operation goes on that location meanwhile.
+
+The location's transition, as the run succeeds, holds or lets go of them
+(`LocationPersistenceHandler`).
+
+`core` refuses a start through an access point another location took (`AccessPointHeld`), but what
+it read can be a moment old. Two starts that meet are told apart by the table's key: rqlite applies
+the writes one after the other, and the second commit fails. `refusing(accessPoints)` wraps the
+start's transaction and turns that failure into the same `AccessPointHeld`, for each of the
+location's access points another location has taken, read once the commit failed. Any other
+failure, and an interruption, go through as they are. The failure arrives as a defect: Quill commits
+inside `ZIO.succeed` (see xref:database.adoc[Database]).
 
 === The entry chain
 

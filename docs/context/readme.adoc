@@ -55,6 +55,11 @@ Read it before changing anything. Most of what is here was expensive to learn.
 | xref:dispatcher-scala-poc.adoc[Proof of concept: the portal dispatcher in Scala with Kyo]
 | You are deciding the portal dispatcher's language, runtime or memory. Native, Wasm and
   JavaScript measured against the Python dispatcher; nothing decided.
+
+| xref:access-points-plan.adoc[Plan: access points and controllers as entities]
+| You are touching how a location is configured with access points, the UniFi controllers they
+  answer to, or which location takes an access point's guests: the race two locations sharing one
+  had, and the tables that close it. Carried out.
 |===
 
 Architecture — what exists and how it is wired — is one level up, indexed in

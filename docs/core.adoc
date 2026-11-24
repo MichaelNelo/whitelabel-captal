@@ -356,16 +356,16 @@ All under `core/src/whitelabel/captal/core/application/commands/`. Every command
 | `LocationRepository`
 | `FingerprintRequirementChanged`, in whatever state the location is
 
-| `RegisterAccessPointCommand(slug, mac, host, port, siteId, token: Option[Secret], settings: SettingsChange, occurredAt)`
+| `RegisterAccessPointCommand(slug, mac, controller: Option[ControllerChoice], settings: SettingsChange, occurredAt)`
 | `RegisterAccessPointHandler`
 | `AccessPoint`
-| `LocationRepository`, `AccessPointRepository`
-| `AccessPointRegistered` for a MAC the location does not have; `AccessPointUpdated` for one it has
+| `LocationRepository`, `AccessPointRepository`, `ControllerRepository`
+| `ControllerRegistered` for a new controller, then `AccessPointRegistered` for a MAC the location is not configured with, `AccessPointUpdated` for one it is
 
-| `UpdateAccessPointCommand(slug, mac, newMac, host, port, siteId, settings: SettingsChange, occurredAt)`
+| `UpdateAccessPointCommand(slug, mac, newMac, controller: Option[ControllerId], settings: SettingsChange, occurredAt)`
 | `UpdateAccessPointHandler`
 | `AccessPoint`
-| `LocationRepository`, `AccessPointRepository`
+| `LocationRepository`, `AccessPointRepository`, `ControllerRepository`
 | `AccessPointUpdated`
 
 | `RemoveAccessPointCommand(slug, mac, occurredAt)`
@@ -373,6 +373,18 @@ All under `core/src/whitelabel/captal/core/application/commands/`. Every command
 | `Unit`
 | `LocationRepository`, `AccessPointRepository`
 | `AccessPointRemoved`
+
+| `UpdateControllerCommand(id, host, port, siteId, token, occurredAt)`
+| `UpdateControllerHandler`
+| `Controller`
+| `ControllerRepository`
+| `ControllerChanged`
+
+| `RemoveControllerCommand(id, occurredAt)`
+| `RemoveControllerHandler`
+| `Unit`
+| `ControllerRepository`
+| `ControllerRemoved`
 |===
 
 The `Result` of the three `Provide*` handlers is a union type, exposed as `Handler.Aux[F, C, Response]` with `type Response = NextVideo | NextStep` (and the survey equivalents). xref:messages.adoc[Messages] wraps each union in an enum for serialisation.
@@ -419,7 +431,11 @@ The other three `Answer*` handlers follow one shape: find the user in the state 
 
 `RedeemRecoveryHandler` refuses an error of another session or one never offered (`UnknownError`), one already taken (`AlreadyRedeemed`), and one taken before its `availableAt` (`NotYet`, carrying the instant). The clock is the command's, so the page's countdown is advisory: it is the server that decides. Its `RecoveryRedeemed` moves the session to `Recovered` and does nothing else: granting access is `finish`'s alone.
 
-The five location commands (`application/commands/Location.scala`) are the backoffice's, not the guest's: what an operator does to a location that is not an operation on its infrastructure. They take no `SessionContext`. Each reads the location by slug (`NotFound` without one, save `CreateLocation`, which refuses a slug another location has, `SlugTaken`, and a blank name) and answers its event or every reason it is refused, as `Error.Location`. `RegisterAccessPointHandler` registers the access point `mac` or changes the one the location has: the token may be left out for one that has a token stored, which it keeps (`TokenRequired` otherwise); `Controller.of` refuses a blank host or site id and a port outside 1–65535; and `settings` applies to the access point's own, or to `Settings.Default` for a new one. `UpdateAccessPointHandler` changes the MAC, the controller's host, port or site and the settings, each `None` keeping what it has, and always keeps the token; a new MAC the location already has is `AccessPointExists`. Both refuse an access point another deployed location takes its guests through (`AccessPointHeld`, from `AccessPointRepository.deployedHolders`), whatever state this location is in: one access point leads to one deployed location, which the access point's dispatch rule counts on. `RemoveAccessPointHandler` refuses an access point the location does not have (`NoSuchAccessPoint`) and the last one of a `Deployed` location (`LastAccessPoint`), which would turn every guest away. None of them changes the location's `State`: it changes only when an operation on its infrastructure succeeds, which the backoffice records itself (see xref:platform.adoc[Platform]).
+The seven location commands (`application/commands/Location.scala`) are the backoffice's, not the guest's: what an operator does to a location, or to the controllers its access points answer to, that is not an operation on its infrastructure. They take no `SessionContext`. Each reads the location by slug (`NotFound` without one, save `CreateLocation`, which refuses a slug another location has, `SlugTaken`, and a blank name, and the two controller commands, which read the controller, `NoSuchController` without one) and answers its events or every reason it is refused, as `Error.Location`.
+
+An access point and its controller are the system's; a location is configured with any number of access points, and any number of locations with one. `RegisterAccessPointHandler` configures the location with the access point `mac`, or changes how: one the location has, or one the system has (`AccessPointRepository.controllerOf`), answers to its own controller, and a `controller` that names another is `AccessPointAnswersTo`; a new one needs one (`ControllerRequired`), `ControllerChoice.Existing(id)` — `NoSuchController` when the system has none — or `ControllerChoice.New`, which `Controller.of` builds and which is refused at the address of one the system has (`ControllerExists`, naming it); `settings` applies to the location's own for it, or to `Settings.Default`. `UpdateAccessPointHandler` changes the controller the access point answers to (`controller`, for every location configured with it), the location's settings for it, and with `newMac` the access point it is configured with instead — which keeps its own controller when the system has it — each `None` keeping what it has; a new MAC the location already has is `AccessPointExists`. Both refuse a `Deployed` location an access point another location has taken (`AccessPointHeld`, from `AccessPointRepository.takenBy`), since a deployed location takes an access point it is configured with at once; one that is not deployed is configured with it freely. `RemoveAccessPointHandler` refuses an access point the location does not have (`NoSuchAccessPoint`) and the last one of a `Deployed` location (`LastAccessPoint`), which would turn every guest away. `UpdateControllerHandler` changes where a controller is and its token, each `None` keeping what it has, refused at another controller's address (`ControllerExists`); `RemoveControllerHandler` refuses one an access point a location is configured with answers to (`ControllerInUse`, with how many); those no location is configured with go with it. None of them changes the location's `State`: it changes only when an operation on its infrastructure succeeds, which the backoffice records itself (see xref:platform.adoc[Platform]).
+
+`StartOperationHandler` refuses a deploy or a resume through an access point another location has taken, deploying or deployed (`AccessPointHeld`). What it read can be a moment old: the backoffice takes the access points as the run starts, and a start that meets another location's there is refused with the same error (see xref:platform.adoc#access-point-taking[Platform]).
 
 === The backoffice's commands
 
@@ -541,7 +557,9 @@ The commands reading a location by slug refuse an unknown one with `location.Err
 | Query | Answers
 
 | `ListLocationsQuery(includeInactive)` | `LocationSummary` each: slug, name, whether it has an access point and requires a fingerprint
-| `AccessPointsOfQuery(slug)` | `AccessPointsReport`: each access point with its controller, whether a token is stored, never the token
+| `AccessPointsOfQuery(slug)` | `AccessPointsReport`: each access point the location is configured with, its controller, whether a token is stored — never the token —, the location's settings for it, and the location that took it (`Taker`: its slug, `deploying` or `deployed`)
+| `ControllersQuery()` | `ControllerReport` each: the system's controllers, whether a token is stored, and how many access points a location is configured with answer to each
+| `AccessPointsQuery()` | `KnownAccessPoint` each: every access point the system has, its controller, the locations configured with it and the one that took it
 | `PreviewLocationQuery(slug, locale)` | `LocationPreview`: what the portal draws with — stylesheet, icon, texts, locales, how many keys are untranslated
 | `LocationReadinessQuery(slug)` | `ReadinessReport`, with its next steps
 | `RunStatusQuery`, `AssetsOfQuery(slug)` | a run of an operation; how many objects a location has in the bucket
@@ -865,13 +883,15 @@ A location as the backoffice administers it: its slug, its name, whether its por
 | `Location[S <: State]` | `id`, `slug`, `name`, `fingerprintRequired`, `state: S`. `fingerprintRequired` is the location's whatever access point a guest joins through, since its link is the link shortener's; the rest of what the portal does for a guest is its access points'
 | `State` | where the location stands, each state an operation that succeeded: `Created`, never deployed; `Deployed(by: RunId, accessPoints: NonEmptyList[AccessPoint])`, taking guests through them; `Paused(by: RunId)`, its access points free for another location; `Destroyed(by: RunId)`, its infrastructure removed — not an end, since a deploy stands it up again. An operation in progress is its run's, not the location's
 | `RunId` | `operation/RunId.scala`, opaque over `String`: a run of a deploy, pause, resume or destroy, as the backoffice records it
-| `AccessPoint` | `mac: Mac`, `controller: Controller`, `settings: Settings`. A location has one per MAC
-| `Controller` | `host`, `port: Option`, `siteId`, `token: Secret`. `Controller.of` trims the host and the site, and refuses a blank host (`BlankHost`), a blank site (`BlankSiteId`) and a port outside 1–65535 (`InvalidPort`)
+| `AccessPoint` | `mac: Mac`, `controller: Controller`, `settings: Settings`: an access point as a location configured with it sees it — the system's access point, the controller it answers to, and the location's settings for it. A location has one per MAC
+| `Controller` | `id: ControllerId`, `host`, `port: Option`, `siteId`, `token: Secret`: the system's, any access point of any location can answer to it. `address` is `(host, port or 443, siteId)`, one controller's alone. `Controller.of` trims the host and the site, and refuses a blank host (`BlankHost`), a blank site (`BlankSiteId`) and a port outside 1–65535 (`InvalidPort`)
+| `ControllerId` | opaque over `String`
+| `ControllerChoice` | the controller a command names for an access point the system does not have: `Existing(id)`, or `New(id, host, port, siteId, token)`
 | `Secret` | a value whose `toString` is `Secret(***)`, so it can travel inside commands and events, which logs print; `reveal` reads it, only to send it where it goes. `Secret.parse` trims and refuses blank
-| `Settings` | `durationMinutes: Option[Int]`, `redirectUrl: Option[String]`, `unifiEnabled` — what the portal does for a guest who joins through an access point. The access point's, since each answers to its own controller. `Settings.Default`, a new access point's: UniFi on, nothing else set
+| `Settings` | `durationMinutes: Option[Int]`, `redirectUrl: Option[String]`, `unifiEnabled` — what the portal does for a guest who joins through an access point. The location's, for that access point. `Settings.Default`, a new configuration's: UniFi on, nothing else set
 | `SettingsChange` | a change to some settings: `None` leaves one as it is, `Some(None)` clears the duration or the redirect URL. `applyTo(settings)` answers the changed settings, or every reason it cannot: a duration under a minute (`InvalidDuration`), a redirect URL that is not http or https (`InvalidRedirectUrl`)
-| `Event` | `LocationCreated(id, slug, name, occurredAt)`, `FingerprintRequirementChanged(id, required, occurredAt)`, `AccessPointRegistered(location, accessPoint, occurredAt)`, `AccessPointUpdated(location, mac, accessPoint, occurredAt)` — the access point that had `mac`, whose MAC may now differ — and `AccessPointRemoved(location, mac, occurredAt)`
-| `Error` | `InvalidSlug`, `BlankName`, `SlugTaken(slug, by)`, `NotFound(slug)`, `InvalidRedirectUrl`, `InvalidDuration`, `BlankHost`, `BlankSiteId`, `InvalidPort`, `TokenRequired(mac)`, `NoSuchAccessPoint(mac)`, `AccessPointExists(mac)`, `AccessPointHeld(mac, by)` — the deployed location `by` takes its guests through it — and `LastAccessPoint(mac)`
+| `Event` | `LocationCreated(id, slug, name, occurredAt)`, `FingerprintRequirementChanged(id, required, occurredAt)`, `AccessPointRegistered(location, accessPoint, occurredAt)`, `AccessPointUpdated(location, mac, accessPoint, occurredAt)` — the access point that had `mac`, whose MAC may now differ — `AccessPointRemoved(location, mac, occurredAt)`, `ControllerRegistered(controller, occurredAt)`, `ControllerChanged(controller, occurredAt)` and `ControllerRemoved(id, occurredAt)`
+| `Error` | `InvalidSlug`, `BlankName`, `SlugTaken(slug, by)`, `NotFound(slug)`, `InvalidRedirectUrl`, `InvalidDuration`, `BlankHost`, `BlankSiteId`, `InvalidPort`, `NoSuchAccessPoint(mac)`, `AccessPointExists(mac)`, `AccessPointHeld(mac, by)` — the location `by` has taken it, deploying or deployed —, `LastAccessPoint(mac)`, `ControllerRequired(mac)`, `AccessPointAnswersTo(mac, controller)`, `NoSuchController(id)`, `ControllerExists(existing)` and `ControllerInUse(id, accessPoints)`
 |===
 
 == Repository traits
@@ -904,8 +924,12 @@ A location as the backoffice administers it: its slug, its name, whether its por
 | `RecoveryRepository.activity(userId, deviceId)` | `Activity` — the user's watched videos on this device and their answers, by the category of the survey each belongs to
 | `LocationRepository.find(slug)` | `Location[State]`, in whatever state it is
 | `LocationRepository.findDeployed(id)` | `Location[State.Deployed]` — the location, if it is deployed
-| `AccessPointRepository.of(location)` | `List[AccessPoint]` — the location's, whatever its state
-| `AccessPointRepository.deployedHolders(mac)` | `List[Slug]` — the deployed locations that take their guests through that access point
+| `AccessPointRepository.of(location)` | `List[AccessPoint]` — the access points the location is configured with, whatever its state
+| `AccessPointRepository.takenBy(mac)` | `Slug` — the location that has taken that access point, deploying or deployed
+| `AccessPointRepository.controllerOf(mac)` | `Controller` — the controller of that access point, when the system has it
+| `ControllerRepository.find(id)` | `Controller`
+| `ControllerRepository.at(host, port, siteId)` | `ControllerId` — the controller at that address, a port of `None` read as 443
+| `ControllerRepository.uses(id)` | `Int` — how many access points a location is configured with answer to it
 | `SessionRepository.find(id)` | `SessionData` — the session a cookie names
 | `DeviceLookup.matching(seen)` | `Device[State]` — the known device `seen` matches under the deployment's policy; none when none does, or when `seen` lacks what the policy compares
 | `DeviceLookup.byId(id)` | `Device[State]`
@@ -930,7 +954,7 @@ The backoffice's commands read through their own, none of which takes a session 
 | `RunRepository.going(location)`, `.unfinished(location)`, `.findStarted(run)` | the run holding the location's lock; the latest run, when none holds it and it did not complete; a run started
 |===
 
-The location's two are implemented together by `LocationRepositoryQuill`, which takes no `SessionContext`: the location commands run with no guest session, and entering the portal reads the served location before it has one. `SessionRepository`, `UserDirectory` (`infrastructure/SessionRepository.scala`) and `DeviceLookup` (`infrastructure/DeviceRepository.scala`) are what entering the portal reads outside any session, and take none either; `EntryRepositoriesQuill` implements the three together. Each device either lookup answers comes with where it stands with the terms of service in force.
+The location's two are implemented together by `LocationRepositoryQuill`, and `ControllerRepository` by its `controllers`, which take no `SessionContext`: the location commands run with no guest session, and entering the portal reads the served location before it has one. `SessionRepository`, `UserDirectory` (`infrastructure/SessionRepository.scala`) and `DeviceLookup` (`infrastructure/DeviceRepository.scala`) are what entering the portal reads outside any session, and take none either; `EntryRepositoriesQuill` implements the three together. Each device either lookup answers comes with where it stands with the terms of service in force.
 
 `infrastructure/Session.scala` holds `SessionData`, the session projection the handlers and `MarkVideoWatchedHandler.withSession` read: `sessionId`, `deviceId`, `userId: Option`, `locale`, `phase`, `currentQuestion: Option[FullyQualifiedQuestionId]`, `currentVideoId`, `currentAdvertiserId`, `locationId`, `clientMac`, `apMac`, `redirectUrl`, `ssid`, `fingerprint`, `accessExpiresAt: Option[Instant]`.
 
