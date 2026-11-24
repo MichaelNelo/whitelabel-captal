@@ -104,15 +104,27 @@ object Refusals:
         "El site id no puede quedar vacío: el portal lo necesita para llegar al controlador."
       case LocationError.InvalidPort(port) =>
         s"El puerto debe estar entre 1 y 65535, no $port."
-      case LocationError.TokenRequired(mac) =>
-        s"Falta el API token: el AP ${mac.show} todavía no tiene uno."
+      case LocationError.ControllerRequired(mac) =>
+        s"El AP ${mac
+            .show} es nuevo en el sistema: elegí un controlador que ya exista (list_unifi_controllers los lista) o creá uno con su host, site id y API token."
+      case LocationError.AccessPointAnswersTo(mac, controller) =>
+        s"El AP ${mac.show} ya responde al controlador '${controller
+            .asString}', para toda location que lo use. Para cambiarlo, usá update_access_point con controllerId."
+      case LocationError.NoSuchController(id) =>
+        s"No hay un controlador con id '${id.asString}'. list_unifi_controllers los lista."
+      case LocationError.ControllerExists(existing) =>
+        s"Ya hay un controlador en ese host, puerto y site: '${existing
+            .asString}'. Elegilo en vez de crear otro."
+      case LocationError.ControllerInUse(id, accessPoints) =>
+        s"El controlador '${id
+            .asString}' tiene $accessPoints AP(s) en uso por alguna location que le responden: pasalos a otro con update_access_point, o sacalos de cada location, antes de quitarlo."
       case LocationError.NoSuchAccessPoint(mac) =>
         s"La location no tiene un AP con la MAC ${mac.show}. get_unifi_config los lista."
       case LocationError.AccessPointExists(mac) =>
         s"La location ya tiene un AP con la MAC ${mac.show}."
       case LocationError.AccessPointHeld(mac, by) =>
-        s"El AP ${mac.show} ya está en '${by
-            .asString}', que está desplegada: un AP lleva a los invitados de una sola location desplegada. Pausala con pause_location antes de usarlo aquí."
+        s"El AP ${mac.show} lo tomó '${by
+            .asString}', que está desplegada o desplegándose: un AP lleva a los invitados de una sola location a la vez. Pausala con pause_location antes de usarlo aquí."
       case LocationError.LastAccessPoint(mac) =>
         s"El AP ${mac
             .show} es el único de una location desplegada: sin él, todo invitado sería rechazado. Agregá otro o pausala con pause_location primero."

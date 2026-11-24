@@ -4,12 +4,25 @@ import com.jamesward.ziohttp.mcp.{CallToolResult, ToolContent}
 import io.getquill.*
 import whitelabel.captal.core.application.commands.RegisterAccessPointCommand
 import whitelabel.captal.core.device.Mac
-import whitelabel.captal.core.location.{Secret, SettingsChange, Slug}
+import whitelabel.captal.core.location.{
+  ControllerChoice,
+  ControllerId,
+  Secret,
+  SettingsChange,
+  Slug
+}
 import whitelabel.captal.mcp.aws.DeployTargets
 import whitelabel.captal.mcp.tools.{Commands, I18nTools, LocationFlows, LocationTools, UnifiTools}
 import whitelabel.captal.platform.schema.QuillSqlite
 import whitelabel.captal.platform.schema.given
-import whitelabel.captal.platform.{AccessPointRow, LocationRow, Operator}
+import whitelabel.captal.platform.{
+  AccessPointRow,
+  ActiveAccessPointRow,
+  LocationAccessPointRow,
+  LocationRow,
+  Operator,
+  UnifiControllerRow
+}
 import zio.*
 import zio.test.*
 
@@ -30,12 +43,22 @@ object LocationToolsSpec extends ZIOSpecDefault:
     import quill.*
     quill.run(query[LocationRow]).map(_.filter(_.slug.startsWith(Prefix)))
 
+  /** The access point and the controller this spec's locations are configured with: the system's,
+    * so its own, apart from the other specs'.
+    */
+  private val SpecAp = "02:00:00:5c:00:01"
+  private val SpecController = ControllerId(s"$Prefix-controller")
+
   private def clear: ZIO[QuillSqlite, Throwable, Unit] = ZIO.serviceWithZIO[QuillSqlite]: quill =>
     import quill.*
     rows.flatMap: owned =>
       ZIO.foreachDiscard(owned): location =>
-        quill.run(query[AccessPointRow].filter(_.locationId == lift(location.id)).delete) *>
+        quill.run(query[ActiveAccessPointRow].filter(_.locationId == lift(location.id)).delete) *>
+          quill.run(
+            query[LocationAccessPointRow].filter(_.locationId == lift(location.id)).delete) *>
           quill.run(query[LocationRow].filter(_.slug == lift(location.slug)).delete)
+    *> quill.run(query[AccessPointRow].filter(_.mac == lift(SpecAp)).delete) *>
+      quill.run(query[UnifiControllerRow].filter(_.id == lift(SpecController.asString)).delete).unit
 
   private def json(fields: (String, zio.json.ast.Json)*) = Some(
     zio.json.ast.Json.Obj(Chunk.fromIterable(fields)))
@@ -182,7 +205,7 @@ object LocationToolsSpec extends ZIOSpecDefault:
       ,
       test("UniFi calls are turned off and back on per access point, and get_unifi_config says so"):
         val slug = s"$Prefix-unifi"
-        val ap = "1c:6a:1b:ee:5c:be"
+        val ap = SpecAp
         def set(target: String, enabled: Boolean) = UnifiTools
           .updateAccessPoint()
           .callWithContext(
@@ -201,19 +224,23 @@ object LocationToolsSpec extends ZIOSpecDefault:
               RegisterAccessPointCommand(
                 Slug.unsafe(slug),
                 Mac.parse(ap).get,
-                "unifi.example",
-                None,
-                "site",
-                Secret.parse("token"),
+                Some(
+                  ControllerChoice.New(
+                    SpecController,
+                    s"unifi.$Prefix.test",
+                    None,
+                    "site",
+                    Secret.parse("token").get)),
                 SettingsChange(),
-                java.time.Instant.now)
+                java.time.Instant.now
+              )
             )(flow)()
             .mapError(IllegalStateException(_))
           initial <- UnifiTools.status().call(json("slug" -> str(slug)))
           off     <- set(slug, false)
           stored  <- ZIO.serviceWithZIO[QuillSqlite]: quill =>
             import quill.*
-            quill.run(query[AccessPointRow].filter(_.mac == lift(ap)))
+            quill.run(query[LocationAccessPointRow].filter(_.accessPointId == lift(ap)))
           on      <- set(slug, true)
           missing <- set(s"$Prefix-nope", false)
         yield assertTrue(

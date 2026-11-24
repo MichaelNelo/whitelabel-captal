@@ -15,7 +15,12 @@ import whitelabel.captal.platform.eventhandlers.{
   TransactionalEventHandler
 }
 import whitelabel.captal.platform.locks.DistributedLock
-import whitelabel.captal.platform.operations.{OperationLock, OperationQueue, OperationQueueHandler}
+import whitelabel.captal.platform.operations.{
+  AccessPointTaking,
+  OperationLock,
+  OperationQueue,
+  OperationQueueHandler
+}
 import whitelabel.captal.platform.repositories.{
   LocationRepositoryQuill,
   RunRepositoryQuill,
@@ -27,10 +32,11 @@ import zio.interop.catz.*
 
 /** A location's operations as flows, composed once: one starts a run, the other ends it.
   *
-  * Starting takes the location's lock in Redis for the run, then writes the run in one transaction
-  * and queues it for [[OperationRunner]] — data only, so no handler here runs a flow — keeping the
-  * lock for the runner; a start that fails lets it go. Ending writes the location's new state and
-  * closes the run in one transaction; the runner lets the lock go after it.
+  * Starting takes the location's lock in Redis for the run, then writes the run — and, for a deploy
+  * or a resume, the access points it takes ([[AccessPointTaking]]) — in one transaction and queues
+  * it for [[OperationRunner]] — data only, so no handler here runs a flow — keeping the lock for
+  * the runner; a start that fails lets it go. Ending writes the location's new state and closes the
+  * run in one transaction; the runner lets the lock go after it.
   */
 object OperationFlows:
   type Start = Flow.Aux[Task, StartOperationCommand, Unit]
@@ -49,10 +55,16 @@ object OperationFlows:
         RunRepositoryQuill(quill, locks),
         TermsRepositoryQuill(quill)),
       OperationLock.taking(locks)(
-        TransactionalEventHandler(
-          RunPersistenceHandler().andThen(EventLogHandler.forOperator(operators)),
-          quill).andThen(OperationQueueHandler(queue)))
+        AccessPointTaking
+          .refusing(locations)(
+            TransactionalEventHandler(
+              RunPersistenceHandler()
+                .andThen(AccessPointTaking.handler())
+                .andThen(EventLogHandler.forOperator(operators)),
+              quill))
+          .andThen(OperationQueueHandler(queue)))
     )
+  end start
 
   def complete(quill: QuillSqlite, operators: OperatorContext, locks: DistributedLock): Complete =
     Flow(
@@ -60,8 +72,10 @@ object OperationFlows:
       TransactionalEventHandler(
         LocationPersistenceHandler()
           .andThen(RunPersistenceHandler())
+          .andThen(AccessPointTaking.handler())
           .andThen(EventLogHandler.forOperator(operators)),
-        quill)
+        quill
+      )
     )
 
   val startLayer

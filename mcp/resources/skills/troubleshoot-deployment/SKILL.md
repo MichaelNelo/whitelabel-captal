@@ -1,7 +1,7 @@
 ---
 name: troubleshoot-deployment
 description: Symptom to cause to fix for a portal that is misbehaving — blank page, 403s, 500s, unhealthy targets, stale content, missing questions or videos, guests stuck at Ready with no internet, guests turned away on the first page, guests waiting on the error page, replaced video files still stored. Triggers on "no funciona", "broken", "error", "503", "502", "500", "404", "403", "unhealthy", "stuck", "drain", "no carga", "troubleshoot", "diagnose", "debug", "sin internet", "no autoriza", "algo salió mal", "espera", "cuenta regresiva".
-version: 2.5.0
+version: 2.6.0
 ---
 
 # Troubleshoot a portal
@@ -120,37 +120,41 @@ retiring an advertiser takes its videos out of the rotation.
 ## J. Guests reach Ready but have no internet
 
 The flow completed and the authorization never happened. `get_unifi_config` for the slug lists
-each access point with its controller's host, port and site id, whether a token is stored, and its
-`unifiEnabled`. A guest is authorized by the controller of the AP they came through, so check the
-one in their portal URL (`ap=`):
+each access point with its controller's id, host, port and site id, whether a token is stored, and
+the location's `unifiEnabled` for it. A guest is authorized by the controller of the AP they came
+through, so check the one in their portal URL (`ap=`):
 
 * `unifiEnabled` false means UniFi calls are turned off for that AP on purpose, and nothing will
   authorize a guest who joins through it. If that is wrong, `update_access_point` with that `apMac`
   and `unifiEnabled: true`; it takes effect on the next guest, no redeploy.
-* A wrong host or site id is fixed with `update_access_point`, a wrong or rotated token with
-  `configure_unifi` passing that `apMac`, which opens a form — it takes no token as an argument on
-  purpose. All of it applies to the next guest, no redeploy.
+* A wrong host or site id is fixed with `update_unifi_controller`, for every AP that answers to that
+  controller; an AP that answers to the wrong controller, with `update_access_point` and
+  `controllerId`. A wrong or rotated token, with `configure_unifi` passing that `apMac`, which opens
+  a form — it takes no token as an argument on purpose — and replaces the token of the AP's
+  controller. All of it applies to the next guest, no redeploy.
 * A guest whose AP was removed with `remove_access_point`, or given a new MAC, after they arrived
-  has no controller to authorize them; they need to come in again through a registered AP.
+  has no controller to authorize them; they need to come in again through one of the location's
+  APs.
 
 ## K. The UCG redirect gives 404 "No portal is set up for this access point."
 
 The load balancer answers a guest the controller redirects with a rule per access point's MAC,
-which this server writes: one that redirects to the portal of the location holding the AP. The
+which this server writes: one that redirects to the portal of the location that took the AP. The
 `404` is what is left when no rule matches the `ap` the controller sent. Three causes, in order:
 
-1. No location has that AP registered. `get_unifi_config` lists a location's access points;
-   register the missing one with `configure_unifi`, or fix a mistyped MAC with
+1. No location is configured with that AP. `get_unifi_config` lists a location's access points;
+   configure it with the missing one through `configure_unifi`, or fix a mistyped MAC with
    `update_access_point` and `newApMac`.
-2. The locations that have it are neither deployed nor paused — created and never deployed, or
-   destroyed. Deploy one.
+2. The locations configured with it are neither deployed nor paused — created and never deployed,
+   or destroyed. Deploy one.
 3. The rule was not written: this server logs `The dispatch rules for … were not written` with
    why. It writes every rule again as it starts, so a redeploy of the server puts them right.
 
-When several locations have the AP, the newest deployed one takes its guests, and with none
-deployed the newest paused. The backoffice keeps one deployed location per AP — registering an AP
-another deployed location has is refused, and so are `deploy_location` and `resume_location` for a
-location that shares one — so to move an AP to another location, pause the old one first.
+When several locations are configured with the AP, the one that took it and is deployed takes its
+guests, and with none the newest paused. One location at a time takes an AP — `deploy_location` and
+`resume_location` refuse a location configured with an AP another location has taken, deploying or
+deployed — so to move an AP to another location, pause the old one first, then deploy or resume the
+new one. `get_unifi_config` says which location took each AP.
 
 ## L. The portal renders key names or `[some.key]` to guests
 

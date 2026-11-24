@@ -1,11 +1,15 @@
 package whitelabel.captal.mcp.apps
 
 import java.time.Instant
+import java.util.UUID
 
-import whitelabel.captal.core.application.commands.RegisterAccessPointCommand
-import whitelabel.captal.core.application.queries.AccessPointsOfQuery
+import whitelabel.captal.core.application.commands.{
+  RegisterAccessPointCommand,
+  UpdateControllerCommand
+}
+import whitelabel.captal.core.application.queries.{AccessPointsOfQuery, Taker}
 import whitelabel.captal.core.device.Mac
-import whitelabel.captal.core.location.{Secret, SettingsChange}
+import whitelabel.captal.core.location.{ControllerChoice, ControllerId, Secret, SettingsChange}
 import whitelabel.captal.mcp.access.Tokens
 import whitelabel.captal.mcp.tools.{Commands, LocationFlows, Queries, Refusals}
 import whitelabel.captal.platform.aws.AssetStore
@@ -24,24 +28,31 @@ import zio.http.*
 object UiRoutes:
   val UnifiPath: String = "/ui/unifi"
 
-  /** One of a location's access points as reported, minus its token: its controller, and what the
-    * portal does for the guests who join through it.
+  /** One of a location's access points as reported, minus its controller's token: its controller,
+    * what the portal does for the guests who join through it, and the location that took it.
     */
   final case class AccessPoint(
       apMac: String,
+      controllerId: String,
       host: String,
       port: Option[Int],
       siteId: String,
       tokenSet: Boolean,
       durationMinutes: Option[Int],
       redirectUrl: Option[String],
-      enabled: Boolean)
+      enabled: Boolean,
+      takenBy: Option[Taker])
 
   /** What is stored for a location's UniFi, minus the tokens: the read `configure_unifi` reports
     * and `get_unifi_config` answers with, kept in one place so the two cannot disagree. All of it
     * is each access point's, since a venue's APs need not share a controller.
     */
   final case class UnifiSettings(slug: String, name: String, accessPoints: List[AccessPoint])
+
+  /** What the page posts for the controller: `NewController` for a new one, made from the fields
+    * beside it; any other value, the id of one the system has; blank, the access point's own.
+    */
+  val NewController: String = "new"
 
   /** Blank means "leave it alone", which is what lets the page render without the token it will
     * never read back. A field the operator clears is not a way to unset a value.
@@ -98,53 +109,92 @@ object UiRoutes:
         .map(point =>
           AccessPoint(
             apMac = point.apMac,
+            controllerId = point.controllerId,
             host = point.host,
             port = point.port,
             siteId = point.siteId,
             tokenSet = point.tokenSet,
             durationMinutes = point.durationMinutes,
             redirectUrl = point.redirectUrl,
-            enabled = point.enabled
+            enabled = point.enabled,
+            takenBy = point.takenBy
           ))
     )
 
-  /** Registers the access point the page names, or changes it — its controller, the access duration
-    * and the redirect URL — as the operator token `actor`. A blank token keeps the one stored,
-    * which is how the page avoids ever rendering it back; a blank duration or redirect URL clears
-    * it.
+  /** The controller the page chose ([[NewController]]): a new one needs its host, site id and
+    * token.
     */
-  private def save(
-      slug: String,
-      form: Form,
-      actor: String): ZIO[OperatorContext & LocationFlows.RegisterAccessPoint, String, String] =
-    for
-      place    <- Refusals.slugOf(slug)
-      rawMac   <- ZIO.fromOption(field(form, "apMac")).orElseFail("Falta la MAC del AP.")
-      mac      <- ZIO.fromEither(parsedMac(rawMac))
-      host     <- ZIO.fromOption(field(form, "host")).orElseFail("Falta el host.")
-      siteId   <- ZIO.fromOption(field(form, "siteId")).orElseFail("Falta el site id.")
-      port     <- ZIO.fromEither(number(form, "port", "El puerto"))
-      duration <- ZIO.fromEither(number(form, "durationMinutes", "La duración"))
-      flow     <- ZIO.service[LocationFlows.RegisterAccessPoint]
-      _        <-
-        // The page's post, with no MCP call behind it to ask anything through.
-        Commands.run(
-          Operator(actor, None),
-          RegisterAccessPointCommand(
-            place,
-            mac,
+  private def chosen(form: Form): IO[String, Option[ControllerChoice]] =
+    field(form, "controllerId") match
+      case None =>
+        ZIO.none
+      case Some(NewController) =>
+        for
+          host   <- ZIO.fromOption(field(form, "host")).orElseFail("Falta el host del controlador.")
+          siteId <- ZIO
+            .fromOption(field(form, "siteId"))
+            .orElseFail("Falta el site id del controlador.")
+          port  <- ZIO.fromEither(number(form, "port", "El puerto"))
+          token <- ZIO
+            .fromOption(field(form, "apiToken").flatMap(Secret.parse))
+            .orElseFail("Falta el API token del controlador nuevo.")
+        yield Some(
+          ControllerChoice.New(
+            ControllerId(s"controller-${UUID.randomUUID}"),
             host,
             port,
             siteId,
-            field(form, "apiToken").flatMap(Secret.parse),
+            token))
+      case Some(id) =>
+        ZIO.some(ControllerChoice.Existing(ControllerId(id)))
+
+  /** Configures the location with the access point the page names, or changes how — the controller
+    * of a new one, the access duration and the redirect URL — as the operator token `actor`. A
+    * token given with a controller the system has replaces that controller's, for every access
+    * point that answers to it; blank, it keeps the one stored, which is how the page avoids ever
+    * rendering it back. A blank duration or redirect URL clears it.
+    */
+  private def save(slug: String, form: Form, actor: String): ZIO[
+    OperatorContext & LocationFlows.RegisterAccessPoint & LocationFlows.UpdateController,
+    String,
+    String] =
+    // The page's post, with no MCP call behind it to ask anything through.
+    val operator = Operator(actor, None)
+    for
+      place      <- Refusals.slugOf(slug)
+      rawMac     <- ZIO.fromOption(field(form, "apMac")).orElseFail("Falta la MAC del AP.")
+      mac        <- ZIO.fromEither(parsedMac(rawMac))
+      controller <- chosen(form)
+      duration   <- ZIO.fromEither(number(form, "durationMinutes", "La duración"))
+      register   <- ZIO.service[LocationFlows.RegisterAccessPoint]
+      point      <-
+        Commands.run(
+          operator,
+          RegisterAccessPointCommand(
+            place,
+            mac,
+            controller,
             SettingsChange(
               durationMinutes = Some(duration),
               redirectUrl = Some(field(form, "redirectUrl"))),
-            Instant.now
-          )
-        )(flow)()
+            Instant.now)
+        )(register)()
+      retokened <-
+        ZIO.foreach(
+          controller
+            .collect { case ControllerChoice.Existing(id) =>
+              id
+            }
+            .zip(field(form, "apiToken").flatMap(Secret.parse))): (id, token) =>
+          ZIO.serviceWithZIO[LocationFlows.UpdateController](
+            Commands.run(
+              operator,
+              UpdateControllerCommand(id, None, None, None, Some(token), Instant.now))(_)())
     // Says what changed without saying what it changed to: this body is shown on the page.
-    yield s"Listo. El AP ${mac.show} de '$slug' queda configurado contra $host."
+    yield s"Listo. El AP ${mac.show} de '$slug' queda configurado contra ${point.controller.host}" +
+      retokened.fold(".")(_ => ", con el token nuevo del controlador.")
+    end for
+  end save
 
   /** Expiry is separated because it is the one an honest operator hits and the remedy differs.
     * Everything else answers the same way: distinguishing "forged" from "revoked" would tell
@@ -182,7 +232,8 @@ object UiRoutes:
               ZIO.fail(UiTicket.Rejected.UnknownToken)
 
   def routes: Routes[
-    QuillSqlite & AssetStore & OperatorContext & LocationFlows.RegisterAccessPoint,
+    QuillSqlite & AssetStore & OperatorContext & LocationFlows.RegisterAccessPoint &
+      LocationFlows.UpdateController,
     Response] = Routes(
     Method.POST / "ui" / "unifi" ->
       handler: (request: Request) =>

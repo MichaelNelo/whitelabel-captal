@@ -3,7 +3,7 @@ package whitelabel.captal.mcp
 import whitelabel.captal.core.application.queries.ReadinessStep
 import whitelabel.captal.mcp.resources.Readiness
 import whitelabel.captal.mcp.tools.Prompts
-import whitelabel.captal.platform.{AccessPointRow, UnifiAccess}
+import whitelabel.captal.platform.{LocationAccessPointRow, UnifiAccess, UnifiControllerRow}
 import zio.test.*
 
 /** How the readiness record reads to the operator: the onboarding prompt that renders it. Which
@@ -63,20 +63,24 @@ object OnboardingSpec extends ZIOSpecDefault:
           Readiness.render(ReadinessStep.LocaleIncomplete("en", 2, 39)).contains("2 of 39")
         )
       ,
-      test("an access point's controller takes its own duration, and defaults its port"):
-        val point = AccessPointRow(
-          id = "ap-1",
-          locationId = "l-1",
-          mac = "1c:6a:1b:ee:5c:be",
-          unifiHost = "10.0.0.1",
-          unifiPort = None,
-          unifiSiteId = "site-uuid",
-          unifiApiToken = "tok",
+      test("an access point's controller takes the location's duration, and defaults its port"):
+        val controller = UnifiControllerRow(
+          id = "controller-1",
+          host = "10.0.0.1",
+          port = None,
+          siteId = "site-uuid",
+          apiToken = "tok",
           createdAt = "",
-          updatedAt = ""
-        )
-        val defaults = UnifiAccess.of(point)
-        val set = UnifiAccess.of(point.copy(unifiPort = Some(8443), durationMinutes = Some(30)))
+          updatedAt = "")
+        val configured = LocationAccessPointRow(
+          locationId = "l-1",
+          accessPointId = "1c:6a:1b:ee:5c:be",
+          createdAt = "",
+          updatedAt = "")
+        val defaults = UnifiAccess.of(controller, configured)
+        val set = UnifiAccess.of(
+          controller.copy(port = Some(8443)),
+          configured.copy(durationMinutes = Some(30)))
         assertTrue(
           defaults == UnifiAccess("10.0.0.1", "tok", 443, "site-uuid", 1440),
           set.port == 8443,

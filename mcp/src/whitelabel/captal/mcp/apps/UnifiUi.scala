@@ -74,12 +74,17 @@ object UnifiUi:
     |label > em { display: block; margin-top: .25rem; font-style: normal;
     |             font-size: var(--font-text-xs-size, .75rem);
     |             color: var(--color-text-tertiary, inherit); opacity: .6; }
-    |input { font: inherit; width: 100%; box-sizing: border-box; padding: .5rem .75rem;
+    |input, select { font: inherit; width: 100%; box-sizing: border-box; padding: .5rem .75rem;
     |        border: var(--border-width-regular, 1px) solid
     |                var(--color-border, var(--color-border-primary, #e5e7eb));
     |        border-radius: var(--radius-md, var(--border-radius-md, .375rem));
     |        background: var(--color-surface, var(--color-background-secondary, #fff)); color: inherit; }
-    |input:focus-visible { outline: 2px solid var(--color-ring-primary, currentColor); outline-offset: 1px; }
+    |input:focus-visible, select:focus-visible {
+    |        outline: 2px solid var(--color-ring-primary, currentColor); outline-offset: 1px; }
+    |select[disabled] { opacity: .7; }
+    |.hidden { display: none; }
+    |#apNote { margin: -.5rem 0 1rem; font-size: var(--font-text-xs-size, .75rem);
+    |          color: var(--color-text-secondary, inherit); opacity: .8; }
     |.pair { display: flex; gap: 1rem; }
     |.pair > label { flex: 1; }
     |button { font: inherit; padding: .75rem 1.5rem; border: 0;
@@ -126,39 +131,56 @@ object UnifiUi:
             p(id   := "lede", "Abrí esta página desde configure_unifi."),
             form(
               id := "form",
-              // The AP is what the rest belongs to: host, port, site id and token are its
-              // controller's, and a MAC the location does not have yet registers a new one.
-              field(
-                "apMac",
-                "MAC del AP",
-                "El AP que configurás: los invitados que entran por él se autorizan contra este controlador. Una MAC nueva registra otro AP.")(
-                required := "required"),
-              // `host` and `siteId` are required with it. The token is too, and the script marks
-              // it required only when the AP has none stored.
-              field("host", "Host", "Dirección del UCG, sin esquema ni puerto.")(
-                required := "required"),
-              div(
-                cls := "pair",
-                field("port", "Puerto", "Vacío usa 443."),
-                field(
-                  "durationMinutes",
-                  "Duración (minutos)",
-                  "De este AP, para los invitados que entran por él. Vacío usa 1440.")
+              // The AP is what the rest belongs to. One the system has answers to its own
+              // controller, which the script then picks and locks; a new one takes the controller
+              // chosen below.
+              label(
+                span("MAC del AP"),
+                input(
+                  `type`               := "text",
+                  id                   := "apMac",
+                  name                 := "apMac",
+                  attr("autocomplete") := "off",
+                  attr("list")         := "knownAps",
+                  required             := "required"),
+                em("El AP que configurás en esta location: uno que el sistema ya tiene, de la lista, o uno nuevo.")
               ),
-              field(
-                "siteId",
-                "Site id",
-                "El UUID que devuelve /proxy/network/integration/v1/sites. El nombre heredado (\"default\") no funciona.")(
-                required := "required"),
+              tag("datalist")(id := "knownAps"),
+              p(id               := "apNote", cls := "hidden"),
+              // Filled by the script: the system's controllers, and `UiRoutes.NewController`.
+              label(
+                span("Controlador"),
+                select(id := "controllerId", name := "controllerId"),
+                em("El que autoriza a los invitados de este AP, para toda location que lo use. Puede ser uno que el sistema ya tiene o uno nuevo.")
+              ),
+              // A new controller's: `host` and `siteId` are required with it, and so is the
+              // token, which the script marks so.
+              div(
+                id  := "newController",
+                cls := "hidden",
+                field("host", "Host", "Dirección del UCG, sin esquema ni puerto."),
+                div(
+                  cls := "pair",
+                  field("port", "Puerto", "Vacío usa 443."),
+                  field(
+                    "siteId",
+                    "Site id",
+                    "El UUID que devuelve /proxy/network/integration/v1/sites. El nombre heredado (\"default\") no funciona.")
+                )
+              ),
               field(
                 "apiToken",
                 "API token",
                 "Va directo al servidor y no pasa por la conversación. Nunca se muestra de vuelta.",
                 inputType = "password"),
               field(
+                "durationMinutes",
+                "Duración (minutos)",
+                "De este AP en esta location, para los invitados que entran por él. Vacío usa 1440."),
+              field(
                 "redirectUrl",
                 "URL de redirección",
-                "De este AP: a dónde manda el dispatcher a los invitados que entran por él en vez del portal. Vacío, van al portal."
+                "De este AP en esta location: a dónde manda el balanceador a los invitados que entran por él en vez del portal. Vacío, van al portal."
               ),
               button(id := "save", `type` := "submit", "Guardar"),
               div(id    := "status", cls  := "status")

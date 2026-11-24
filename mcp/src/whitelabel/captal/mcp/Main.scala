@@ -289,6 +289,8 @@ object Main extends ZIOAppDefault:
     LocationFlows.registerAccessPoint,
     LocationFlows.updateAccessPoint,
     LocationFlows.removeAccessPoint,
+    LocationFlows.updateController,
+    LocationFlows.removeController,
     ContentFlows.changeRecoveryPolicyLayer,
     ContentFlows.publishTermsVersionLayer,
     ContentFlows.setTermsTranslationLayer,

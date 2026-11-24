@@ -1,7 +1,7 @@
 ---
 name: configure-aws
 description: Use this skill for the backoffice deployment itself — its environment variables, its AWS permissions, where the infrastructure lives, and the operator tokens it issues. Triggers on "configure aws", "setup aws", "env vars", "variables de entorno", "MCP_ADMIN_TOKEN", "assets bucket", "cloudfront distribution", "iam permissions", "terraform", "tofu", "infra", "create token", "nuevo operador", "dar acceso", "revoke token", "revocar token".
-version: 2.0.2
+version: 2.0.3
 ---
 
 # Configure the backoffice deployment
@@ -98,7 +98,7 @@ handing someone `tokens_write` safe — they can extend the chain, never widen i
 | Scope | Unlocks |
 |---|---|
 | `i18n_write` | `set_translations`, `remove_translation` |
-| `content_write` | locations, advertisers, videos, styles and icon, advertiser surveys and their questions, `configure_unifi` |
+| `content_write` | locations, advertisers, videos, styles and icon, advertiser surveys and their questions, `configure_unifi`, the access points and the UniFi controllers |
 | `identity_write` | the three deployment-wide identification surveys and their questions |
 | `tokens_write` | `create_token`, `revoke_token` |
 

@@ -7,7 +7,7 @@ import org.scalajs.dom
 import whitelabel.captal.mcpui.Bridge
 
 /** The behaviour behind `ui://configure-unifi`. The markup is the server's; this fills it, posts
-  * the credentials, and tells the host what happened.
+  * the access point and its controller, and tells the host what happened.
   *
   * Addressed bare, so everything it works on — including the ticket that authorises the POST —
   * arrives with the result of the call that opened it.
@@ -17,6 +17,9 @@ import whitelabel.captal.mcpui.Bridge
   */
 object UnifiApp:
 
+  /** What the page posts for a new controller: `UiRoutes.NewController`. */
+  private val NewController = "new"
+
   /** Mirrors `UnifiTools.ConfigureResponse`. Field names are the contract between the two.
     */
   final class Config(raw: js.Dynamic):
@@ -24,16 +27,39 @@ object UnifiApp:
     def slug: String = raw.slug.asInstanceOf[String]
     def name: String = raw.name.asInstanceOf[String]
     def postUrl: String = raw.postUrl.asInstanceOf[String]
-    def tokenSet: Boolean = raw.tokenSet.asInstanceOf[Boolean]
-    def host: js.UndefOr[String] = raw.host.asInstanceOf[js.UndefOr[String]]
-    def siteId: js.UndefOr[String] = raw.siteId.asInstanceOf[js.UndefOr[String]]
     def apMac: js.UndefOr[String] = raw.apMac.asInstanceOf[js.UndefOr[String]]
+    def controllerId: js.UndefOr[String] = raw.controllerId.asInstanceOf[js.UndefOr[String]]
     def redirectUrl: js.UndefOr[String] = raw.redirectUrl.asInstanceOf[js.UndefOr[String]]
-    def port: js.UndefOr[Double] = raw.port.asInstanceOf[js.UndefOr[Double]]
     def durationMinutes: js.UndefOr[Double] = raw.durationMinutes.asInstanceOf[js.UndefOr[Double]]
+    def controllers: List[Controller] = list(raw.controllers).map(Controller(_))
+    def knownAccessPoints: List[Known] = list(raw.knownAccessPoints).map(Known(_))
+
+  /** Mirrors `UnifiTools.ControllerView`. */
+  final class Controller(raw: js.Dynamic):
+    def id: String = raw.id.asInstanceOf[String]
+    def host: String = raw.host.asInstanceOf[String]
+    def port: js.UndefOr[Double] = raw.port.asInstanceOf[js.UndefOr[Double]]
+    def siteId: String = raw.siteId.asInstanceOf[String]
+    def describe: String = s"$host:${port.fold(443)(_.toInt)} · $siteId"
+
+  /** Mirrors `UnifiTools.KnownAccessPointView`. */
+  final class Known(raw: js.Dynamic):
+    def mac: String = raw.mac.asInstanceOf[String]
+    def controllerId: String = raw.controllerId.asInstanceOf[String]
+    def locations: List[String] = list(raw.locations).map(_.asInstanceOf[String])
+
+  private def list(raw: js.Dynamic): List[js.Dynamic] =
+    raw.asInstanceOf[js.UndefOr[js.Array[js.Dynamic]]].fold(List.empty[js.Dynamic])(_.toList)
 
   private def byId(id: String) = dom.document.getElementById(id)
   private def input(id: String) = byId(id).asInstanceOf[dom.html.Input]
+  private def chooser = byId("controllerId").asInstanceOf[dom.html.Select]
+
+  /** `raw` as the server stores a MAC — lowercase, with colons — when it is one. */
+  private def macOf(raw: String): Option[String] =
+    val hex = raw.trim.toLowerCase.filterNot(c => c == ':' || c == '-')
+    Option.when(hex.length == 12 && hex.forall(c => c.isDigit || ('a' to 'f').contains(c)))(
+      hex.grouped(2).mkString(":"))
 
   /** The second public module out of the same linker run. See
     * [[whitelabel.captal.mcpui.UploadApp.start]] for why both apps live in one module now.
@@ -54,30 +80,82 @@ object UnifiApp:
     byId("form").setAttribute("class", "ready")
     byId("slug").textContent = s"${config.name} (${config.slug})"
     byId("lede").textContent =
-      if config.tokenSet then
-        "Esta location ya tiene un token cargado. Escribir uno nuevo lo reemplaza; dejarlo vacío conserva el actual."
-      else
-        "Sin estas credenciales el portal completa el flujo pero nunca autoriza a un invitado: la sesión queda en Ready."
+      "Sin un AP con su controlador el portal completa el flujo pero nunca autoriza a un invitado: la sesión queda en Ready."
 
-    config.host.foreach(input("host").value = _)
-    config.siteId.foreach(input("siteId").value = _)
+    val known = byId("knownAps")
+    config
+      .knownAccessPoints
+      .foreach: point =>
+        val option = dom.document.createElement("option").asInstanceOf[dom.html.Option]
+        option.value = point.mac
+        option.label = point.locations.mkString(", ")
+        known.appendChild(option)
+
+    config
+      .controllers
+      .foreach: controller =>
+        chooser.appendChild(optionOf(controller.id, controller.describe))
+    chooser.appendChild(optionOf(NewController, "Nuevo controlador…"))
+    chooser.value = config
+      .controllerId
+      .getOrElse(config.controllers.headOption.fold(NewController)(_.id))
+
     config.apMac.foreach(input("apMac").value = _)
     config.redirectUrl.foreach(input("redirectUrl").value = _)
-    config.port.foreach(v => input("port").value = v.toInt.toString)
     config.durationMinutes.foreach(v => input("durationMinutes").value = v.toInt.toString)
-    // Required only when there is nothing to fall back on: a location that already has a token
-    // keeps it when the field is left blank, which is how the form never has to render it back.
-    if !config.tokenSet then
-      input("apiToken").setAttribute("required", "required")
 
     wire(config)
+    follow(config)
   end start
+
+  private def optionOf(value: String, text: String): dom.html.Option =
+    val option = dom.document.createElement("option").asInstanceOf[dom.html.Option]
+    option.value = value
+    option.textContent = text
+    option
+
+  /** The form as the MAC and the controller chosen leave it: an access point the system has answers
+    * to its own controller, which is picked and locked; a new controller asks for where it is and
+    * for its token, which a controller the system has only replaces.
+    */
+  private def follow(config: Config): Unit =
+    val note = byId("apNote")
+    macOf(input("apMac").value).flatMap(mac => config.knownAccessPoints.find(_.mac == mac)) match
+      case Some(point) =>
+        chooser.value = point.controllerId
+        chooser.disabled = true
+        note.setAttribute("class", "")
+        note.textContent =
+          if point.locations.isEmpty then
+            "El sistema ya tiene este AP: responde a su controlador."
+          else
+            s"El sistema ya tiene este AP, en ${point
+                .locations
+                .mkString(", ")}: responde a su controlador."
+      case None =>
+        chooser.disabled = false
+        note.setAttribute("class", "hidden")
+    val creating = chooser.value == NewController
+    byId("newController").setAttribute(
+      "class",
+      if creating then
+        ""
+      else
+        "hidden")
+    List("host", "siteId", "apiToken").foreach: name =>
+      if creating then
+        input(name).setAttribute("required", "required")
+      else
+        input(name).removeAttribute("required")
+  end follow
 
   private def wire(config: Config): Unit =
     val form = byId("form").asInstanceOf[dom.html.Form]
     val button = byId("save").asInstanceOf[dom.html.Button]
     val status = byId("status")
 
+    input("apMac").addEventListener("input", (_: dom.Event) => follow(config))
+    chooser.addEventListener("change", (_: dom.Event) => follow(config))
     form.addEventListener(
       "submit",
       (event: dom.Event) =>
@@ -99,7 +177,8 @@ object UnifiApp:
             // A call the page makes is invisible to the model; this is what the host hears about
             // it.
             Bridge.tellTheModel(
-              s"Configuré las credenciales de UniFi para la location ${config.slug}.")
+              s"Configuré el AP ${input("apMac").value.trim} en UniFi para la location ${config
+                  .slug}.")
     )
   end wire
 
@@ -109,11 +188,11 @@ object UnifiApp:
     * server reads, so a stray input added to the markup can't arrive as an unintended field.
     */
   private val Fields = List(
+    "apMac",
     "host",
     "port",
     "siteId",
     "apiToken",
-    "apMac",
     "redirectUrl",
     "durationMinutes")
 
@@ -125,6 +204,8 @@ object UnifiApp:
     val payload = new dom.URLSearchParams()
     payload.append("ticket", config.ticket)
     Fields.foreach(name => payload.append(name, input(name).value))
+    // Read even while locked: a disabled field is left out of a form's own submission, not of this.
+    payload.append("controllerId", chooser.value)
     val init =
       new dom.RequestInit:
         method = dom.HttpMethod.POST
@@ -139,5 +220,6 @@ object UnifiApp:
           js.Thenable[Outcome])
       .`catch`(_ =>
         Outcome(false, "No se pudo contactar al servidor."): Outcome | js.Thenable[Outcome])
+  end send
 
 end UnifiApp

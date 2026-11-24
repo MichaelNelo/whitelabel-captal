@@ -1,7 +1,7 @@
 ---
 name: add-location
-description: Use this skill to onboard a location end-to-end — create it, give it translations, advertisers and videos, brand it, register its access points with their UniFi controllers, set how its guests recover from errors, and check what is still missing. Composes the smaller skills into one flow. Triggers on "agregar location", "add new location", "onboard location", "nuevo cliente", "new client", "create location", "configurar unifi", "configure unifi", "access point", "punto de acceso", "agregar AP", "add AP", "desactivar unifi", "disable unifi", "espera de error", "error wait", "recovery policy", "readiness", "qué falta".
-version: 2.7.0
+description: Use this skill to onboard a location end-to-end — create it, give it translations, advertisers and videos, brand it, configure it with its access points and their UniFi controllers, set how its guests recover from errors, and check what is still missing. Composes the smaller skills into one flow. Triggers on "agregar location", "add new location", "onboard location", "nuevo cliente", "new client", "create location", "configurar unifi", "configure unifi", "access point", "punto de acceso", "agregar AP", "add AP", "desactivar unifi", "disable unifi", "espera de error", "error wait", "recovery policy", "readiness", "qué falta".
+version: 2.8.0
 ---
 
 # Onboard a location end-to-end
@@ -69,50 +69,65 @@ that set is simply never read. Then `set_location_styles` (whole file, not a pat
 handlers). Both invalidate the CDN so the change is visible immediately. Read
 `read_skill('style-reference')`.
 
-## 6. UniFi: register the access points
+## 6. UniFi: configure the access points
 
-A location has one or more access points, each with the UniFi controller that grants access to the
-guests who join through it. **A guest is admitted only through one of the location's access
-points**: without one registered, the portal turns every guest away with an error on the first
-page. `get_unifi_config` lists them, without the tokens.
+Access points and UniFi controllers are the system's, not a location's: an access point answers to
+one controller, for every location configured with it, and a controller's token is stored once. A
+location is configured with one or more access points, and any number of locations with one access
+point — so that one can take a venue over from another. **A guest is admitted only through one of
+the location's access points**: without one, the portal turns every guest away with an error on the
+first page. `get_unifi_config` lists them, without the tokens; `list_unifi_controllers` lists the
+system's controllers.
 
-`configure_unifi` takes the slug and **opens a form** that registers one access point. It
-deliberately does not accept the API token as an argument: every tool call is recorded by the host
-and replayed into the model's context on later turns, and a token that authorises guest access on
-someone else's network must not go there. The operator types it into the page and the browser posts
-it straight to the server. Call it once per access point. To change one already registered, pass its
-`apMac` too and the page opens with its settings.
+`configure_unifi` takes the slug and **opens a form** that configures the location with one access
+point. It deliberately does not accept an API token as an argument: every tool call is recorded by
+the host and replayed into the model's context on later turns, and a token that authorises guest
+access on someone else's network must not go there. The operator types it into the page and the
+browser posts it straight to the server. Call it once per access point. To change one the location
+has, pass its `apMac` too and the page opens with its settings.
 
-What the form stores:
+What the form takes:
 
 | Field | Required | Notes |
 |---|---|---|
-| `apMac` | yes | The access point; a MAC the location does not have yet registers a new one. Any spelling |
-| `host` | yes | Its controller: the UCG on the LAN, reachable through the Tailscale proxy on cloud deploys |
-| `siteId` | yes | Site **UUID**, not the `default` name |
-| `apiToken` | when the AP has none | Left blank on a later edit, the stored one is kept |
-| `port` | no | Defaults to 443 |
-| `redirectUrl` | no | This AP's: when set, the load balancer sends the guests who join through it here instead of the portal. An http or https address with no fragment, its host and path up to 128 characters and no encoded characters in the path: anything else is refused. Blank clears it |
-| `durationMinutes` | no | This AP's, for the guests who join through it. Defaults to 1440. Blank clears it |
+| `apMac` | yes | The access point, in any spelling. The page lists the ones the system has; one of them answers to its own controller, which the page picks and locks. Any other MAC is a new one |
+| `controllerId` | for a new AP | A controller the system has, from the list, or **Nuevo controlador** to register one with the fields below |
+| `host` | for a new controller | The UCG on the LAN, reachable through the Tailscale proxy on cloud deploys |
+| `siteId` | for a new controller | Site **UUID**, not the `default` name |
+| `port` | no | A new controller's. Defaults to 443 |
+| `apiToken` | for a new controller | With a controller the system has, a token typed replaces its token for every AP that answers to it; blank keeps it |
+| `redirectUrl` | no | This location's for this AP: when set, the load balancer sends the guests who join through it here instead of the portal. An http or https address with no fragment, its host and path up to 128 characters and no encoded characters in the path: anything else is refused. Blank clears it |
+| `durationMinutes` | no | This location's for this AP, for the guests who join through it. Defaults to 1440. Blank clears it |
+
+A controller already at the host, port and site typed for a new one is refused: choose it from the
+list instead.
 
 **The AP MAC is also what routes traffic to this location.** This server keeps a rule on the load
-balancer per registered AP's MAC, which redirects the devices the UCG sends with that MAC to this
-location's portal once it is deployed; with no access point registered, such a device gets a 404
-instead of the portal. Find each MAC in the controller under
-Devices → the AP → Details → MAC Address.
+balancer per AP's MAC, which redirects the devices the UCG sends with that MAC to the portal of the
+location that took it; with no location configured with it, such a device gets a 404 instead of the
+portal. Find each MAC in the controller under Devices → the AP → Details → MAC Address.
 
-**An access point takes the guests of one deployed location.** Registering an AP that another
-deployed location already has is refused: pause that location first with `pause_location`. For the
-same reason `deploy_location` and `resume_location` refuse a location that shares an AP with another
-deployed one, and one with no AP at all.
+**An access point takes the guests of one location at a time.** A deploy or a resume takes every AP
+its location is configured with as it starts, and a pause or a destroy lets them go once it
+succeeds. So `deploy_location` and `resume_location` refuse a location configured with an AP another
+location has taken — deploying or deployed — and one with no AP at all: pause the other location
+first with `pause_location`. A location that is not deployed can be configured with any AP; a
+deployed one is refused an AP another location has taken, since it takes it at once.
+`get_unifi_config` says which location took each AP.
 
 Without the form:
 
-- `update_access_point(slug, apMac, newApMac?, host?, port?, siteId?, durationMinutes?, redirectUrl?, unifiEnabled?)`
-  changes an AP without the form — `newApMac` for an AP that was physically replaced; an empty
-  `redirectUrl` removes it. Never the token.
-- `remove_access_point(slug, apMac)` takes one off. Guests coming through it are turned away from
-  then on. A deployed location's last AP is refused: add another, or pause it first.
+- `update_access_point(slug, apMac, newApMac?, controllerId?, durationMinutes?, redirectUrl?, unifiEnabled?)`
+  changes how the location uses an AP without the form — `newApMac` for an AP that was physically
+  replaced; `controllerId` moves the AP to another controller the system has, for every location
+  configured with it; an empty `redirectUrl` removes it. Never a token.
+- `remove_access_point(slug, apMac)` takes one off the location; the AP stays the system's. Guests
+  coming through it are turned away from then on, unless another location takes it. A deployed
+  location's last AP is refused: add another, or pause it first.
+- `update_unifi_controller(controllerId, host?, port?, siteId?)` changes where a controller is, for
+  every AP that answers to it. Its token changes only through the form.
+- `remove_unifi_controller(controllerId)` removes a controller no location uses any more, with the
+  APs that answer to it and no location is configured with.
 
 All of these, and the form, apply to the next guest with no redeploy, and each is recorded under the
 operator token that made it.
@@ -130,9 +145,9 @@ Integration v1 endpoints. All UCG hardware uses port 443 and the same base path;
 
 **An access point whose network grants access some other way** has its UniFi calls turned off:
 call `update_access_point` with `unifiEnabled: false` and the portal never calls its controller.
-Guests who join through it finish the flow and stay at Ready. The switch is each AP's, so a location
-that grants access some other way everywhere turns it off on every AP. It still needs its access
-points registered, because they are what admits a guest, and readiness keeps asking for one until
+Guests who join through it finish the flow and stay at Ready. The switch is the location's for each
+AP, so a location that grants access some other way everywhere turns it off on every AP. It still
+needs its access points configured, because they are what admits a guest, and readiness keeps asking for one until
 there is. It can be turned off or back on at any time, also after deploying; the stored settings
 are kept and the change reaches the next guest without a redeploy.
 

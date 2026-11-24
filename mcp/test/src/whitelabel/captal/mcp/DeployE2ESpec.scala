@@ -69,6 +69,7 @@ import whitelabel.captal.platform.{
   AdvertiserRow,
   AdvertiserVideoRow,
   LocalizedTextRow,
+  LocationAccessPointRow,
   LocationRow,
   OperatorContext as Operators,
   QuestionOptionRow,
@@ -76,6 +77,7 @@ import whitelabel.captal.platform.{
   QuestionRuleRow,
   RqliteDataSource,
   SurveyRow,
+  UnifiControllerRow,
   VideoFileRow,
   VideoFiles,
   VideoPlaybackRow,
@@ -739,27 +741,39 @@ object DeployE2ESpec extends ZIOSpecDefault:
       video       <- buildContent(client)
       replacement <- replaceFile(client, video.videoId)
       // An access point, which a deploy needs: written as the UniFi page's save would, since that
-      // page posts under a ticket rather than through a tool.
+      // page posts under a ticket rather than through a tool. The controller and the access point
+      // are the system's, kept from an earlier run when there was one.
       _ <- ZIO.serviceWithZIO[QuillSqlite]: quill =>
         import quill.*
         for
           location <- quill.run(query[LocationRow].filter(_.slug == lift(Slug))).map(_.head)
-          now = java.time.Instant.now.toString
+          now        = java.time.Instant.now.toString
+          controller = UnifiControllerRow(
+            id = s"$Slug-controller",
+            host = "unifi.e2e.test",
+            port = None,
+            siteId = "default",
+            apiToken = "token",
+            createdAt = now,
+            updatedAt = now)
+          point = AccessPointRow(
+            id = ApMac.show,
+            mac = ApMac.show,
+            controllerId = controller.id,
+            createdAt = now,
+            updatedAt = now)
+          _ <- quill.run(query[UnifiControllerRow].insertValue(lift(controller)).onConflictIgnore)
+          _ <- quill.run(query[AccessPointRow].insertValue(lift(point)).onConflictIgnore)
           _ <- quill.run(
-            query[AccessPointRow].insertValue(
+            query[LocationAccessPointRow].insertValue(
               lift(
-                AccessPointRow(
-                  id = s"$Slug-ap",
+                LocationAccessPointRow(
                   locationId = location.id,
-                  mac = ApMac.show,
-                  unifiHost = "unifi.e2e.test",
-                  unifiPort = None,
-                  unifiSiteId = "default",
-                  unifiApiToken = "token",
+                  accessPointId = point.id,
                   createdAt = now,
-                  updatedAt = now
-                ))))
+                  updatedAt = now))))
         yield ()
+        end for
 
       // The content half, read back through the tool an operator would call.
       ready <- client.tool[Readiness.ReadinessRequest, Readiness.LocationReadiness](

@@ -1,7 +1,7 @@
 ---
 name: deploy-location
 description: Use this skill for anything that changes whether a location's portal is serving — deploying it, giving it a newer bundle, closing it for a while, bringing it back, or removing it for good. It says which of deploy_location, pause_location, resume_location and destroy_location fits, what each one leaves behind, and how to follow the run each one starts with get_deploy_status. Triggers on "deploy location", "push location", "deploy", "publicar location", "provision location", "publish bundle", "subir el bundle", "go live", "pause location", "pausar", "mantenimiento", "maintenance page", "cerrar temporalmente", "resume location", "reanudar", "reactivar", "destroy location", "eliminar location", "borrar location", "dar de baja", "tear down".
-version: 6.0.0
+version: 6.1.0
 ---
 
 # A location's portal: deploying, pausing, removing
@@ -55,8 +55,11 @@ every API call, because no rule matches the path.
 exists: a portal asks every guest to accept them before the flow begins, so without one it could
 start nobody. `get_terms_of_service` says whether there is one; `create_terms_version` publishes it.
 It refuses too while the location has no access point, since a deployed location with none turns
-every guest away, or has one that another deployed location takes its guests through: register one
-with `configure_unifi`, or pause the other location first. `resume_location` asks the same.
+every guest away, or is configured with one another location has taken, deploying or deployed:
+configure one with `configure_unifi`, or pause the other location first. `resume_location` asks the
+same. A deploy or a resume takes the location's access points as it starts — two started at the same
+moment through one AP, the second is refused — and a pause or a destroy lets them go once it
+succeeds. `get_unifi_config` says which location took each.
 
 `deploy_location(slug)` creates the five things that fixes, in an order that is not arbitrary:
 

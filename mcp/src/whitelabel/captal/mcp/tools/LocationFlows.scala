@@ -8,16 +8,20 @@ import whitelabel.captal.core.application.commands.{
   RegisterAccessPointHandler,
   RemoveAccessPointCommand,
   RemoveAccessPointHandler,
+  RemoveControllerCommand,
+  RemoveControllerHandler,
   RequireFingerprintCommand,
   RequireFingerprintHandler,
   UpdateAccessPointCommand,
-  UpdateAccessPointHandler
+  UpdateAccessPointHandler,
+  UpdateControllerCommand,
+  UpdateControllerHandler
 }
 import whitelabel.captal.core.application.Flow
 import whitelabel.captal.core.application.queries.DispatchQuery
 import whitelabel.captal.core.device.Mac
 import whitelabel.captal.core.infrastructure.{AccessPointRepository, LocationRepository}
-import whitelabel.captal.core.location.{AccessPoint, Location, State}
+import whitelabel.captal.core.location.{AccessPoint, Controller, Location, State}
 import whitelabel.captal.mcp.aws.DispatchRules
 import whitelabel.captal.platform.OperatorContext
 import whitelabel.captal.platform.eventhandlers.{
@@ -39,8 +43,11 @@ object LocationFlows:
   type RegisterAccessPoint = Flow.Aux[Task, RegisterAccessPointCommand, AccessPoint]
   type UpdateAccessPoint = Flow.Aux[Task, UpdateAccessPointCommand, AccessPoint]
   type RemoveAccessPoint = Flow.Aux[Task, RemoveAccessPointCommand, Unit]
+  type UpdateController = Flow.Aux[Task, UpdateControllerCommand, Controller]
+  type RemoveController = Flow.Aux[Task, RemoveControllerCommand, Unit]
   type All =
-    Create & RequireFingerprint & RegisterAccessPoint & UpdateAccessPoint & RemoveAccessPoint
+    Create & RequireFingerprint & RegisterAccessPoint & UpdateAccessPoint & RemoveAccessPoint &
+      UpdateController & RemoveController
 
   type Repositories = LocationRepository[Task] & AccessPointRepository[Task]
 
@@ -74,12 +81,28 @@ object LocationFlows:
   private def register(quill: QuillSqlite, operators: OperatorContext, dispatch: DispatchRules) =
     dispatching(dispatch)((c: RegisterAccessPointCommand) => Set(c.mac))(
       flow(quill, operators)(repositories =>
-        RegisterAccessPointHandler[Task](repositories, repositories)))
+        RegisterAccessPointHandler[Task](
+          repositories,
+          repositories,
+          LocationRepositoryQuill.controllers(quill))))
 
   private def update(quill: QuillSqlite, operators: OperatorContext, dispatch: DispatchRules) =
     dispatching(dispatch)((c: UpdateAccessPointCommand) => Set(c.mac) ++ c.newMac)(
       flow(quill, operators)(repositories =>
-        UpdateAccessPointHandler[Task](repositories, repositories)))
+        UpdateAccessPointHandler[Task](
+          repositories,
+          repositories,
+          LocationRepositoryQuill.controllers(quill))))
+
+  /** Where a controller is, or its token, decides no access point's dispatch: no rule is written.
+    */
+  private def changeController(quill: QuillSqlite, operators: OperatorContext) =
+    flow(quill, operators)(_ =>
+      UpdateControllerHandler[Task](LocationRepositoryQuill.controllers(quill)))
+
+  private def retireController(quill: QuillSqlite, operators: OperatorContext) =
+    flow(quill, operators)(_ =>
+      RemoveControllerHandler[Task](LocationRepositoryQuill.controllers(quill)))
 
   private def remove(quill: QuillSqlite, operators: OperatorContext, dispatch: DispatchRules) =
     dispatching(dispatch)((c: RemoveAccessPointCommand) => Set(c.mac))(
@@ -98,7 +121,13 @@ object LocationFlows:
       : ZLayer[QuillSqlite & OperatorContext & DispatchRules, Nothing, RemoveAccessPoint] = ZLayer
     .fromFunction(remove)
 
-  /** The five, for a caller that builds its environment by hand — a test that runs the tools
+  val updateController: ZLayer[QuillSqlite & OperatorContext, Nothing, UpdateController] = ZLayer
+    .fromFunction(changeController)
+
+  val removeController: ZLayer[QuillSqlite & OperatorContext, Nothing, RemoveController] = ZLayer
+    .fromFunction(retireController)
+
+  /** Every one, for a caller that builds its environment by hand — a test that runs the tools
     * without `Main`'s layers — writing the dispatch rules through `dispatch`, none by default.
     * Added one by one, so each is found by its own type.
     */
@@ -112,4 +141,6 @@ object LocationFlows:
     .add[RegisterAccessPoint](register(quill, operators, dispatch))
     .add[UpdateAccessPoint](update(quill, operators, dispatch))
     .add[RemoveAccessPoint](remove(quill, operators, dispatch))
+    .add[UpdateController](changeController(quill, operators))
+    .add[RemoveController](retireController(quill, operators))
 end LocationFlows
