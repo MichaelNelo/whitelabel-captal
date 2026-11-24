@@ -19,6 +19,17 @@ enum Event:
 
   case AccessPointRemoved(location: LocationId, mac: Mac, occurredAt: Instant)
 
+  /** A controller the system did not have, which access points can answer to from now on. */
+  case ControllerRegistered(controller: Controller, occurredAt: Instant)
+
+  /** The controller is now `controller`: every access point that answers to it, whatever location
+    * has it, calls it there.
+    */
+  case ControllerChanged(controller: Controller, occurredAt: Instant)
+
+  /** The controller, which no access point answered to, is gone. */
+  case ControllerRemoved(id: ControllerId, occurredAt: Instant)
+
   /** The run `by` stood the location up, from created or destroyed. */
   case LocationDeployed(id: LocationId, by: RunId, occurredAt: Instant)
   case LocationPaused(id: LocationId, by: RunId, occurredAt: Instant)

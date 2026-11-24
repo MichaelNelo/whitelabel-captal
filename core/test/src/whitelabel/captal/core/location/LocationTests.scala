@@ -11,7 +11,11 @@ import whitelabel.captal.core.application.Error as AppError
 import whitelabel.captal.core.application.Event as AppEvent
 import whitelabel.captal.core.application.commands.*
 import whitelabel.captal.core.device.Mac
-import whitelabel.captal.core.infrastructure.{AccessPointRepository, LocationRepository}
+import whitelabel.captal.core.infrastructure.{
+  AccessPointRepository,
+  ControllerRepository,
+  LocationRepository
+}
 import whitelabel.captal.core.operation.RunId
 
 object LocationTests extends TestSuite:
@@ -22,13 +26,19 @@ object LocationTests extends TestSuite:
   private val OtherAp = Mac.parse("aa:aa:aa:aa:aa:aa").get
   private val Token = Secret.parse("token").get
 
+  private def controller(host: String = "unifi.example") = Controller(
+    ControllerId(s"controller-$host"),
+    host,
+    Some(8443),
+    "default",
+    Token)
+
+  private val Unifi = controller()
+
   private def point(
       mac: Mac,
       host: String = "unifi.example",
-      settings: Settings = Settings.Default) = AccessPoint(
-    mac,
-    Controller(host, Some(8443), "default", Token),
-    settings)
+      settings: Settings = Settings.Default) = AccessPoint(mac, controller(host), settings)
 
   private def at[S <: State](state: S): Location[S] = Location(
     LocationId("plaza-id"),
@@ -46,12 +56,30 @@ object LocationTests extends TestSuite:
       def byId(id: LocationId) = found.filter(_.id == id)
       def findDeployed(id: LocationId) = None
 
+  /** The location's `points`; `taken`, the location each access point has been taken by; `known`,
+    * the system's access points and the controllers they answer to.
+    */
   private def accessPoints(
       points: List[AccessPoint] = Nil,
-      holders: Map[Mac, List[Slug]] = Map.empty): AccessPointRepository[Id] =
+      taken: Map[Mac, Slug] = Map.empty,
+      known: Map[Mac, Controller] = Map.empty): AccessPointRepository[Id] =
     new AccessPointRepository[Id]:
       def of(location: LocationId) = points
-      def deployedHolders(mac: Mac) = holders.getOrElse(mac, Nil)
+      def takenBy(mac: Mac) = taken.get(mac)
+      def controllerOf(mac: Mac) = known
+        .get(mac)
+        .orElse(points.find(_.mac == mac).map(_.controller))
+
+  /** The system's controllers, `all`, and how many access points answer to each, `usedBy`. */
+  private def controllers(
+      all: List[Controller] = List(Unifi),
+      usedBy: Map[ControllerId, Int] = Map.empty): ControllerRepository[Id] =
+    new ControllerRepository[Id]:
+      def find(id: ControllerId) = all.find(_.id == id)
+      def at(host: String, port: Option[Int], siteId: String) = all
+        .find(_.address == (host, port.getOrElse(443), siteId))
+        .map(_.id)
+      def uses(id: ControllerId) = usedBy.getOrElse(id, 0)
 
   /** The events emitted, or the location errors refused with. */
   private def outcome[A](op: Op[AppEvent, AppError, A]): Either[List[Error], (List[Event], A)] =
@@ -89,7 +117,7 @@ object LocationTests extends TestSuite:
       assert(point(Ap).toString.contains("***"), !point(Ap).toString.contains("token"))
 
     test("Controller collects every reason it is not one"):
-      val refused = Controller.of(" ", Some(70000), "", Token)
+      val refused = Controller.of(ControllerId("c"), " ", Some(70000), "", Token)
       assert(
         refused.left.map(_.toList) ==
           Left(List(Error.BlankHost, Error.BlankSiteId, Error.InvalidPort(70000))))
@@ -144,31 +172,79 @@ object LocationTests extends TestSuite:
           Right(List(Event.FingerprintRequirementChanged(LocationId("plaza-id"), false, Now))))
 
     test("RegisterAccessPoint"):
+      val Fresh = ControllerChoice.New(
+        ControllerId("fresh"),
+        "fresh.example",
+        None,
+        "default",
+        Token)
       def register(
-          token: Option[Secret] = Some(Token),
+          controller: Option[ControllerChoice] = Some(ControllerChoice.Existing(Unifi.id)),
           settings: SettingsChange = SettingsChange()) = RegisterAccessPointCommand(
         Here,
         Ap,
-        "unifi.example",
-        Some(8443),
-        "default",
-        token,
+        controller,
         settings,
         Now)
-      test("registers a new one with the default settings and what is given"):
+      def handler(
+          location: Location[State] = at(State.Created),
+          points: AccessPointRepository[Id] = accessPoints()) = RegisterAccessPointHandler(
+        locations(Some(location)),
+        points,
+        controllers())
+      test("configures a new one with a controller the system has, and the default settings"):
         val result = outcome(
-          RegisterAccessPointHandler(locations(Some(at(State.Created))), accessPoints()).handle(
-            register(settings = SettingsChange(durationMinutes = Some(Some(90))))))
+          handler().handle(register(settings = SettingsChange(durationMinutes = Some(Some(90))))))
         val expected = point(Ap, settings = Settings.Default.copy(durationMinutes = Some(90)))
         assert(
           result.map(_._1) ==
             Right(List(Event.AccessPointRegistered(LocationId("plaza-id"), expected, Now))))
-      test("changes the one it has, keeping its token and its settings when none are given"):
+      test("registers a new controller ahead of a new access point that answers to it"):
+        val result = outcome(handler().handle(register(Some(Fresh))))
+        val made = Controller(ControllerId("fresh"), "fresh.example", None, "default", Token)
+        assert(
+          result.map(_._1) ==
+            Right(
+              List(
+                Event.ControllerRegistered(made, Now),
+                Event.AccessPointRegistered(
+                  LocationId("plaza-id"),
+                  AccessPoint(Ap, made, Settings.Default),
+                  Now))))
+      test("configures one the system has with its own controller"):
+        val result = outcome(
+          handler(points = accessPoints(known = Map(Ap -> controller("other.example")))).handle(
+            register(None)))
+        assert(result.map(_._2.controller) == Right(controller("other.example")))
+      test("refuses another controller for one the system has"):
+        val result = outcome(
+          handler(points = accessPoints(known = Map(Ap -> controller("other.example")))).handle(
+            register()))
+        assert(
+          result ==
+            Left(List(Error.AccessPointAnswersTo(Ap, ControllerId("controller-other.example")))))
+      test("asks for a controller for a new one"):
+        assert(
+          outcome(handler().handle(register(None))) == Left(List(Error.ControllerRequired(Ap))))
+      test("refuses a new controller at the address of one the system has"):
+        val there = ControllerChoice.New(
+          ControllerId("again"),
+          "unifi.example",
+          Some(8443),
+          "default",
+          Token)
+        assert(
+          outcome(handler().handle(register(Some(there)))) ==
+            Left(List(Error.ControllerExists(Unifi.id))))
+      test("refuses a controller the system does not have"):
+        val missing = ControllerChoice.Existing(ControllerId("missing"))
+        assert(
+          outcome(handler().handle(register(Some(missing)))) ==
+            Left(List(Error.NoSuchController(ControllerId("missing")))))
+      test("changes the one it has, keeping its settings when none are given"):
         val kept = Settings.Default.copy(redirectUrl = Some("https://example.com"))
         val result = outcome(
-          RegisterAccessPointHandler(
-            locations(Some(at(State.Created))),
-            accessPoints(points = List(point(Ap, host = "old.example", settings = kept)))).handle(
+          handler(points = accessPoints(points = List(point(Ap, settings = kept)))).handle(
             register(None)))
         assert(
           result.map(_._1) ==
@@ -179,83 +255,114 @@ object LocationTests extends TestSuite:
                   Ap,
                   point(Ap, settings = kept),
                   Now))))
-      test("asks for a token for a new one"):
-        val result = outcome(
-          RegisterAccessPointHandler(locations(Some(at(State.Created))), accessPoints()).handle(
-            register(None)))
-        assert(result == Left(List(Error.TokenRequired(Ap))))
       test("refuses settings the portal could not use"):
         val result = outcome(
-          RegisterAccessPointHandler(locations(Some(at(State.Created))), accessPoints()).handle(
-            register(settings = SettingsChange(durationMinutes = Some(Some(0))))))
+          handler().handle(register(settings = SettingsChange(durationMinutes = Some(Some(0))))))
         assert(result == Left(List(Error.InvalidDuration(0))))
-      test("refuses one another deployed location takes guests through"):
+      test("configures a location that is not deployed with one another location has taken"):
         val result = outcome(
-          RegisterAccessPointHandler(
-            locations(Some(at(State.Created))),
-            accessPoints(holders = Map(Ap -> List(Elsewhere)))).handle(register()))
+          handler(points = accessPoints(taken = Map(Ap -> Elsewhere))).handle(register()))
+        assert(result.isRight)
+      test("refuses a deployed location one another location has taken"):
+        val result = outcome(
+          handler(deployed(point(OtherAp)), accessPoints(taken = Map(Ap -> Elsewhere))).handle(
+            register()))
         assert(result == Left(List(Error.AccessPointHeld(Ap, Elsewhere))))
       test("does not count the location itself as another"):
         val result = outcome(
-          RegisterAccessPointHandler(
-            locations(Some(deployed(point(Ap)))),
-            accessPoints(points = List(point(Ap)), holders = Map(Ap -> List(Here)))).handle(
-            register()))
+          handler(
+            deployed(point(Ap)),
+            accessPoints(points = List(point(Ap)), taken = Map(Ap -> Here))).handle(register()))
         assert(result.isRight)
 
     test("UpdateAccessPoint"):
       def update(
           newMac: Option[Mac] = None,
-          host: Option[String] = None,
+          controller: Option[ControllerId] = None,
           settings: SettingsChange = SettingsChange()) = UpdateAccessPointCommand(
         Here,
         Ap,
         newMac,
-        host,
-        None,
-        None,
+        controller,
         settings,
         Now)
-      test("moves it to a new MAC, keeping its controller and its settings"):
+      def handler(
+          location: Location[State] = at(State.Created),
+          points: AccessPointRepository[Id]) = UpdateAccessPointHandler(
+        locations(Some(location)),
+        points,
+        controllers(List(Unifi, controller("other.example"))))
+      test(
+        "configures the access point of a new MAC in its place, with its controller and settings"):
         val result = outcome(
-          UpdateAccessPointHandler(
-            locations(Some(at(State.Created))),
-            accessPoints(points = List(point(Ap)))).handle(update(newMac = Some(OtherAp))))
+          handler(points = accessPoints(points = List(point(Ap)))).handle(
+            update(newMac = Some(OtherAp))))
         assert(
           result.map(_._1) ==
             Right(List(Event.AccessPointUpdated(LocationId("plaza-id"), Ap, point(OtherAp), Now))))
+      test("takes the controller of an access point the system has at the new MAC"):
+        val result = outcome(
+          handler(points = accessPoints(
+            points = List(point(Ap)),
+            known = Map(OtherAp -> controller("other.example")))).handle(
+            update(newMac = Some(OtherAp))))
+        assert(result.map(_._2.controller) == Right(controller("other.example")))
+      test("moves it to another controller"):
+        val result = outcome(
+          handler(points = accessPoints(points = List(point(Ap)))).handle(
+            update(controller = Some(ControllerId("controller-other.example")))))
+        assert(result.map(_._2.controller) == Right(controller("other.example")))
+      test("refuses a controller the system does not have"):
+        val result = outcome(
+          handler(points = accessPoints(points = List(point(Ap)))).handle(
+            update(controller = Some(ControllerId("missing")))))
+        assert(result == Left(List(Error.NoSuchController(ControllerId("missing")))))
       test("changes its settings"):
         val result = outcome(
-          UpdateAccessPointHandler(
-            locations(Some(at(State.Created))),
-            accessPoints(points = List(point(Ap)))).handle(
+          handler(points = accessPoints(points = List(point(Ap)))).handle(
             update(settings = SettingsChange(unifiEnabled = Some(false)))))
         assert(result.map(_._2.settings.unifiEnabled) == Right(false))
       test("refuses a MAC the location already has"):
         val result = outcome(
-          UpdateAccessPointHandler(
-            locations(Some(at(State.Created))),
-            accessPoints(points = List(point(Ap), point(OtherAp)))).handle(
+          handler(points = accessPoints(points = List(point(Ap), point(OtherAp)))).handle(
             update(newMac = Some(OtherAp))))
         assert(result == Left(List(Error.AccessPointExists(OtherAp))))
-      test("refuses a MAC another deployed location takes guests through"):
+      test("refuses a deployed location a MAC another location has taken"):
         val result = outcome(
-          UpdateAccessPointHandler(
-            locations(Some(at(State.Created))),
-            accessPoints(points = List(point(Ap)), holders = Map(OtherAp -> List(Elsewhere))))
-            .handle(update(newMac = Some(OtherAp))))
+          handler(
+            deployed(point(Ap)),
+            accessPoints(points = List(point(Ap)), taken = Map(OtherAp -> Elsewhere))).handle(
+            update(newMac = Some(OtherAp))))
         assert(result == Left(List(Error.AccessPointHeld(OtherAp, Elsewhere))))
-      test("refuses a blank host"):
-        val result = outcome(
-          UpdateAccessPointHandler(
-            locations(Some(at(State.Created))),
-            accessPoints(points = List(point(Ap)))).handle(update(host = Some(" "))))
-        assert(result == Left(List(Error.BlankHost)))
       test("refuses one the location does not have"):
-        val result = outcome(
-          UpdateAccessPointHandler(locations(Some(at(State.Created))), accessPoints()).handle(
-            update(host = Some("new.example"))))
+        val result = outcome(handler(points = accessPoints()).handle(update()))
         assert(result == Left(List(Error.NoSuchAccessPoint(Ap))))
+
+    test("UpdateController"):
+      test("changes where it is, keeping its token"):
+        val result = outcome(
+          UpdateControllerHandler(controllers()).handle(
+            UpdateControllerCommand(Unifi.id, Some("moved.example"), None, None, None, Now)))
+        assert(
+          result.map(_._1) ==
+            Right(List(Event.ControllerChanged(Unifi.copy(host = "moved.example"), Now))))
+      test("refuses the address of another controller"):
+        val result = outcome(
+          UpdateControllerHandler(controllers(List(Unifi, controller("other.example")))).handle(
+            UpdateControllerCommand(Unifi.id, Some("other.example"), None, None, None, Now)))
+        assert(
+          result == Left(List(Error.ControllerExists(ControllerId("controller-other.example")))))
+
+    test("RemoveController"):
+      test("removes one no access point answers to"):
+        val result = outcome(
+          RemoveControllerHandler(controllers()).handle(RemoveControllerCommand(Unifi.id, Now)))
+        assert(result.map(_._1) == Right(List(Event.ControllerRemoved(Unifi.id, Now))))
+      test("refuses one access points answer to"):
+        val result = outcome(
+          RemoveControllerHandler(controllers(usedBy = Map(Unifi.id -> 2))).handle(
+            RemoveControllerCommand(Unifi.id, Now)))
+        assert(result == Left(List(Error.ControllerInUse(Unifi.id, 2))))
 
     test("RemoveAccessPoint"):
       val remove = RemoveAccessPointCommand(Here, Ap, Now)

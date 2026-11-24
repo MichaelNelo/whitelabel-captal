@@ -27,6 +27,7 @@ import whitelabel.captal.core.infrastructure.{
 import whitelabel.captal.core.location.{
   AccessPoint,
   Controller,
+  ControllerId,
   Error as LocationError,
   Event as LocationEvent,
   Location,
@@ -48,7 +49,12 @@ object OperationTests extends TestSuite:
 
   private val Point = AccessPoint(
     Ap,
-    Controller("unifi.example", Some(8443), "default", Secret.parse("token").get),
+    Controller(
+      ControllerId("controller-1"),
+      "unifi.example",
+      Some(8443),
+      "default",
+      Secret.parse("token").get),
     Settings.Default)
 
   private def at(state: State): Location[State] = Location(Id, Here, "Plaza", true, state)
@@ -74,7 +80,7 @@ object OperationTests extends TestSuite:
       unfinished: Option[Run[RunState]] = None,
       known: List[Run[RunState]] = Nil,
       points: List[AccessPoint] = List(Point),
-      holders: Map[Mac, List[Slug]] = Map.empty,
+      taken: Map[Mac, Slug] = Map.empty,
       terms: Option[TermsVersion] = Some(TermsVersion("terms-1", 1))) = StartOperationHandler[Id](
     new LocationRepository[Id]:
       def find(slug: Slug) = location.filter(_.slug == slug)
@@ -83,7 +89,8 @@ object OperationTests extends TestSuite:
     ,
     new AccessPointRepository[Id]:
       def of(location: LocationId) = points
-      def deployedHolders(mac: Mac) = holders.getOrElse(mac, Nil)
+      def takenBy(mac: Mac) = taken.get(mac)
+      def controllerOf(mac: Mac) = points.find(_.mac == mac).map(_.controller)
     ,
     runs(going, unfinished, known),
     new TermsRepository[Id]:
@@ -161,10 +168,10 @@ object OperationTests extends TestSuite:
           outcome(refused) ==
             Left(List(LocationError.NoTermsOfService, LocationError.NoAccessPoint)))
 
-      test("refuses a resume through an access point another deployed location holds"):
+      test("refuses a resume through an access point another location has taken"):
         val refused = starting(
           location = Some(at(State.Paused(RunId("run-0")))),
-          holders = Map(Ap -> List(Here, Elsewhere))).handle(start(Operation.Resume))
+          taken = Map(Ap -> Elsewhere)).handle(start(Operation.Resume))
         assert(outcome(refused) == Left(List(LocationError.AccessPointHeld(Ap, Elsewhere))))
 
       test("pauses with no terms in force: a pause takes no guests"):

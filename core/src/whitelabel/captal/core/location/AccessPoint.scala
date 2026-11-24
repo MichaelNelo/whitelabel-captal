@@ -52,16 +52,33 @@ final case class SettingsChange(
         ))
 end SettingsChange
 
-/** The UniFi controller an access point answers to: where it is (`host`, and `port` when it is not
-  * the default), which of its sites, and the API token it takes.
+opaque type ControllerId = String
+
+object ControllerId:
+  def apply(value: String): ControllerId = value
+
+  extension (id: ControllerId)
+    def asString: String = id
+
+/** A UniFi controller, the system's: where it is (`host`, and `port` when it is not the default),
+  * which of its sites, and the API token it takes. Any access point of any location can answer to
+  * it, so its token is stored once, here.
   */
-final case class Controller(host: String, port: Option[Int], siteId: String, token: Secret)
+final case class Controller(
+    id: ControllerId,
+    host: String,
+    port: Option[Int],
+    siteId: String,
+    token: Secret):
+  /** Where it is, as two controllers are told apart: a port left out is 443. */
+  def address: (String, Int, String) = (host, port.getOrElse(443), siteId)
 
 object Controller:
   /** The controller these describe, trimmed, or every reason they do not: a blank host or site, a
     * port outside 1–65535.
     */
   def of(
+      id: ControllerId,
       host: String,
       port: Option[Int],
       siteId: String,
@@ -72,7 +89,14 @@ object Controller:
         Option.when(siteId.trim.isEmpty)(Error.BlankSiteId),
         port.filter(p => p < 1 || p > 65535).map(Error.InvalidPort(_))
       ).flatten
-    NonEmptyChain.fromSeq(problems).toLeft(Controller(host.trim, port, siteId.trim, token))
+    NonEmptyChain.fromSeq(problems).toLeft(Controller(id, host.trim, port, siteId.trim, token))
+
+/** The controller a new access point answers to: one the system has, or a new one, whose id the
+  * caller makes as it makes every id.
+  */
+enum ControllerChoice:
+  case Existing(id: ControllerId)
+  case New(id: ControllerId, host: String, port: Option[Int], siteId: String, token: Secret)
 
 /** A value that never shows: `toString` redacts it, so it can travel inside commands and events,
   * which logs print. [[reveal]] reads it, only to send it where it goes.

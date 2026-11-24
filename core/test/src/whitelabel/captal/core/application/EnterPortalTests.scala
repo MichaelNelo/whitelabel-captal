@@ -25,6 +25,7 @@ import whitelabel.captal.core.infrastructure.{
 import whitelabel.captal.core.location.{
   AccessPoint,
   Controller,
+  ControllerId,
   Location,
   LocationId,
   Secret,
@@ -59,8 +60,14 @@ object EnterPortalTests extends TestSuite:
         NonEmptyList.one(
           AccessPoint(
             Mac.parse(Ap).get,
-            Controller("unifi.example", None, "site", Secret.parse("token").get),
-            Settings.Default)))
+            Controller(
+              ControllerId("controller-1"),
+              "unifi.example",
+              None,
+              "site",
+              Secret.parse("token").get),
+            Settings.Default))
+      )
     )
 
   private def accepted(id: user.DeviceId) = Device[DeviceState](

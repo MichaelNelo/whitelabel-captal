@@ -54,7 +54,8 @@ final case class StartOperationCommand(
   *     [[LocationError.NotAllowedFrom]]. A destroy leaves every state, since whatever stands in AWS
   *     — a deploy that failed part way included — is what it removes;
   *   - for a deploy or a resume, which take guests: the terms of service in force, an access point
-  *     at least, and none of them taking another deployed location's guests.
+  *     at least, and none of them taken by another location, deploying or deployed. That another
+  *     location takes one meanwhile is refused as the run starts, by the relation the start writes.
   *
   * What it reads can be a moment old by the time the run starts: whatever takes the location for
   * the run refuses it then if another took it first. The location does not change: it changes when
@@ -175,8 +176,9 @@ object StartOperationHandler:
               points  <- accessPoints.of(location.id)
               held    <- points.traverse: point =>
                 accessPoints
-                  .deployedHolders(point.mac)
-                  .map(_.find(_ != location.slug).map(LocationError.AccessPointHeld(point.mac, _)))
+                  .takenBy(point.mac)
+                  .map(
+                    _.filter(_ != location.slug).map(LocationError.AccessPointHeld(point.mac, _)))
             yield NonEmptyChain.fromSeq(
               Option.when(version.isEmpty)(LocationError.NoTermsOfService).toList ++
                 Option.when(points.isEmpty)(LocationError.NoAccessPoint).toList ++ held.flatten)

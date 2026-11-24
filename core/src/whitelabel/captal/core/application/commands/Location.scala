@@ -9,10 +9,16 @@ import cats.syntax.functor.*
 import whitelabel.captal.core.Op as CoreOp
 import whitelabel.captal.core.application.{Error, Event}
 import whitelabel.captal.core.device.Mac
-import whitelabel.captal.core.infrastructure.{AccessPointRepository, LocationRepository}
+import whitelabel.captal.core.infrastructure.{
+  AccessPointRepository,
+  ControllerRepository,
+  LocationRepository
+}
 import whitelabel.captal.core.location.{
   AccessPoint,
   Controller,
+  ControllerChoice,
+  ControllerId,
   Error as LocationError,
   Event as LocationEvent,
   Location,
@@ -37,6 +43,14 @@ private object Decided:
         CoreOp.fail[Event, Error, A](Error.Location(errors))
       case Right((event, value)) =>
         CoreOp.emit[Event, Error, A](Event.Location(event), value)
+
+  /** As [[apply]], for a change that is several events, in the order they are written. */
+  def all[A](outcome: Either[NonEmptyChain[LocationError], (List[LocationEvent], A)]): Op[A] =
+    outcome match
+      case Left(errors) =>
+        CoreOp.fail[Event, Error, A](Error.Location(errors))
+      case Right((events, value)) =>
+        CoreOp.emitAll[Event, Error, A](events.map(Event.Location(_)), value)
 
   def refused[A](error: LocationError): Either[NonEmptyChain[LocationError], A] = Left(
     NonEmptyChain.one(error))
@@ -104,26 +118,29 @@ object RequireFingerprintHandler:
                 ()))))
 end RequireFingerprintHandler
 
-/** Registers the access point `mac` at the location, or changes the one it has: its controller and,
-  * as `settings` asks, what the portal does for the guests who join through it — what the UniFi
-  * form saves. `token` may be left out for an access point that has one stored, which it keeps; a
-  * new one starts from [[Settings.Default]].
+/** Configures the location with the access point `mac`, or changes how it treats the guests who
+  * join through one it has — what the UniFi form saves. An access point the system has answers to
+  * its own controller; a new one to `controller`, one the system has or a new one. A new
+  * configuration starts from [[Settings.Default]], and `settings` changes it as it asks.
   */
 final case class RegisterAccessPointCommand(
     slug: Slug,
     mac: Mac,
-    host: String,
-    port: Option[Int],
-    siteId: String,
-    token: Option[Secret],
+    controller: Option[ControllerChoice],
     settings: SettingsChange,
     occurredAt: Instant)
 
-/** Refused while another deployed location takes its guests through the access point, whatever
-  * state this one is in: the operator pauses that one first.
+/** Any number of locations can be configured with one access point, so registering one another
+  * location has is allowed — unless this one is deployed, which takes it at once: then it is
+  * refused while another location has taken it ([[LocationError.AccessPointHeld]]). A new
+  * controller is refused at an address one is already at, and an access point the system has
+  * refuses a controller other than its own.
   */
 object RegisterAccessPointHandler:
-  def apply[F[_]: Monad](locations: LocationRepository[F], accessPoints: AccessPointRepository[F])
+  def apply[F[_]: Monad](
+      locations: LocationRepository[F],
+      accessPoints: AccessPointRepository[F],
+      controllers: ControllerRepository[F])
       : Handler.Aux[F, RegisterAccessPointCommand, AccessPoint] =
     new Handler[F, RegisterAccessPointCommand]:
       type Result = AccessPoint
@@ -131,51 +148,112 @@ object RegisterAccessPointHandler:
       def handle(cmd: RegisterAccessPointCommand) =
         Decided.located(locations, cmd.slug): found =>
           for
-            points  <- accessPoints.of(found.id)
-            holders <- accessPoints.deployedHolders(cmd.mac)
+            points <- accessPoints.of(found.id)
+            known  <- accessPoints.controllerOf(cmd.mac)
+            taken  <- accessPoints.takenBy(cmd.mac)
+            chosen <- chosenController(cmd.controller, controllers)
           yield
             val existing = points.find(_.mac == cmd.mac)
-            Decided:
+            Decided.all:
               for
-                token <- cmd
-                  .token
-                  .orElse(existing.map(_.controller.token))
-                  .toRight(NonEmptyChain.one(LocationError.TokenRequired(cmd.mac)))
-                controller <- Controller.of(cmd.host, cmd.port, cmd.siteId, token)
-                settings   <- cmd.settings.applyTo(existing.fold(Settings.Default)(_.settings))
-                _          <- Decided.unless(
-                  holders.find(_ != found.slug).map(LocationError.AccessPointHeld(cmd.mac, _)))
+                (registered, controller) <-
+                  (existing.map(_.controller).orElse(known), chosen) match
+                    case (Some(own), None) =>
+                      Right((None, own))
+                    case (Some(own), Some(Right(Chosen.Existing(choice)))) if choice.id == own.id =>
+                      Right((None, own))
+                    case (Some(own), Some(_)) =>
+                      Decided.refused(LocationError.AccessPointAnswersTo(cmd.mac, own.id))
+                    case (None, None) =>
+                      Decided.refused(LocationError.ControllerRequired(cmd.mac))
+                    case (None, Some(Left(errors))) =>
+                      Left(errors)
+                    case (None, Some(Right(Chosen.Existing(choice)))) =>
+                      Right((None, choice))
+                    case (None, Some(Right(Chosen.Made(made)))) =>
+                      Right((Some(made), made))
+                settings <- cmd.settings.applyTo(existing.fold(Settings.Default)(_.settings))
+                _        <- Decided.unless(heldElsewhere(found, cmd.mac, taken))
               yield
                 val point = AccessPoint(cmd.mac, controller, settings)
-                existing match
-                  case Some(_) =>
-                    (
-                      LocationEvent.AccessPointUpdated(found.id, cmd.mac, point, cmd.occurredAt),
-                      point)
-                  case None =>
-                    (LocationEvent.AccessPointRegistered(found.id, point, cmd.occurredAt), point)
+                val change =
+                  existing match
+                    case Some(_) =>
+                      LocationEvent.AccessPointUpdated(found.id, cmd.mac, point, cmd.occurredAt)
+                    case None =>
+                      LocationEvent.AccessPointRegistered(found.id, point, cmd.occurredAt)
+                (
+                  registered.map(LocationEvent.ControllerRegistered(_, cmd.occurredAt)).toList :+
+                    change,
+                  point)
+              end for
 end RegisterAccessPointHandler
 
-/** Changes the access point `mac`: its MAC, for one that was replaced, its controller's host, port
-  * or site, and its settings as `settings` asks. Each `None` keeps what it has, and its token is
-  * kept.
+/** A controller a command chose: one the system has, or one it makes. */
+private enum Chosen:
+  case Existing(controller: Controller)
+  case Made(controller: Controller)
+
+/** The controller `choice` names, or why there is none: an id the system does not have, a new one
+  * whose fields are refused, or a new one at an address a controller is already at — that one is
+  * chosen, not made again.
+  */
+private def chosenController[F[_]: Monad](
+    choice: Option[ControllerChoice],
+    controllers: ControllerRepository[F]): F[Option[Either[NonEmptyChain[LocationError], Chosen]]] =
+  choice match
+    case None =>
+      Monad[F].pure(None)
+    case Some(ControllerChoice.Existing(id)) =>
+      controllers
+        .find(id)
+        .map(found =>
+          Some(
+            found
+              .map(Chosen.Existing(_))
+              .toRight(NonEmptyChain.one(LocationError.NoSuchController(id)))))
+    case Some(ControllerChoice.New(id, host, port, siteId, token)) =>
+      controllers
+        .at(host.trim, port, siteId.trim)
+        .map: there =>
+          Some(
+            there.fold(Controller.of(id, host, port, siteId, token).map(Chosen.Made(_)))(existing =>
+              Decided.refused(LocationError.ControllerExists(existing))))
+
+/** Refused when the location is deployed — so it takes the access point at once — and another
+  * location has taken it.
+  */
+private def heldElsewhere(
+    found: Location[State],
+    mac: Mac,
+    taken: Option[Slug]): Option[LocationError] =
+  found.state match
+    case _: State.Deployed =>
+      taken.filter(_ != found.slug).map(LocationError.AccessPointHeld(mac, _))
+    case _ =>
+      None
+
+/** Changes how the location treats the guests of its access point `mac`, as `settings` asks; with
+  * `controller`, the controller that access point answers to, for every location configured with
+  * it; with `newMac`, the location is configured with the access point of that MAC in its place —
+  * the system's, or a new one answering to the same controller. Each `None` keeps what it has.
   */
 final case class UpdateAccessPointCommand(
     slug: Slug,
     mac: Mac,
     newMac: Option[Mac],
-    host: Option[String],
-    port: Option[Int],
-    siteId: Option[String],
+    controller: Option[ControllerId],
     settings: SettingsChange,
     occurredAt: Instant)
 
-/** A new MAC is refused when the location already has it, or another deployed location takes its
-  * guests through it.
+/** A new MAC is refused when the location already has it, or when the location is deployed and
+  * another location has taken it.
   */
 object UpdateAccessPointHandler:
-  def apply[F[_]: Monad](locations: LocationRepository[F], accessPoints: AccessPointRepository[F])
-      : Handler.Aux[F, UpdateAccessPointCommand, AccessPoint] =
+  def apply[F[_]: Monad](
+      locations: LocationRepository[F],
+      accessPoints: AccessPointRepository[F],
+      controllers: ControllerRepository[F]): Handler.Aux[F, UpdateAccessPointCommand, AccessPoint] =
     new Handler[F, UpdateAccessPointCommand]:
       type Result = AccessPoint
 
@@ -183,8 +261,14 @@ object UpdateAccessPointHandler:
         Decided.located(locations, cmd.slug): found =>
           val moved = cmd.newMac.filter(_ != cmd.mac)
           for
-            points  <- accessPoints.of(found.id)
-            holders <- moved.fold(Monad[F].pure(List.empty[Slug]))(accessPoints.deployedHolders)
+            points <- accessPoints.of(found.id)
+            known  <- moved.fold(Monad[F].pure(Option.empty[Controller]))(accessPoints.controllerOf)
+            taken  <- moved.fold(Monad[F].pure(Option.empty[Slug]))(accessPoints.takenBy)
+            chosen <-
+              cmd
+                .controller
+                .fold(Monad[F].pure(Option.empty[Option[Controller]]))(id =>
+                  controllers.find(id).map(Some(_)))
           yield Decided:
             for
               point <- points
@@ -194,15 +278,15 @@ object UpdateAccessPointHandler:
                 moved
                   .filter(mac => points.exists(_.mac == mac))
                   .map(LocationError.AccessPointExists(_)))
-              _ <- Decided.unless(
-                moved.flatMap(mac =>
-                  holders.find(_ != found.slug).map(LocationError.AccessPointHeld(mac, _))))
-              controller <- Controller.of(
-                cmd.host.getOrElse(point.controller.host),
-                cmd.port.orElse(point.controller.port),
-                cmd.siteId.getOrElse(point.controller.siteId),
-                point.controller.token
-              )
+              _          <- Decided.unless(moved.flatMap(heldElsewhere(found, _, taken)))
+              controller <-
+                (cmd.controller, chosen) match
+                  case (Some(id), Some(None)) =>
+                    Decided.refused(LocationError.NoSuchController(id))
+                  case (_, Some(Some(controller))) =>
+                    Right(controller)
+                  case _ =>
+                    Right(known.getOrElse(point.controller))
               settings <- cmd.settings.applyTo(point.settings)
             yield
               val updated = AccessPoint(moved.getOrElse(cmd.mac), controller, settings)
@@ -244,3 +328,73 @@ object RemoveAccessPointHandler:
                         None)
                 yield (LocationEvent.AccessPointRemoved(found.id, cmd.mac, cmd.occurredAt), ())
 end RemoveAccessPointHandler
+
+/** Changes the controller `id`, for every access point that answers to it: where it is, and with
+  * `token` the token it takes. Each `None` keeps what it has.
+  */
+final case class UpdateControllerCommand(
+    id: ControllerId,
+    host: Option[String],
+    port: Option[Int],
+    siteId: Option[String],
+    token: Option[Secret],
+    occurredAt: Instant)
+
+/** Refused at an address another controller is already at. */
+object UpdateControllerHandler:
+  def apply[F[_]: Monad](
+      controllers: ControllerRepository[F]): Handler.Aux[F, UpdateControllerCommand, Controller] =
+    new Handler[F, UpdateControllerCommand]:
+      type Result = Controller
+
+      def handle(cmd: UpdateControllerCommand) = controllers
+        .find(cmd.id)
+        .flatMap:
+          case None =>
+            Monad[F].pure(Decided(Decided.refused(LocationError.NoSuchController(cmd.id))))
+          case Some(current) =>
+            val host = cmd.host.getOrElse(current.host)
+            val port = cmd.port.orElse(current.port)
+            val siteId = cmd.siteId.getOrElse(current.siteId)
+            controllers
+              .at(host.trim, port, siteId.trim)
+              .map: there =>
+                Decided:
+                  for
+                    _ <- Decided.unless(
+                      there.filter(_ != cmd.id).map(LocationError.ControllerExists(_)))
+                    changed <- Controller.of(
+                      cmd.id,
+                      host,
+                      port,
+                      siteId,
+                      cmd.token.getOrElse(current.token))
+                  yield (LocationEvent.ControllerChanged(changed, cmd.occurredAt), changed)
+end UpdateControllerHandler
+
+final case class RemoveControllerCommand(id: ControllerId, occurredAt: Instant)
+
+/** Refused while a location is configured with an access point that answers to the controller: it
+  * is moved to another first, or taken off every location. Those no location is configured with go
+  * with it.
+  */
+object RemoveControllerHandler:
+  def apply[F[_]: Monad](
+      controllers: ControllerRepository[F]): Handler.Aux[F, RemoveControllerCommand, Unit] =
+    new Handler[F, RemoveControllerCommand]:
+      type Result = Unit
+
+      def handle(cmd: RemoveControllerCommand) = controllers
+        .find(cmd.id)
+        .flatMap:
+          case None =>
+            Monad[F].pure(Decided(Decided.refused(LocationError.NoSuchController(cmd.id))))
+          case Some(_) =>
+            controllers
+              .uses(cmd.id)
+              .map: uses =>
+                Decided:
+                  Decided
+                    .unless(Option.when(uses > 0)(LocationError.ControllerInUse(cmd.id, uses)))
+                    .map(_ => (LocationEvent.ControllerRemoved(cmd.id, cmd.occurredAt), ()))
+end RemoveControllerHandler

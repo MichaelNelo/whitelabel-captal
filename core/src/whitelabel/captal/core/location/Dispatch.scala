@@ -105,23 +105,29 @@ end RedirectTarget
 
 /** Which location an access point's guests are sent to, of those that hold it. */
 object Dispatch:
-  /** A location holding the access point, as the choice reads it. */
+  /** A location configured with the access point, as the choice reads it, with its redirect URL for
+    * it.
+    */
   final case class Holder(
       slug: Slug,
       standing: Standing,
       createdAt: Instant,
       redirectUrl: Option[String])
 
+  /** `Deployed`, the location that took the access point and whose deploy or resume succeeded — one
+    * at most; `Paused`, a paused location; `Other`, any other.
+    */
   enum Standing:
     case Deployed,
       Paused,
       Other
 
-  /** The newest deployed holder, else the newest paused: a paused location takes no guests while a
+  /** The deployed holder, else the newest paused: a paused location takes no guests while a
     * deployed one shares its access point, and its own guests reach its page, which the pause made
     * the maintenance page. Sent to the access point's own address unless that holder is paused —
     * and to its portal when the address is not one a redirect can carry. None when no holder is
-    * deployed or paused: a location created and never deployed, or destroyed, has no portal.
+    * deployed or paused: a location created and never deployed, or destroyed, has no portal, and
+    * one still deploying takes no guests yet.
     */
   def destination(holders: List[Holder]): Option[Destination] =
     val newest = holders.sortBy(_.createdAt).reverse

@@ -21,17 +21,35 @@ enum Error:
   case BlankSiteId
   case InvalidPort(port: Int)
 
-  /** The access point has no token stored yet, and none was given. */
-  case TokenRequired(mac: Mac)
   case NoSuchAccessPoint(mac: Mac)
 
   /** The location already has an access point with this MAC. */
   case AccessPointExists(mac: Mac)
 
-  /** The deployed location `by` takes its guests through this access point: one access point leads
-    * to one deployed location, which is what the portal dispatcher counts on.
+  /** The location `by` has taken this access point, deploying or deployed: one access point leads
+    * to one location at a time, which is what the dispatch counts on.
     */
   case AccessPointHeld(mac: Mac, by: Slug)
+
+  /** The system has no access point with this MAC yet, and nothing says which controller it answers
+    * to.
+    */
+  case ControllerRequired(mac: Mac)
+
+  /** The access point is the system's already and answers to `controller`: it is configured as it
+    * is, and its controller is changed for every location with `update_access_point`.
+    */
+  case AccessPointAnswersTo(mac: Mac, controller: ControllerId)
+
+  case NoSuchController(id: ControllerId)
+
+  /** The controller `existing` is already at this host, port and site: chosen, not made again. */
+  case ControllerExists(existing: ControllerId)
+
+  /** `accessPoints` access points a location is configured with answer to the controller, which
+    * goes only once none does.
+    */
+  case ControllerInUse(id: ControllerId, accessPoints: Int)
 
   /** The location is deployed and this is its only access point: without it every guest would be
     * turned away.
