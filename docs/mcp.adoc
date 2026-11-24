@@ -1189,6 +1189,34 @@ check path contract leaves uncorrected, and how a deployed location's resources 
 `terraform/` builds — belongs entirely to xref:infrastructure.adoc[Infrastructure]'s "What the
 deploy tool creates that tofu does not."
 
+[[dispatch-rules]]
+=== Dispatch rules
+
+The portal dispatcher is a rule per access point's MAC on the load balancer's HTTP listener, which
+`DispatchRules` (`mcp/…/aws/DispatchRules.scala`) writes on `ALB_DISPATCH_LISTENER_ARN` and points at
+`PUBLIC_BASE_URL`; without either, or without the deploy configuration, it writes nothing and says
+so once. A rule matches `/guest/s/*` with the MAC in `ap` — as UniFi writes it and with its colons
+encoded — and answers a `302`, `#{query}` carrying UniFi's parameters, to where the query
+`DispatchQuery` (`platform`'s `DispatchRoutes`) says, which is `core`'s `Dispatch.destination` over
+the locations holding the MAC. A MAC with no destination has no rule.
+
+What it is told to write is written three ways:
+
+* `OperationRunner`, once a run has ended and while it still holds the location's lock, writes the
+  MACs of that location (`DispatchQuery.OfLocation`): a deploy, pause, resume or destroy moves where
+  they go.
+* The access point flows (`LocationFlows`), once a registration, change or removal has committed,
+  write its MAC, and the new one when it changes (`DispatchQuery.Of`).
+* `Main`, as the runner starts, writes every MAC in the background (`DispatchQuery.All`), which also
+  removes the rules of MACs no location holds.
+
+A rule is created at the next free priority below `DeployTargets.GuestFallbackPriority` (50000), the
+configuration's own `404` for every other access point, changed in place when it exists, and
+deleted when its MAC has no destination. Writes in one process go one at a time. A write never fails
+its caller, since it follows a change already committed: a failure is logged, and the next write of
+that MAC, or the next startup, puts it right. Why the rules replaced a Lambda is
+xref:context/alb-dispatch-plan.adoc[the dispatch plan].
+
 == See also
 
 * xref:infrastructure.adoc[Infrastructure] — the AWS mechanics of the deploy tools, and the task

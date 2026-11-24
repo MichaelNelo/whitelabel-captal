@@ -48,6 +48,10 @@ Read it before changing anything. Most of what is here was expensive to learn.
 | You are touching the change data capture relay, its subscribers or rqlite's CDC configuration. An
   agreed plan, carried out whole, with what rqlite's CDC actually does.
 
+| xref:alb-dispatch-plan.adoc[Plan: the load balancer dispatches the access points' guests]
+| You are touching how a guest UniFi sends reaches their portal: the rule per access point the
+  backoffice writes on the load balancer, which replaced the dispatcher Lambda. Carried out.
+
 | xref:dispatcher-scala-poc.adoc[Proof of concept: the portal dispatcher in Scala with Kyo]
 | You are deciding the portal dispatcher's language, runtime or memory. Native, Wasm and
   JavaScript measured against the Python dispatcher; nothing decided.

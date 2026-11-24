@@ -1,0 +1,81 @@
+= Plan: the load balancer dispatches the access points' guests
+:toc:
+:toclevels: 2
+
+A plan agreed in conversation on 2026-11-23, after
+xref:dispatcher-scala-poc.adoc[the dispatcher's proof of concept] showed that a Lambda's cold start
+is most of what a guest waits for on arrival, and carried out whole the same day but for checking it
+against a real load balancer, which `pending.adoc` keeps. The portal dispatcher stops being a function: each
+access point's MAC becomes a rule on the load balancer's HTTP listener that redirects its guests
+where the dispatcher sent them, written by the backoffice whenever what decides it changes. No
+Lambda, no cold start, nothing running per request.
+
+== What the dispatcher does today
+
+`terraform/modules/portal-dispatcher/dispatcher.py`, a Python Lambda at 128 MB behind the listener
+rule on `/guest/s/*` that Global Accelerator's static IP reaches — UniFi takes only an IPv4 as its
+external portal server. For the `ap` query parameter it reads, from rqlite, every location holding
+that access point, takes the newest deployed, else the newest paused, else the newest, and answers
+a `302` to the access point's own redirect URL — unless the location is paused — or to
+`https://<portal>/<slug>/`, the query string carried over. Its cold start at 128 MB is about 1.1 s
+(see the proof of concept).
+
+== The design
+
+* *One rule per MAC*, on the HTTP listener, at its own priority: a `path-pattern` of `/guest/s/*`
+  and a `query-string` condition on `ap`, whose action is a `302` redirect. A rule per location does
+  not fit: a `query-string` condition takes up to three values and a rule up to five match
+  evaluations, so a location with four access points would need several rules anyway, and one rule
+  per MAC is also where the choice between several holders is made once.
+* *The rule's two values* are the MAC as UniFi writes it, `94:2a:6f:d0:30:57`, and with its colons
+  encoded, `94%3A2a%3A6f%3Ad0%3A30%3A57`. The documentation does not say whether the comparison is
+  on the raw query or the decoded one; with both, either way matches. The comparison is not
+  case-sensitive.
+* *The action* is the redirect the dispatcher answered: `Location`'s protocol, host, port and path
+  from `PUBLIC_BASE_URL` and the slug, or from the access point's own URL, and `#{query}`, which
+  keeps the query string as UniFi sent it. The dispatcher encoded it once more
+  (`urllib.parse.urlencode` of the decoded values); the rule passes it through untouched.
+* *The choice is `core`'s* (`Dispatch.destination`): the newest deployed holder, else the newest
+  paused; its redirect URL unless it is paused. A MAC whose holders are only created or destroyed
+  locations has no rule — the dispatcher sent those guests to a portal that was not there.
+* *An access point's redirect URL has to fit a redirect action*: host and path up to 128 characters,
+  the query up to 128 with `&#{query}` appended, a path of the characters the action takes.
+  `RedirectTarget.of` is the rule, and the access point's settings refuse a URL it refuses
+  (`InvalidRedirectUrl`).
+* *Unknown access points get a `404`*: a fixed-response rule on `/guest/s/*` at priority 50000, the
+  last there is, which the configuration owns. Every rule the backoffice numbers stays below it.
+* *The backoffice writes the rules* (`DispatchRules`), from the query `DispatchQuery`:
+  ** after every operation that ends — a deploy, pause, resume or destroy changes its location's
+     state, so its access points' rules are written again;
+  ** after an access point is registered, changed or removed, for its MAC and, when it changes, the
+     new one;
+  ** on startup, every MAC, so a rule a missed write left behind, or a rule for a MAC no longer
+     held, is put right. It also writes the rules the first time, for the access points a
+     configuration had before.
+* *Global Accelerator stays*, in front of the same listener. The Lambda, its security group, its
+  target group, its rule, its access to rqlite and `dispatcher.py` go.
+
+== Limits and what is not verified
+
+* *Rules per load balancer*: 100 by default, adjustable. Every access point takes one, beside each
+  location's API rule. Prod used 5 when this was planned.
+* *Rule evaluations cost*: the first 10 a request evaluates are free; past them, a load balancer
+  capacity unit holds 1,000 a second, far beyond this traffic.
+* *Raw or decoded query*: open in AWS's documentation, covered by the two values above. Not
+  verified against a real load balancer: the probe, a temporary rule on prod's listener, was not run.
+* *LocalStack*: its load balancer matches `query-string` conditions — case-insensitively, against
+  the raw query, so the encoded value never matches there — but its redirect action leaves the
+  keywords unsubstituted: the `Location` it answers carries a literal `#{query}`. The end-to-end
+  features read where a rule sends a guest from the `Location`'s host and path and add the query
+  themselves (`Venue.dispatched`).
+
+== Order of work
+
+. The rule in `core`: `Destination`, `RedirectTarget`, `Dispatch.destination`, the redirect URL's
+  check in `SettingsChange`, and `DispatchQuery`; its implementation in `platform`.
+. `DispatchRules` in the backoffice, the three triggers, `ALB_DISPATCH_LISTENER_ARN`, and the
+  priority 50000 kept out of every slot the backoffice numbers.
+. The configuration: the fixed `404`, the dispatcher's module gone, the listener's address handed to
+  the backoffice.
+. The end-to-end features: a guest sent by the access point arrives through the load balancer's
+  rule, and `dispatch.feature` covers an access point's own URL and an unknown one.

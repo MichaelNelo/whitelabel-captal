@@ -111,6 +111,21 @@ left: the API's routes run their flows by hand. The extension the backoffice's t
 (`Adapters`) has its counterpart for typed endpoints in xref:flow-adapters-plan.adoc[the flow
 adapters plan], left for the next time the routes are reworked.
 
+== The dispatch rules have not met a real load balancer
+
+The portal dispatcher is the load balancer's own rules, one per access point's MAC, written by the
+backoffice (xref:alb-dispatch-plan.adoc[the dispatch plan]). Two things about them are checked
+only against LocalStack, which differs from AWS on both:
+
+* Whether AWS compares a `query-string` condition against the raw query or the decoded one. Each
+  rule carries the MAC both ways, so either matches; which one does is not known. LocalStack
+  compares the raw query.
+* That `#{query}` carries UniFi's parameters to the portal. AWS documents it; LocalStack leaves it
+  unsubstituted, so the end-to-end features add the query themselves.
+
+Settling it is one request with an access point's MAC at the load balancer's HTTP listener once a
+release with the rules reaches an environment, raw and encoded, reading the `Location` it answers.
+
 == The Redlock is the simple version
 
 Every lock is in Redis since 2026-11-15, and two things the lock does not do yet are known. An instance

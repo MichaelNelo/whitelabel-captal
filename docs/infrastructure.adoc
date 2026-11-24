@@ -577,22 +577,17 @@ literal IP address, and HTTPS traffic still reaches CloudFront directly rather t
 accelerator. Its health check tolerates the ALB's own `301` HTTP→HTTPS redirect as a pass
 (`200`–`399`).
 
-`modules/portal-dispatcher` is the Lambda (Python 3.12, VPC-attached, 128 MB, 10-second timeout) that
-the accelerator's listener and an ALB rule (`/guest/s/*`, priority 100) feed: it looks up in
-rqlite the locations that have the AP among their access points (`access_points`, or each
-location's own `unifi_ap_mac` on a database without that table) and answers a `302` to the
-CloudFront URL of the newest matching location that is deployed — or, with none, paused — or to the access point's
-redirect URL when it has one (the location's `unifi_redirect_url` on a database whose access points
-have no settings yet). Its own security group opens port 4001 toward rqlite's and 443
-outbound to AWS APIs ("VPC interface endpoints for logs aren't provisioned here"); the reciprocal
-ingress on rqlite's own security group is declared at the *root* module rather than inside either
-module, specifically to avoid a dependency cycle between the two.
-
-Which locations are paused it reads in the same query, from each location's recorded state
-(`locations.state`), so its role has no S3 permission and the VPC no gateway endpoint for it: a
-Lambda attached to a VPC gets no public address, and with no NAT it reaches nothing outside the VPC
-but rqlite. Every ECS task here has a public address, so their S3 traffic goes through the internet
-gateway. See xref:unifi.adoc#static-ipv4-and-the-portal-dispatcher[the portal dispatcher].
+The portal dispatcher is the ALB's HTTP listener itself, the one the accelerator reaches. UniFi
+sends a guest to `/guest/s/<site>/` with the access point's MAC in `ap`, and the backoffice keeps
+one rule there per MAC (`DispatchRules`, see xref:mcp.adoc#dispatch-rules[Dispatch rules]): a
+`path-pattern` of `/guest/s/*`, a `query-string` condition on `ap`, and a `302` redirect to the
+location's portal, `PUBLIC_BASE_URL` with the slug, or to the access point's own address, keeping
+the query with `#{query}`. The configuration owns the rule for every other access point:
+`aws_lb_listener_rule.unknown_access_point`, a fixed `404` on `/guest/s/*` at priority 50000, the
+last a listener takes, which every rule the backoffice numbers stays below. Nothing runs per
+request, so there is no cold start; the rules count against the load balancer's quota of 100
+(adjustable), one per access point. See
+xref:unifi.adoc#static-ipv4-and-the-portal-dispatcher[the portal dispatcher].
 
 === Tailscale proxy
 

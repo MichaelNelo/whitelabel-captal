@@ -64,9 +64,9 @@ The integration is not a module. Its moving parts are spread across five of them
 | The `unifi_*` columns on `locations`, `sessions.access_expires_at`, the `access_points` table and
   its settings.
 
-| `terraform/modules/{tailscale-proxy,global-accelerator,portal-dispatcher}`
+| `terraform/modules/{tailscale-proxy,global-accelerator}`, `mcp/…/aws/DispatchRules.scala`
 | The network path: the proxy out to the customer LAN, the static IPv4 the controller points at,
-  and the Lambda that turns an AP MAC into a portal slug.
+  and the load balancer's rule per access point that turns its MAC into its portal.
 |===
 
 == End-to-end flow
@@ -76,9 +76,9 @@ The integration is not a module. Its moving parts are spread across five of them
  1. Guest associates to the venue's guest SSID; the controller blocks its traffic.
  2. Controller redirects the device to the external portal server, carrying the session's
     parameters as a query string.
- 3. (Deployed only) the Global Accelerator IP → ALB → portal-dispatcher Lambda resolves the
-    location slug from the `ap` parameter — the running location that has that access point — and
-    302s to the portal, preserving the query string.
+ 3. (Deployed only) the Global Accelerator IP → the ALB's HTTP listener, whose rule for the MAC in
+    the `ap` parameter — written by the backoffice for the running location that has that access
+    point — 302s to the portal, preserving the query string.
  4. The SPA loads, reads the query parameters and forwards them as `X-*` headers on
     `GET /api/status`, whose `EnterPortalCommand` checks that the location is deployed and that
     `X-Ap-Mac` is one of its access points, and starts the session, its `ap_mac` included.
@@ -391,7 +391,7 @@ Configuration is rows in the database, written by the MCP backoffice. There is n
 file. A location has any number of access points, each a row in `access_points` carrying the
 controller that authorizes the guests who join through it — a venue's APs need not share a
 controller — and what the portal does for those guests: how long they are let in for, where the
-dispatcher sends them, and whether the controller is called at all. All of it is the access
+load balancer's dispatch rule sends them, and whether the controller is called at all. All of it is the access
 point's, since each answers to its own controller.
 
 === Access points
@@ -402,8 +402,8 @@ point's, since each answers to its own controller.
 
 | `location_id` | `locationId` | TEXT | required | — | The location the AP belongs to.
 | `mac` | `mac` | TEXT | required | — | The AP's MAC, lowercase with colons as `Mac.show` writes it.
-  What `/api/status` checks `X-Ap-Mac` against, what the portal dispatcher matches the `ap`
-  parameter on, and what a session's `ap_mac` finds its controller by. Unique within a location.
+  What `/api/status` checks `X-Ap-Mac` against, what the access point's dispatch rule matches the
+  `ap` parameter on, and what a session's `ap_mac` finds its controller by. Unique within a location.
 | `unifi_host` | `unifiHost` | TEXT | required | — | Controller address on the customer LAN, without
   scheme or port. An IPv6/ULA literal is bracketed automatically.
 | `unifi_api_token` | `unifiApiToken` | TEXT | required | — | The `X-API-KEY` value.
@@ -413,10 +413,11 @@ point's, since each answers to its own controller.
 | `duration_minutes` | `durationMinutes` | INTEGER | optional | `1440` (24 h) | The authorize
   call's `timeLimitMinutes` and the `accessExpiresAt` the session is stamped with, for the guests
   who join through this AP.
-| `redirect_url` | `redirectUrl` | TEXT | optional | dispatcher default
-  `https://<cloudfront-host>/<slug>/` | Overrides where the dispatcher sends the guests who join
-  through this AP, preserving the controller's query parameters. For a portal SPA running elsewhere
-  behind this system's static IP; not where a guest goes after authorizing.
+| `redirect_url` | `redirectUrl` | TEXT | optional | the portal,
+  `<PUBLIC_BASE_URL>/<slug>/` | Overrides where the access point's dispatch rule sends the guests
+  who join through this AP, preserving the controller's query parameters. For a portal SPA running
+  elsewhere behind this system's static IP; not where a guest goes after authorizing. Refused unless
+  the load balancer's redirect can spell it (<<static-ipv4-and-the-portal-dispatcher>>).
 | `unifi_is_enabled` | `unifiIsEnabled` | INTEGER | optional | `1` | Whether the portal calls this
   AP's controller at all. `0` skips both authorize and revoke for its guests, whatever else is
   configured, and keeps the stored settings as they are.
@@ -434,10 +435,8 @@ Whether a redirect into the portal has to carry the link shortener's fingerprint
 (`locations.fingerprint_is_required`), whatever access point the guest joins through, since the
 location's link is the shortener's; see xref:api.adoc[Guest API]. Nothing about UniFi is the
 location's: `unifi_duration_minutes`, `unifi_redirect_url` and `unifi_is_enabled` are still columns
-of `locations`, which **V36** copied into each of its access points, and nothing in this release
-reads or writes them but the dispatcher's fallback below, which reads `unifi_redirect_url` on a
-database V36 has not reached. They stay for an API or a dispatcher still on the previous release,
-and a later migration drops them.
+of `locations`, which **V36** copied into each of its access points, and nothing reads or writes
+them. A later migration drops them.
 
 === How the portal reads them
 
@@ -480,7 +479,7 @@ The migrations that shaped these columns: **V16** added `unifi_host`, `unifi_por
 `unifi_site` to `unifi_site_id` for the shift from name to UUID, and dropped `unifi_use_os`, which
 the uniform `/proxy/network/integration/v1` path made irrelevant. **V19** renamed the standalone
 `ap_mac` (V11) to `unifi_ap_mac` and added `unifi_redirect_url`. **V24** added `unifi_is_enabled`.
-**V34** creates `access_points`, with an index on `mac` for the dispatcher, and copies into it each
+**V34** creates `access_points`, with an index on `mac`, and copies into it each
 location that had a complete configuration and an AP MAC that reads as one, as its one access point:
 the MAC written as `Mac.show` would, the id `<location_id>/<mac>` and both stamps the location's
 `updated_at`, since rqlite runs a statement on every node and a value that differed between them
@@ -490,9 +489,7 @@ would split the replicas. **V36** adds `duration_minutes`, `redirect_url` and `u
 
 The columns V34 and V36 copied from — `unifi_ap_mac`, `unifi_host`, `unifi_port`, `unifi_site_id`,
 `unifi_api_token`, `unifi_duration_minutes`, `unifi_redirect_url` and `unifi_is_enabled` — stay on
-`locations` for one release: a dispatcher or an API still on the previous release reads them until
-it is replaced. This release reads none of them, save the dispatcher's fallbacks on a database V36
-or V34 has not reached (below), and writing them changes nothing. A later migration drops them.
+`locations`. Nothing reads them, and writing them changes nothing. A later migration drops them.
 
 === Which tool writes them
 
@@ -535,7 +532,7 @@ Behaviour of that write:
   already registered keeps its own.
 * An access point that another deployed location already has is refused (`AccessPointHeld`),
   naming that location and asking for it to be paused first: an AP takes the guests of one deployed
-  location, which is what the portal dispatcher counts on. Deployed is the state recorded on the
+  location, which is what the access point's dispatch rule counts on. Deployed is the state recorded on the
   location (`locations.state`), which a paused one is not.
 * The response body names the AP and the host it configured and never the token.
 
@@ -556,8 +553,8 @@ redirect URL http or https, and a new MAC has to read as a MAC and is stored low
 A new MAC the location already has, or one another deployed location has, is refused.
 `unifiEnabled: false` stops every call to that AP's controller and keeps its stored settings;
 `true` resumes them. It never touches the token, and answers with the same report as
-`get_unifi_config`. The next authorize or revoke reads it, and the dispatcher the redirect URL on
-its next redirect, with no redeploy.
+`get_unifi_config`. The next authorize or revoke reads it, and the access point's dispatch rule is
+written again with the change, with no redeploy.
 
 `remove_access_point` (`UnifiTools.removeAccessPoint`, scope `content:write`) takes an access point
 off a location, with its controller's settings and token, `RemoveAccessPointCommand`, and answers
@@ -663,47 +660,38 @@ in the controller's External Portal Server field. The listener is TCP/80 with
 `client_affinity = NONE`, and the endpoint group sends 100% of traffic to the ALB, health-checked on
 `GET /` port 80 (the ALB's 301 counts as healthy).
 
-`terraform/modules/portal-dispatcher/` is the next hop. An ALB HTTP listener rule on `/guest/s/*`
-(priority 100, created by `terraform/modules/alb/` when `enable_portal_dispatcher_rule` is set)
-forwards to a Lambda target group running `dispatcher.py`:
+The next hop is the ALB's HTTP listener, where the backoffice keeps one rule per access point's MAC
+(`DispatchRules`, see xref:mcp.adoc#dispatch-rules[Dispatch rules]):
 
-. Read the `ap` query parameter and lowercase it; a missing one is a 400. Write it as
-  `access_points.mac` is written, twelve hex digits joined by colons, whatever separators it came
-  with; a value that is not a MAC is left as it is.
-. `SELECT l.slug, a.redirect_url, l.state FROM access_points a JOIN locations l ON l.id =
-  a.location_id WHERE a.mac = '<ap>' ORDER BY l.created_at DESC` against rqlite over its HTTP API
-  (`http://rqlite.<namespace>:4001`, `level=none`, 5-second timeout): every location that has that
-  access point, newest first, with that access point's redirect URL and the location's recorded
-  state. When rqlite answers it with an
-  `error` — a database V36 has not reached, whose access points have no `redirect_url` — the Lambda
-  logs it and asks for the location's own, `SELECT l.slug, l.unifi_redirect_url` over the same
-  join. When that too is an `error` — a database V34 has not reached, with no `access_points`
-  table — it asks the locations' own AP column instead, `SELECT slug, unifi_redirect_url FROM
-  locations WHERE LOWER(unifi_ap_mac) = '<ap>' ORDER BY created_at DESC`. An unreachable database
-  is a 503; no matching row is a 404 naming the AP.
-. Take the newest of those locations that is deployed. Several deployed ones sharing an AP are
-  logged, and the newest takes the guests; with none deployed, the newest paused, whose page is the
-  maintenance page; failing both, the newest.
-. 302 to its `<redirect_url><?|&><params>` when the override is set and the location is not
-  paused, otherwise to `https://<CLOUDFRONT_HOST>/<slug>/?<params>`, with `Cache-Control:
-  no-store`. Every query parameter the controller sent is forwarded verbatim. The override sends
-  the access point's guests to a portal hosted elsewhere instead of this one; it is not where a
-  guest goes after authorizing.
+. *It matches* `/guest/s/*` with the MAC in the `ap` query parameter, written as UniFi writes it,
+  `94:2a:6f:d0:30:57`, and with its colons encoded, `94%3A2a%3A6f%3Ad0%3A30%3A57`, since AWS does
+  not document whether it compares the raw query or the decoded one. The comparison is not
+  case-sensitive.
+. *It redirects*, `302`, where `core`'s `Dispatch.destination` sends the guests of that MAC: of
+  the locations that hold it, the newest deployed, else the newest paused, whose page is the
+  maintenance page; to the access point's own `redirect_url` unless that location is paused,
+  otherwise to `<PUBLIC_BASE_URL>/<slug>/`. `#{query}` carries every query parameter the controller
+  sent, as it sent it. The override sends the access point's guests to a portal hosted elsewhere
+  instead of this one; it is not where a guest goes after authorizing, and it is refused unless a
+  redirect can spell it (`RedirectTarget.of`: http or https, no fragment, a host and a path of up
+  to 128 characters, the path of the characters a redirect takes, the query up to 128 with
+  `&#{query}` added).
+. *A MAC no deployed or paused location holds has no rule*: its guests reach the configuration's
+  fixed `404` on `/guest/s/*`, at priority 50000.
+
+The backoffice writes a MAC's rule again whenever what decides it changes: once a deploy, pause,
+resume or destroy of a location holding it has ended, and once an access point is registered,
+changed or removed. On startup it writes every MAC's and removes the rules of MACs no location
+holds.
 
 So a location can take over an AP from another by pausing the old one: the AP's guests go to the
 location that is running. The backoffice keeps it to one deployed location per AP — registering an
 AP another deployed location has is refused, and so is deploying or resuming a location that shares
 one — so the newest-wins rule above is for a state the backoffice does not leave.
 
-Which locations are deployed and which paused is read in the same query, from the state each
-location is recorded in (`locations.state`), which a pause, a resume, a deploy and a destroy write
-once their run completes. The Lambda takes the newest deployed location; with none, the newest
-paused, whose page is the maintenance page; failing both, the newest. A database from before the
-access points' own settings has no state to read, and every location reads as not paused.
-
 So the AP MAC is what selects the portal: one static IP serves every location, and a new location
-needs only its access points registered. The whole accelerator-plus-dispatcher pair is behind
-`enable_global_accelerator`, which environments that do not integrate with UniFi leave off. See
+needs only its access points registered. The accelerator is behind `enable_global_accelerator`,
+which environments that do not integrate with UniFi leave off; the rules are written either way. See
 xref:infrastructure.adoc[Infrastructure].
 
 == Known caveats
