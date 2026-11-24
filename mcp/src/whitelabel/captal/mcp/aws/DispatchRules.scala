@@ -149,8 +149,9 @@ object DispatchRules:
         end redirectTo
 
   /** The two conditions a MAC's rule matches on: UniFi's path, and the MAC in `ap` as UniFi writes
-    * it or with its colons encoded — whether AWS compares the raw query or the decoded one is not
-    * documented, and the comparison is not case-sensitive.
+    * it, its colons unencoded — the same in the raw query and the decoded one, whichever AWS
+    * compares, which it does not document. Not with its colons encoded as well: AWS refuses a `%`
+    * in a condition's value. The comparison is not case-sensitive.
     */
   def conditionsFor(mac: Mac): List[RuleCondition] = List(
     RuleCondition
@@ -164,10 +165,7 @@ object DispatchRules:
       .queryStringConfig(
         QueryStringConditionConfig
           .builder()
-          .values(
-            QueryStringKeyValuePair.builder().key(ApKey).value(mac.show).build(),
-            QueryStringKeyValuePair.builder().key(ApKey).value(mac.show.replace(":", "%3A")).build()
-          )
+          .values(QueryStringKeyValuePair.builder().key(ApKey).value(mac.show).build())
           .build())
       .build()
   )
@@ -186,7 +184,7 @@ object DispatchRules:
       .flatMap(condition => Option(condition.queryStringConfig()).toList)
       .flatMap(_.values().asScala)
       .filter(_.key() == ApKey)
-      .flatMap(pair => Mac.parse(pair.value().replace("%3A", ":").replace("%3a", ":")))
+      .flatMap(pair => Mac.parse(pair.value()))
       .headOption
   end macOf
 
